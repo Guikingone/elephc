@@ -374,6 +374,28 @@ echo Holder::$staticBox["k"];
     assert_eq!(out, "ps");
 }
 
+/// Verifies a nullable property narrowed by `??=` retains its `ArrayAccess` contract for an
+/// object-keyed subscript write and read.
+#[test]
+fn test_nullable_array_access_property_subscript_write() {
+    let out = compile_and_run(
+        r#"<?php
+class NullableStorageHolder {
+    private ?SplObjectStorage $storage = null;
+
+    public function store(object $key): string {
+        $this->storage ??= new SplObjectStorage();
+        $this->storage[$key] = "stored";
+        return $this->storage[$key];
+    }
+}
+
+echo (new NullableStorageHolder())->store(new stdClass());
+"#,
+    );
+    assert_eq!(out, "stored");
+}
+
 /// Verifies subscript assignment expressions (`$b["k"] = 5`), compound assignment
 /// (`+=`), and null-coalescing assignment (`??=`) return the computed value.
 #[test]

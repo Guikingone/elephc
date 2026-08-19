@@ -178,7 +178,7 @@ pub(super) fn eval_new_object_result(
 }
 
 /// Emits the failing AOT/eval construction substage under opt-in runtime tracing.
-fn trace_new_object_error(
+pub(super) fn trace_new_object_error(
     stage: &str,
     class_name: &str,
     status: EvalStatus,

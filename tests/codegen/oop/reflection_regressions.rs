@@ -212,12 +212,31 @@ $object = new ReflectionObject(new ReflectionSourceTarget());
 $method = new ReflectionMethod(ReflectionSourceTarget::class, 'execute');
 $function = new ReflectionFunction('reflection_source_function');
 echo $class->getFileName() !== false ? 'f' : 'x';
-echo $object->getFileName() !== false ? 'f' : 'x';
+$objectFile = $object->getFileName();
+echo is_string($objectFile) && '' !== $objectFile ? 'f' : 'x';
 echo $method->getEndLine() >= $method->getStartLine() ? 'e' : 'x';
 echo $function->getFileName() !== false ? 'f' : 'x';
 "#,
     );
     assert_eq!(out, "ffef");
+}
+
+/// Verifies ReflectionObject on `$this` uses the lexical hierarchy to select runtime metadata.
+#[test]
+fn test_reflection_object_this_source_file_is_non_empty() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionThisSourceBase {
+    public function sourceFile(): string|bool {
+        return (new ReflectionObject($this))->getFileName();
+    }
+}
+final class ReflectionThisSourceChild extends ReflectionThisSourceBase {}
+$file = (new ReflectionThisSourceChild())->sourceFile();
+echo is_string($file) && '' !== $file ? 'file' : 'missing';
+"#,
+    );
+    assert_eq!(out, "file");
 }
 
 /// Verifies the built-in Reflection attribute-filter flag is available as a class constant.

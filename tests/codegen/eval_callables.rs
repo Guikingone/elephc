@@ -1996,6 +1996,34 @@ return $box->value . "|" . $box->apply($callback, 4) . "|" .
     );
 }
 
+/// Verifies a Throwable from a dynamic eval callable crosses an AOT method and native catch.
+#[test]
+fn test_eval_dynamic_callable_throwable_crosses_aot_method_to_native_catch() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_dynamic_callable_throwing_aot(): int {
+    throw new RuntimeException("eval callable boom");
+}
+
+class EvalDynamicCallableThrowableBridgeBox {
+    public function invoke(callable $callback): int {
+        return $callback();
+    }
+}
+
+$box = new EvalDynamicCallableThrowableBridgeBox();
+try {
+    eval('return $box->invoke("eval_dynamic_callable_throwing_aot");');
+    echo "bad";
+} catch (RuntimeException $caught) {
+    echo get_class($caught) . ":" . $caught->getMessage();
+}
+"#,
+    );
+
+    assert_eq!(out, "RuntimeException:eval callable boom");
+}
+
 /// Verifies `Closure::call()` rebinds method closures but passes later args by value.
 #[test]
 fn test_eval_closure_from_callable_call_rebinds_targets_and_uses_by_value_args() {
@@ -2469,6 +2497,30 @@ return is_null(Closure::bind($eval, null, "EvalBindFromCallableScopeBox")) ? "f"
     );
 
     assert_eq!(out, "A:x|A:y|a|b|E:u|E:v|e|f");
+}
+
+/// Verifies an eval Closure crossing an AOT callable parameter retains Reflection metadata.
+#[test]
+fn test_eval_callable_adapter_reflection_parameters_keep_concrete_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCallableReflectionProbe {
+    public function inspect(callable $callable, ?ReflectionFunction $reflector = null): void {
+        $reflection = $reflector ?? new ReflectionFunction($callable);
+        $parameters = $reflection->getParameters();
+        echo count($parameters) . ':';
+        foreach ($parameters as $parameter) {
+            echo $parameter->getType()->getName();
+        }
+    }
+}
+
+$runtime = eval('return new EvalCallableReflectionProbe();');
+$callback = eval('return static function (array $context): object { return new stdClass(); };');
+$runtime->inspect($callback);
+"#,
+    );
+    assert_eq!(out, "1:array");
 }
 
 /// Verifies ReflectionFunction reports retained metadata for Closure callables.

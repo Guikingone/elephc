@@ -83,6 +83,9 @@ fn lower_if_chain(
     span: Span,
 ) -> bool {
     let cond_value = lower_expr(ctx, condition);
+    if ctx.builder.insertion_block_is_terminated() {
+        return false;
+    }
     let cond_value = ctx.truthy_consuming(cond_value, Some(condition.span));
     let split_initialized = ctx.initialized_slots_snapshot();
     let split_types = ctx.local_types_snapshot();
@@ -99,6 +102,7 @@ fn lower_if_chain(
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types.clone());
+    apply_instanceof_branch_narrowing(ctx, condition, true);
     lower_block(ctx, then_body);
     let then_initialized = ctx.initialized_slots_snapshot();
     let mut merge_reachable = false;
@@ -112,6 +116,7 @@ fn lower_if_chain(
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types);
+    apply_instanceof_branch_narrowing(ctx, condition, false);
     let else_reachable =
         if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
             lower_if_chain(
@@ -151,6 +156,19 @@ fn lower_if_chain(
         else_reachable,
     ));
     merge_reachable
+}
+
+/// Applies the positive nominal fact implied by a static `instanceof` branch to one local.
+fn apply_instanceof_branch_narrowing(
+    ctx: &mut LoweringContext<'_, '_>,
+    condition: &Expr,
+    branch_matches: bool,
+) {
+    if let Some((name, ty)) =
+        crate::ir_lower::expr::instanceof_branch_local_type(ctx, condition, branch_matches)
+    {
+        ctx.set_local_logical_type(&name, ty);
+    }
 }
 
 /// Defers one reachable arm's merge edge so representation conversions can be inserted later.
@@ -331,8 +349,8 @@ pub(super) fn lower_ifdef(
 /// Materializes the checker-recorded storage contract before entering a loop.
 ///
 /// Indexed and associative arrays are promoted in place so existing elements use boxed payload
-/// cells. A whole-value `Mixed` contract uses the ordinary retaining store, allowing loop-carried
-/// container-kind changes to share the same fixed frame representation.
+/// cells. Nullable scalars receive a tagged null sentinel, while a whole-value `Mixed` contract
+/// uses the ordinary retaining store so loop-carried representation changes share one frame slot.
 pub(super) fn apply_loop_storage_contracts(
     ctx: &mut LoweringContext<'_, '_>,
     loop_span: Span,
@@ -352,8 +370,22 @@ pub(super) fn apply_loop_storage_contracts(
             ctx.set_local_type(&name, target_ty);
             continue;
         }
-        let source = ctx.load_local(&name, span);
         let target_repr = target_ty.codegen_repr();
+        if matches!(source_ty, PhpType::Void | PhpType::Never)
+            && target_repr == PhpType::TaggedScalar
+        {
+            let converted = ctx.emit_value(
+                Op::ConstNull,
+                Vec::new(),
+                None,
+                target_ty.clone(),
+                Op::ConstNull.default_effects(),
+                span,
+            );
+            ctx.store_local(&name, converted, target_ty, span);
+            continue;
+        }
+        let source = ctx.load_local(&name, span);
         match (&source_ty, &target_repr) {
             (PhpType::Array(_), PhpType::AssocArray { .. }) => {
                 let converted = ctx.emit_value(

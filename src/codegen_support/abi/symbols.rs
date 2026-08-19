@@ -12,7 +12,7 @@ use crate::codegen_support::NULL_SENTINEL;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::types::PhpType;
 
-use super::calls::emit_call_label;
+use super::calls::{emit_call_label, emit_call_reg};
 use super::frame::{emit_load_from_address, emit_store_to_address};
 #[cfg(test)]
 use super::frame::{load_at_offset_scratch, store_at_offset_scratch};
@@ -23,6 +23,18 @@ use super::registers::{
     symbol_scratch_reg,
 };
 use super::values::{emit_decref_if_refcounted, emit_load_int_immediate};
+
+/// Calls a named target without relying on AArch64's direct `bl` displacement range.
+pub fn emit_call_label_long_range(emitter: &mut Emitter, label: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            let scratch = symbol_scratch_reg(emitter);
+            emit_symbol_address(emitter, scratch, label);
+            emit_call_reg(emitter, scratch);
+        }
+        Arch::X86_64 => emit_call_label(emitter, label),
+    }
+}
 
 /// Stores a local variable from its frame slot into a static/global symbol.
 /// Loads the value from `offset` relative to the frame pointer, then writes it

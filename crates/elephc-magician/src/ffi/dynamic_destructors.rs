@@ -129,18 +129,23 @@ unsafe fn dynamic_object_destruct_inner(object: *mut RuntimeCell) -> u64 {
     let object_cell = match ElephcRuntimeOps::object_from_raw(object) {
         Ok(object_cell) => object_cell,
         Err(_) => {
-            context.forget_dynamic_object(identity);
+            for value in context.forget_dynamic_object(identity) {
+                let _ = values.release(value);
+            }
             return 1;
         }
     };
     let destruct_result =
         eval_dynamic_destructor_for_object_cell(identity, object_cell, context, &mut values);
+    let overlay_release_result = context
+        .forget_dynamic_object(identity)
+        .into_iter()
+        .try_for_each(|value| values.release(value));
     let release_result = values.release(object_cell);
-    context.forget_dynamic_object(identity);
-    match (destruct_result, release_result) {
-        (Ok(true), Ok(())) => 1,
-        (Ok(false), Ok(())) => 0,
-        (Err(EvalStatus::UnsupportedConstruct), _) => 1,
-        (Err(_), _) | (_, Err(_)) => 1,
+    match (destruct_result, overlay_release_result, release_result) {
+        (Ok(true), Ok(()), Ok(())) => 1,
+        (Ok(false), Ok(()), Ok(())) => 0,
+        (Err(EvalStatus::UnsupportedConstruct), _, _) => 1,
+        (Err(_), _, _) | (_, Err(_), _) | (_, _, Err(_)) => 1,
     }
 }

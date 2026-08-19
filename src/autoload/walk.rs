@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{
     AttributeGroup, CallableTarget, CatchClause, ClassConst, ClassMethod, ClassProperty, Expr,
-    ExprKind, Program, StaticReceiver, Stmt, StmtKind, TraitUse, TypeExpr,
+    ExprKind, Program, StaticReceiver, Stmt, StmtKind, TraitAdaptation, TraitUse, TypeExpr,
 };
 
 /// Stable l-value shapes whose deterministic class-string assignments can seed dynamic `new`.
@@ -33,18 +33,18 @@ enum DynamicClassIndex {
     Int(i64),
 }
 
-/// Per-statement reference collection state, including prior definite class-string assignments.
-struct ReferenceSet<'a> {
+/// Per-statement reference collection state, including possible class-string assignments.
+struct ReferenceSet {
     names: HashSet<String>,
-    dynamic_class_defaults: &'a HashMap<DynamicClassTarget, HashSet<String>>,
+    dynamic_class_defaults: HashMap<DynamicClassTarget, HashSet<String>>,
 }
 
-impl<'a> ReferenceSet<'a> {
-    /// Creates an empty reference set backed by the current definite-assignment facts.
-    fn new(dynamic_class_defaults: &'a HashMap<DynamicClassTarget, HashSet<String>>) -> Self {
+impl ReferenceSet {
+    /// Creates an empty reference set seeded by the current class-string assignment facts.
+    fn new(dynamic_class_defaults: &HashMap<DynamicClassTarget, HashSet<String>>) -> Self {
         Self {
             names: HashSet::new(),
-            dynamic_class_defaults,
+            dynamic_class_defaults: dynamic_class_defaults.clone(),
         }
     }
 
@@ -111,11 +111,10 @@ fn collect_refs_with_definite_flow(
             }
         }
         _ => {
-            let local_names = {
-                let mut refs = ReferenceSet::new(defaults);
-                collect_refs_stmt(stmt, &mut refs);
-                refs.names
-            };
+            let mut refs = ReferenceSet::new(defaults);
+            collect_refs_stmt(stmt, &mut refs);
+            let local_names = refs.names;
+            *defaults = refs.dynamic_class_defaults;
             names.extend(local_names);
             update_dynamic_class_defaults(stmt, defaults);
         }
@@ -154,6 +153,15 @@ fn update_dynamic_class_defaults(
         _ => return,
     };
 
+    update_dynamic_class_target_default(target, value, defaults);
+}
+
+/// Records possible class strings assigned to one stable dynamic class target.
+fn update_dynamic_class_target_default(
+    target: DynamicClassTarget,
+    value: &Expr,
+    defaults: &mut HashMap<DynamicClassTarget, HashSet<String>>,
+) {
     let mut candidates = HashSet::new();
     collect_possible_class_strings(value, &mut candidates);
     let preserves_previous = matches!(
@@ -177,6 +185,15 @@ fn collect_possible_class_strings(expr: &Expr, out: &mut HashSet<String>) {
             let name = name.trim_start_matches('\\');
             if !name.is_empty() {
                 out.insert(name.to_string());
+            }
+        }
+        ExprKind::ClassConstant {
+            receiver: StaticReceiver::Named(name),
+        } => {
+            let canonical = name.as_canonical();
+            let canonical = canonical.trim_start_matches('\\');
+            if !canonical.is_empty() {
+                out.insert(canonical.to_string());
             }
         }
         ExprKind::NullCoalesce { value, default }
@@ -218,7 +235,7 @@ fn dynamic_class_index(expr: &Expr) -> Option<DynamicClassIndex> {
 }
 
 /// Recurse into a statement to collect class references.
-fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet<'_>) {
+fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet) {
     collect_attribute_groups(&stmt.attributes, out);
     match &stmt.kind {
         StmtKind::ClassDecl {
@@ -251,12 +268,16 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet<'_>) {
         }
         StmtKind::InterfaceDecl {
             extends,
+            properties,
             methods,
             constants,
             ..
         } => {
             for parent in extends {
                 push_name(parent, out);
+            }
+            for prop in properties {
+                collect_property(prop, out);
             }
             for method in methods {
                 collect_method(method, out);
@@ -285,12 +306,35 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet<'_>) {
                 collect_class_const(constant, out);
             }
         }
-        StmtKind::EnumDecl { cases, .. } => {
+        StmtKind::EnumDecl {
+            backing_type,
+            cases,
+            implements,
+            trait_uses,
+            methods,
+            constants,
+            ..
+        } => {
+            if let Some(ty) = backing_type {
+                collect_type_expr(ty, out);
+            }
+            for interface in implements {
+                push_name(interface, out);
+            }
+            for trait_use in trait_uses {
+                collect_trait_use(trait_use, out);
+            }
             for case in cases {
                 collect_attribute_groups(&case.attributes, out);
                 if let Some(value) = &case.value {
                     collect_refs_expr(value, out);
                 }
+            }
+            for method in methods {
+                collect_method(method, out);
+            }
+            for constant in constants {
+                collect_class_const(constant, out);
             }
         }
         StmtKind::PackedClassDecl { fields, .. } => {
@@ -301,17 +345,15 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet<'_>) {
         StmtKind::FunctionDecl {
             params,
             param_attributes,
+            variadic_type,
+            return_type,
             body,
             ..
         } => {
             for groups in param_attributes {
                 collect_attribute_groups(groups, out);
             }
-            for (_, _, default, _) in params {
-                if let Some(d) = default {
-                    collect_refs_expr(d, out);
-                }
-            }
+            collect_callable_signature(params, variadic_type.as_ref(), return_type.as_ref(), out);
             for s in body {
                 collect_refs_stmt(s, out);
             }
@@ -507,63 +549,172 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet<'_>) {
 }
 
 /// Collect class references from a catch clause.
-fn collect_refs_catch(catch: &CatchClause, out: &mut ReferenceSet<'_>) {
+fn collect_refs_catch(catch: &CatchClause, out: &mut ReferenceSet) {
+    for exception_type in &catch.exception_types {
+        push_name(exception_type, out);
+    }
     for s in &catch.body {
         collect_refs_stmt(s, out);
     }
 }
 
 /// Collect class references from a class method declaration.
-fn collect_method(method: &ClassMethod, out: &mut ReferenceSet<'_>) {
+fn collect_method(method: &ClassMethod, out: &mut ReferenceSet) {
     collect_attribute_groups(&method.attributes, out);
     for groups in &method.param_attributes {
         collect_attribute_groups(groups, out);
     }
-    for (_, _, default, _) in &method.params {
-        if let Some(d) = default {
-            collect_refs_expr(d, out);
-        }
-    }
+    collect_callable_signature(
+        &method.params,
+        method.variadic_type.as_ref(),
+        method.return_type.as_ref(),
+        out,
+    );
     for s in &method.body {
         collect_refs_stmt(s, out);
     }
 }
 
 /// Collect class references from a class property declaration.
-fn collect_property(prop: &ClassProperty, out: &mut ReferenceSet<'_>) {
+fn collect_property(prop: &ClassProperty, out: &mut ReferenceSet) {
     collect_attribute_groups(&prop.attributes, out);
+    if let Some(ty) = &prop.type_expr {
+        collect_type_expr(ty, out);
+    }
     if let Some(d) = &prop.default {
         collect_refs_expr(d, out);
     }
 }
 
 /// Collect class references from a class constant declaration.
-fn collect_class_const(constant: &ClassConst, out: &mut ReferenceSet<'_>) {
+fn collect_class_const(constant: &ClassConst, out: &mut ReferenceSet) {
     collect_attribute_groups(&constant.attributes, out);
+    if let Some(ty) = &constant.type_expr {
+        collect_type_expr(ty, out);
+    }
     collect_refs_expr(&constant.value, out);
 }
 
+/// Collects named parameter, variadic, and return types plus parameter default expressions.
+fn collect_callable_signature(
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    variadic_type: Option<&TypeExpr>,
+    return_type: Option<&TypeExpr>,
+    out: &mut ReferenceSet,
+) {
+    for (_, ty, default, _) in params {
+        if let Some(ty) = ty {
+            collect_type_expr(ty, out);
+        }
+        if let Some(default) = default {
+            collect_refs_expr(default, out);
+        }
+    }
+    if let Some(ty) = variadic_type {
+        collect_type_expr(ty, out);
+    }
+    if let Some(ty) = return_type {
+        collect_type_expr(ty, out);
+    }
+}
+
 /// Collects attribute class names and references nested in their argument expressions.
-fn collect_attribute_groups(groups: &[AttributeGroup], out: &mut ReferenceSet<'_>) {
+fn collect_attribute_groups(groups: &[AttributeGroup], out: &mut ReferenceSet) {
     for group in groups {
         for attribute in &group.attributes {
             push_name(&attribute.name, out);
             for argument in &attribute.args {
                 collect_refs_expr(argument, out);
+                collect_attribute_class_constant_refs(argument, out);
             }
         }
     }
 }
 
+/// Collects class-string constants retained as attribute metadata dependencies.
+///
+/// Ordinary `Type::class` expressions do not autoload the named type in PHP, so the general
+/// expression walker deliberately ignores them. Attribute metadata is different: reflection may
+/// later instantiate or inspect the recorded class string, and AOT must have discovered an
+/// existing declaration before reachability can keep it. Nested constant-expression arrays and
+/// named arguments are traversed recursively.
+fn collect_attribute_class_constant_refs(expr: &Expr, out: &mut ReferenceSet) {
+    match &expr.kind {
+        ExprKind::ClassConstant {
+            receiver: StaticReceiver::Named(name),
+        } => push_name(name, out),
+        ExprKind::ArrayLiteral(items) => {
+            for item in items {
+                collect_attribute_class_constant_refs(item, out);
+            }
+        }
+        ExprKind::ArrayLiteralAssoc(items) => {
+            for (key, value) in items {
+                collect_attribute_class_constant_refs(key, out);
+                collect_attribute_class_constant_refs(value, out);
+            }
+        }
+        ExprKind::NamedArg { value, .. }
+        | ExprKind::Negate(value)
+        | ExprKind::Not(value)
+        | ExprKind::BitNot(value)
+        | ExprKind::ErrorSuppress(value)
+        | ExprKind::Spread(value)
+        | ExprKind::Cast { expr: value, .. } => {
+            collect_attribute_class_constant_refs(value, out);
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            collect_attribute_class_constant_refs(left, out);
+            collect_attribute_class_constant_refs(right, out);
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            collect_attribute_class_constant_refs(condition, out);
+            collect_attribute_class_constant_refs(then_expr, out);
+            collect_attribute_class_constant_refs(else_expr, out);
+        }
+        ExprKind::ShortTernary { value, default }
+        | ExprKind::NullCoalesce { value, default } => {
+            collect_attribute_class_constant_refs(value, out);
+            collect_attribute_class_constant_refs(default, out);
+        }
+        _ => {}
+    }
+}
+
 /// Collect class references from a trait use declaration.
-fn collect_trait_use(trait_use: &TraitUse, out: &mut ReferenceSet<'_>) {
+fn collect_trait_use(trait_use: &TraitUse, out: &mut ReferenceSet) {
     for name in &trait_use.trait_names {
         push_name(name, out);
+    }
+    for adaptation in &trait_use.adaptations {
+        match adaptation {
+            TraitAdaptation::Alias { trait_name, .. } => {
+                if let Some(name) = trait_name {
+                    push_name(name, out);
+                }
+            }
+            TraitAdaptation::InsteadOf {
+                trait_name,
+                instead_of,
+                ..
+            } => {
+                if let Some(name) = trait_name {
+                    push_name(name, out);
+                }
+                for name in instead_of {
+                    push_name(name, out);
+                }
+            }
+        }
     }
 }
 
 /// Collect class references from a type expression.
-fn collect_type_expr(ty: &TypeExpr, out: &mut ReferenceSet<'_>) {
+fn collect_type_expr(ty: &TypeExpr, out: &mut ReferenceSet) {
     match ty {
         TypeExpr::Named(name) => push_name(name, out),
         TypeExpr::Array(inner) => collect_type_expr(inner, out),
@@ -581,7 +732,7 @@ fn collect_type_expr(ty: &TypeExpr, out: &mut ReferenceSet<'_>) {
 
 /// Recurse into an expression to collect class references, including compile-time
 /// autoload demands from `class_exists`/`interface_exists`/etc. with literal arguments.
-fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet<'_>) {
+fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet) {
     match &expr.kind {
         ExprKind::NewObject { class_name, args } => {
             push_name(class_name, out);
@@ -590,14 +741,7 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet<'_>) {
             }
         }
         ExprKind::NewDynamic { name_expr, args } => {
-            if let Some(target) = dynamic_class_target(name_expr) {
-                if let Some(candidates) = out.dynamic_class_defaults.get(&target) {
-                    let candidates = candidates.iter().cloned().collect::<Vec<_>>();
-                    for candidate in candidates {
-                        out.insert(candidate);
-                    }
-                }
-            }
+            collect_dynamic_class_target_candidates(name_expr, out);
             collect_refs_expr(name_expr, out);
             for arg in args {
                 collect_refs_expr(arg, out);
@@ -691,6 +835,13 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet<'_>) {
             for s in prelude {
                 collect_refs_stmt(s, out);
             }
+            if let Some(target) = dynamic_class_target(target) {
+                update_dynamic_class_target_default(
+                    target,
+                    value,
+                    &mut out.dynamic_class_defaults,
+                );
+            }
         }
         ExprKind::FunctionCall { name, args } => {
             // Detect compile-time demands for a literal class name. The
@@ -737,6 +888,9 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet<'_>) {
             collect_refs_expr(index, out);
         }
         ExprKind::ArrayLiteral(items) => {
+            if items.len() == 2 {
+                collect_dynamic_class_target_candidates(&items[0], out);
+            }
             for i in items {
                 collect_refs_expr(i, out);
             }
@@ -777,14 +931,12 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet<'_>) {
         ExprKind::NamedArg { value, .. } => collect_refs_expr(value, out),
         ExprKind::Closure {
             params,
+            variadic_type,
+            return_type,
             body,
             ..
         } => {
-            for (_, _, default, _) in params {
-                if let Some(d) = default {
-                    collect_refs_expr(d, out);
-                }
-            }
+            collect_callable_signature(params, variadic_type.as_ref(), return_type.as_ref(), out);
             for s in body {
                 collect_refs_stmt(s, out);
             }
@@ -807,15 +959,29 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet<'_>) {
     }
 }
 
+/// Adds known class-string candidates used as a dynamic class target in the current expression.
+fn collect_dynamic_class_target_candidates(expr: &Expr, out: &mut ReferenceSet) {
+    let Some(target) = dynamic_class_target(expr) else {
+        return;
+    };
+    let Some(candidates) = out.dynamic_class_defaults.get(&target) else {
+        return;
+    };
+    let candidates = candidates.iter().cloned().collect::<Vec<_>>();
+    for candidate in candidates {
+        out.insert(candidate);
+    }
+}
+
 /// Collect a class reference from a static receiver (::scope).
-fn collect_static_receiver(receiver: &StaticReceiver, out: &mut ReferenceSet<'_>) {
+fn collect_static_receiver(receiver: &StaticReceiver, out: &mut ReferenceSet) {
     if let StaticReceiver::Named(name) = receiver {
         push_name(name, out);
     }
 }
 
 /// Collect a class reference from a first-class callable target.
-fn collect_callable_target(target: &CallableTarget, out: &mut ReferenceSet<'_>) {
+fn collect_callable_target(target: &CallableTarget, out: &mut ReferenceSet) {
     match target {
         CallableTarget::StaticMethod { receiver, .. } => collect_static_receiver(receiver, out),
         CallableTarget::Method { object, .. } => collect_refs_expr(object, out),
@@ -824,7 +990,7 @@ fn collect_callable_target(target: &CallableTarget, out: &mut ReferenceSet<'_>) 
 }
 
 /// Normalize a name to its canonical FQN (strip leading `\`), then insert it into `out` if non-empty.
-fn push_name(name: &crate::names::Name, out: &mut ReferenceSet<'_>) {
+fn push_name(name: &crate::names::Name, out: &mut ReferenceSet) {
     let canonical = name.as_canonical();
     let trimmed = canonical.trim_start_matches('\\');
     if !trimmed.is_empty() {
@@ -834,7 +1000,7 @@ fn push_name(name: &crate::names::Name, out: &mut ReferenceSet<'_>) {
 
 /// Extract a literal string FQN from an expression argument (used for `class_exists` etc.).
 /// Inserts the cleaned FQN into `out` if the argument is a string literal.
-fn push_literal_fqn(arg: Option<&crate::parser::ast::Expr>, out: &mut ReferenceSet<'_>) {
+fn push_literal_fqn(arg: Option<&crate::parser::ast::Expr>, out: &mut ReferenceSet) {
     let Some(arg) = arg else { return };
     let ExprKind::StringLiteral(name) = &arg.kind else {
         return;

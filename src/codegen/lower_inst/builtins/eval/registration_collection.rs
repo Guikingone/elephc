@@ -20,7 +20,7 @@ pub(super) fn eval_native_function_registrations(
         .map(|function| EvalNativeFunctionRegistration {
             name: function.name.clone(),
             signature: function_signature_from_eir(function),
-            bridge_supported: function_signature_can_bridge_with_eval(function),
+            bridge_supported: eval_native_function_bridge_supported(function),
         })
         .collect()
 }

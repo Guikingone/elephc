@@ -1018,6 +1018,19 @@ echo $a->format("Y-m-d"), "|", $b->format("Y-m-d H:i:s"), "|", $c->format("H:i")
     assert_eq!(out, "1999-03-05|2001-09-09 01:46:40|12:00|2024-03-15");
 }
 
+/// Verifies weak call sites coerce an integer timestamp into createFromFormat's string parameter.
+#[test]
+fn test_create_from_format_weak_integer_string_coercion() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set('UTC');
+$date = DateTimeImmutable::createFromFormat('U', 0);
+echo $date->format('U');
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
 /// Verifies `createFromFormat` returns `false` when the subject does not match the format, and that
 /// the `=== false` check works on the result.
 #[test]

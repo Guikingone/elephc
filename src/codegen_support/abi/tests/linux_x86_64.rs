@@ -317,6 +317,15 @@ fn test_emit_branch_helpers_use_native_zero_checks_on_linux_x86_64() {
     );
 }
 
+/// Verifies named long-range calls retain the native direct x86_64 call instruction.
+#[test]
+fn test_emit_call_label_long_range_uses_direct_linux_x86_64_call() {
+    let mut emitter = test_emitter_x86();
+    emit_call_label_long_range(&mut emitter, "_shared_helper");
+
+    assert_eq!(emitter.output(), "    call _shared_helper\n");
+}
+
 /// Verifies that emit_store_result_to_symbol stores a string result (pointer
 /// in rax, length in rdx) via RIP-relative mov, and emit_load_symbol_to_result
 /// loads it back. For strings, the result is stored as two adjacent QWORDs

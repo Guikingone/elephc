@@ -114,10 +114,75 @@ pub(super) fn eval_assign(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let location = evaluate_location(target, context, scope, values)?;
+    let location = evaluate_plain_assignment_location(target, context, scope, values)?;
     let assigned = eval_expr(value, context, scope, values)?;
     write_location(location, assigned, true, context, scope, values)?;
     Ok(assigned)
+}
+
+/// Evaluates a plain-assignment target without reading an existing property value first.
+fn evaluate_plain_assignment_location(
+    target: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvaluatedLocation, EvalStatus> {
+    match target {
+        EvalExpr::PropertyGet { object, property } => {
+            let object = eval_expr(object, context, scope, values)?;
+            Ok(EvaluatedLocation::Property {
+                object,
+                property: property.clone(),
+                current: object,
+            })
+        }
+        EvalExpr::DynamicPropertyGet { object, property } => {
+            let object = eval_expr(object, context, scope, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            Ok(EvaluatedLocation::Property {
+                object,
+                property,
+                current: object,
+            })
+        }
+        EvalExpr::StaticPropertyGet {
+            class_name,
+            property,
+        } => Ok(EvaluatedLocation::StaticProperty {
+            class_name: class_name.clone(),
+            property: property.clone(),
+            current: values.null()?,
+        }),
+        EvalExpr::DynamicStaticPropertyGet {
+            class_name,
+            property,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            Ok(EvaluatedLocation::StaticProperty {
+                class_name,
+                property: property.clone(),
+                current: values.null()?,
+            })
+        }
+        EvalExpr::DynamicStaticPropertyNameGet {
+            class_name,
+            property,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            Ok(EvaluatedLocation::StaticProperty {
+                class_name,
+                property,
+                current: values.null()?,
+            })
+        }
+        EvalExpr::LoadVar(_) | EvalExpr::ArrayGet { .. } => {
+            evaluate_location(target, context, scope, values)
+        }
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
 }
 
 /// Evaluates the receiver and index components of one supported writable expression once.

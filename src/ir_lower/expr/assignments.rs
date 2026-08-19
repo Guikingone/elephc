@@ -19,8 +19,13 @@ pub(super) fn lower_assignment_expr(
     conditional_value_temp: Option<&str>,
     expr: &Expr,
 ) -> LoweredValue {
+    let terminated_prelude_result = (!prelude.is_empty()).then(|| lower_null(ctx, expr));
     for stmt in prelude {
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
+        if ctx.builder.insertion_block_is_terminated() {
+            return terminated_prelude_result
+                .expect("non-empty assignment prelude has an unreachable result placeholder");
+        }
     }
     if let (
         ExprKind::Variable(target_name),
@@ -79,6 +84,9 @@ pub(super) fn lower_assignment_expr(
         .and_then(|_| callable_array.as_ref().map(|assignment| assignment.value))
         .or_else(|| assigned_name.and_then(|name| lower_closure_for_assignment(ctx, name, value)))
         .unwrap_or_else(|| lower_expr(ctx, value));
+    if ctx.builder.insertion_block_is_terminated() {
+        return lowered;
+    }
     let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
         // For static locals and ref-bound locals, keep the declared type to
@@ -125,6 +133,9 @@ pub(super) fn lower_assignment_expr(
         }
     } else {
         lower_non_local_assignment_write(ctx, target, value, expr.span);
+    }
+    if ctx.builder.insertion_block_is_terminated() {
+        return result;
     }
     if let Some(result_target) = result_target {
         return lower_expr(ctx, result_target);

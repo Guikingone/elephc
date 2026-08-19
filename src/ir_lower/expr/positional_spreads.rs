@@ -15,7 +15,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
     sig: &FunctionSig,
     args: &[Expr],
 ) -> Option<Vec<crate::ir::ValueId>> {
-    if sig.variadic.is_some() {
+    if sig.variadic.is_some() && !crate::func_args::sig_collects_surplus_args(sig) {
         return None;
     }
     let spread_idx = single_trailing_indexed_spread_arg(ctx, args)?;
@@ -37,8 +37,10 @@ pub(super) fn lower_positional_spread_args_with_signature(
         operands.push(lower_arg_with_signature(ctx, sig, index, arg));
     }
 
-    let spread_type = indexed_spread_source_type(ctx, inner)?;
+    indexed_spread_source_type(ctx, inner)?;
     let spread = lower_expr(ctx, inner);
+    let spread = narrow_gradual_indexed_spread_source(ctx, spread, args[spread_idx].span);
+    let spread_type = ctx.builder.value_php_type(spread.value);
     let temp_name = ctx.declare_hidden_temp(spread_type.clone());
     store_value_into_temp(ctx, &temp_name, spread_type, spread, args[spread_idx].span);
     let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
@@ -84,7 +86,43 @@ pub(super) fn lower_positional_spread_args_with_signature(
         operands.push(lower_expr(ctx, &expr).value);
     }
 
+    if crate::func_args::sig_collects_surplus_args(sig) {
+        operands.push(lower_hidden_variadic_spread_tail(
+            ctx,
+            &spread_expr,
+            regular_param_count - first_spread_param_idx,
+            args[spread_idx].span,
+        ));
+    }
+
     Some(operands)
+}
+
+/// Copies the part of an indexed spread that remains after the visible fixed parameters.
+///
+/// Argument-introspection lowering uses a compiler-private variadic slot to preserve surplus PHP
+/// arguments. Calls still have a fixed source signature, so a runtime spread must materialize the
+/// visible parameters individually and pass only its remaining suffix into that hidden slot.
+fn lower_hidden_variadic_spread_tail(
+    ctx: &mut LoweringContext<'_, '_>,
+    spread_expr: &Expr,
+    offset: usize,
+    span: crate::span::Span,
+) -> crate::ir::ValueId {
+    let source = lower_expr(ctx, spread_expr);
+    let offset = emit_i64_at_span(ctx, offset as i64, span);
+    let target = crate::ir::RuntimeFnId::ArraySlice;
+    ctx.emit_value(
+        Op::RuntimeCall,
+        vec![source.value, offset.value],
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::Function(target),
+        )),
+        PhpType::Array(Box::new(PhpType::Mixed)),
+        target.effects(),
+        Some(span),
+    )
+    .value
 }
 
 /// Returns the element count for a statically-known indexed spread source.
@@ -126,10 +164,14 @@ pub(super) fn indexed_spread_source_type(
     let ty = match &expr.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, expr),
-        _ => infer_expr_type_syntactic(expr),
+        _ => ctx
+            .builtin_call_types
+            .get(&(ctx.loop_storage_scope.clone(), expr.span))
+            .cloned()
+            .unwrap_or_else(|| infer_expr_type_syntactic(expr)),
     }
     .codegen_repr();
-    if matches!(ty, PhpType::Array(_)) {
+    if matches!(ty, PhpType::Array(_) | PhpType::Mixed | PhpType::Union(_)) {
         Some(ty)
     } else {
         None
@@ -191,4 +233,3 @@ pub(super) fn emit_positional_spread_min_len_guard(
 
     ctx.builder.position_at_end(ok);
 }
-

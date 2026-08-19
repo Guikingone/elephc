@@ -6,7 +6,7 @@
 //! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
-//! - `preg_match()` captures currently support direct local `$matches` variables.
+//! - Regex output variables are written through the local's active raw/ref-cell representation.
 //! - `preg_replace_callback()` supports static string callbacks and descriptor-backed
 //!   callable values through a regex-specific callback wrapper.
 //! - `preg_split()` forces boxed Mixed element slots so dynamic flags cannot mismatch layout.
@@ -21,21 +21,29 @@ use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::super::callables;
+use super::super::load_value_to_first_int_arg;
 
 const PREG_SPLIT_FORCE_MIXED_RESULT: i64 = 1 << 30;
 
-/// Lowers `preg_match(pattern, subject)` through the shared regex runtime helper.
+/// Lowers `preg_match(pattern, subject, matches, flags, offset)` through the regex runtime.
 pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count_between(inst, "preg_match", 2, 3)?;
+    super::ensure_arg_count_between(inst, "preg_match", 2, 5)?;
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
     let matches_slot = inst
         .operands
         .get(2)
         .copied()
-        .map(|value| matches_local_slot(ctx, value))
-        .transpose()?;
-    load_pattern_and_subject(ctx, pattern, subject)?;
+        .map(|value| optional_local_slot_operand(ctx, value, "preg_match matches"))
+        .transpose()?
+        .flatten();
+    load_match_args(
+        ctx,
+        pattern,
+        subject,
+        inst.operands.get(3).copied(),
+        inst.operands.get(4).copied(),
+    )?;
     if let Some(slot) = matches_slot {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_capture");
         store_matches_array(ctx, slot)?;
@@ -79,7 +87,13 @@ pub(crate) fn lower_preg_grep(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::AArch64 => "x0",
         Arch::X86_64 => "rax",
     };
-    load_flags_arg(ctx, inst.operands.get(2).copied(), flags_reg)?;
+    load_integer_args(
+        ctx,
+        &[(inst.operands.get(2).copied(), 0, "preg_grep flags")],
+        &[flags_reg],
+        &[],
+        &[],
+    )?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("and x0, x0, #1");                          // retain only PHP's PREG_GREP_INVERT bit
@@ -256,16 +270,32 @@ pub(crate) fn lower_mb_ereg_match(
     super::store_if_result(ctx, inst)
 }
 
-/// Lowers `preg_match_all(pattern, subject)` through the shared regex runtime helper.
+/// Lowers `preg_match_all(pattern, subject, matches, flags, offset)` through the regex runtime.
 pub(crate) fn lower_preg_match_all(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "preg_match_all", 2)?;
+    super::ensure_arg_count_between(inst, "preg_match_all", 2, 5)?;
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
-    load_pattern_and_subject(ctx, pattern, subject)?;
+    let matches_slot = inst
+        .operands
+        .get(2)
+        .copied()
+        .map(|value| optional_local_slot_operand(ctx, value, "preg_match_all matches"))
+        .transpose()?
+        .flatten();
+    load_match_args(
+        ctx,
+        pattern,
+        subject,
+        inst.operands.get(3).copied(),
+        inst.operands.get(4).copied(),
+    )?;
     abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
+    if let Some(slot) = matches_slot {
+        store_empty_preg_match_all_matches(ctx, slot)?;
+    }
     super::store_if_result(ctx, inst)
 }
 
@@ -285,16 +315,40 @@ pub(crate) fn lower_preg_replace(ctx: &mut FunctionContext<'_>, inst: &Instructi
         .flatten();
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            load_string_arg(ctx, pattern, "x1", "x2", "preg_replace pattern")?;
-            load_string_arg(ctx, replacement, "x3", "x4", "preg_replace replacement")?;
-            load_string_arg(ctx, subject, "x5", "x6", "preg_replace subject")?;
-            load_optional_int_arg(ctx, limit, "x7", -1)?;
+            load_string_args(
+                ctx,
+                &[
+                    (pattern, "preg_replace pattern"),
+                    (replacement, "preg_replace replacement"),
+                    (subject, "preg_replace subject"),
+                ],
+                &[("x1", "x2"), ("x3", "x4"), ("x5", "x6")],
+            )?;
+            load_integer_args(
+                ctx,
+                &[(limit, -1, "preg_replace limit")],
+                &["x7"],
+                &[("x1", "x2"), ("x3", "x4"), ("x5", "x6")],
+                &[],
+            )?;
         }
         Arch::X86_64 => {
-            load_string_arg(ctx, pattern, "rdi", "rsi", "preg_replace pattern")?;
-            load_string_arg(ctx, replacement, "rdx", "rcx", "preg_replace replacement")?;
-            load_string_arg(ctx, subject, "r8", "r9", "preg_replace subject")?;
-            load_optional_int_arg(ctx, limit, "r10", -1)?;
+            load_string_args(
+                ctx,
+                &[
+                    (pattern, "preg_replace pattern"),
+                    (replacement, "preg_replace replacement"),
+                    (subject, "preg_replace subject"),
+                ],
+                &[("rdi", "rsi"), ("rdx", "rcx"), ("r8", "r9")],
+            )?;
+            load_integer_args(
+                ctx,
+                &[(limit, -1, "preg_replace limit")],
+                &["r10"],
+                &[("rdi", "rsi"), ("rdx", "rcx"), ("r8", "r9")],
+                &[],
+            )?;
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_replace");
@@ -328,18 +382,42 @@ pub(crate) fn lower_preg_replace_callback(
     )?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            load_string_arg(ctx, pattern, "x1", "x2", "preg_replace_callback pattern")?;
+            load_string_args(
+                ctx,
+                &[
+                    (pattern, "preg_replace_callback pattern"),
+                    (subject, "preg_replace_callback subject"),
+                ],
+                &[("x1", "x2"), ("x5", "x6")],
+            )?;
             abi::emit_symbol_address(ctx.emitter, "x3", &callback_target.entry_label);
             load_static_callback_env_arg(ctx, "x4", env_bytes);
-            load_string_arg(ctx, subject, "x5", "x6", "preg_replace_callback subject")?;
-            load_optional_int_arg(ctx, limit, "x7", -1)?;
+            load_integer_args(
+                ctx,
+                &[(limit, -1, "preg_replace_callback limit")],
+                &["x7"],
+                &[("x1", "x2"), ("x5", "x6")],
+                &["x3", "x4"],
+            )?;
         }
         Arch::X86_64 => {
-            load_string_arg(ctx, pattern, "rdi", "rsi", "preg_replace_callback pattern")?;
+            load_string_args(
+                ctx,
+                &[
+                    (pattern, "preg_replace_callback pattern"),
+                    (subject, "preg_replace_callback subject"),
+                ],
+                &[("rdi", "rsi"), ("r8", "r9")],
+            )?;
             abi::emit_symbol_address(ctx.emitter, "rdx", &callback_target.entry_label);
             load_static_callback_env_arg(ctx, "rcx", env_bytes);
-            load_string_arg(ctx, subject, "r8", "r9", "preg_replace_callback subject")?;
-            load_optional_int_arg(ctx, limit, "r10", -1)?;
+            load_integer_args(
+                ctx,
+                &[(limit, -1, "preg_replace_callback limit")],
+                &["r10"],
+                &[("rdi", "rsi"), ("r8", "r9")],
+                &["rdx", "rcx"],
+            )?;
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_replace_callback");
@@ -639,19 +717,47 @@ pub(crate) fn lower_preg_split(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let flags = inst.operands.get(3).copied();
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            load_string_arg(ctx, pattern, "x1", "x2", "preg_split pattern")?;
-            load_string_arg(ctx, subject, "x3", "x4", "preg_split subject")?;
-            load_limit_arg(ctx, limit, "x5")?;
-            load_flags_arg(ctx, flags, "x6")?;
+            load_string_args(
+                ctx,
+                &[
+                    (pattern, "preg_split pattern"),
+                    (subject, "preg_split subject"),
+                ],
+                &[("x1", "x2"), ("x3", "x4")],
+            )?;
+            load_integer_args(
+                ctx,
+                &[
+                    (limit, -1, "preg_split limit"),
+                    (flags, 0, "preg_split flags"),
+                ],
+                &["x5", "x6"],
+                &[("x1", "x2"), ("x3", "x4")],
+                &[],
+            )?;
             ctx.emitter
                 .instruction(&format!("orr x6, x6, #{}", PREG_SPLIT_FORCE_MIXED_RESULT));
             // force boxed-Mixed split slots for EIR result layout
         }
         Arch::X86_64 => {
-            load_string_arg(ctx, pattern, "rdi", "rsi", "preg_split pattern")?;
-            load_string_arg(ctx, subject, "rdx", "rcx", "preg_split subject")?;
-            load_limit_arg(ctx, limit, "r8")?;
-            load_flags_arg(ctx, flags, "r9")?;
+            load_string_args(
+                ctx,
+                &[
+                    (pattern, "preg_split pattern"),
+                    (subject, "preg_split subject"),
+                ],
+                &[("rdi", "rsi"), ("rdx", "rcx")],
+            )?;
+            load_integer_args(
+                ctx,
+                &[
+                    (limit, -1, "preg_split limit"),
+                    (flags, 0, "preg_split flags"),
+                ],
+                &["r8", "r9"],
+                &[("rdi", "rsi"), ("rdx", "rcx")],
+                &[],
+            )?;
             ctx.emitter
                 .instruction(&format!("or r9, {}", PREG_SPLIT_FORCE_MIXED_RESULT));
             // force boxed-Mixed split slots for EIR result layout
@@ -668,14 +774,43 @@ fn load_pattern_and_subject(
     subject: ValueId,
 ) -> Result<()> {
     match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            load_string_arg(ctx, pattern, "x1", "x2", "preg pattern")?;
-            load_string_arg(ctx, subject, "x3", "x4", "preg subject")
-        }
-        Arch::X86_64 => {
-            load_string_arg(ctx, pattern, "rdi", "rsi", "preg pattern")?;
-            load_string_arg(ctx, subject, "rdx", "rcx", "preg subject")
-        }
+        Arch::AArch64 => load_string_args(
+            ctx,
+            &[(pattern, "preg pattern"), (subject, "preg subject")],
+            &[("x1", "x2"), ("x3", "x4")],
+        ),
+        Arch::X86_64 => load_string_args(
+            ctx,
+            &[(pattern, "preg pattern"), (subject, "preg subject")],
+            &[("rdi", "rsi"), ("rdx", "rcx")],
+        ),
+    }
+}
+
+/// Loads the common regex inputs plus PHP flags and starting offset.
+fn load_match_args(
+    ctx: &mut FunctionContext<'_>,
+    pattern: ValueId,
+    subject: ValueId,
+    flags: Option<ValueId>,
+    offset: Option<ValueId>,
+) -> Result<()> {
+    load_pattern_and_subject(ctx, pattern, subject)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => load_integer_args(
+            ctx,
+            &[(flags, 0, "preg flags"), (offset, 0, "preg offset")],
+            &["x5", "x6"],
+            &[("x1", "x2"), ("x3", "x4")],
+            &[],
+        ),
+        Arch::X86_64 => load_integer_args(
+            ctx,
+            &[(flags, 0, "preg flags"), (offset, 0, "preg offset")],
+            &["r8", "r9"],
+            &[("rdi", "rsi"), ("rdx", "rcx")],
+            &[],
+        ),
     }
 }
 
@@ -686,49 +821,40 @@ fn load_mb_ereg_match_args(
     subject: ValueId,
     options: Option<ValueId>,
 ) -> Result<()> {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            load_string_arg(ctx, pattern, "x1", "x2", "mb_ereg_match pattern")?;
-            load_string_arg(ctx, subject, "x3", "x4", "mb_ereg_match subject")?;
-            load_optional_string_arg(ctx, options, "x5", "x6", "mb_ereg_match options")
+    let mut args = vec![
+        (pattern, "mb_ereg_match pattern"),
+        (subject, "mb_ereg_match subject"),
+    ];
+    if let Some(options) = options {
+        args.push((options, "mb_ereg_match options"));
+    }
+    match (ctx.emitter.target.arch, options.is_some()) {
+        (Arch::AArch64, true) => load_string_args(
+            ctx,
+            &args,
+            &[("x1", "x2"), ("x3", "x4"), ("x5", "x6")],
+        ),
+        (Arch::AArch64, false) => {
+            load_string_args(ctx, &args, &[("x1", "x2"), ("x3", "x4")])?;
+            abi::emit_load_int_immediate(ctx.emitter, "x5", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "x6", 0);
+            Ok(())
         }
-        Arch::X86_64 => {
-            load_string_arg(ctx, pattern, "rdi", "rsi", "mb_ereg_match pattern")?;
-            load_string_arg(ctx, subject, "rdx", "rcx", "mb_ereg_match subject")?;
-            load_optional_string_arg(ctx, options, "r8", "r9", "mb_ereg_match options")
+        (Arch::X86_64, true) => load_string_args(
+            ctx,
+            &args,
+            &[("rdi", "rsi"), ("rdx", "rcx"), ("r8", "r9")],
+        ),
+        (Arch::X86_64, false) => {
+            load_string_args(ctx, &args, &[("rdi", "rsi"), ("rdx", "rcx")])?;
+            abi::emit_load_int_immediate(ctx.emitter, "r8", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "r9", 0);
+            Ok(())
         }
     }
 }
 
-/// Returns the local slot represented by a `preg_match()` `$matches` operand.
-fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<LocalSlotId> {
-    let value_ref = ctx
-        .function
-        .value(value)
-        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Err(CodegenIrError::unsupported(
-            "preg_match matches argument that is not a local load",
-        ));
-    };
-    let inst_ref = ctx
-        .function
-        .instruction(inst)
-        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::LoadLocal {
-        return Err(CodegenIrError::unsupported(
-            "preg_match matches argument that is not a local variable",
-        ));
-    }
-    let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
-        return Err(CodegenIrError::invalid_module(
-            "preg_match matches load missing local slot",
-        ));
-    };
-    Ok(slot)
-}
-
-/// Returns an optional local slot, treating an omitted nullable default as no destination.
+/// Returns an optional writable local slot, treating an omitted nullable default as no destination.
 fn optional_local_slot_operand(
     ctx: &FunctionContext<'_>,
     value: ValueId,
@@ -743,7 +869,7 @@ fn optional_local_slot_operand(
             context
         )));
     };
-    if inst_ref.op != Op::LoadLocal {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
         return Err(CodegenIrError::unsupported(format!(
             "{} argument that is not a local variable",
             context
@@ -758,28 +884,148 @@ fn optional_local_slot_operand(
     Ok(Some(slot))
 }
 
-/// Stores the runtime-built matches array into a local slot without clobbering the match flag.
+/// Stores the runtime-built string matches array without clobbering the match flag.
 fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
-    let offset = ctx.local_offset(slot)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::store_at_offset(ctx.emitter, "x1", offset);
+    let target_ty = ctx.local_php_type(slot)?.codegen_repr();
+    let box_result = match &target_ty {
+        PhpType::Array(element_ty)
+            if matches!(element_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) =>
+        {
+            false
         }
-        Arch::X86_64 => {
-            abi::store_at_offset(ctx.emitter, "rdx", offset);
+        PhpType::Mixed | PhpType::Union(_) => true,
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "preg_match matches destination PHP type {:?}",
+                other
+            )));
         }
+    };
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let matches_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdx",
+    };
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, 0);
+    abi::emit_store_to_sp(ctx.emitter, matches_reg, 8);
+    ctx.release_local_before_refcounted_writeback(slot)?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 8);
+    if box_result {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x1, x0");                          // transfer the matches array payload into a Mixed box
+                ctx.emitter.instruction("mov x0, #4");                          // runtime value tag 4 = indexed array
+                ctx.emitter.instruction("mov x2, xzr");                         // indexed-array payload has no high word
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // transfer the matches array payload into a Mixed box
+                ctx.emitter.instruction("mov eax, 4");                          // runtime value tag 4 = indexed array
+                ctx.emitter.instruction("xor esi, esi");                        // indexed-array payload has no high word
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
     }
+    ctx.store_current_result_to_local(slot)?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
+/// Initializes the capture destination while the full capture-matrix runtime is constructed.
+fn store_empty_preg_match_all_matches(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    let local_ty = ctx.local_php_type(slot)?.codegen_repr();
+    let (element_size, box_result) = match &local_ty {
+        PhpType::Array(element_ty) => (
+            if matches!(element_ty.codegen_repr(), PhpType::Str) {
+                16
+            } else {
+                8
+            },
+            false,
+        ),
+        PhpType::Mixed | PhpType::Union(_) => (8, true),
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "preg_match_all matches destination PHP type {:?}",
+                other
+            )));
+        }
+    };
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, 0);
+    let capacity_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let element_size_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_int_immediate(ctx.emitter, capacity_reg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, element_size_reg, element_size);
+    abi::emit_call_label(ctx.emitter, "__rt_array_new");
+    if box_result {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x1, x0");                          // transfer the empty capture array payload into a Mixed box
+                ctx.emitter.instruction("mov x0, #4");                          // runtime value tag 4 = indexed array
+                ctx.emitter.instruction("mov x2, xzr");                         // indexed-array payload has no high word
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // transfer the empty capture array payload into a Mixed box
+                ctx.emitter.instruction("mov eax, 4");                          // runtime value tag 4 = indexed array
+                ctx.emitter.instruction("xor esi, esi");                        // indexed-array payload has no high word
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    }
+    abi::emit_store_to_sp(ctx.emitter, result_reg, 8);
+    ctx.release_local_before_refcounted_writeback(slot)?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 8);
+    ctx.store_current_result_to_local(slot)?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
 }
 
 /// Stores the replacement count returned beside a string result into its caller local.
 fn store_preg_replace_count(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
-    let offset = ctx.local_offset(slot)?;
+    let target_ty = ctx.local_php_type(slot)?.codegen_repr();
+    let (result_ptr_reg, result_len_reg) = abi::string_result_regs(ctx.emitter);
+    let int_result_reg = abi::int_result_reg(ctx.emitter);
     let count_reg = match ctx.emitter.target.arch {
         Arch::AArch64 => "x3",
         Arch::X86_64 => "rcx",
     };
-    abi::store_at_offset(ctx.emitter, count_reg, offset);
+
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    abi::emit_store_to_sp(ctx.emitter, result_ptr_reg, 0);
+    abi::emit_store_to_sp(ctx.emitter, result_len_reg, 8);
+    abi::emit_store_to_sp(ctx.emitter, count_reg, 16);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, int_result_reg, 16);
+
+    match target_ty {
+        PhpType::Mixed => {
+            abi::emit_push_reg(ctx.emitter, int_result_reg);
+            ctx.release_local_before_refcounted_writeback(slot)?;
+            abi::emit_pop_reg(ctx.emitter, int_result_reg);
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+        }
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
+        }
+        PhpType::Int => {}
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "regex replacement count destination with PHP type {:?}",
+                other
+            )));
+        }
+    }
+    ctx.store_current_result_to_local(slot)?;
+
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_ptr_reg, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_len_reg, 8);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     Ok(())
 }
 
@@ -831,79 +1077,138 @@ fn load_string_arg(
     len_reg: &str,
     context: &str,
 ) -> Result<()> {
-    require_string(ctx.value_php_type(value)?, context)?;
-    ctx.load_string_value_to_regs(value, ptr_reg, len_reg)
+    super::strings::load_value_as_string_to_regs(ctx, value, context, ptr_reg, len_reg)
 }
 
-/// Loads an optional string operand, using a null pointer and zero length when absent or null.
-fn load_optional_string_arg(
+/// Materializes string-coercible operands without allowing later conversions to clobber earlier pairs.
+fn load_string_args(
     ctx: &mut FunctionContext<'_>,
-    value: Option<ValueId>,
-    ptr_reg: &str,
-    len_reg: &str,
+    args: &[(ValueId, &str)],
+    destination_regs: &[(&str, &str)],
+) -> Result<()> {
+    if args.len() != destination_regs.len() {
+        return Err(CodegenIrError::invalid_module(format!(
+            "regex string argument count {} does not match destination count {}",
+            args.len(),
+            destination_regs.len()
+        )));
+    }
+    let spill_bytes = args.len() * 16;
+    abi::emit_reserve_temporary_stack(ctx.emitter, spill_bytes);
+    let (result_ptr, result_len) = abi::string_result_regs(ctx.emitter);
+    for (index, (value, context)) in args.iter().enumerate() {
+        super::strings::load_value_as_string_to_regs(
+            ctx,
+            *value,
+            context,
+            result_ptr,
+            result_len,
+        )?;
+        abi::emit_store_to_sp(ctx.emitter, result_ptr, index * 16);
+        abi::emit_store_to_sp(ctx.emitter, result_len, index * 16 + 8);
+    }
+    for (index, (ptr_reg, len_reg)) in destination_regs.iter().enumerate() {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, ptr_reg, index * 16);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, len_reg, index * 16 + 8);
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, spill_bytes);
+    Ok(())
+}
+
+/// Materializes integer-coercible operands while preserving previously staged string arguments.
+fn load_integer_args(
+    ctx: &mut FunctionContext<'_>,
+    args: &[(Option<ValueId>, i64, &str)],
+    destination_regs: &[&str],
+    preserved_string_regs: &[(&str, &str)],
+    preserved_scalar_regs: &[&str],
+) -> Result<()> {
+    if args.len() != destination_regs.len() {
+        return Err(CodegenIrError::invalid_module(format!(
+            "regex integer argument count {} does not match destination count {}",
+            args.len(),
+            destination_regs.len()
+        )));
+    }
+    let scalar_base = preserved_string_regs.len() * 16;
+    let integer_base = scalar_base + preserved_scalar_regs.len() * 16;
+    let spill_bytes = integer_base + args.len() * 16;
+    abi::emit_reserve_temporary_stack(ctx.emitter, spill_bytes);
+    for (index, (ptr_reg, len_reg)) in preserved_string_regs.iter().enumerate() {
+        abi::emit_store_to_sp(ctx.emitter, ptr_reg, index * 16);
+        abi::emit_store_to_sp(ctx.emitter, len_reg, index * 16 + 8);
+    }
+    for (index, reg) in preserved_scalar_regs.iter().enumerate() {
+        abi::emit_store_to_sp(ctx.emitter, reg, scalar_base + index * 16);
+    }
+    for (index, (value, default, context)) in args.iter().enumerate() {
+        if let Some(value) = value {
+            load_integer_arg_to_result(ctx, *value, context)?;
+        } else {
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_load_int_immediate(ctx.emitter, result_reg, *default);
+        }
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_store_to_sp(
+            ctx.emitter,
+            result_reg,
+            integer_base + index * 16,
+        );
+    }
+    for (index, (ptr_reg, len_reg)) in preserved_string_regs.iter().enumerate() {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, ptr_reg, index * 16);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, len_reg, index * 16 + 8);
+    }
+    for (index, reg) in preserved_scalar_regs.iter().enumerate() {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, reg, scalar_base + index * 16);
+    }
+    for (index, destination_reg) in destination_regs.iter().enumerate() {
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            destination_reg,
+            integer_base + index * 16,
+        );
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, spill_bytes);
+    Ok(())
+}
+
+/// Resolves a regex integer operand into the canonical integer result register.
+fn load_integer_arg_to_result(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
     context: &str,
 ) -> Result<()> {
-    let Some(value) = value else {
-        abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
-        abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
-        return Ok(());
-    };
-    let ty = ctx.value_php_type(value)?;
-    if matches!(ty, PhpType::Void | PhpType::Never) {
-        abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
-        abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
-        return Ok(());
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Int | PhpType::Bool => {
+            ctx.load_value_to_result(value)?;
+        }
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+        }
+        PhpType::Void | PhpType::Never => {
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+        }
+        PhpType::Float => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_float_result_to_int_result(ctx.emitter);
+        }
+        PhpType::Str => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
+        }
+        ty => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} for PHP type {:?}",
+                context, ty
+            )));
+        }
     }
-    require_string(ty, context)?;
-    ctx.load_string_value_to_regs(value, ptr_reg, len_reg)
-}
-
-/// Loads the optional `preg_split()` limit, using PHP's default `-1`.
-fn load_limit_arg(ctx: &mut FunctionContext<'_>, limit: Option<ValueId>, reg: &str) -> Result<()> {
-    load_optional_int_arg(ctx, limit, reg, -1)
-}
-
-/// Loads an optional integer operand into a caller-selected register.
-fn load_optional_int_arg(
-    ctx: &mut FunctionContext<'_>,
-    value: Option<ValueId>,
-    reg: &str,
-    default: i64,
-) -> Result<()> {
-    let Some(value) = value else {
-        abi::emit_load_int_immediate(ctx.emitter, reg, default);
-        return Ok(());
-    };
-    require_integer_like(ctx.load_value_to_reg(value, reg)?, "regex integer option")
-}
-
-/// Loads the optional `preg_split()` flags, using PHP's default `0`.
-fn load_flags_arg(ctx: &mut FunctionContext<'_>, flags: Option<ValueId>, reg: &str) -> Result<()> {
-    let Some(flags) = flags else {
-        abi::emit_load_int_immediate(ctx.emitter, reg, 0);
-        return Ok(());
-    };
-    require_integer_like(ctx.load_value_to_reg(flags, reg)?, "preg_split flags")
-}
-
-/// Verifies that a regex string operand is statically string-shaped.
-fn require_string(ty: PhpType, context: &str) -> Result<()> {
-    if ty == PhpType::Str {
-        return Ok(());
-    }
-    Err(CodegenIrError::unsupported(format!(
-        "{} for PHP type {:?}",
-        context, ty
-    )))
-}
-
-/// Verifies that a regex integer option is statically integer-like.
-fn require_integer_like(ty: PhpType, context: &str) -> Result<()> {
-    if matches!(ty, PhpType::Int | PhpType::Bool) {
-        return Ok(());
-    }
-    Err(CodegenIrError::unsupported(format!(
-        "{} for PHP type {:?}",
-        context, ty
-    )))
+    Ok(())
 }

@@ -1035,6 +1035,18 @@ echo strtr("aXbXc", ["X"=>"","b"=>"BB"]);
     assert_eq!(out, "bar baz|hello all, I said hi|Xc|xx|aBBc");
 }
 
+/// Verifies pair values use PHP's runtime string coercion when the hash stores boxed values.
+#[test]
+fn test_strtr_replacement_pairs_coerce_mixed_values() {
+    let out = compile_and_run(
+        r#"<?php
+$pairs = ["int" => 7, "string" => "ok", "null" => null, "bool" => true];
+echo strtr("int|string|null|bool", $pairs);
+"#,
+    );
+    assert_eq!(out, "7|ok||1");
+}
+
 /// Verifies `strtr()` skips keys longer than the subject, matches numeric-string and integer
 /// keys through their decimal spelling, and returns the subject for an empty pair list.
 #[test]

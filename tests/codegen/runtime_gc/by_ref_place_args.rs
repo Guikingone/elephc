@@ -173,3 +173,31 @@ echo $value, "|", $number === null ? "null" : "value";
     );
     assert_clean(out, "5|null");
 }
+
+/// An uninitialized local used as an output destination starts as null instead of inheriting
+/// unrelated frame bytes, and the object used after that call remains alive.
+#[test]
+fn test_uninitialized_output_local_is_zero_initialized() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Cursor {
+    private int $offset = 0;
+
+    public function read(string $input): string {
+        preg_match('/([A-Z_]+)/A', $input, $output, 0, $this->offset);
+        $this->offset += strlen($output[0]);
+        return $output[1] . ':' . $this->offset;
+    }
+}
+
+echo (new Cursor())->read('APP_ENV=value');
+"#,
+    );
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "APP_ENV:7", "stderr: {}", out.stderr);
+    assert!(
+        !out.stderr.contains("heap debug detected"),
+        "unexpected heap corruption: {}",
+        out.stderr
+    );
+}

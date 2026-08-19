@@ -17,10 +17,15 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
     if inst.operands.len() == 3 && matches!(inst.immediate, Some(Immediate::Data(_))) {
         return lower_property_array_runtime_set(ctx, inst);
     }
-    if inst.operands.len() == 1 && matches!(inst.immediate, Some(Immediate::Data(_))) {
+    if inst.operands.len() == 1
+        && matches!(inst.immediate, Some(Immediate::NominalObject { .. }))
+    {
         if let Some(()) = lower_generic_object_nominal_guard(ctx, inst)? {
             return Ok(());
         }
+    }
+    if inst.operands.len() == 1 && matches!(inst.immediate, Some(Immediate::TypeName(_))) {
+        return lower_gradual_union_param_guard(ctx, inst);
     }
     if let Some(()) = try_lower_array_access_runtime_call(ctx, inst)? {
         return Ok(());
@@ -54,6 +59,45 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         emit_object_tostring_call(ctx, value, normalized)?;
         return store_if_result(ctx, inst);
     }
+    if source_ty == PhpType::Str && inst.result_php_type.codegen_repr() == PhpType::Callable {
+        let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+        callables::emit_runtime_string_descriptor_value(
+            ctx,
+            value,
+            &result_reg,
+            "callable return",
+            crate::strict_php::is_enabled(),
+        )?;
+        return store_if_result(ctx, inst);
+    }
+    if matches!(source_ty, PhpType::Array(_))
+        && inst.result_php_type.codegen_repr() == PhpType::Callable
+    {
+        callables::emit_runtime_callable_array_descriptor_value(ctx, value, "callable return")?;
+        return store_if_result(ctx, inst);
+    }
+    if matches!(&source_ty, PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed)
+        && matches!(
+            inst.result_php_type.codegen_repr(),
+            PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed
+        )
+    {
+        ctx.load_value_to_result(value)?;
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the indexed mixed array to the hash conversion helper
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+        return store_if_result(ctx, inst);
+    }
+    if matches!(source_ty, PhpType::AssocArray { .. })
+        && matches!(inst.result_php_type.codegen_repr(), PhpType::Array(_))
+    {
+        // PHP's `array` return boundary accepts both packed and hash-backed storage. Keep the
+        // associative pointer and its keys intact; array consumers dispatch on the runtime
+        // storage-kind metadata when a statically indexed value is hash-backed.
+        ctx.load_value_to_result(value)?;
+        return store_if_result(ctx, inst);
+    }
     if inst.result_php_type.codegen_repr() == PhpType::Iterable
         && matches!(
             source_ty,
@@ -64,23 +108,25 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         return store_if_result(ctx, inst);
     }
     if inst.result_php_type.codegen_repr() == PhpType::TaggedScalar {
-        match source_ty {
-            PhpType::Int | PhpType::Bool | PhpType::Callable => {
-                ctx.load_value_to_result(value)?;
-                crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
-                return store_if_result(ctx, inst);
-            }
-            PhpType::Void | PhpType::Never => {
-                crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
-                return store_if_result(ctx, inst);
-            }
-            other => {
-                return Err(CodegenIrError::unsupported(format!(
-                    "runtime_call from PHP type {:?} to PHP type TaggedScalar",
-                    other
-                )))
-            }
-        }
+        ctx.load_value_to_result(value)?;
+        coerce_loaded_value_to_tagged_scalar(ctx, &source_ty)?;
+        return store_if_result(ctx, inst);
+    }
+    if source_ty == PhpType::TaggedScalar
+        && inst.result_php_type.codegen_repr() == PhpType::Int
+    {
+        ctx.load_value_to_result(value)?;
+        let null_label = ctx.next_label("nullable_int_param_null");
+        let accepted_label = ctx.next_label("nullable_int_param_accepted");
+        crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(
+            ctx.emitter,
+            &null_label,
+        );
+        abi::emit_jump(ctx.emitter, &accepted_label);
+        ctx.emitter.label(&null_label);
+        exceptions::emit_type_error(ctx, "Argument must be of type int, null given");
+        ctx.emitter.label(&accepted_label);
+        return store_if_result(ctx, inst);
     }
     if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         let result_ty = inst.result_php_type.codegen_repr();
@@ -118,24 +164,133 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
     )))
 }
 
-/// Guards a raw bare-object payload against a named class or interface boundary.
+/// Validates a boxed argument's active runtime tag against its declared union parameter.
+fn lower_gradual_union_param_guard(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let Some(Immediate::TypeName(type_name)) = inst.immediate else {
+        return Err(CodegenIrError::invalid_module(
+            "gradual union parameter guard is missing its declared type name",
+        ));
+    };
+    let declared_name = ctx
+        .module
+        .data
+        .strings
+        .get(type_name.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| CodegenIrError::missing_entry("type-name data", type_name.as_raw()))?;
+    let accepted_tags = gradual_union_param_tags(&inst.result_php_type).ok_or_else(|| {
+        CodegenIrError::invalid_module(format!(
+            "unsupported gradual union parameter guard for PHP type {:?}",
+            inst.result_php_type
+        ))
+    })?;
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let accepted_label = ctx.next_label("gradual_union_param_accepted");
+    let wrong_tag_label = ctx.next_label("gradual_union_param_wrong_tag");
+    for tag in accepted_tags {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp x0, #{}", tag));          // compare the active Mixed tag with one declared union member
+                ctx.emitter.instruction(&format!("b.eq {}", accepted_label));   // accept the original boxed value when this member matches
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp rax, {}", tag));          // compare the active Mixed tag with one declared union member
+                ctx.emitter.instruction(&format!("je {}", accepted_label));     // accept the original boxed value when this member matches
+            }
+        }
+    }
+    abi::emit_jump(ctx.emitter, &wrong_tag_label);
+    super::builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &wrong_tag_label,
+        &|given| format!("Argument must be of type {}, {} given", declared_name, given),
+    );
+    ctx.emitter.label(&accepted_label);
+    ctx.load_value_to_result(value)?;                                          // keep the caller's original boxed union representation
+    store_if_result(ctx, inst)
+}
+
+/// Returns the stable Mixed tags accepted by a scalar/null/array union parameter.
+fn gradual_union_param_tags(ty: &PhpType) -> Option<Vec<i64>> {
+    let PhpType::Union(members) = ty else {
+        return None;
+    };
+    let mut tags = Vec::new();
+    for member in members {
+        let member_tags: &[i64] = match member {
+            PhpType::Int => &[0],
+            PhpType::Str => &[1],
+            PhpType::Float => &[2],
+            PhpType::Bool => &[3],
+            PhpType::Array(_) | PhpType::AssocArray { .. } => &[4, 5],
+            PhpType::Void => &[8],
+            _ => return None,
+        };
+        for tag in member_tags {
+            if !tags.contains(tag) {
+                tags.push(*tag);
+            }
+        }
+    }
+    Some(tags)
+}
+
+/// Guards an object payload against a named class or interface boundary.
 fn lower_generic_object_nominal_guard(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<Option<()>> {
     let value = expect_operand(inst, 0)?;
-    let PhpType::Object(source_name) = ctx.value_php_type(value)?.codegen_repr() else {
-        return Ok(None);
-    };
-    if !source_name.trim_start_matches('\\').is_empty() {
+    let source_ty = ctx.value_php_type(value)?.codegen_repr();
+    if !matches!(source_ty, PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)) {
         return Ok(None);
     }
-    let target_name = objects::class_name_immediate(ctx, inst)?.to_string();
-    let Some((target_id, target_kind)) = objects::classify_named_target(ctx, &target_name) else {
-        return Err(CodegenIrError::invalid_module(format!(
-            "missing runtime type metadata for object boundary {:?}",
-            target_name
-        )));
+    let Some(Immediate::NominalObject { target, boundary }) = inst.immediate else {
+        return Ok(None);
+    };
+    let target_name = ctx
+        .module
+        .data
+        .class_names
+        .get(target.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| CodegenIrError::missing_entry("class data", target.as_raw()))?;
+    if let PhpType::Object(source_name) = &source_ty {
+        if php_symbol_key(source_name) == php_symbol_key(&target_name) {
+            ctx.load_value_to_result(value)?;
+            store_nominal_object_result(ctx, inst, &source_ty)?;
+            return Ok(Some(()));
+        }
+    }
+    let target_metadata = objects::classify_named_target(ctx, &target_name);
+    if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+        return lower_gradual_object_nominal_guard(
+            ctx,
+            inst,
+            value,
+            &target_name,
+            target_metadata,
+            boundary,
+        )
+        .map(Some);
+    }
+    let Some((target_id, target_kind)) = target_metadata else {
+        // An unresolved nominal declaration can name an optional runtime type that is not part
+        // of the compiled program. The exact-name case was accepted above; any other statically
+        // known object cannot be proven compatible without inventing hierarchy metadata.
+        let message = nominal_object_type_error_message(
+            boundary,
+            &target_name,
+            false,
+            "object",
+        );
+        exceptions::emit_type_error(ctx, &message);
+        return Ok(Some(()));
     };
     let source_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(value, source_reg)?;
@@ -152,14 +307,151 @@ fn lower_generic_object_nominal_guard(
         }
     }
     abi::emit_pop_reg(ctx.emitter, source_reg);
-    exceptions::emit_type_error(
-        ctx,
-        &format!("Return value must be of type {}, object returned", target_name),
-    );
+    let message = match boundary {
+        NominalObjectBoundary::Parameter => {
+            format!("Argument must be of type {}, object given", target_name)
+        }
+        NominalObjectBoundary::Property => {
+            format!("Cannot assign object to property of type {}", target_name)
+        }
+        NominalObjectBoundary::Return => {
+            format!("Return value must be of type {}, object returned", target_name)
+        }
+    };
+    exceptions::emit_type_error(ctx, &message);
     ctx.emitter.label(&accepted);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    store_if_result(ctx, inst)?;
+    store_nominal_object_result(ctx, inst, &source_ty)?;
     Ok(Some(()))
+}
+
+/// Boxes a raw nominal object when the boundary result uses the Mixed representation, then stores
+/// the value in the instruction result slot.
+fn store_nominal_object_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    source_ty: &PhpType,
+) -> Result<()> {
+    if matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed)
+        && matches!(source_ty.codegen_repr(), PhpType::Object(_))
+    {
+        emit_box_current_value_as_mixed(ctx.emitter, source_ty);
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Validates a boxed gradual return against a nullable or non-null named object declaration.
+fn lower_gradual_object_nominal_guard(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+    target_name: &str,
+    target_metadata: Option<(u64, i64)>,
+    boundary: NominalObjectBoundary,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let object_label = ctx.next_label("gradual_object_boundary_object");
+    let wrong_tag_label = ctx.next_label("gradual_object_boundary_wrong_tag");
+    let accepted_label = ctx.next_label("gradual_object_boundary_accepted");
+    let accepts_null = match &inst.result_php_type {
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| matches!(member, PhpType::Void | PhpType::Never)),
+        PhpType::Void | PhpType::Never => true,
+        _ => false,
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 = object
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));
+            if accepts_null {
+                ctx.emitter.instruction("cmp x0, #8");                          // runtime tag 8 = null
+                ctx.emitter.instruction(&format!("b.eq {}", accepted_label));
+            }
+            ctx.emitter.instruction(&format!("b {}", wrong_tag_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 = object
+            ctx.emitter.instruction(&format!("je {}", object_label));
+            if accepts_null {
+                ctx.emitter.instruction("cmp rax, 8");                          // runtime tag 8 = null
+                ctx.emitter.instruction(&format!("je {}", accepted_label));
+            }
+            ctx.emitter.instruction(&format!("jmp {}", wrong_tag_label));
+        }
+    }
+    super::builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &wrong_tag_label,
+        &|given| nominal_object_type_error_message(boundary, target_name, accepts_null, given),
+    );
+
+    ctx.emitter.label(&object_label);
+    if let Some((target_id, target_kind)) = target_metadata {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),             // pass the unboxed object payload to the nominal matcher
+            Arch::X86_64 => {}                                                   // the unboxed object payload is already in rdi
+        }
+        objects::emit_match_call(ctx, target_id, target_kind, "__rt_exception_matches");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbnz x0, {}", accepted_label)); // accept an object matching the declared class or interface
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                       // test the nominal object matcher result
+                ctx.emitter.instruction(&format!("jne {}", accepted_label));    // accept an object matching the declared class or interface
+            }
+        }
+    }
+    let message = nominal_object_type_error_message(
+        boundary,
+        target_name,
+        accepts_null,
+        "object",
+    );
+    exceptions::emit_type_error(ctx, &message);
+
+    ctx.emitter.label(&accepted_label);
+    ctx.load_value_to_result(value)?;                                          // reload the original boxed object-or-null source after matcher calls
+    if matches!(inst.result_php_type.codegen_repr(), PhpType::Object(_)) {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, x1");                          // expose the accepted object payload as the concrete result
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rax, rdi");                        // expose the accepted object payload as the concrete result
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_incref");
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Formats the PHP-facing type error for a nominal object parameter, property, or return guard.
+fn nominal_object_type_error_message(
+    boundary: NominalObjectBoundary,
+    target_name: &str,
+    accepts_null: bool,
+    given: &str,
+) -> String {
+    let declared_name = if accepts_null {
+        format!("{}|null", target_name)
+    } else {
+        target_name.to_string()
+    };
+    match boundary {
+        NominalObjectBoundary::Parameter => {
+            format!("Argument must be of type {}, {} given", declared_name, given)
+        }
+        NominalObjectBoundary::Property => {
+            format!("Cannot assign {} to property of type {}", given, declared_name)
+        }
+        NominalObjectBoundary::Return => {
+            format!("Return value must be of type {}, {} returned", declared_name, given)
+        }
+    }
 }
 
 /// Lowers generic EIR runtime calls that represent PHP `ArrayAccess` object indexing.
@@ -338,6 +630,7 @@ pub(super) fn lower_boxed_array_access_interface_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 

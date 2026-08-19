@@ -846,3 +846,17 @@ echo str_replace(["a", "b"], replacements(1, null), "abc");
     );
     assert_eq!(out, "1c");
 }
+
+/// Verifies a gradual search array is converted element-by-element to PHP strings.
+#[test]
+fn test_str_replace_mixed_search_array() {
+    let out = compile_and_run(
+        r#"<?php
+function searches(mixed $first, mixed $second): array {
+    return [$first, $second];
+}
+echo str_replace(searches("a", 2), ["x", "y"], "a2");
+"#,
+    );
+    assert_eq!(out, "xy");
+}

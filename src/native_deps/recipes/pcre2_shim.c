@@ -4,9 +4,12 @@
 #include <stdlib.h>
 #include <pcre2posix.h>
 
+#define ELEPHC_PCRE2_CFLAG_ANCHORED 0x2000U
+
 typedef struct elephc_pcre2_v1_handle {
     regex_t regex;
     size_t slot_count;
+    int anchored;
 } elephc_pcre2_v1_handle;
 
 int32_t elephc_pcre2_v1_compile(
@@ -16,6 +19,7 @@ int32_t elephc_pcre2_v1_compile(
     uint64_t *match_slot_count_out
 ) {
     elephc_pcre2_v1_handle *handle;
+    uint32_t posix_cflags;
     int result;
 
     if (handle_out != NULL) {
@@ -24,7 +28,8 @@ int32_t elephc_pcre2_v1_compile(
     if (match_slot_count_out != NULL) {
         *match_slot_count_out = 0;
     }
-    if (handle_out == NULL || match_slot_count_out == NULL || pattern_z == NULL || cflags > INT_MAX) {
+    posix_cflags = cflags & ~ELEPHC_PCRE2_CFLAG_ANCHORED;
+    if (handle_out == NULL || match_slot_count_out == NULL || pattern_z == NULL || posix_cflags > INT_MAX) {
         return (int32_t)REG_BADPAT;
     }
 
@@ -32,7 +37,8 @@ int32_t elephc_pcre2_v1_compile(
     if (handle == NULL) {
         return (int32_t)REG_ESPACE;
     }
-    result = pcre2_regcomp(&handle->regex, pattern_z, (int)cflags);
+    handle->anchored = (cflags & ELEPHC_PCRE2_CFLAG_ANCHORED) != 0;
+    result = pcre2_regcomp(&handle->regex, pattern_z, (int)posix_cflags);
     if (result != 0) {
         free(handle);
         return (int32_t)result;
@@ -81,7 +87,10 @@ int32_t elephc_pcre2_v1_exec(
     }
     slots = (size_t)requested_slots;
     effective_slots = slots < handle->slot_count ? slots : handle->slot_count;
-    use_startend = (eflags & REG_STARTEND) != 0 && effective_slots != 0;
+    if (handle->anchored && effective_slots == 0) {
+        effective_slots = 1;
+    }
+    use_startend = (eflags & REG_STARTEND) != 0 && slots != 0;
     if (use_startend) {
         start_offset = offset_pairs[0];
         end_offset = offset_pairs[1];
@@ -109,8 +118,12 @@ int32_t elephc_pcre2_v1_exec(
         }
     }
     result = pcre2_regexec(&handle->regex, subject_z, effective_slots, matches, (int)eflags);
+    if (result == 0 && handle->anchored
+        && matches[0].rm_so != (regoff_t)(use_startend ? start_offset : 0)) {
+        result = REG_NOMATCH;
+    }
     if (result == 0) {
-        for (index = 0; index < effective_slots; ++index) {
+        for (index = 0; index < effective_slots && index < slots; ++index) {
             offset_pairs[index * 2] = (int64_t)matches[index].rm_so;
             offset_pairs[index * 2 + 1] = (int64_t)matches[index].rm_eo;
         }

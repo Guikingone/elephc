@@ -346,6 +346,24 @@ fn merge_null_coalesce_result_type(value: PhpType, default: PhpType) -> PhpType 
         .unwrap_or_else(|| null_coalesce_merge_type(&value, &default))
 }
 
+/// Joins the non-null value and default types of `??` while retaining compatible objects.
+///
+/// Object arms use the same inheritance-aware join as ternaries and match expressions. This
+/// keeps a common class or interface contract available to a method call chained from the
+/// coalesce expression, while the lowering layer may still box distinct runtime classes in its
+/// merge slot. Non-object arms retain the ordinary null-coalesce join above.
+fn merge_null_coalesce_checked_result_type(
+    checker: &Checker,
+    value: PhpType,
+    default: PhpType,
+) -> PhpType {
+    if object_union_match_arm_type(&value) && object_union_match_arm_type(&default) {
+        merge_object_union_match_arm_types(checker, value, default)
+    } else {
+        merge_null_coalesce_result_type(value, default)
+    }
+}
+
 /// Joins object/sentinel branch types at their existing compatible supertype
 /// when one accepts the other, otherwise retaining a normalized union. A null
 /// member from either side is restored after comparing the non-null members.

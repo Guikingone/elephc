@@ -9,6 +9,66 @@
 
 use super::*;
 
+/// Verifies object syntax may invoke a static-only method, preserving receiver evaluation and the
+/// static method's declared return type.
+#[test]
+fn test_object_receiver_invokes_static_only_method() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticThroughObject {
+    public static function label(string $value): string { return "S".$value; }
+}
+
+function receiver(): StaticThroughObject {
+    echo "R";
+    return new StaticThroughObject();
+}
+
+echo receiver()->label("X");
+"#,
+    );
+    assert_eq!(out, "RSX");
+}
+
+/// Verifies nullable object storage retains object-syntax static dispatch after the null guard,
+/// including nullsafe short-circuiting and an ordinary call's catchable null-receiver error.
+#[test]
+fn test_nullable_object_receiver_invokes_static_only_method() {
+    let out = compile_and_run(
+        r#"<?php
+class NullableStaticTarget {
+    public static function label(string $value): string { return "S".$value; }
+}
+
+class NullableStaticHolder {
+    public function __construct(private ?NullableStaticTarget $target) {}
+
+    public function regular(): string {
+        return $this->target->label("R");
+    }
+
+    public function nullsafe(): ?string {
+        return $this->target?->label("N");
+    }
+}
+
+$present = new NullableStaticHolder(new NullableStaticTarget());
+$missing = new NullableStaticHolder(null);
+echo $present->regular(), "|", $present->nullsafe(), "|";
+var_dump($missing->nullsafe());
+try {
+    $missing->regular();
+} catch (Error $error) {
+    echo get_class($error), ":", $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "SR|SN|NULL\nError:Call to a member function label() on null"
+    );
+}
+
 /// Verifies PHP's generic `object` parameter type accepts concrete objects and
 /// preserves object-shaped ABI lowering.
 #[test]
@@ -202,6 +262,114 @@ function nominalReturn(object $value): ?ExpectedReturnObject {
 echo nominalReturn(new ExpectedReturnObject()) instanceof ExpectedReturnObject ? 'ok' : 'bad';
 try {
     nominalReturn(new UnexpectedReturnObject());
+} catch (TypeError) {
+    echo '|caught';
+}
+"#,
+    );
+    assert_eq!(out, "ok|caught");
+}
+
+/// Verifies a statically known superclass return is checked before crossing a narrower class
+/// boundary, accepting a matching runtime subclass and throwing for the superclass itself.
+#[test]
+fn test_superclass_object_nominal_return_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+class NominalReturnBase {}
+final class NominalReturnChild extends NominalReturnBase {}
+
+function narrowedReturn(NominalReturnBase $value): NominalReturnChild {
+    return $value;
+}
+
+echo narrowedReturn(new NominalReturnChild()) instanceof NominalReturnChild ? 'ok' : 'bad';
+try {
+    narrowedReturn(new NominalReturnBase());
+} catch (TypeError) {
+    echo '|caught';
+}
+"#,
+    );
+    assert_eq!(out, "ok|caught");
+}
+
+/// Verifies an object-or-false producer is checked only when its active runtime branch crosses a
+/// nullable nominal object return, preserving object and null while rejecting false.
+#[test]
+fn test_gradual_object_false_union_nominal_return_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+final class GradualNominalReturn {}
+
+function objectOrFalse(bool $present): GradualNominalReturn|false {
+    return $present ? new GradualNominalReturn() : false;
+}
+
+function nullableNominalReturn(bool $present): ?GradualNominalReturn {
+    return objectOrFalse($present);
+}
+
+echo nullableNominalReturn(true) instanceof GradualNominalReturn ? 'ok' : 'bad';
+try {
+    nullableNominalReturn(false);
+} catch (TypeError) {
+    echo '|caught';
+}
+"#,
+    );
+    assert_eq!(out, "ok|caught");
+}
+
+/// Verifies an unresolved nominal return still accepts null and rejects scalar or unrelated
+/// object values without requiring fabricated runtime hierarchy metadata.
+#[test]
+fn test_unresolved_nominal_return_boundary_is_conservative() {
+    let out = compile_and_run(
+        r#"<?php
+final class KnownUnrelatedReturnObject {}
+
+function unresolvedNominalReturn(mixed $value): ?ExternalNominalContract {
+    return $value;
+}
+
+echo unresolvedNominalReturn(null) === null ? 'null' : 'bad';
+try {
+    unresolvedNominalReturn(1);
+} catch (TypeError) {
+    echo '|scalar';
+}
+try {
+    unresolvedNominalReturn(new KnownUnrelatedReturnObject());
+} catch (TypeError) {
+    echo '|object';
+}
+"#,
+    );
+    assert_eq!(out, "null|scalar|object");
+}
+
+/// Verifies a statically known superclass argument is checked before crossing a narrower
+/// constructor parameter, accepting a matching runtime subclass and throwing otherwise.
+#[test]
+fn test_superclass_object_nominal_parameter_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+class NominalParameterBase {}
+final class NominalParameterChild extends NominalParameterBase {}
+
+final class NominalParameterReceiver {
+    public function __construct(NominalParameterChild $value) {}
+}
+
+function constructNarrowed(NominalParameterBase $value): string {
+    new NominalParameterReceiver($value);
+    return 'ok';
+}
+
+echo constructNarrowed(new NominalParameterChild());
+try {
+    constructNarrowed(new NominalParameterBase());
 } catch (TypeError) {
     echo '|caught';
 }

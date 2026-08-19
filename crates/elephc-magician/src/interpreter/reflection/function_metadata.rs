@@ -590,12 +590,7 @@ pub(super) fn eval_reflection_function_closure_scope_class_name(
                 return Ok(Some(bound_scope.clone()));
             }
             if context.closure(name).is_none() {
-                return match bound_this {
-                    Some(object) => {
-                        eval_closure_bound_object_class_name(*object, context, values).map(Some)
-                    }
-                    None => Ok(None),
-                };
+                return Ok(bound_this.map(|_| String::from("Closure")));
             }
             match bound_this {
                 Some(object) => eval_closure_bound_object_class_name(*object, context, values)

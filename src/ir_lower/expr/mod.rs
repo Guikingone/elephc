@@ -70,7 +70,7 @@ mod indexed_array_literals;
 mod assoc_array_literals;
 mod match_expr;
 mod array_access;
-mod array_access_types;
+pub(in crate::ir_lower) mod array_access_types;
 mod ternary_cast;
 mod closures;
 mod closure_calls;
@@ -116,6 +116,8 @@ use callable_resolution::*;
 use unset::*;
 use array_builtin_args::*;
 use builtin_special_args::*;
+pub(crate) use call_arg_coercion::apply_scalar_param_cast;
+pub(in crate::ir_lower) use call_arg_coercion::param_accepts_object_without_string_coercion;
 use call_arg_coercion::*;
 use positional_spreads::*;
 use named_args::*;
@@ -148,7 +150,9 @@ use generators::*;
 use instanceof_coercions::*;
 use merge_temps::*;
 
-pub(in crate::ir_lower) use instanceof_coercions::statically_known_instanceof_result;
+pub(in crate::ir_lower) use instanceof_coercions::{
+    instanceof_branch_local_type, statically_known_instanceof_result,
+};
 
 pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
@@ -577,7 +581,7 @@ fn widen_array_splice_receiver_for_replacement(
     let Some(replacement) = operands.get(3).copied() else {
         return;
     };
-    let Some((name, span)) = array_splice_receiver_local(ctx, sig, args) else {
+    let Some((name, span)) = first_parameter_plain_local(ctx, sig, args) else {
         return;
     };
     let PhpType::Array(elem_ty) = ctx.local_type(&name).codegen_repr() else {
@@ -605,15 +609,12 @@ fn widen_array_splice_receiver_for_replacement(
     operands[0] = ctx.load_local(&name, Some(span)).value;
 }
 
-/// Returns the plain local variable bound to `array_splice()`'s by-reference receiver.
+/// Returns the plain local variable bound to a call's first declared parameter.
 ///
-/// Two receiver shapes are deliberately excluded even though they name a local. A by-reference
-/// parameter and a `&$x` binding share storage with a caller slot this function cannot retype,
-/// and the hidden `__eir_place` temporary of the property/element rewrite is written back into a
-/// place whose declared element type is equally out of reach. Widening either would publish
-/// boxed `Mixed` cells through a slot still described as `array<int>`, so both keep the
-/// backend's explicit diagnostic instead.
-fn array_splice_receiver_local(
+/// Reference-bound locals and hidden place temporaries are excluded because retyping their
+/// storage would also require updating a caller, property, or array-element contract outside the
+/// current frame.
+fn first_parameter_plain_local(
     ctx: &LoweringContext<'_, '_>,
     sig: &FunctionSig,
     args: &[Expr],
@@ -747,8 +748,9 @@ fn lower_new_dynamic_planned_dispatch(
     name_expr: &Expr,
     args: &[Expr],
     expr: &Expr,
+    required_parent: Option<&str>,
 ) -> Option<LoweredValue> {
-    let candidates = dynamic_new_planned_candidate_classes(ctx, args);
+    let candidates = dynamic_new_planned_candidate_classes(ctx, args, required_parent);
     if candidates.is_empty() {
         return None;
     }
@@ -758,11 +760,17 @@ fn lower_new_dynamic_planned_dispatch(
         PhpType::Str => PhpType::Str,
         _ => PhpType::Mixed,
     };
-    let name_temp = ctx.declare_owned_hidden_temp(name_type.clone());
+    // Candidate guards read the class name repeatedly. A one-shot `OwnedTemp` would make
+    // every `LoadLocal` look like an ownership transfer and the first guard cleanup would
+    // free the value while later guards and the fallback still reference the slot.
+    let name_temp = ctx.declare_hidden_temp(name_type.clone());
     store_value_into_temp(ctx, &name_temp, name_type.clone(), name_value, expr.span);
     let name_var = Expr::new(ExprKind::Variable(name_temp.clone()), name_expr.span);
 
-    let result_temp = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let result_type = required_parent
+        .map(|parent| PhpType::Object(parent.to_string()))
+        .unwrap_or(PhpType::Mixed);
+    let result_temp = ctx.declare_owned_hidden_temp(result_type.clone());
     let merge = ctx
         .builder
         .create_named_block("new.dynamic.planned.merge", Vec::new());
@@ -793,19 +801,28 @@ fn lower_new_dynamic_planned_dispatch(
         ctx.builder.position_at_end(match_block);
         let class = Name::unqualified(class_name.clone());
         let object = lower_new_object(ctx, &class, args, expr);
-        store_value_into_temp(ctx, &result_temp, PhpType::Mixed, object, expr.span);
+        store_value_into_temp(ctx, &result_temp, result_type.clone(), object, expr.span);
         branch_to(ctx, merge);
 
         ctx.builder.position_at_end(next_block);
     }
 
-    let name_value = ctx.load_local(&name_temp, Some(expr.span));
-    let fallback = lower_new_dynamic_generic(ctx, name_value, args, expr);
-    store_value_into_temp(ctx, &result_temp, PhpType::Mixed, fallback, expr.span);
-    branch_to(ctx, merge);
+    if let Some(parent) = required_parent {
+        let message = ctx.intern_string(&format!(
+            "Fatal error: Cannot instantiate late-static class constrained to {}\n",
+            parent
+        ));
+        ctx.builder.terminate(Terminator::Fatal { message });
+    } else {
+        let name_value = ctx.load_local(&name_temp, Some(expr.span));
+        let fallback = lower_new_dynamic_generic(ctx, name_value, args, expr);
+        store_value_into_temp(ctx, &result_temp, result_type, fallback, expr.span);
+        branch_to(ctx, merge);
+    }
 
     ctx.builder.position_at_end(merge);
-    ctx.clear_owned_hidden_temp(&name_temp, Some(expr.span));
+    let null = lower_null(ctx, expr);
+    ctx.unset_local(&name_temp, null, Some(expr.span));
     Some(take_owned_temp(ctx, &result_temp, expr.span))
 }
 
@@ -870,7 +887,26 @@ fn dynamic_new_class_name_match_expr(
 fn dynamic_new_planned_candidate_classes(
     ctx: &LoweringContext<'_, '_>,
     args: &[Expr],
+    required_parent: Option<&str>,
 ) -> Vec<String> {
+    if let Some(required_parent) = required_parent {
+        let mut candidates = ctx
+            .classes
+            .iter()
+            .filter(|(class_name, class_info)| {
+                static_new_class_is_planning_candidate(
+                    ctx,
+                    class_name,
+                    class_info,
+                    required_parent,
+                    args,
+                )
+            })
+            .map(|(class_name, _)| class_name.clone())
+            .collect::<Vec<_>>();
+        candidates.sort();
+        return candidates;
+    }
     if args.is_empty() {
         return Vec::new();
     }
@@ -879,18 +915,47 @@ fn dynamic_new_planned_candidate_classes(
         .classes
         .iter()
         .filter(|(class_name, class_info)| {
+            if required_parent.is_some_and(|parent| {
+                !is_same_or_descendant_class(ctx, class_name, parent)
+            }) {
+                return false;
+            }
             dynamic_new_class_is_planning_candidate(
                 ctx,
                 class_name,
                 class_info,
                 &constructor_key,
                 args,
+                required_parent.is_some(),
             )
         })
         .map(|(class_name, _)| class_name.clone())
         .collect::<Vec<_>>();
     candidates.sort();
     candidates
+}
+
+/// Returns whether a concrete descendant can be emitted as one fixed late-static branch.
+fn static_new_class_is_planning_candidate(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    class_info: &crate::types::ClassInfo,
+    required_parent: &str,
+    args: &[Expr],
+) -> bool {
+    if class_info.is_abstract
+        || ctx.enums.contains_key(class_name)
+        || class_info.declaration_span == Span::dummy()
+        || php_symbol_key(class_name).starts_with("__elephc")
+        || !is_same_or_descendant_class(ctx, class_name, required_parent)
+    {
+        return false;
+    }
+    let constructor_key = php_symbol_key("__construct");
+    let Some(sig) = class_info.methods.get(&constructor_key) else {
+        return args.is_empty();
+    };
+    dynamic_new_args_lower_to_exact_arity(ctx, sig, args)
 }
 
 /// Returns true when a dynamic `new` should construct `class_name` through a fixed-class
@@ -901,6 +966,7 @@ fn dynamic_new_class_is_planning_candidate(
     class_info: &crate::types::ClassInfo,
     constructor_key: &str,
     args: &[Expr],
+    allow_inherited_constructor: bool,
 ) -> bool {
     if class_info.is_abstract || ctx.enums.contains_key(class_name) {
         return false;
@@ -918,10 +984,11 @@ fn dynamic_new_class_is_planning_candidate(
     if class_info.declaration_span == Span::dummy() {
         return false;
     }
-    if !class_info
-        .method_decls
-        .iter()
-        .any(|method| php_symbol_key(&method.name) == constructor_key && method.has_body)
+    if !allow_inherited_constructor
+        && !class_info
+            .method_decls
+            .iter()
+            .any(|method| php_symbol_key(&method.name) == constructor_key && method.has_body)
     {
         return false;
     }

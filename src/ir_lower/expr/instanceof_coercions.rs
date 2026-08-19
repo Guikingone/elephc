@@ -72,7 +72,10 @@ pub(in crate::ir_lower) fn statically_known_instanceof_result(
 }
 
 /// Resolves lexical `instanceof` target keywords to concrete class names when possible.
-pub(super) fn instanceof_target_name(ctx: &LoweringContext<'_, '_>, name: &str) -> String {
+fn instanceof_target_name(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+) -> String {
     match name.trim_start_matches('\\') {
         "self" => ctx.current_class.clone().unwrap_or_else(|| name.to_string()),
         "parent" => ctx
@@ -83,6 +86,43 @@ pub(super) fn instanceof_target_name(ctx: &LoweringContext<'_, '_>, name: &str) 
             .unwrap_or_else(|| name.to_string()),
         _ => name.to_string(),
     }
+}
+
+/// Returns the positive nominal local-type fact proven by one static `instanceof` branch.
+pub(in crate::ir_lower) fn instanceof_branch_local_type(
+    ctx: &LoweringContext<'_, '_>,
+    condition: &Expr,
+    branch_matches: bool,
+) -> Option<(String, PhpType)> {
+    let (name, target) = positive_instanceof_local(condition, branch_matches)?;
+    let class_name = instanceof_target_name(ctx, target);
+    if class_name.trim_start_matches('\\') == "static" {
+        return None;
+    }
+    Some((name.to_string(), PhpType::Object(class_name)))
+}
+
+/// Extracts a local and named target when the selected branch proves an `instanceof` condition.
+fn positive_instanceof_local(condition: &Expr, branch_matches: bool) -> Option<(&str, &str)> {
+    if let ExprKind::Not(inner) = &condition.kind {
+        return positive_instanceof_local(inner, !branch_matches);
+    }
+    if !branch_matches {
+        return None;
+    }
+    let ExprKind::InstanceOf {
+        value,
+        target: InstanceOfTarget::Name(target),
+    } = &condition.kind
+    else {
+        return None;
+    };
+    let name = match &value.kind {
+        ExprKind::Variable(name) => name.as_str(),
+        ExprKind::This => "this",
+        _ => return None,
+    };
+    Some((name, target.as_str()))
 }
 
 /// Coerces a value to integer storage before integer-only operations.
@@ -97,6 +137,21 @@ pub(crate) fn coerce_to_int_at_span(
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
     match value.ir_type {
+        IrType::I64
+            if matches!(
+                ctx.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) =>
+        {
+            ctx.emit_value(
+                Op::Move,
+                vec![value.value],
+                None,
+                PhpType::Int,
+                Op::Move.default_effects(),
+                span,
+            )
+        }
         IrType::I64 => value,
         IrType::F64 => ctx.emit_value(Op::FToI, vec![value.value], None, PhpType::Int, Op::FToI.default_effects(), span),
         IrType::Str => ctx.emit_value(Op::StrToI, vec![value.value], None, PhpType::Int, Op::StrToI.default_effects(), span),

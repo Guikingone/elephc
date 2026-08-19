@@ -41,7 +41,7 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         collect_declared_trait_constant_visibilities(program);
     module.declared_trait_final_constants = collect_declared_trait_final_constants(program);
     module.class_infos = check_result.classes.clone();
-    normalize_untyped_instance_array_storage_for_eir(&mut module.class_infos);
+    normalize_untyped_instance_storage_for_eir(&mut module.class_infos);
     normalize_class_method_signatures_for_eir(module, &check_result.callable_param_sigs);
     module.interface_infos = check_result.interfaces.clone();
     module.enum_infos = check_result.enums.clone();
@@ -73,14 +73,16 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         crate::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
 }
 
-/// Normalizes untyped instance-array slots to EIR's runtime-dispatched PHP array representation.
+/// Normalizes untyped instance slots that need EIR's runtime-dispatched storage representation.
 ///
 /// Closed-world checking can infer a precise indexed or associative shape from the first writes
 /// to an untyped property. PHP does not make that shape a contract: later assignments, casts,
 /// merges, or nested keyed writes can change both storage kind and element representation. EIR
-/// therefore uses `array<mixed>` so all loads, stores, and cleanup agree. Declared PHP properties
-/// and static properties retain their explicit or specialized contracts.
-fn normalize_untyped_instance_array_storage_for_eir(
+/// therefore uses `array<mixed>` so all loads, stores, and cleanup agree. An untyped property with
+/// no statically attributable write remains `Void` in the checker, but still needs a boxed `Mixed`
+/// cell because a bare `object` receiver can initialize it at runtime. Declared PHP properties and
+/// static properties retain their explicit or specialized contracts.
+fn normalize_untyped_instance_storage_for_eir(
     classes: &mut HashMap<String, ClassInfo>,
 ) {
     for class_info in classes.values_mut() {
@@ -89,11 +91,14 @@ fn normalize_untyped_instance_array_storage_for_eir(
             if class_info.property_slot_is_declared(index, &property) {
                 continue;
             }
-            if matches!(
-                class_info.properties[index].1.codegen_repr(),
-                PhpType::Array(_) | PhpType::AssocArray { .. }
-            ) {
-                class_info.properties[index].1 = PhpType::Array(Box::new(PhpType::Mixed));
+            match class_info.properties[index].1.codegen_repr() {
+                PhpType::Array(_) | PhpType::AssocArray { .. } => {
+                    class_info.properties[index].1 = PhpType::Array(Box::new(PhpType::Mixed));
+                }
+                PhpType::Void | PhpType::Never => {
+                    class_info.properties[index].1 = PhpType::Mixed;
+                }
+                _ => {}
             }
         }
     }

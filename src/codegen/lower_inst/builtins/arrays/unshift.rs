@@ -42,6 +42,12 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
         ));
     }
     let array = expect_operand(inst, 0)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return super::unshift_dynamic::lower_array_unshift_dynamic(ctx, inst, array);
+    }
     if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::AssocArray { .. }) {
         return lower_assoc_array_unshift(ctx, inst, array);
     }
@@ -207,7 +213,7 @@ fn require_array_unshift_value_type(elem_ty: &PhpType, value_ty: &PhpType) -> Re
 }
 
 /// Verifies the lowered `array_unshift()` result carries PHP's integer count metadata.
-fn require_array_unshift_result_type(result_ty: &PhpType) -> Result<()> {
+pub(super) fn require_array_unshift_result_type(result_ty: &PhpType) -> Result<()> {
     if result_ty == &PhpType::Int {
         return Ok(());
     }
@@ -301,7 +307,7 @@ fn lower_array_unshift_x86_64(
 /// Concrete slots retain refcounted payloads directly. A generic `array<mixed>` slot instead
 /// owns a boxed cell, so concrete scalar and heap values are boxed while an existing Mixed cell
 /// is retained before the runtime helper takes ownership of the pointer.
-fn load_array_unshift_value(
+pub(super) fn load_array_unshift_value(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     elem_ty: &PhpType,

@@ -177,6 +177,14 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::Data(id) => {
             let _ = write!(out, " data[{}]", id.as_raw());
         }
+        Immediate::NominalObject { target, boundary } => {
+            let _ = write!(
+                out,
+                " nominal_object[{}:{:?}]",
+                target.as_raw(),
+                boundary
+            );
+        }
         Immediate::LocalSlot(id) => {
             let _ = write!(out, " slot[{}]", id.as_raw());
         }

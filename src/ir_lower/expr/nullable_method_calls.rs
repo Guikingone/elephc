@@ -120,6 +120,11 @@ pub(super) fn lower_method_call_with_receiver(
     {
         return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
     }
+    if let Some(receiver) = object_static_method_receiver(ctx, object.value, method) {
+        let call = lower_static_method_call(ctx, &receiver, method, args, expr);
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return call;
+    }
     let magic_args;
     let (dispatch_method, args) =
         if let Some(args) = magic_call_dispatch_args(ctx, object.value, method, args, expr.span) {

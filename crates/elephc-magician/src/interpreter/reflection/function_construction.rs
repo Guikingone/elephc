@@ -8,7 +8,7 @@
 //! - Closure targets and native parameter/default metadata are attached once here.
 
 use super::*;
-use crate::context::DecodedCallableCapture;
+use crate::context::{decode_eval_callback_adapter_capture, DecodedCallableCapture};
 use std::ffi::c_void;
 
 /// Normalized callable target used while constructing a reflected function.
@@ -16,6 +16,7 @@ struct EvalReflectionFunctionCallableArg {
     target: EvalClosureObjectTarget,
     lookup_name: String,
     display_name: String,
+    metadata_closure: Option<EvalClosure>,
 }
 
 /// Builds an eval-backed `ReflectionFunction` object for eval or registered native functions.
@@ -36,7 +37,11 @@ pub(super) fn eval_reflection_function_new(
         .as_ref()
         .map(|target| target.lookup_name.clone())
         .unwrap_or_else(|| requested_name.trim_start_matches('\\').to_ascii_lowercase());
-    if let Some(closure) = context.closure(&lookup_name).cloned() {
+    let metadata_closure = callable_target
+        .as_ref()
+        .and_then(|target| target.metadata_closure.clone())
+        .or_else(|| context.closure(&lookup_name).cloned());
+    if let Some(closure) = metadata_closure {
         let function = closure.function();
         let required_parameter_count = eval_reflection_required_parameter_count(
             function.parameter_defaults(),
@@ -181,21 +186,83 @@ fn eval_reflection_function_callable_target_arg(
                 display_name: lookup_name.clone(),
                 lookup_name,
                 target,
+                metadata_closure: None,
             }))
         }
         EVAL_TAG_CALLABLE => {
             let descriptor = values.raw_value_word(value)? as usize as *mut c_void;
+            let trace = std::env::var_os("ELEPHC_EVAL_TRACE").is_some();
+            if trace {
+                eprintln!(
+                    "[elephc-eval-trace] phase=reflection-callable descriptor={descriptor:p}"
+                );
+            }
             let Some(decoded) = (unsafe { decode_callable_descriptor(descriptor) }) else {
-                return Err(EvalStatus::RuntimeFatal);
+                let captures = unsafe { decode_eval_callback_adapter_capture(descriptor.cast()) };
+                let Some((captured_context, captured)) = captures else {
+                    if trace {
+                        eprintln!(
+                            "[elephc-eval-trace] phase=reflection-adapter-missing descriptor={descriptor:p}"
+                        );
+                    }
+                    return Err(EvalStatus::RuntimeFatal);
+                };
+                if trace {
+                    eprintln!(
+                        "[elephc-eval-trace] phase=reflection-adapter descriptor={descriptor:p} context=0x{captured_context:x} capture_tag={} capture=0x{:x}",
+                        captured.type_tag, captured.value_word
+                    );
+                }
+                let captured = if captured.type_tag == EVAL_TAG_MIXED {
+                    RuntimeCellHandle::from_raw(
+                        captured.value_word as usize as *mut crate::value::RuntimeCell,
+                    )
+                } else {
+                    values.raw_word_value(captured.type_tag, captured.value_word)?
+                };
+                if values.type_tag(captured)? == EVAL_TAG_OBJECT {
+                    let identity = values.object_identity(captured)?;
+                    let captured_context = unsafe {
+                        (captured_context as usize as *mut ElephcEvalContext).as_ref()
+                    }
+                    .ok_or(EvalStatus::RuntimeFatal)?;
+                    if trace {
+                        eprintln!(
+                            "[elephc-eval-trace] phase=reflection-adapter-object identity={identity} target_found={}",
+                            captured_context.closure_object_target(identity).is_some()
+                        );
+                    }
+                    if let Some(target) = captured_context.closure_object_target(identity).cloned() {
+                        let lookup_name = eval_reflection_function_closure_target_name(&target);
+                        return Ok(Some(EvalReflectionFunctionCallableArg {
+                            display_name: lookup_name.clone(),
+                            metadata_closure: captured_context.closure(&lookup_name).cloned(),
+                            lookup_name,
+                            target,
+                        }));
+                    }
+                }
+                return eval_reflection_function_callable_target_arg(captured, context, values);
             };
+            if trace {
+                eprintln!(
+                    "[elephc-eval-trace] phase=reflection-descriptor descriptor={descriptor:p} display={:?}",
+                    decoded.display_name
+                );
+            }
             let bound_this = eval_reflection_descriptor_bound_this(decoded.bound_this, values)?;
             let lookup_name = format!("{{closure:native:{:x}}}", descriptor as usize);
-            if context.native_function(&lookup_name).is_none()
-                && context
-                    .define_native_function(lookup_name.clone(), decoded.function)
-                    .is_err()
-            {
-                return Err(EvalStatus::RuntimeFatal);
+            if context.native_function(&lookup_name).is_none() {
+                if let Err(_existing) =
+                    context.define_native_function(lookup_name.clone(), decoded.function)
+                {
+                    if trace {
+                        eprintln!(
+                            "[elephc-eval-trace] phase=reflection-descriptor-register failed=true"
+                        );
+                    }
+                    return Err(EvalStatus::RuntimeFatal);
+                }
             }
             let target = match bound_this {
                 Some(bound_this) => EvalClosureObjectTarget::BoundNamed {
@@ -213,6 +280,7 @@ fn eval_reflection_function_callable_target_arg(
                 target,
                 lookup_name,
                 display_name: decoded.display_name,
+                metadata_closure: None,
             }))
         }
         _ => Ok(None),

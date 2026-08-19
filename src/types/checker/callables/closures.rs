@@ -188,10 +188,16 @@ impl Checker {
             return Ok((generator_ty, false));
         }
 
+        let previous_loop_storage_scope = self.current_loop_storage_scope.clone();
+        self.current_loop_storage_scope = crate::types::nested_loop_storage_scope(
+            &previous_loop_storage_scope,
+            span,
+        );
         let mut all_return_infos = Vec::new();
         for stmt in body {
             self.collect_return_infos(stmt, env, &mut all_return_infos);
         }
+        self.current_loop_storage_scope = previous_loop_storage_scope;
 
         if let Some(type_ann) = return_type {
             let declared_ret =

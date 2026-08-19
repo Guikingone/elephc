@@ -90,8 +90,7 @@ pub(super) fn emit_reflection_class_array(ctx: &mut FunctionContext<'_>, names: 
     emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Object("ReflectionClass".to_string()));
     for name in names {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        let metadata = reflection_class_metadata_for_name(ctx, name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &metadata)?;
+        emit_full_reflection_class_object(ctx, name)?;
         emit_reflection_class_hash_insert(ctx, name);
     }
     Ok(())
@@ -318,4 +317,3 @@ pub(super) fn emit_skip_if_static_property_uninitialized(
     }
     Some(skip_label)
 }
-

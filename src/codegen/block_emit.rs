@@ -65,9 +65,23 @@ pub(super) fn emit_module(
     regalloc_linear: bool,
     web: bool,
 ) -> Result<()> {
-    let mut shared = SharedCodegenState::default();
+    let mut shared = SharedCodegenState::for_module(module);
     let mut inventory = BackendInventory::from_env();
     function_variants::emit_dispatchers(module, emitter, data);
+    super::shared_mixed_string::emit_shared_mixed_string_helpers(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
+    super::shared_mixed_callable::emit_shared_mixed_callable_helpers(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
     // In `--web` builds the reset routine references every request superglobal.
     // If a superglobal is never read or written by user/prelude code, the symbol
     // would otherwise be missing from the object, so reserve storage up front.
@@ -83,18 +97,18 @@ pub(super) fn emit_module(
         .iter()
         .filter(|function| !is_main(function))
     {
-        inventory.run(emitter, &function.name, |emitter| {
-            emit_user_function(module, function, emitter, data, &mut shared, regalloc_linear)
+        inventory.run_with_shared(emitter, &mut shared, &function.name, |emitter, shared| {
+            emit_user_function(module, function, emitter, data, shared, regalloc_linear)
         })?;
     }
     for method in &module.class_methods {
-        inventory.run(emitter, &method.name, |emitter| {
-            emit_class_method(module, method, emitter, data, &mut shared, regalloc_linear)
+        inventory.run_with_shared(emitter, &mut shared, &method.name, |emitter, shared| {
+            emit_class_method(module, method, emitter, data, shared, regalloc_linear)
         })?;
     }
     for closure in &module.closures {
-        inventory.run(emitter, &closure.name, |emitter| {
-            emit_user_function(module, closure, emitter, data, &mut shared, regalloc_linear)
+        inventory.run_with_shared(emitter, &mut shared, &closure.name, |emitter, shared| {
+            emit_user_function(module, closure, emitter, data, shared, regalloc_linear)
         })?;
     }
     inventory.finish()?;
@@ -111,13 +125,13 @@ pub(super) fn emit_module(
         .iter()
         .find(|function| is_main(function))
         .ok_or_else(|| CodegenIrError::invalid_module("EIR module has no main function"))?;
-    inventory.run(emitter, &main.name, |emitter| {
+    inventory.run_with_shared(emitter, &mut shared, &main.name, |emitter, shared| {
         emit_main_function(
             module,
             main,
             emitter,
             data,
-            &mut shared,
+            shared,
             gc_stats,
             heap_debug,
             requires_elephc_tls,
@@ -172,6 +186,7 @@ impl BackendInventory {
     }
 
     /// Emits one body or records its first refusal and rolls its output back.
+    #[cfg(test)]
     fn run(
         &mut self,
         emitter: &mut Emitter,
@@ -187,6 +202,37 @@ impl BackendInventory {
             Ok(()) => Ok(()),
             Err(error) => {
                 emitter.rollback_to(checkpoint);
+                self.failures.push(InventoryFailure {
+                    body: name.to_string(),
+                    cause: cause_key(error.message()),
+                    detail: error.to_string(),
+                });
+                Ok(())
+            }
+        }
+    }
+
+    /// Emits one body while rolling back Reflection label reservations with failed assembly.
+    fn run_with_shared(
+        &mut self,
+        emitter: &mut Emitter,
+        shared: &mut SharedCodegenState,
+        name: &str,
+        emit: impl FnOnce(&mut Emitter, &mut SharedCodegenState) -> Result<()>,
+    ) -> Result<()> {
+        if !self.enabled {
+            return emit(emitter, shared);
+        }
+        self.scanned += 1;
+        let emitter_checkpoint = emitter.checkpoint();
+        let reflection_checkpoint = shared.reflection.materializer_checkpoint();
+        match emit(emitter, shared) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                emitter.rollback_to(emitter_checkpoint);
+                shared
+                    .reflection
+                    .rollback_materializers(reflection_checkpoint);
                 self.failures.push(InventoryFailure {
                     body: name.to_string(),
                     cause: cause_key(error.message()),
@@ -1027,12 +1073,11 @@ fn emit_static_property_default(
     expr: &ExprKind,
 ) -> Result<()> {
     ensure_static_property_default_type_supported(class_name, property, php_type)?;
-    let expr = crate::codegen::eval_class_constant_helpers::resolve_class_like_constant_literal(
+    let expr = crate::codegen::eval_class_constant_helpers::resolve_class_like_constants_in_literal(
         ctx.module,
         class_name,
         expr,
-    )
-    .unwrap_or_else(|| expr.clone());
+    );
     let expr = crate::codegen::literal_defaults::resolve_literal_default_global_constants(
         &expr,
         &ctx.module.global_constants,
@@ -1271,7 +1316,12 @@ mod backend_inventory_tests {
 
     use super::{BackendInventory, CodegenIrError};
     use crate::codegen::platform::{Arch, Platform, Target};
+    use crate::codegen::shared_reflection::{
+        ReflectionMaterializerKey, ReflectionOwnerKind,
+    };
+    use crate::codegen::shared_state::SharedCodegenState;
     use crate::codegen_support::emit::Emitter;
+    use crate::ir::Module;
 
     /// Builds a fixed-target emitter whose buffer can be inspected directly.
     fn emitter() -> Emitter {
@@ -1308,6 +1358,58 @@ mod backend_inventory_tests {
         let output = emitter.output();
         assert!(!output.contains("discarded:"));
         assert!(output.contains("kept:"));
+    }
+
+    /// Verifies a refused body cannot leave a reusable Reflection label without assembly.
+    #[test]
+    fn enabled_inventory_rolls_back_reflection_materializer_reservations() {
+        let mut inventory = BackendInventory::new(true);
+        let mut emitter = emitter();
+        let module = Module::new(Target::new(Platform::Linux, Arch::AArch64));
+        let mut shared = SharedCodegenState::for_module(&module);
+        let key = ReflectionMaterializerKey::FullClass {
+            owner: ReflectionOwnerKind::Class,
+            name: "RolledBack".to_string(),
+        };
+
+        let failed_key = key.clone();
+        let failed = inventory.run_with_shared(
+            &mut emitter,
+            &mut shared,
+            "failed",
+            |emitter, shared| {
+                emitter.raw("discarded:");
+                shared
+                    .reflection
+                    .reserve_materializer(failed_key, "discarded_label".to_string());
+                Err(CodegenIrError::unsupported("gap"))
+            },
+        );
+
+        assert!(failed.is_ok());
+        assert_eq!(emitter.checkpoint(), 0);
+        assert!(shared.reflection.materializer_label(&key).is_none());
+
+        let kept_key = key.clone();
+        let kept = inventory.run_with_shared(
+            &mut emitter,
+            &mut shared,
+            "kept",
+            |emitter, shared| {
+                emitter.raw("kept:");
+                shared
+                    .reflection
+                    .reserve_materializer(kept_key, "kept_label".to_string());
+                Ok(())
+            },
+        );
+
+        assert!(kept.is_ok());
+        assert!(emitter.output().contains("kept:"));
+        assert_eq!(
+            shared.reflection.materializer_label(&key).as_deref(),
+            Some("kept_label")
+        );
     }
 
     /// Verifies identical causes are grouped while per-body details remain present.

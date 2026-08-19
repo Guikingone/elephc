@@ -14,12 +14,23 @@ trade-offs.
 
 - **AST optimizer** — PHP-preserving rewrites expressed over syntax: constant
   folding, constant propagation, control-flow pruning and normalization, and
-  dead-code elimination. Always on; not behind a flag. See
+  dead-code elimination, followed by conservative whole-program declaration
+  reachability that removes unused functions, classes, and methods before EIR
+  lowering. Dynamic lookup and Reflection widen its keep-set, while explicit
+  `--with-<crate>` prelude requests become roots. Always on; not behind a flag. See
   [The Optimizer](../internals/the-optimizer.md).
 - **EIR optimization passes** — transformations that need value identity, basic
   blocks, or dominance, which the AST cannot express well. Run by a fixed-point
   pass driver after lowering. Controlled by `--ir-opt`. See
   [The EIR Design](../internals/the-ir.md#optimization-passes).
+
+Declaration reachability favors correctness over minimum size. Runtime-computed
+functions, methods, classes, callables, aliases, and Reflection may therefore
+retain a wider declaration family than the eventual runtime value needs. On
+macOS, linker atom splitting remains limited to the runtime object: generated
+user metadata and address-taken callable labels can rely on one contiguous user
+object, so user declarations are removed by the AST pass instead of by
+`.subsections_via_symbols`.
 
 ## EIR optimization passes
 

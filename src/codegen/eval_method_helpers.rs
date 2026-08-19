@@ -545,6 +545,20 @@ fn emit_static_method_call_x86_64(
     emitter.instruction("ret");                                                 // return the boxed static method result to Rust
 }
 
+/// Branches on AArch64 zero through an unconditional branch with the wider displacement range.
+fn emit_aarch64_branch_if_zero_far(emitter: &mut Emitter, reg: &str, label: &str) {
+    emitter.instruction(&format!("cbnz {}, 1f", reg));                          // skip the far failure branch when the tested value is nonzero
+    emitter.instruction(&format!("b {}", label));                               // reach the shared failure tail through the wider branch encoding
+    emitter.label("1");
+}
+
+/// Branches on AArch64 inequality through an unconditional branch with wider reach.
+fn emit_aarch64_branch_if_not_equal_far(emitter: &mut Emitter, label: &str) {
+    emitter.instruction("b.eq 1f");                                             // skip the far failure branch when the compared values are equal
+    emitter.instruction(&format!("b {}", label));                               // reach the shared failure tail through the wider branch encoding
+    emitter.label("1");
+}
+
 /// Emits the ARM64 method-call helper body.
 fn emit_method_call_aarch64(
     module: &Module,
@@ -565,10 +579,10 @@ fn emit_method_call_aarch64(
     emitter.instruction("str x4, [sp, #32]");                                   // save the active eval class-scope pointer
     emitter.instruction("str x5, [sp, #40]");                                   // save the active eval class-scope length
     emitter.instruction("str x6, [sp, #64]");                                   // save the active eval context for callable descriptors
-    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // null Mixed receiver cannot dispatch a method
+    emit_aarch64_branch_if_zero_far(emitter, "x0", fail_label);
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // non-object receivers cannot dispatch instance methods
+    emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for method calls
     emit_aarch64_builtin_throwable_method_dispatch(
         module,
@@ -1080,7 +1094,7 @@ fn emit_aarch64_method_scope_check(
     let (scope_ptr_offset, scope_len_offset) = aarch64_method_scope_offsets(is_static);
     emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));       // reload the active eval class-scope pointer
     emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));       // reload the active eval class-scope length
-    emitter.instruction(&format!("cbz x1, {}", fail_label));                    // reject scoped method access outside a class scope
+    emit_aarch64_branch_if_zero_far(emitter, "x1", fail_label);
     for scope_name in allowed_scopes {
         let (label, len) = data.add_string(scope_name.as_bytes());
         emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));   // reload the active eval class-scope pointer
@@ -1200,7 +1214,7 @@ fn emit_aarch64_validate_builtin_throwable_method_arg_count(
     let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
     emitter.instruction("cmp x0, #0");                                          // compact Throwable methods accept no eval arguments
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject unsupported Throwable method arguments from eval
+    emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
 }
 
 /// Emits x86_64 zero-argument validation for compact Throwable eval methods.
@@ -1476,7 +1490,7 @@ fn emit_aarch64_validate_method_arg_count(
     abi::emit_call_label(emitter, &array_len_symbol);
     abi::emit_load_int_immediate(emitter, "x9", slot.params.len() as i64);
     emitter.instruction("cmp x0, x9");                                          // compare supplied eval argument count with the method signature
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject method dispatch when arity differs
+    emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
 }
 
 /// Emits x86_64 arity validation for one method body.
@@ -1506,7 +1520,7 @@ fn emit_aarch64_validate_static_method_arg_count(
     abi::emit_call_label(emitter, &array_len_symbol);
     abi::emit_load_int_immediate(emitter, "x9", slot.params.len() as i64);
     emitter.instruction("cmp x0, x9");                                          // compare supplied eval argument count with the static method signature
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject static method dispatch when arity differs
+    emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
 }
 
 /// Emits x86_64 arity validation for one static method body.
@@ -1993,11 +2007,11 @@ fn emit_aarch64_cast_eval_object_arg(
     abi::emit_load_int_immediate(emitter, "x2", len as i64);
     emitter.instruction("mov x3, xzr");                                         // allow exact class matches for object type hints
     abi::emit_call_label(emitter, &is_a_symbol);
-    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject values that fail the object type hint
+    emit_aarch64_branch_if_zero_far(emitter, "x0", fail_label);
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for object unboxing
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the object payload for the native method call
     emitter.instruction("cmp x0, #6");                                          // object type hints require an object payload, not a class string
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject malformed non-object payloads
+    emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
     emitter.instruction("mov x0, x1");                                          // place the unboxed object pointer in the result register
 }
 
@@ -2007,7 +2021,7 @@ fn emit_aarch64_cast_eval_array_arg(emitter: &mut Emitter, expected_tag: i64, fa
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the array payload for the native method call
     abi::emit_load_int_immediate(emitter, "x9", expected_tag);
     emitter.instruction("cmp x0, x9");                                          // compare the eval payload tag with the expected array ABI
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject array payloads with an incompatible ABI shape
+    emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
     emitter.instruction("mov x0, x1");                                          // place the unboxed array pointer in the result register
 }
 
@@ -2385,4 +2399,34 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
     let symbol = module.target.extern_symbol(name);
     emitter.label_global(&symbol);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::{Platform, Target};
+
+    /// Verifies far zero checks invert `cbz` locally before the wider unconditional branch.
+    #[test]
+    fn far_zero_branch_uses_inverted_compare_and_branch_shape() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_aarch64_branch_if_zero_far(&mut emitter, "x3", "_far_fail");
+
+        assert_eq!(
+            emitter.output(),
+            concat!("    cbnz x3, 1f\n", "    b _far_fail\n", "1:\n")
+        );
+    }
+
+    /// Verifies far inequality checks invert the condition before the wider branch.
+    #[test]
+    fn far_not_equal_branch_uses_inverted_condition_shape() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+        emit_aarch64_branch_if_not_equal_far(&mut emitter, "_far_fail");
+
+        assert_eq!(
+            emitter.output(),
+            concat!("    b.eq 1f\n", "    b _far_fail\n", "1:\n")
+        );
+    }
 }

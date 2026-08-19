@@ -17,7 +17,6 @@ use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
 
 #[derive(Clone)]
 pub(crate) struct RuntimeCallableCase {
-    pub(crate) label: String,
     pub(crate) descriptor_label: String,
     pub(crate) php_name: Option<String>,
 }

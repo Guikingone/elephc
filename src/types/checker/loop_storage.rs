@@ -43,7 +43,8 @@ struct ArrayWrite<'a> {
 /// `infer_value` receives the evolving fixed-point environment, so a promotion can cascade
 /// through intermediate locals and through later iterations. The result contains only locals
 /// that require an up-front representation contract: indexed/associative arrays with boxed
-/// `mixed` payloads, or whole-value `mixed` for a nullable local crossing a back-edge.
+/// `mixed` payloads, tagged nullable scalars, or whole-value `mixed` for a local crossing a
+/// back-edge.
 pub fn loop_carried_storage_types(
     body: &[Stmt],
     update: Option<&Stmt>,
@@ -442,6 +443,11 @@ fn representation_contract(
             })
         }
         (PhpType::Array(_), fixed @ PhpType::AssocArray { .. }) => Some(fixed),
+        (PhpType::Void | PhpType::Never, PhpType::TaggedScalar)
+            if has_whole_representation_source =>
+        {
+            Some(fixed.clone())
+        }
         (entry_repr, PhpType::Mixed)
             if entry_repr != PhpType::Mixed && has_whole_representation_source =>
         {

@@ -249,7 +249,7 @@ pub(super) fn module_known_list_is_lowercased_core_extensions() {
     #[test]
 pub(super) fn cli_ini_get_all_renders_filter_dispatch() {
         let program = parse("<?php var_dump(ini_get_all(null, false));");
-        let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
+        let injected = inject_for_test(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         let rendered = format!("{injected:?}");
         assert!(injected.len() > program.len(), "ini_get_all must be injected");
         // The predicate is injected alongside the wrapper.
@@ -277,9 +277,9 @@ pub(super) fn opcache_ini_helpers_follow_version() {
 pub(super) fn cli_injects_ini_get_opcache_wrapper() {
         let program = parse("<?php echo ini_get('opcache.enable');");
 
-        let cli = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
+        let cli = inject_for_test(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         assert!(cli.len() > program.len());
         // web = true must not inject the CLI wrappers (would redeclare web_prelude's ini_get).
-        let web = inject_if_used(program.clone(), PhpVersion::Php85, true, None, &[], &[], None, false).0;
+        let web = inject_for_test(program.clone(), PhpVersion::Php85, true, None, &[], &[], None, false).0;
         assert_eq!(web.len(), program.len());
     }

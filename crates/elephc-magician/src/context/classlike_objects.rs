@@ -247,17 +247,75 @@ impl ElephcEvalContext {
             .retain(|(object, _)| *object != identity);
     }
 
-    /// Removes one dynamic object identity and all per-object eval metadata.
-    pub fn forget_dynamic_object(&mut self, identity: u64) {
+    /// Removes one dynamic object identity and returns its owned overlay property cells.
+    pub fn forget_dynamic_object(&mut self, identity: u64) -> Vec<RuntimeCellHandle> {
         self.dynamic_objects.remove(&identity);
         self.closure_objects.remove(&identity);
         self.dynamic_destructing_objects.remove(&identity);
         self.dynamic_destructed_objects.remove(&identity);
+        let property_keys = self
+            .dynamic_property_values
+            .keys()
+            .filter(|(object, _)| *object == identity)
+            .cloned()
+            .collect::<Vec<_>>();
+        let property_values = property_keys
+            .into_iter()
+            .filter_map(|key| self.dynamic_property_values.remove(&key))
+            .collect();
         self.dynamic_property_aliases
             .retain(|(object, _), _| *object != identity);
         self.dynamic_initialized_properties
             .retain(|(object, _)| *object != identity);
         crate::ffi::dynamic_destructors::unregister_dynamic_object(identity);
+        property_values
+    }
+
+    /// Returns one retained-by-context overlay value for an eval object property slot.
+    pub fn dynamic_property_value(
+        &self,
+        identity: u64,
+        storage_property_name: &str,
+    ) -> Option<RuntimeCellHandle> {
+        self.dynamic_property_values
+            .get(&(identity, storage_property_name.to_string()))
+            .copied()
+    }
+
+    /// Stores one owned overlay value and returns any replaced distinct cell.
+    pub fn set_dynamic_property_value(
+        &mut self,
+        identity: u64,
+        storage_property_name: &str,
+        value: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        let previous = self
+            .dynamic_property_values
+            .insert((identity, storage_property_name.to_string()), value);
+        previous.filter(|previous| *previous != value)
+    }
+
+    /// Removes and returns one owned overlay value for an eval object property slot.
+    pub fn remove_dynamic_property_value(
+        &mut self,
+        identity: u64,
+        storage_property_name: &str,
+    ) -> Option<RuntimeCellHandle> {
+        self.dynamic_property_values
+            .remove(&(identity, storage_property_name.to_string()))
+    }
+
+    /// Returns property names and cells that need retaining for a shallow object clone.
+    pub fn dynamic_property_values_for_clone(
+        &self,
+        identity: u64,
+    ) -> Vec<(String, RuntimeCellHandle)> {
+        self.dynamic_property_values
+            .iter()
+            .filter_map(|((object, property), value)| {
+                (*object == identity).then(|| (property.clone(), *value))
+            })
+            .collect()
     }
 
     /// Removes this context from the process-local dynamic object destructor registry.

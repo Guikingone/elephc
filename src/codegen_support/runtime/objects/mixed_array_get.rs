@@ -1,6 +1,7 @@
 //! Purpose:
 //! Emits the `__rt_mixed_array_get` runtime helper for `$mixed[$key]` access.
-//! Routes boxed JSON-style values to indexed-array, hash, or stdClass lookup paths.
+//! Routes boxed strings and JSON-style values to string, indexed-array, hash,
+//! or object lookup paths.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::objects::emit_mixed_array_get()`.
@@ -43,6 +44,7 @@ pub fn emit_mixed_array_get(emitter: &mut Emitter) {
 /// Returns an owned pointer to a boxed `Mixed` cell in `x0`.
 ///
 /// The function dispatches on the mixed value's tag:
+/// - Tag 1 → string-offset path
 /// - Tag 4 → indexed array path
 /// - Tag 5 → associative array path
 /// - Tag 6 → stdClass object path
@@ -75,6 +77,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
 
     emitter.instruction("cbz x0, __rt_mixed_array_get_null_container");         // null Mixed pointers behave as PHP null receivers
     emitter.instruction("ldr x9, [x0]");                                        // load tag from mixed[0]
+    emitter.instruction("cmp x9, #1");                                          // tag = 1 (string)?
+    emitter.instruction("b.eq __rt_mixed_array_get_string");                    // read string offsets from the boxed pointer/length pair
     emitter.instruction("cmp x9, #4");                                          // tag = 4 (indexed array)?
     emitter.instruction("b.eq __rt_mixed_array_get_indexed");                   // branch on the current JSON decoder condition
     emitter.instruction("cmp x9, #5");                                          // tag = 5 (associative array)?
@@ -84,6 +88,35 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #8");                                          // tag = 8 (canonical PHP null)?
     emitter.instruction("b.eq __rt_mixed_array_get_null_container");            // null receivers warn only for ordinary reads
     emitter.instruction("b __rt_mixed_array_get_null");                         // any other payload → null
+
+    // String: integer keys select one byte; negative offsets are relative to the end.
+    emitter.label("__rt_mixed_array_get_string");
+    emitter.instruction("ldr x10, [sp, #16]");                                  // load the normalized key high word
+    emitter.instruction("cmn x10, #1");                                         // integer keys carry the -1 high-word sentinel
+    emitter.instruction("b.ne __rt_mixed_array_get_null");                      // non-integer string offsets are not readable on this fallback path
+    emitter.instruction("ldr x10, [x0, #8]");                                   // load the boxed string pointer
+    emitter.instruction("ldr x11, [x0, #16]");                                  // load the boxed string byte length
+    emitter.instruction("ldr x12, [sp, #8]");                                   // load the requested integer offset
+    emitter.instruction("cmp x12, #0");                                         // test whether the offset is relative to the end
+    emitter.instruction("b.ge __rt_mixed_array_get_string_non_negative");       // preserve non-negative offsets
+    emitter.instruction("add x12, x11, x12");                                   // convert a negative offset to length plus offset
+    emitter.instruction("cmp x12, #0");                                         // reject offsets that still precede the string
+    emitter.instruction("b.lt __rt_mixed_array_get_string_empty");              // out-of-bounds string reads return an empty string
+    emitter.label("__rt_mixed_array_get_string_non_negative");
+    emitter.instruction("cmp x12, x11");                                        // compare the normalized offset with the byte length
+    emitter.instruction("b.ge __rt_mixed_array_get_string_empty");              // offsets at or beyond the end return an empty string
+    emitter.instruction("add x1, x10, x12");                                    // point at the selected byte
+    emitter.instruction("mov x2, #1");                                          // an in-bounds string offset has one byte
+    emitter.instruction("b __rt_mixed_array_get_string_box");                   // box a detached one-byte string result
+    emitter.label("__rt_mixed_array_get_string_empty");
+    emitter.instruction("mov x1, x10");                                         // preserve a valid source pointer for the empty string
+    emitter.instruction("mov x2, #0");                                          // out-of-bounds string offsets stringify to empty
+    emitter.label("__rt_mixed_array_get_string_box");
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 identifies a string payload
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the selected byte for the caller
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return the owned boxed string in x0
 
     // Indexed array: integer key only. key_hi == -1 marks int keys.
     emitter.label("__rt_mixed_array_get_indexed");
@@ -375,6 +408,8 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rdi, rdi");                                       // null Mixed → null
     emitter.instruction("je __rt_mixed_array_get_null_container");              // null Mixed pointers behave as PHP null receivers
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load tag from mixed[0]
+    emitter.instruction("cmp r10, 1");                                          // tag = 1 (string)?
+    emitter.instruction("je __rt_mixed_array_get_string");                      // read string offsets from the boxed pointer/length pair
     emitter.instruction("cmp r10, 4");                                          // tag = 4 (indexed array)?
     emitter.instruction("je __rt_mixed_array_get_indexed");                     // branch on the current JSON decoder condition
     emitter.instruction("cmp r10, 5");                                          // tag = 5 (associative array)?
@@ -384,6 +419,33 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 8");                                          // tag = 8 (canonical PHP null)?
     emitter.instruction("je __rt_mixed_array_get_null_container");              // null receivers warn only for ordinary reads
     emitter.instruction("jmp __rt_mixed_array_get_null");                       // any other payload → null
+
+    emitter.label("__rt_mixed_array_get_string");
+    emitter.instruction("cmp QWORD PTR [rbp - 24], -1");                        // integer keys carry the -1 high-word sentinel
+    emitter.instruction("jne __rt_mixed_array_get_null");                       // non-integer string offsets are not readable on this fallback path
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the boxed string pointer
+    emitter.instruction("mov r11, QWORD PTR [rdi + 16]");                       // load the boxed string byte length
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // load the requested integer offset
+    emitter.instruction("cmp r8, 0");                                           // test whether the offset is relative to the end
+    emitter.instruction("jge __rt_mixed_array_get_string_non_negative");        // preserve non-negative offsets
+    emitter.instruction("add r8, r11");                                         // convert a negative offset to length plus offset
+    emitter.instruction("cmp r8, 0");                                           // reject offsets that still precede the string
+    emitter.instruction("jl __rt_mixed_array_get_string_empty");                // out-of-bounds string reads return an empty string
+    emitter.label("__rt_mixed_array_get_string_non_negative");
+    emitter.instruction("cmp r8, r11");                                         // compare the normalized offset with the byte length
+    emitter.instruction("jge __rt_mixed_array_get_string_empty");               // offsets at or beyond the end return an empty string
+    emitter.instruction("add r10, r8");                                         // point at the selected byte
+    emitter.instruction("mov rsi, 1");                                          // an in-bounds string offset has one byte
+    emitter.instruction("jmp __rt_mixed_array_get_string_box");                 // box a detached one-byte string result
+    emitter.label("__rt_mixed_array_get_string_empty");
+    emitter.instruction("xor esi, esi");                                        // out-of-bounds string offsets stringify to empty
+    emitter.label("__rt_mixed_array_get_string_box");
+    emitter.instruction("mov rax, 1");                                          // runtime tag 1 identifies a string payload
+    emitter.instruction("mov rdi, r10");                                        // pass the selected byte pointer to the boxing helper
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the selected byte for the caller
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return the owned boxed string in rax
 
     emitter.label("__rt_mixed_array_get_indexed");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = array pointer

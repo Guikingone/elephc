@@ -834,11 +834,57 @@ fn emit_to_array_loaded_source(
         }
         PhpType::Iterable => emit_to_array_loaded_iterable(ctx, preserve_keys),
         PhpType::Object(_) => emit_to_array_loaded_traversable_object(ctx, preserve_keys),
+        PhpType::Mixed => emit_to_array_loaded_mixed(ctx, preserve_keys),
         other => Err(CodegenIrError::unsupported(format!(
             "iterator_to_array for PHP type {:?}",
             other
         ))),
     }
+}
+
+/// Unboxes a gradual iterator source, accepts only Traversable objects, and preserves PHP's
+/// runtime TypeError for every scalar, null, array, resource, or callable payload.
+fn emit_to_array_loaded_mixed(
+    ctx: &mut FunctionContext<'_>,
+    preserve_keys: bool,
+) -> Result<()> {
+    let object_case = ctx.next_label("iterator_to_array_mixed_object");
+    let invalid_case = ctx.next_label("iterator_to_array_mixed_invalid");
+    let done = ctx.next_label("iterator_to_array_mixed_done");
+
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime Mixed tag 6 carries an object payload
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // defer Traversable validation to the object protocol path
+            ctx.emitter.instruction(&format!("b {}", invalid_case));            // every non-object payload violates the Traversable contract
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime Mixed tag 6 carries an object payload
+            ctx.emitter.instruction(&format!("je {}", object_case));            // defer Traversable validation to the object protocol path
+            ctx.emitter.instruction(&format!("jmp {}", invalid_case));          // every non-object payload violates the Traversable contract
+        }
+    }
+
+    super::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &invalid_case,
+        &|given| {
+            format!(
+                "iterator_to_array(): Argument #1 ($iterator) must be of type Traversable, {} given",
+                given
+            )
+        },
+    );
+
+    ctx.emitter.label(&object_case);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // expose the unboxed object pointer to Traversable dispatch
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // expose the unboxed object pointer to Traversable dispatch
+    }
+    emit_to_array_loaded_traversable_object(ctx, preserve_keys)?;
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Emits the dynamic preserve-keys branch and boxes both possible result containers as Mixed.

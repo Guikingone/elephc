@@ -292,9 +292,14 @@ fn check_array_callback_builtin_call_in_engine_frame(
             env,
             &param_hints,
         )?;
+        let checked_args = if sig.variadic.is_none() && callback_args.len() > sig.params.len() {
+            &callback_args[..sig.params.len()]
+        } else {
+            callback_args.as_slice()
+        };
         return checker.check_known_callable_call(
             &sig,
-            &callback_args,
+            checked_args,
             span,
             &callback_env,
             label,
@@ -981,11 +986,31 @@ fn check_callback_builtin_call_in_engine_frame(
         }
         return Ok(PhpType::Mixed);
     }
+    if callback_builtin_allows_runtime_string_descriptor(label)
+        && type_may_hold_runtime_callable(&callback_ty)
+    {
+        for arg in callback_args {
+            checker.infer_type(arg, env)?;
+        }
+        return Ok(PhpType::Mixed);
+    }
 
     Err(CompileError::new(
         callback.span,
         &format!("{} must have a statically known callable signature", label),
     ))
+}
+
+/// Returns whether a gradual value may select a callable descriptor at runtime.
+fn type_may_hold_runtime_callable(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Callable | PhpType::Mixed => true,
+        PhpType::Object(class_name) => class_name
+            .trim_start_matches('\\')
+            .eq_ignore_ascii_case("Closure"),
+        PhpType::Union(members) => members.iter().any(type_may_hold_runtime_callable),
+        _ => false,
+    }
 }
 
 /// Returns true when a callback builtin can resolve string callbacks at runtime.

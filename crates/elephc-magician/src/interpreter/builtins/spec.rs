@@ -151,15 +151,17 @@ impl EvalBuiltinSpec {
             .map(|param| param.name)
             .collect::<Vec<_>>();
         if let Some(variadic) = signature.variadic {
-            param_names.push(variadic);
+            param_names.push(variadic.name);
         }
-        let by_ref_params = signature
+        let mut by_ref_params = signature
             .params
             .iter()
             .filter(|param| param.by_ref)
             .map(|param| param.name)
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
+            .collect::<Vec<_>>();
+        if let Some(variadic) = signature.variadic.filter(|variadic| variadic.is_by_reference()) {
+            by_ref_params.push(variadic.name);
+        }
         let execution = eval_execution(contract)
             .expect("eval builtin binding must reference an eval-supported shared contract");
 
@@ -168,8 +170,8 @@ impl EvalBuiltinSpec {
             area: binding.area,
             param_names: param_names.into_boxed_slice(),
             params,
-            variadic: signature.variadic,
-            by_ref_params,
+            variadic: signature.variadic.map(|variadic| variadic.name),
+            by_ref_params: by_ref_params.into_boxed_slice(),
             required_param_count: signature.required_param_count,
             direct: binding.direct,
             values: binding.values,

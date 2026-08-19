@@ -367,8 +367,13 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 PhpType::Bool
             }
             "ptr_sizeof" | "ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
-            _ => PhpType::Int,
+            _ => PhpType::Mixed,
         },
+        ExprKind::MethodCall { .. }
+        | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. }
+        | ExprKind::StaticMethodCall { .. } => PhpType::Mixed,
+        ExprKind::Assignment { value, .. } => infer_expr_type_syntactic(value),
         ExprKind::NullCoalesce { value, default } => {
             let left_ty = infer_expr_type_syntactic(value);
             let right_ty = infer_expr_type_syntactic(default);
@@ -640,6 +645,7 @@ fn merge_array_literal_element_type_syntactic(existing: PhpType, next: PhpType) 
 mod tests {
     use super::*;
     use crate::names::Name;
+    use crate::parser::ast::StaticReceiver;
     use crate::span::Span;
 
     /// Verifies syntactic type inference treats eval as a runtime Mixed value.
@@ -657,6 +663,71 @@ mod tests {
         };
 
         assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Mixed);
+    }
+
+    /// Verifies an unresolved function call retains a dynamic result instead of inventing an
+    /// integer contract that later chained operations cannot satisfy.
+    #[test]
+    fn test_syntactic_unknown_function_call_is_mixed() {
+        let expr = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified("unknown_result"),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+
+        assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Mixed);
+    }
+
+    /// Verifies a method call without semantic metadata keeps a dynamic syntactic result.
+    #[test]
+    fn test_syntactic_method_call_is_mixed() {
+        let expr = Expr::new(
+            ExprKind::MethodCall {
+                object: Box::new(Expr::new(ExprKind::Variable("value".to_string()), Span::dummy())),
+                method: "produce".to_string(),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+
+        assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Mixed);
+    }
+
+    /// Verifies a static method call without semantic metadata keeps a dynamic syntactic result.
+    #[test]
+    fn test_syntactic_static_method_call_is_mixed() {
+        let expr = Expr::new(
+            ExprKind::StaticMethodCall {
+                receiver: StaticReceiver::Named(Name::unqualified("Factory")),
+                method: "produce".to_string(),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+
+        assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Mixed);
+    }
+
+    /// Verifies an assignment expression has the assigned value's syntactic result type.
+    #[test]
+    fn test_syntactic_assignment_uses_value_type() {
+        let expr = Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(Expr::new(
+                    ExprKind::Variable("value".to_string()),
+                    Span::dummy(),
+                )),
+                value: Box::new(Expr::float_lit(1.5)),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            Span::dummy(),
+        );
+
+        assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Float);
     }
 
     /// Verifies syntactic indexed plus assoc array union type.

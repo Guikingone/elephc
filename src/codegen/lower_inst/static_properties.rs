@@ -23,7 +23,9 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::context::FunctionContext;
-use super::objects::property_compatibility::can_store_assoc_array_as_mixed_property;
+use super::objects::property_compatibility::{
+    can_convert_indexed_array_to_assoc_property, can_store_assoc_array_as_mixed_property,
+};
 use super::{
     builtins, emit_loaded_assoc_array_to_mixed, expect_data, expect_operand, load_value_to_first_int_arg, property_values,
     store_if_result,
@@ -1006,11 +1008,17 @@ fn ensure_static_property_value_supported(
         return Ok(());
     }
     if matches!(slot.php_type.codegen_repr(), PhpType::Int)
-        && matches!(value_ty.codegen_repr(), PhpType::Mixed)
+        && matches!(
+            value_ty.codegen_repr(),
+            PhpType::Mixed | PhpType::TaggedScalar
+        )
     {
         return Ok(());
     }
     if is_empty_array_for_array_static_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
+    if can_convert_indexed_array_to_assoc_property(value_ty, &slot.php_type) {
         return Ok(());
     }
     if can_store_assoc_array_as_mixed_property(value_ty, &slot.php_type) {
@@ -1020,6 +1028,9 @@ fn ensure_static_property_value_supported(
         return Ok(());
     }
     if property_values::can_unbox_mixed_to_object_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
+    if property_values::can_unbox_mixed_to_array_property(value_ty, &slot.php_type) {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(
@@ -1080,6 +1091,14 @@ fn load_static_property_store_value_to_result(
     slot_ty: &PhpType,
 ) -> Result<()> {
     let value_ty = ctx.value_php_type(value)?;
+    if can_convert_indexed_array_to_assoc_property(&value_ty, slot_ty) {
+        let first_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        ctx.load_value_to_reg(value, first_arg)?;
+        // The conversion produces fresh hash storage and retains refcounted entries, leaving
+        // the source SSA array owned by its original cleanup path.
+        abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+        return Ok(());
+    }
     if can_store_assoc_array_as_mixed_property(&value_ty, slot_ty) {
         let PhpType::AssocArray {
             key: source_key,
@@ -1141,8 +1160,18 @@ fn load_static_property_store_value_to_result(
             PhpType::Object(_) => {
                 property_values::emit_mixed_object_for_property_store(ctx)
             }
+            PhpType::Array(_) | PhpType::AssocArray { .. } => {
+                property_values::emit_mixed_array_for_property_store(ctx, slot_ty)
+            }
             _ => {}
         }
+        return Ok(());
+    }
+    if slot_ty.codegen_repr() == PhpType::Int
+        && value_ty.codegen_repr() == PhpType::TaggedScalar
+    {
+        ctx.load_value_to_result(value)?;
+        crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
         return Ok(());
     }
     ctx.load_value_to_result(value)?;

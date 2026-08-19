@@ -56,6 +56,7 @@ pub fn inject_if_used(
     overrides: &[(String, String)],
     preload: Option<&PreloadStatistics>,
     strict: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> (Program, ManifestBakeSites) {
     let mut bodies = String::new();
     let mut sites = ManifestBakeSites {
@@ -236,6 +237,9 @@ pub fn inject_if_used(
     let src = format!("<?php\n{bodies}");
     let tokens = crate::lexer::tokenize(&src).expect("opcache prelude must tokenize");
     let mut combined = crate::parser::parse_internal(&tokens).expect("opcache prelude must parse");
+    // Per-function injection remains the cheapest first filter; whole-program
+    // declaration reachability is the conservative backstop for injected helpers.
+    inventory.record_program("opcache", &combined);
     combined.extend(program);
     (combined, sites)
 }

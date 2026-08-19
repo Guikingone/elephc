@@ -8,6 +8,7 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 
 use super::*;
+use crate::parser::ast::ExprKind;
 
 /// Lowers a direct instance-method call on a statically known object receiver.
 pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -177,6 +178,11 @@ pub(super) fn lower_mixed_method_call(
         emit_method_call_on_null_fatal(ctx, method_name);
         return Ok(());
     }
+    if builtins::has_eval_context(ctx)
+        && mixed_method_call_needs_eval_callable_adapter(ctx, inst, &candidates)?
+    {
+        return builtins::lower_eval_method_call(ctx, inst, object, method_name);
+    }
 
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     let non_object_label = ctx.next_label("mixed_method_non_object");
@@ -222,6 +228,34 @@ pub(super) fn lower_mixed_method_call(
 
     ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Returns whether a gradual callable argument needs the eval context carried by its object cell.
+fn mixed_method_call_needs_eval_callable_adapter(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    candidates: &[MixedMethodCandidate],
+) -> Result<bool> {
+    for (operand_index, operand) in inst.operands.iter().enumerate().skip(1) {
+        let source_ty = ctx.raw_value_php_type(*operand)?.codegen_repr();
+        if !matches!(
+            source_ty,
+            PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)
+        ) {
+            continue;
+        }
+        let param_index = operand_index - 1;
+        if candidates.iter().any(|candidate| {
+            candidate
+                .target
+                .params
+                .get(param_index)
+                .is_some_and(|param| param.codegen_repr() == PhpType::Callable)
+        }) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Emits one concrete class branch for a `Mixed` receiver method call.
@@ -274,6 +308,7 @@ pub(super) fn lower_mixed_method_candidate_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &candidate.target)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
@@ -481,13 +516,29 @@ pub(super) fn mixed_method_candidates(
     let method_key = php_symbol_key(method_name);
     let mut candidates = Vec::new();
     for (class_name, class_info) in &ctx.module.class_infos {
+        // Compiler-runtime classes expose synthetic checker declarations whose
+        // methods are lowered by dedicated intrinsics and have no ordinary EIR
+        // method entry symbol. They must never enter generic Mixed dispatch.
+        if php_symbol_key(class_name.trim_start_matches('\\')) == "fiber" {
+            continue;
+        }
         let Some(signature) = class_info.methods.get(&method_key) else {
             continue;
         };
-        if signature.params.len() + 1 != operand_count {
+        let provided = operand_count.saturating_sub(1);
+        if provided > signature.params.len()
+            || signature.defaults[provided..]
+                .iter()
+                .any(|default| !matches!(default.as_ref().map(|expr| &expr.kind), Some(ExprKind::Null)))
+        {
             continue;
         }
-        let target = resolve_method_call_target(ctx, class_name, method_name, operand_count)?;
+        let target = resolve_method_call_target(
+            ctx,
+            class_name,
+            method_name,
+            signature.params.len() + 1,
+        )?;
         candidates.push(MixedMethodCandidate {
             class_id: class_info.class_id,
             class_name: class_name.clone(),

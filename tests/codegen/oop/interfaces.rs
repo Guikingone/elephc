@@ -192,6 +192,29 @@ echo (new ReflectionClass(StaticWidget::class))->implementsInterface(StaticMaker
     assert_eq!(out, "W:box:H:make:S:1:S:make:Y");
 }
 
+/// Verifies object syntax dispatches a static interface method to the concrete receiver class.
+#[test]
+fn test_static_interface_method_dispatch_through_object_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+interface RuntimeStaticLabel {
+    public static function label(string $suffix = "!"): string;
+}
+final class RuntimeStaticA implements RuntimeStaticLabel {
+    public static function label(string $suffix = "!"): string { return "A" . $suffix; }
+}
+final class RuntimeStaticB implements RuntimeStaticLabel {
+    public static function label(string $suffix = "!"): string { return "B" . $suffix; }
+}
+function runtimeStaticLabel(RuntimeStaticLabel $value): string {
+    return $value->label("?");
+}
+echo runtimeStaticLabel(new RuntimeStaticA()), "|", runtimeStaticLabel(new RuntimeStaticB());
+"#,
+    );
+    assert_eq!(out, "A?|B?");
+}
+
 /// Verifies an abstract class may defer a static interface method to a concrete child.
 ///
 /// Fixture: `AbstractStaticLabel` implements `StaticLabel` but leaves the
@@ -445,6 +468,32 @@ fn test_class_covariant_self_return_override() {
         "<?php class Base { public function w(): Base { return $this; } } class Child extends Base { public function w(): static { return $this; } } echo (new Child())->w() instanceof Child ? 'ok' : 'no';",
     );
     assert_eq!(out, "ok");
+}
+
+/// Verifies covariant object returns do not depend on class metadata construction order.
+#[test]
+fn test_class_covariant_sibling_return_before_result_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+interface ResultContract {}
+class ConcreteResult implements ResultContract {}
+class BaseResult {}
+class NarrowResult extends BaseResult {}
+class ParentFactory {
+    public function create(): BaseResult { return new BaseResult(); }
+    public function createContract(): ResultContract { return new ConcreteResult(); }
+}
+class ChildFactory extends ParentFactory {
+    public function create(): NarrowResult { return new NarrowResult(); }
+    public function createContract(): ConcreteResult { return new ConcreteResult(); }
+}
+$factory = new ChildFactory();
+echo ($factory->create() instanceof NarrowResult ? 'class' : 'bad');
+echo '|';
+echo ($factory->createContract() instanceof ConcreteResult ? 'interface' : 'bad');
+"#,
+    );
+    assert_eq!(out, "class|interface");
 }
 
 /// Verifies an inherited interface method returning `static` stays typed as the child interface.

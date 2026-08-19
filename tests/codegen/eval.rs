@@ -21,6 +21,382 @@ fn assert_no_rust_panic_leaked(stderr: &str) {
     );
 }
 
+/// Verifies that distinct eval contexts call one shared metadata-registration body.
+#[test]
+fn test_eval_registration_helper_is_shared_across_context_sites() {
+    let dir = make_cli_test_dir("elephc_eval_registration_helper_shared");
+    let source = r#"<?php
+function first(string $code): void {
+    eval($code);
+}
+function second(string $code): void {
+    eval($code);
+}
+$code = $argc > 1 ? $argv[1] : 'echo "shared";';
+first($code);
+second($code);
+"#;
+    fs::write(dir.join("main.php"), source).unwrap();
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "shared eval registration fixture should compile:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let user_asm = fs::read_to_string(dir.join("main.s"))
+        .expect("shared eval registration fixture should emit assembly");
+
+    assert_eq!(
+        user_asm
+            .lines()
+            .filter(|line| {
+                let line = line.trim();
+                (line.starts_with("bl ") || line.starts_with("call "))
+                    && line.ends_with("__elephc_eval_context_new")
+            })
+            .count(),
+        2,
+        "each function must retain its own persistent eval context"
+    );
+    let native_function_registrations = user_asm
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            (line.starts_with("bl ") || line.starts_with("call "))
+                && line.ends_with("__elephc_eval_register_native_function")
+        })
+        .count();
+    assert!(
+        native_function_registrations >= 2,
+        "both source functions must retain native registration metadata"
+    );
+    let registration_helper_calls = user_asm
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            (line.starts_with("bl ") || line.starts_with("call "))
+                && line.contains("eval_register_module_")
+                && !line.contains("_done_")
+        })
+        .count();
+    assert_eq!(
+        registration_helper_calls, 2,
+        "one shared helper call per context is expected"
+    );
+    let registration_helper_definitions = user_asm
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            line.ends_with(':')
+                && line.contains("eval_register_module_")
+                && !line.contains("_done_")
+        })
+        .count();
+    assert_eq!(
+        registration_helper_definitions, 1,
+        "one shared registration helper definition is expected"
+    );
+    assert!(
+        !user_asm.contains("_eir_second_eval_callable_invoker_"),
+        "the second context must call the shared invoker body"
+    );
+
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run shared eval registration fixture");
+    assert!(
+        run.status.success(),
+        "shared eval registration fixture failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "sharedshared");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies callable selector lookup bodies are emitted once and reused by multiple sites.
+#[test]
+fn test_eval_callable_lookup_helpers_are_shared_across_sites() {
+    let dir = make_cli_test_dir("elephc_eval_callable_lookup_helpers_shared");
+    let source = r#"<?php
+function callback_lookup_value(int $value): int {
+    return $value + 1;
+}
+
+class CallableLookupBox {
+    public function __construct(callable $callback) {}
+
+    public function first(callable $callback): int {
+        return $callback(1);
+    }
+
+    public function second(callable $callback): int {
+        return $callback(2);
+    }
+
+    public static function third(callable $callback): int {
+        return $callback(3);
+    }
+}
+
+$code = $argc > 1 ? $argv[1] : 'return 0;';
+eval($code);
+"#;
+    fs::write(dir.join("main.php"), source).unwrap();
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "shared callable lookup fixture should compile:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let user_asm = fs::read_to_string(dir.join("main.s"))
+        .expect("shared callable lookup fixture should emit assembly");
+
+    for prefix in [
+        "__elephc_eval_callable_string_lookup_",
+        "__elephc_eval_callable_array_lookup_",
+        "__elephc_eval_callable_object_lookup_",
+    ] {
+        let definitions = user_asm
+            .lines()
+            .filter(|line| {
+                let line = line.trim();
+                line.starts_with(".globl ") && line.contains(prefix)
+            })
+            .count();
+        assert_eq!(
+            definitions, 1,
+            "one module-wide callable lookup helper is expected for {prefix}"
+        );
+        let calls = user_asm
+            .lines()
+            .filter(|line| {
+                let line = line.trim();
+                (line.starts_with("bl ") || line.starts_with("call ")) && line.contains(prefix)
+            })
+            .count();
+        assert!(
+            calls >= 2,
+            "multiple callable sites should reuse {prefix}; observed {calls} calls"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies equal AOT callable signatures share an invoker while retaining distinct descriptors.
+#[test]
+fn test_eval_callable_invokers_are_shared_per_signature() {
+    let dir = make_cli_test_dir("elephc_eval_callable_invokers_shared_per_signature");
+    let source = r#"<?php
+function _eval_callable_cache_first(int $value): int {
+    return $value + 1;
+}
+
+function _eval_callable_cache_second(int $value): int {
+    return $value + 2;
+}
+
+class EvalCallableInvokerCacheGate {
+    private function gate(callable $callback): void {}
+}
+
+$code = $argc > 1 ? $argv[1] : 'return 0;';
+eval($code);
+"#;
+    fs::write(dir.join("main.php"), source).unwrap();
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "shared callable invoker fixture should compile:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let user_asm = fs::read_to_string(dir.join("main.s"))
+        .expect("shared callable invoker fixture should emit assembly");
+    let lines: Vec<_> = user_asm.lines().collect();
+
+    let invoker_labels = [
+        elephc::names::function_symbol("_eval_callable_cache_first"),
+        elephc::names::function_symbol("_eval_callable_cache_second"),
+    ]
+    .into_iter()
+    .map(|target| {
+        let target_entries: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                (line.trim() == format!(".quad {target}")).then_some(index)
+            })
+            .collect();
+        assert!(
+            !target_entries.is_empty(),
+            "each callable target must retain at least one descriptor entry"
+        );
+
+        let invoker_labels: Vec<_> = target_entries
+            .into_iter()
+            .flat_map(|entry_index| {
+                let descriptor_start = (0..=entry_index)
+                    .rev()
+                    .find(|index| lines[*index].trim().ends_with(':'))
+                    .expect("callable descriptor must have a data label");
+                let descriptor_end = lines
+                    .iter()
+                    .enumerate()
+                    .skip(entry_index + 1)
+                    .find(|(_, line)| line.trim().ends_with(':'))
+                    .map(|(index, _)| index)
+                    .unwrap_or(lines.len());
+                let descriptor = &lines[descriptor_start..descriptor_end];
+                descriptor
+                    .iter()
+                    .filter_map(|line| {
+                        line.trim()
+                            .strip_prefix(".quad __elephc_eval_callable_invoker_")
+                            .map(|suffix| format!("__elephc_eval_callable_invoker_{suffix}"))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            invoker_labels.len(),
+            1,
+            "each callable descriptor must contain one static invoker reference"
+        );
+        invoker_labels.into_iter().next().unwrap()
+    })
+    .collect::<Vec<_>>();
+
+    assert_eq!(
+        invoker_labels[0], invoker_labels[1],
+        "equal signature/capture layouts should share one invoker label"
+    );
+    let shared_label = format!("{}:", invoker_labels[0]);
+    assert_eq!(
+        lines.iter().filter(|line| line.trim() == shared_label).count(),
+        1,
+        "the shared invoker label must have one body definition"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies bridge-supported AOT callable targets use the dynamic descriptor path while an
+/// unregistered underscore-prefixed function retains its direct eval descriptor.
+#[test]
+fn test_eval_callable_bridge_supported_targets_are_not_emitted_as_direct_cases() {
+    let dir = make_cli_test_dir("elephc_eval_callable_bridge_supported_direct_cases");
+    let source = r#"<?php
+function eval_callable_bridge_supported_function(int $value): int {
+    return $value + 1;
+}
+
+function _eval_callable_unregistered(int $value): int {
+    return $value + 2;
+}
+
+class EvalCallableBridgeSupportedBox {
+    public function __construct(callable $callback) {}
+
+    public function instance(int $value): int {
+        return $value + 3;
+    }
+
+    public static function staticMethod(int $value): int {
+        return $value + 4;
+    }
+
+    public function __invoke(int $value): int {
+        return $value + 5;
+    }
+}
+
+$code = $argc > 1 ? $argv[1] : 'return 0;';
+eval($code);
+"#;
+    fs::write(dir.join("main.php"), source).unwrap();
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "bridge-supported callable fixture should compile:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let user_asm = fs::read_to_string(dir.join("main.s"))
+        .expect("bridge-supported callable fixture should emit assembly");
+    let lines: Vec<_> = user_asm.lines().collect();
+    let direct_invokers_for_target = |target: &str| {
+        let target_entries: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                (line.trim() == format!(".quad {target}")).then_some(index)
+            })
+            .collect();
+        assert!(
+            !target_entries.is_empty(),
+            "callable target must retain at least one descriptor entry: {target}"
+        );
+        target_entries
+            .into_iter()
+            .flat_map(|entry_index| {
+                let descriptor_start = (0..=entry_index)
+                    .rev()
+                    .find(|index| lines[*index].trim().ends_with(':'))
+                    .expect("callable descriptor must have a data label");
+                let descriptor_end = lines
+                    .iter()
+                    .enumerate()
+                    .skip(entry_index + 1)
+                    .find(|(_, line)| line.trim().ends_with(':'))
+                    .map(|(index, _)| index)
+                    .unwrap_or(lines.len());
+                lines[descriptor_start..descriptor_end]
+                    .iter()
+                    .filter_map(|line| {
+                        line.trim()
+                            .strip_prefix(".quad __elephc_eval_callable_invoker_")
+                            .map(|suffix| format!("__elephc_eval_callable_invoker_{suffix}"))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    let supported_symbol =
+        elephc::names::function_symbol("eval_callable_bridge_supported_function");
+    assert!(
+        direct_invokers_for_target(&supported_symbol).is_empty(),
+        "bridge-supported function must not retain a direct eval invoker"
+    );
+    let unregistered_symbol = elephc::names::function_symbol("_eval_callable_unregistered");
+    let unregistered_invokers = direct_invokers_for_target(&unregistered_symbol);
+    assert_eq!(
+        unregistered_invokers.len(),
+        1,
+        "unregistered underscore function must retain exactly one direct eval invoker"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim() == format!(".quad {unregistered_symbol}")),
+        "the unregistered underscore function should retain a direct descriptor entry"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Asserts a scope-aware literal eval was lowered as an internal EIR function without Magician.
 fn assert_scope_eir_aot_without_bridge(
     user_asm: &str,
@@ -7689,6 +8065,19 @@ echo $result . ":" . $callbackCount;');
 "#,
     );
     assert_eq!(out, "xxaa:2:yyy:3:zza:2");
+}
+
+/// Verifies dynamic evaluation preserves the `A` modifier's anchored-at-offset semantics.
+#[test]
+fn test_eval_preg_match_anchored_modifier() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+eval('$late = preg_match("/foo/A", "xxfoo", $lateMatches, 0, 0);
+$atOffset = preg_match("/foo/A", "xxfoo", $offsetMatches, 0, 2);
+echo $late . ":" . count($lateMatches) . "|" . $atOffset . ":" . $offsetMatches[0];');
+"#,
+    );
+    assert_eq!(out, "0:0|1:foo");
 }
 
 /// Verifies eval `preg_replace_callback()` accepts general callable forms.

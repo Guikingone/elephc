@@ -40,6 +40,9 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     if ctx.by_ref_return {
         if let Some(Expr { kind: ExprKind::PropertyAccess { object, property }, .. }) = value_expr {
             let object = lower_expr(ctx, object);
+            if ctx.builder.insertion_block_is_terminated() {
+                return;
+            }
             let data = ctx.intern_string(property);
             let result_ty = ctx.return_php_type.clone();
             let cell_ptr = ctx.emit_value(
@@ -57,6 +60,9 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     if ctx.return_type == IrType::Void {
         if let Some(value_expr) = value_expr {
             lower_expr(ctx, value_expr);
+            if ctx.builder.insertion_block_is_terminated() {
+                return;
+            }
         }
         terminate_return(ctx, None);
         return;
@@ -66,6 +72,9 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     } else {
         emit_null_value(ctx, Some(span))
     };
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     let value = coerce_to_return_type(ctx, value, Some(span));
     let value = acquire_borrowed_return_value(ctx, value, span);
     let value = acquire_returned_this(ctx, value_expr, value, span);

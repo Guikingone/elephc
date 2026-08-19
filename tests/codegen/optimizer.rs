@@ -27,6 +27,8 @@ mod eir_common_subexpression;
 mod dead_code_elimination;
 #[path = "optimizer/dead_instruction_elimination.rs"]
 mod dead_instruction_elimination;
+#[path = "optimizer/declaration_reachability.rs"]
+mod declaration_reachability;
 #[path = "optimizer/dead_store_elimination.rs"]
 mod dead_store_elimination;
 #[path = "optimizer/eir_constant_propagation.rs"]

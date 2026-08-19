@@ -309,9 +309,5 @@ pub(super) fn reflection_method_is_generator(
         declaring_class_name.trim_start_matches('\\'),
         method_name
     ));
-    ctx.module.class_methods.iter().any(|function| {
-        php_symbol_key(function.name.trim_start_matches('\\')) == expected_key
-            && function.flags.is_generator
-    })
+    ctx.shared.reflection.method_is_generator(&expected_key)
 }
-

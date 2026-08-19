@@ -651,16 +651,6 @@ fn test_error_array_replace_wrong_args() {
     );
 }
 
-/// Verifies that array_replace() rejects string-element indexed arrays (scalar indexed inputs
-/// are supported; string/heap element indexed inputs are a follow-up).
-#[test]
-fn test_error_array_replace_string_indexed_unsupported() {
-    expect_error(
-        "<?php array_replace([\"a\", \"b\"], [\"c\"]);",
-        "array_replace() arguments must be associative arrays or indexed arrays of scalars",
-    );
-}
-
 /// Verifies that array_replace_recursive() with a single argument reports an arity error.
 #[test]
 fn test_error_array_replace_recursive_wrong_args() {
@@ -854,16 +844,14 @@ array_walk($w, function ($v) { echo strlen($v); });
     );
 }
 
-/// Verifies contextual callback typing does not silence real errors: an integer element type
-/// still rejects a string-only builtin applied to the inherited parameter.
+/// Verifies contextual integer callback parameters retain PHP's weak scalar-to-string coercion.
 #[test]
-fn test_array_callback_contextual_typing_still_rejects_wrong_element_use() {
-    expect_error(
+fn test_array_callback_contextual_typing_accepts_weak_strlen_coercion() {
+    expect_no_error(
         r#"<?php
 $w = [3, 1, 2];
 usort($w, fn($a, $b) => strlen($a) <=> strlen($b));
 "#,
-        "strlen() argument must be string",
     );
 }
 

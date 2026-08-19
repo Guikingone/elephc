@@ -52,6 +52,36 @@ demo();
     assert_eq!(out, "411");
 }
 
+/// Verifies a coalesce between compatible object classes retains their common interface, so a
+/// chained method call uses the interface's declared string return type on either runtime arm.
+#[test]
+fn test_compatible_object_null_coalesce_preserves_interface_method_type() {
+    let out = compile_and_run(
+        r#"<?php
+interface NamedPath {
+    public function name(): string;
+}
+
+class RootPath implements NamedPath {
+    public function name(): string { return "root"; }
+}
+
+class ChildPath implements NamedPath {
+    public function __construct(private ?NamedPath $parent = null) {}
+    public function name(): string { return "child"; }
+    public function selectedName(): string {
+        return ($this->parent ?? $this)->name();
+    }
+}
+
+echo (new ChildPath())->selectedName();
+echo ":";
+echo (new ChildPath(new RootPath()))->selectedName();
+"#,
+    );
+    assert_eq!(out, "child:root");
+}
+
 /// Verifies every array member of a flow union satisfies an `iterable` parameter, including the
 /// empty-array arm retained after a conditional append.
 #[test]
@@ -244,4 +274,40 @@ echo "|", $b->count;
 "#,
     );
     assert_eq!(out, "F|7|1.5|42");
+}
+
+/// Verifies a narrowed nullable integer remains loadable after its slot joins null and int paths.
+#[test]
+fn test_narrowed_nullable_int_local_loads_as_int() {
+    let out = compile_and_run(
+        r#"<?php
+function advance(?int $candidate): int {
+    $offset = 0;
+    for ($i = 0; $i < 2; ++$i) {
+        if (null !== $candidate) {
+            $offset = $candidate;
+        }
+        $candidate = $offset;
+    }
+    return $offset;
+}
+echo advance(7), "|", advance(null);
+"#,
+    );
+    assert_eq!(out, "7|0");
+}
+
+/// Verifies a gradual array read can populate an inline nullable-integer return value.
+#[test]
+fn test_mixed_array_read_returns_nullable_int() {
+    let out = compile_and_run(
+        r#"<?php
+function selected(array $values): ?int {
+    return $values["selected"] ?? null;
+}
+echo selected(["selected" => 9]), "|";
+var_dump(selected([]));
+"#,
+    );
+    assert_eq!(out, "9|NULL\n");
 }

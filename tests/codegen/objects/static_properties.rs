@@ -325,6 +325,33 @@ EncodingRegistry::dump();
     assert_eq!(out, "ASCII,UTF-8:ISO-8859-1");
 }
 
+/// Verifies Mixed values are checked and widened before entering declared static array storage.
+#[test]
+fn test_mixed_array_values_replace_declared_static_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeStaticArrayHolder {
+    public static array $generic = [];
+    public static array $associative = ['seed' => 0];
+
+    public static function replaceGeneric(mixed $value): void {
+        self::$generic = $value;
+    }
+
+    public static function replaceAssociative(mixed $value): void {
+        self::$associative = $value;
+    }
+}
+
+RuntimeStaticArrayHolder::replaceGeneric([1, 'two']);
+RuntimeStaticArrayHolder::replaceAssociative(['name' => 'value', 'count' => 2]);
+echo RuntimeStaticArrayHolder::$generic[0], ':', RuntimeStaticArrayHolder::$generic[1], '|';
+echo RuntimeStaticArrayHolder::$associative['name'], ':', RuntimeStaticArrayHolder::$associative['count'];
+"#,
+    );
+    assert_eq!(out, "1:two|value:2");
+}
+
 /// Tests that the index expression in `Registry::$items[idx()] += 6` is evaluated exactly once.
 /// The side-effect function `idx()` echoes "i" and the result proves no double-evaluation.
 #[test]

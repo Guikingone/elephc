@@ -14,6 +14,24 @@
 
 use crate::support::*;
 
+/// Runtime-name fixture whose unconstrained string parameter requires the open callable universe.
+const RUNTIME_STRING_CALLABLE_SOURCE: &str = r#"<?php
+function return_named_callable(string $name): callable {
+    return $name;
+}
+$callback = return_named_callable($argc > 0 ? "strtoupper" : "strtolower");
+echo $callback("Mixed");
+"#;
+
+/// Open runtime-name fixture whose selector originates outside the compiler's finite literal set.
+const OPEN_RUNTIME_STRING_CALLABLE_SOURCE: &str = r#"<?php
+function return_open_named_callable(string $name): callable {
+    return $name;
+}
+$callback = return_open_named_callable($argv[0]);
+echo $callback("Mixed");
+"#;
+
 /// Verifies a builtin function-name string binds to a declared `callable` parameter and is
 /// invoked inside the callee — the repro from the parameter-typing audit.
 #[test]
@@ -107,4 +125,54 @@ fn test_bound_callable_string_keeps_working_alongside_first_class_callables() {
         "#,
     );
     assert_eq!(out, "ABcde!");
+}
+
+/// Verifies a runtime string name is validated and materialized at a callable return boundary.
+#[test]
+fn test_runtime_string_satisfies_callable_return_type() {
+    let out = compile_and_run(RUNTIME_STRING_CALLABLE_SOURCE);
+    assert_eq!(out, "MIXED");
+}
+
+/// Verifies an open runtime string universe emits one hash resolver call instead of a candidate ladder.
+#[test]
+fn test_runtime_string_callable_uses_compact_lookup_table() {
+    let dir = make_cli_test_dir("elephc_runtime_string_callable_lookup_table");
+    let (user_asm, _runtime_asm, _required_libraries) = compile_source_to_asm_with_options(
+        OPEN_RUNTIME_STRING_CALLABLE_SOURCE,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(
+        user_asm.contains("__rt_callable_lookup_string_linear")
+            || user_asm.contains("__rt_callable_lookup_string_hash"),
+        "open string-callable dispatch should call a compact table resolver"
+    );
+    assert!(
+        !user_asm.contains("mixed_string_descriptor_next"),
+        "open string-callable dispatch must not emit a per-candidate descriptor ladder"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Verifies a gradual receiver/method pair is validated and materialized as a callable return.
+#[test]
+fn test_gradual_array_satisfies_callable_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+class ReturnedStaticCallable {
+    public static function decorate(string $value): string {
+        return "[" . $value . "]";
+    }
+}
+function return_array_callable(mixed $class, mixed $method): callable {
+    return [$class, $method];
+}
+$callback = return_array_callable(ReturnedStaticCallable::class, "decorate");
+echo $callback("ok");
+"#,
+    );
+    assert_eq!(out, "[ok]");
 }

@@ -191,6 +191,14 @@ pub(super) fn check_types_impl(
         errors.extend(error.flatten());
     }
     checker.declared_classes = class_map.keys().cloned().collect();
+    checker.declared_class_parents = class_map
+        .iter()
+        .map(|(name, class)| (name.clone(), class.extends.clone()))
+        .collect();
+    checker.declared_class_interfaces = class_map
+        .iter()
+        .map(|(name, class)| (name.clone(), class.implements.clone()))
+        .collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
     checker.declared_traits = declared_traits.clone();
     checker.declared_trait_methods = declared_trait_methods;

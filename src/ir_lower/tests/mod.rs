@@ -53,12 +53,13 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::resolver::resolve(parsed, parent).expect("resolver failed");
     let ast = crate::autoload::collect_aliases(ast);
     let ast = crate::dom_prelude::inject(ast);
-    let ast = crate::pdo_prelude::inject_if_used(ast, false);
-    let ast = crate::tz_prelude::inject_if_used(ast, false);
-    let ast = crate::list_id_prelude::inject_if_used(ast);
-    let ast = crate::var_export_prelude::inject_if_used(ast);
-    let ast = crate::image_prelude::inject_if_used(ast, false);
-    let ast = crate::hash_prelude::inject_if_used(ast, false);
+    let mut prelude_inventory = crate::optimize::reachability::PreludeInventory::new();
+    let ast = crate::pdo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::tz_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
     let (ast, _) = crate::autoload::run_collecting_included_with_defines(
         ast,
@@ -72,11 +73,23 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.
     let ast = crate::func_args::desugar(ast).expect("func_args desugar failed");
     let ast = crate::optimize::fold_constants(ast);
-    let check_result = crate::types::check_with_target(&ast, target).expect("type check failed");
+    let mut check_result =
+        crate::types::check_with_target(&ast, target).expect("type check failed");
     let ast = crate::optimize::propagate_constants(ast);
     let ast = crate::optimize::prune_constant_control_flow(ast);
     let ast = crate::optimize::normalize_control_flow(ast);
     let ast = crate::optimize::eliminate_dead_code(ast);
+    let empty_roots = HashSet::new();
+    let ast = crate::optimize::prune_unreachable_declarations(
+        ast,
+        &mut check_result,
+        crate::optimize::reachability::PruneOptions {
+            inventory: &prelude_inventory,
+            forced_groups: &empty_roots,
+            exported_functions: &empty_roots,
+            eval_forced: false,
+        },
+    );
     crate::ir_lower::lower_program(&ast, &check_result, target, false).unwrap_or_else(|error| {
         panic!(
             "EIR lowering failed for {}: {error:?}",

@@ -17,12 +17,34 @@ pub(super) fn coerce_to_return_type(
 ) -> LoweredValue {
     let return_php_type = ctx.return_php_type.clone();
     let value = guard_generic_object_nominal_return(ctx, value, &return_php_type, span);
+    let source_declared_type = ctx.builder.value_php_type(value.value).clone();
+    let value = match crate::types::param_binding::scalar_param_cast(
+        &return_php_type,
+        &source_declared_type,
+    ) {
+        Some(cast) => crate::ir_lower::expr::apply_scalar_param_cast(
+            ctx,
+            cast,
+            value,
+            &return_php_type,
+            span,
+        ),
+        None => value,
+    };
     let value = crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
         ctx,
         value,
         &return_php_type,
         span,
     );
+    if matches!(return_php_type.codegen_repr(), PhpType::Callable)
+        && matches!(
+            ctx.builder.value_php_type(value.value).codegen_repr(),
+            PhpType::Str | PhpType::Array(_)
+        )
+    {
+        return coerce_to_callable_return(ctx, value, span);
+    }
     if let Some(value) = coerce_container_to_return_type(ctx, value, span) {
         return value;
     }
@@ -51,56 +73,69 @@ pub(super) fn coerce_to_return_type(
     }
 }
 
-/// Inserts the runtime class guard required when bare `object` crosses a nominal return boundary.
+/// Resolves a runtime string or receiver/method pair to callable descriptor storage.
+fn coerce_to_callable_return(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> LoweredValue {
+    let coerced = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![value.value],
+        None,
+        PhpType::Callable,
+        effects_lookup::runtime_effects(),
+        span,
+    );
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+    }
+    coerced
+}
+
+/// Inserts the runtime class guard required when an object crosses a narrower nominal boundary.
 fn guard_generic_object_nominal_return(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     return_type: &PhpType,
     span: Option<Span>,
 ) -> LoweredValue {
-    let PhpType::Object(source_name) = ctx.builder.value_php_type(value.value).codegen_repr() else {
-        return value;
-    };
-    if !source_name.trim_start_matches('\\').is_empty() {
+    let source_type = ctx.builder.value_php_type(value.value).codegen_repr();
+    let needs_object_guard = matches!(source_type, PhpType::Object(_))
+        || crate::types::param_binding::gradual_object_requires_runtime_nominal_guard(
+            return_type,
+            &source_type,
+        );
+    if !needs_object_guard {
         return value;
     }
-    let Some(target_name) = nominal_object_return_target(return_type) else {
+    let Some(target_name) =
+        crate::types::param_binding::nominal_object_boundary_target(return_type)
+    else {
         return value;
     };
-    let data = ctx.intern_string(&target_name);
+    if matches!(source_type, PhpType::Object(_))
+        && crate::ir_lower::expr::param_accepts_object_without_string_coercion(
+        ctx,
+        return_type,
+        &source_type,
+    ) {
+        return value;
+    }
+    let data = ctx.intern_class_name(&target_name);
     ctx.emit_value(
         Op::RuntimeCall,
         vec![value.value],
-        Some(Immediate::Data(data)),
-        PhpType::Object(target_name),
+        Some(Immediate::NominalObject {
+            target: data,
+            boundary: crate::ir::NominalObjectBoundary::Return,
+        }),
+        return_type.clone(),
         effects_lookup::runtime_effects(),
         span,
     )
 }
 
-/// Extracts the single named object accepted by an object or nullable-object return type.
-fn nominal_object_return_target(return_type: &PhpType) -> Option<String> {
-    match return_type {
-        PhpType::Object(name) if !name.trim_start_matches('\\').is_empty() => Some(name.clone()),
-        PhpType::Union(members) => {
-            let mut target = None;
-            for member in members {
-                match member {
-                    PhpType::Void | PhpType::Never => {}
-                    PhpType::Object(name) if !name.trim_start_matches('\\').is_empty() => {
-                        if target.as_ref().is_some_and(|existing| existing != name) {
-                            return None;
-                        }
-                        target = Some(name.clone());
-                    }
-                    _ => return None,
-                }
-            }
-            target
-        }
-        _ => None,
-    }
-}
 
 /// Coerces a return value and releases the old owning temporary when replaced.
 pub(super) fn coerce_return_scalar_source(

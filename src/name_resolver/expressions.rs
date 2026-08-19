@@ -44,6 +44,9 @@ pub(super) fn resolve_expr(
         ExprKind::Throw(inner) => {
             ExprKind::Throw(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
         }
+        ExprKind::Clone(inner) => {
+            ExprKind::Clone(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
+        }
         ExprKind::Print(inner) => {
             ExprKind::Print(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
         }
@@ -215,7 +218,9 @@ pub(super) fn resolve_expr(
             params: resolve_params(params, current_namespace, imports, symbols),
             variadic: variadic.clone(),
             variadic_by_ref: *variadic_by_ref,
-            variadic_type: variadic_type.clone(),
+            variadic_type: variadic_type
+                .as_ref()
+                .map(|ty| resolve_type_expr(ty, current_namespace, imports, symbols)),
             return_type: return_type
                 .as_ref()
                 .map(|ty| resolve_type_expr(ty, current_namespace, imports, symbols)),
@@ -430,6 +435,20 @@ pub(super) fn resolve_expr(
             element_type: resolve_type_expr(element_type, current_namespace, imports, symbols),
             len: Box::new(resolve_expr(len, current_namespace, imports, symbols)),
         },
+        ExprKind::Yield { key, value } => ExprKind::Yield {
+            key: key.as_ref().map(|key| {
+                Box::new(resolve_expr(key, current_namespace, imports, symbols))
+            }),
+            value: value.as_ref().map(|value| {
+                Box::new(resolve_expr(value, current_namespace, imports, symbols))
+            }),
+        },
+        ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(resolve_expr(
+            inner,
+            current_namespace,
+            imports,
+            symbols,
+        ))),
         // A named argument wraps its value expression — without this arm the value escaped
         // resolution entirely, so e.g. `new self(url: new Url('/'))` left the imported `Url`
         // alias unresolved ("Undefined class: Url").

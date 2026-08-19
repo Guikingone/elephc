@@ -76,7 +76,135 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
     if let ExprKind::ArrayAccess { array, index } = &value.kind {
         return lower_array_access_with_missing_warning(ctx, array, index, value, false);
     }
+    if let Some(value) = lower_known_missing_property_probe(ctx, value) {
+        return value;
+    }
+    if let Some(value) = lower_initialized_property_null_coalesce_probe(ctx, value) {
+        return value;
+    }
     lower_expr(ctx, value)
+}
+
+/// Probes a declared property before reading it so `??` treats an uninitialized slot as null.
+fn lower_initialized_property_null_coalesce_probe(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: &Expr,
+) -> Option<LoweredValue> {
+    let ExprKind::PropertyAccess { object, property } = &value.kind else {
+        return None;
+    };
+    if !matches!(
+        materialized_expr_type_for_merge(ctx, object).codegen_repr(),
+        PhpType::Object(_)
+    ) {
+        return None;
+    }
+    if !matches!(
+        super::native_isset::property_isset_action(ctx, object, property),
+        Some(super::native_isset::IssetPropertyAction::Initialized)
+    ) {
+        return None;
+    }
+
+    let object = lower_expr(ctx, object);
+    let object_is_owned = ctx.value_is_owning_temporary(object);
+    let property_data = ctx.intern_string(property);
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![object.value],
+        Some(Immediate::Data(property_data)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(value.span),
+    );
+    let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let missing_block = ctx
+        .builder
+        .create_named_block("coalesce.property.uninitialized", Vec::new());
+    let read_block = ctx
+        .builder
+        .create_named_block("coalesce.property.read", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("coalesce.property.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: read_block,
+        then_args: Vec::new(),
+        else_target: missing_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(missing_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    let null = lower_boxed_null(ctx, value);
+    store_value_into_temp(ctx, &temp_name, PhpType::Mixed, null, value.span);
+    if object_is_owned {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(value.span));
+    }
+    let missing_reachable = !ctx.builder.insertion_block_is_terminated();
+    let missing_initialized = ctx.initialized_slots_snapshot();
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(read_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    let property_value =
+        lower_property_get_from_value(ctx, object, property, Op::PropGet, value);
+    store_value_into_temp(
+        ctx,
+        &temp_name,
+        PhpType::Mixed,
+        property_value,
+        value.span,
+    );
+    let read_reachable = !ctx.builder.insertion_block_is_terminated();
+    let read_initialized = ctx.initialized_slots_snapshot();
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &split_initialized,
+        missing_initialized,
+        missing_reachable,
+        read_initialized,
+        read_reachable,
+    ));
+    Some(take_owned_temp(ctx, &temp_name, value.span))
+}
+
+/// Evaluates the receiver of a statically missing concrete-class property and
+/// materializes null, matching PHP's warning-free `$object->missing ?? $default` probe.
+fn lower_known_missing_property_probe(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: &Expr,
+) -> Option<LoweredValue> {
+    let ExprKind::PropertyAccess { object, property } = &value.kind else {
+        return None;
+    };
+    let class_name = instance_callable_object_class(ctx, object)?;
+    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    if class_info
+        .properties
+        .iter()
+        .any(|(name, _)| name == property)
+        || class_info.methods.contains_key("__get")
+        || class_info.allow_dynamic_properties
+    {
+        return None;
+    }
+    let receiver = lower_expr(ctx, object);
+    if ctx.value_is_owning_temporary(receiver) {
+        crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(value.span));
+    }
+    Some(ctx.emit_value(
+        Op::ConstNull,
+        Vec::new(),
+        None,
+        PhpType::Void,
+        Op::ConstNull.default_effects(),
+        Some(value.span),
+    ))
 }
 
 /// Returns the materialized result type for a null-coalesce merge.
@@ -218,4 +346,3 @@ pub(super) fn release_discarded_branch_value(
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
 }
-

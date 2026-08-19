@@ -71,10 +71,18 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_dynamic_call_user_func_array(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = lower_literal_pattern_array_preg_replace_callback(
+        ctx, canonical, args, expr,
+    ) {
+        return value;
+    }
     // A call whose by-reference array argument is a property, static property, or container
     // element is rewritten to `$tmp = <place>; f($tmp, ...); <place> = $tmp;` before argument
     // materialization, so copy-on-write separation is stored back into the caller's place.
     if let Some(value) = ref_place_args::lower_ref_place_function_call(ctx, name, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_gradual_local_krsort(ctx, canonical, args, expr) {
         return value;
     }
     if let Some(value) = lower_static_array_map(ctx, canonical, args, expr) {
@@ -228,6 +236,171 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal)
 }
 
+/// Promotes a boxed gradual local before descending key sort and republishes it afterwards.
+///
+/// A descending key order cannot live in packed storage. `MixedToHash` produces the mutable hash
+/// passed to the runtime sort; after the call, the same SSA value contains any COW-adjusted hash
+/// pointer and is boxed back into the local's original gradual slot. This also lets the enclosing
+/// ref-place adapter write a valid boxed value back to a property or nested element.
+fn lower_gradual_local_krsort(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(canonical.trim_start_matches('\\')) != "krsort" || args.len() != 1 {
+        return None;
+    }
+    let receiver = match &args[0].kind {
+        ExprKind::Variable(name) => Some((name.as_str(), args[0].span)),
+        ExprKind::NamedArg { name, value } if name == "array" => match &value.kind {
+            ExprKind::Variable(local) => Some((local.as_str(), value.span)),
+            _ => None,
+        },
+        _ => None,
+    }?;
+    let (name, span) = receiver;
+    if !ctx.has_local_slot(name)
+        || !matches!(
+            ctx.local_type(name).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+    {
+        return None;
+    }
+
+    let source = ctx.load_local(name, Some(span));
+    let hash_type = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let hash = ctx.emit_value(
+        Op::MixedToHash,
+        vec![source.value],
+        None,
+        hash_type,
+        Op::MixedToHash.default_effects(),
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+
+    let definition = crate::builtins::registry::lookup("krsort")?;
+    let lowered = crate::builtins::semantics::lower_registry_call(
+        ctx,
+        definition,
+        &[hash.value],
+        &PhpType::Bool,
+        expr.span,
+    )
+    .ok()?;
+    let call = LoweredValue {
+        value: lowered.value,
+        ir_type: ctx.builder.value_type(lowered.value),
+    };
+    ctx.store_local(name, hash, PhpType::Mixed, Some(span));
+    Some(call)
+}
+
+/// Expands a literal string-pattern array into sequential callback replacements.
+///
+/// PHP applies array patterns in source order while reusing the same callback and evolving
+/// subject. Hoisting both values into synthetic locals preserves single evaluation and callback
+/// identity. The optional replacement count is deliberately left to the general runtime path,
+/// because its total must accumulate across patterns rather than expose the last call's count.
+fn lower_literal_pattern_array_preg_replace_callback(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(canonical.trim_start_matches('\\')) != "preg_replace_callback"
+        || !(3..=4).contains(&args.len())
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let patterns = match &args[0].kind {
+        ExprKind::ArrayLiteral(patterns)
+            if patterns
+                .iter()
+                .all(|pattern| matches!(pattern.kind, ExprKind::StringLiteral(_))) =>
+        {
+            patterns.iter().collect::<Vec<_>>()
+        }
+        ExprKind::ArrayLiteralAssoc(patterns)
+            if patterns
+                .iter()
+                .all(|(_, pattern)| matches!(pattern.kind, ExprKind::StringLiteral(_))) =>
+        {
+            patterns.iter().map(|(_, pattern)| pattern).collect::<Vec<_>>()
+        }
+        _ => return None,
+    };
+    if matches!(
+        materialized_expr_type_for_merge(ctx, &args[2]).codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. }
+    ) {
+        return None;
+    }
+
+    let callback = if matches!(args[1].kind, ExprKind::Closure { .. }) {
+        lower_preg_replace_callback_closure(ctx, &args[1])?
+    } else {
+        lower_expr(ctx, &args[1])
+    };
+    let callback_type = ctx.builder.value_php_type(callback.value);
+    let callback_temp = ctx.declare_synthetic_php_local(callback_type.clone());
+    ctx.store_local(
+        &callback_temp,
+        callback,
+        callback_type,
+        Some(args[1].span),
+    );
+
+    let subject = lower_expr(ctx, &args[2]);
+    let subject = persist_call_arg_if_string(ctx, subject, args[2].span);
+    let subject_type = ctx.builder.value_php_type(subject.value);
+    let subject_temp = ctx.declare_synthetic_php_local(subject_type.clone());
+    ctx.store_local(&subject_temp, subject, subject_type, Some(args[2].span));
+
+    let limit_temp = args.get(3).map(|limit| {
+        let value = lower_expr(ctx, limit);
+        let value_type = ctx.builder.value_php_type(value.value);
+        let temp = ctx.declare_synthetic_php_local(value_type.clone());
+        ctx.store_local(&temp, value, value_type, Some(limit.span));
+        temp
+    });
+
+    for pattern in patterns {
+        let pattern = lower_expr(ctx, pattern);
+        let callback = ctx.load_local(&callback_temp, Some(expr.span));
+        let subject = ctx.load_local(&subject_temp, Some(expr.span));
+        let mut operands = vec![pattern.value, callback.value, subject.value];
+        if let Some(limit_temp) = &limit_temp {
+            operands.push(ctx.load_local(limit_temp, Some(expr.span)).value);
+        }
+        let replaced = emit_builtin_call_value(
+            ctx,
+            canonical,
+            operands,
+            PhpType::Str,
+            expr.span,
+            None,
+        );
+        ctx.store_local(
+            &subject_temp,
+            replaced,
+            PhpType::Str,
+            Some(expr.span),
+        );
+    }
+
+    Some(ctx.load_local(&subject_temp, Some(expr.span)))
+}
+
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.
 pub(super) fn emit_builtin_call_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -361,7 +534,7 @@ pub(super) fn registry_builtin_result_type(
     // of accepting whichever synthetic call last occupied that key.
     let checked = if span.line != 0 {
         ctx.builtin_call_types
-            .get(&span)
+            .get(&(ctx.loop_storage_scope.clone(), span))
             .map(|checked| normalize_value_php_type(checked.clone()))
     } else {
         None

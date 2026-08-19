@@ -10,6 +10,46 @@
 
 use crate::support::*;
 
+/// Verifies a nullable local widened by a loop is loaded through its runtime storage type after
+/// the loop, even when the final flow snapshot still describes the pre-loop null value.
+#[test]
+fn test_loop_widened_nullable_local_returns_runtime_value() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class SearchableValue {
+    public function lastIndex(string|iterable $needle, int $offset = 0): ?int {
+        if (is_string($needle)) {
+            throw new TypeError('scalar search must be overridden');
+        }
+
+        $index = null;
+        foreach ($needle as $value) {
+            $candidate = $this->lastIndex((string) $value, $offset);
+            if (null !== $candidate && $candidate >= $index) {
+                $index = $offset = $candidate;
+            }
+        }
+
+        return $index;
+    }
+}
+
+final class ConcreteSearchableValue extends SearchableValue {
+    public function lastIndex(string|iterable $needle, int $offset = 0): ?int {
+        if (is_string($needle)) {
+            return (int) $needle;
+        }
+
+        return parent::lastIndex($needle, $offset);
+    }
+}
+
+echo (new ConcreteSearchableValue())->lastIndex(['1', '3', '2']);
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
 /// Verifies concrete arrays and Traversable objects satisfy an `iterable` return by forwarding the
 /// runtime payload instead of emitting a placeholder heap coercion.
 #[test]
@@ -181,6 +221,37 @@ try {
 "#,
     );
     assert_eq!(out, "9|caught");
+}
+
+/// Verifies a boxed union with several nominal alternatives is checked at a nullable object
+/// parameter boundary instead of being rejected statically.
+#[test]
+fn test_multi_object_union_argument_uses_runtime_nominal_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+interface AcceptedValue {}
+interface OtherValue {}
+final class AcceptedObject implements AcceptedValue {}
+final class OtherObject implements OtherValue {}
+
+function choose(int $kind): AcceptedValue|OtherValue|null {
+    if ($kind === 1) { return new AcceptedObject(); }
+    if ($kind === 2) { return new OtherObject(); }
+    return null;
+}
+function take(?AcceptedValue $value): string {
+    return $value === null ? 'null' : 'accepted';
+}
+
+echo take(choose(1)), '|', take(choose(0));
+try {
+    take(choose(2));
+} catch (TypeError $error) {
+    echo '|caught';
+}
+"#,
+    );
+    assert_eq!(out, "accepted|null|caught");
 }
 
 /// Verifies a boxed scalar union can cross a matching declared parameter boundary when its

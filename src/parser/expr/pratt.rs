@@ -354,7 +354,9 @@ fn parse_expr_bp_inner(
             Token::LParen => {
                 if matches!(
                     lhs.kind,
-                    ExprKind::ArrayAccess { .. }
+                    ExprKind::ArrayLiteral(_)
+                        | ExprKind::ArrayLiteralAssoc(_)
+                        | ExprKind::ArrayAccess { .. }
                         | ExprKind::ExprCall { .. }
                         | ExprKind::ClosureCall { .. }
                         | ExprKind::FunctionCall { .. }

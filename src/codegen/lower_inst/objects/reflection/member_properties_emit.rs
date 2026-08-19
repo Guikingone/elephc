@@ -165,8 +165,7 @@ pub(super) fn emit_reflection_parent_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(parent_class_name) = parent_class_name {
-        let parent_metadata = reflection_class_metadata_for_name(ctx, parent_class_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &parent_metadata)?;
+        emit_full_reflection_class_object(ctx, parent_class_name)?;
         emit_box_current_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
@@ -205,9 +204,7 @@ pub(super) fn emit_reflection_declaring_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(declaring_class_name) = declaring_class_name {
-        let declaring_metadata =
-            reflection_shallow_class_metadata_for_name(ctx, declaring_class_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &declaring_metadata)?;
+        emit_shallow_reflection_class_object(ctx, declaring_class_name)?;
         emit_box_current_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
@@ -242,8 +239,7 @@ pub(super) fn emit_reflection_enum_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(enum_name) = enum_name {
-        let enum_metadata = reflection_shallow_enum_metadata_for_name(ctx, enum_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionEnum", &enum_metadata)?;
+        emit_shallow_reflection_enum_object(ctx, enum_name)?;
         emit_box_current_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionEnum".to_string()),

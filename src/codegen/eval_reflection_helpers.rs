@@ -233,22 +233,15 @@ fn emit_set_args_property_aarch64(
     layout: &ReflectionAttributeLayout,
     fail_label: &str,
 ) {
-    let args_ok_label = "__elephc_eval_reflection_attribute_args_ok";
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the boxed eval attribute-argument array
     emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null argument arrays
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the argument array tag and payload pointer
-    emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
-    emitter.instruction(&format!("b.eq {}", args_ok_label));                    // accept indexed argument arrays from older eval paths
-    emitter.instruction("cmp x0, #5");                                          // runtime tag 5 means associative array
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array argument metadata
-    emitter.label(args_ok_label);
-    emitter.instruction("str x1, [sp, #32]");                                   // save the unboxed argument array across incref
-    emitter.instruction("mov x0, x1");                                          // move the array payload into the incref argument register
-    emitter.instruction("bl __rt_incref");                                      // retain the argument array for ReflectionAttribute ownership
-    emitter.instruction("ldr x1, [sp, #32]");                                   // reload the retained argument array payload
+    emit_normalize_attribute_args_aarch64(emitter, fail_label);
+    emitter.instruction("str x0, [sp, #32]");                                   // save the owned associative argument array
+    emitter.instruction("ldr x1, [sp, #32]");                                   // reload the owned associative argument array payload
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", layout.args_lo);
-    emitter.instruction("mov x10, #4");                                         // store the native property array tag expected by getArguments()
+    emitter.instruction("mov x10, #5");                                         // record associative storage for the argument-map property
     abi::emit_store_to_address(emitter, "x10", "x9", layout.args_hi);
 }
 
@@ -258,24 +251,50 @@ fn emit_set_args_property_x86_64(
     layout: &ReflectionAttributeLayout,
     fail_label: &str,
 ) {
-    let args_ok_label = "__elephc_eval_reflection_attribute_args_ok_x";
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the boxed eval attribute-argument array
     emitter.instruction("test rax, rax");                                       // check whether the boxed argument array is null
     emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null argument arrays
     emitter.instruction("call __rt_mixed_unbox");                               // expose the argument array tag and payload pointer
-    emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
-    emitter.instruction(&format!("je {}", args_ok_label));                      // accept indexed argument arrays from older eval paths
-    emitter.instruction("cmp rax, 5");                                          // runtime tag 5 means associative array
-    emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array argument metadata
-    emitter.label(args_ok_label);
-    emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // save the unboxed argument array across incref
-    emitter.instruction("mov rax, rdi");                                        // move the array payload into the incref argument register
-    emitter.instruction("call __rt_incref");                                    // retain the argument array for ReflectionAttribute ownership
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the retained argument array payload
+    emit_normalize_attribute_args_x86_64(emitter, fail_label);
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the owned associative argument array
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the owned associative argument array payload
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", layout.args_lo);
-    emitter.instruction("mov r11, 4");                                          // store the native property array tag expected by getArguments()
+    emitter.instruction("mov r11, 5");                                          // record associative storage for the argument-map property
     abi::emit_store_to_address(emitter, "r11", "r10", layout.args_hi);
+}
+
+/// Returns an owned associative ARM64 argument map from an unboxed eval array tag/payload.
+fn emit_normalize_attribute_args_aarch64(emitter: &mut Emitter, fail_label: &str) {
+    let indexed = "__elephc_eval_reflection_attribute_args_indexed";
+    let done = "__elephc_eval_reflection_attribute_args_done";
+    emitter.instruction("cmp x0, #4");                                          // does eval expose positional indexed arguments?
+    emitter.instruction(&format!("b.eq {}", indexed));                          // convert positional arguments to integer-keyed hash storage
+    emitter.instruction("cmp x0, #5");                                          // otherwise require an associative argument map
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array argument metadata
+    emitter.instruction("mov x0, x1");                                          // retain the borrowed associative argument hash
+    emitter.instruction("bl __rt_incref");                                      // transfer one hash owner into ReflectionAttribute
+    emitter.instruction(&format!("b {}", done));                                // skip indexed-array conversion
+    emitter.label(indexed);
+    emitter.instruction("mov x0, x1");                                          // pass the borrowed indexed argument array for conversion
+    emitter.instruction("bl __rt_array_to_hash");                               // build an owned integer-keyed associative argument map
+    emitter.label(done);
+}
+
+/// Returns an owned associative x86_64 argument map from an unboxed eval array tag/payload.
+fn emit_normalize_attribute_args_x86_64(emitter: &mut Emitter, fail_label: &str) {
+    let indexed = "__elephc_eval_reflection_attribute_args_indexed_x";
+    let done = "__elephc_eval_reflection_attribute_args_done_x";
+    emitter.instruction("cmp rax, 4");                                          // does eval expose positional indexed arguments?
+    emitter.instruction(&format!("je {}", indexed));                            // convert positional arguments to integer-keyed hash storage
+    emitter.instruction("cmp rax, 5");                                          // otherwise require an associative argument map
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array argument metadata
+    emitter.instruction("mov rax, rdi");                                        // retain the borrowed associative argument hash
+    emitter.instruction("call __rt_incref");                                    // transfer one hash owner into ReflectionAttribute
+    emitter.instruction(&format!("jmp {}", done));                              // skip indexed-array conversion
+    emitter.label(indexed);
+    emitter.instruction("call __rt_array_to_hash");                             // build an owned integer-keyed associative argument map
+    emitter.label(done);
 }
 
 /// Stores factory id 0 on the ARM64 reflection object.
@@ -328,4 +347,32 @@ fn emit_set_repeated_property_x86_64(emitter: &mut Emitter, layout: &ReflectionA
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
     let symbol = module.target.extern_symbol(name);
     emitter.label_global(&symbol);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::{Platform, Target};
+
+    /// Verifies ARM64 positional attribute args become an owned integer-keyed hash.
+    #[test]
+    fn arm64_attribute_args_normalize_indexed_storage_to_hash() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_normalize_attribute_args_aarch64(&mut emitter, "args_fail");
+        let output = emitter.output();
+        assert!(output.contains("cmp x0, #4"));
+        assert!(output.contains("bl __rt_array_to_hash"));
+        assert!(output.contains("bl __rt_incref"));
+    }
+
+    /// Verifies x86_64 positional attribute args become an owned integer-keyed hash.
+    #[test]
+    fn x86_64_attribute_args_normalize_indexed_storage_to_hash() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_normalize_attribute_args_x86_64(&mut emitter, "args_fail");
+        let output = emitter.output();
+        assert!(output.contains("cmp rax, 4"));
+        assert!(output.contains("call __rt_array_to_hash"));
+        assert!(output.contains("call __rt_incref"));
+    }
 }

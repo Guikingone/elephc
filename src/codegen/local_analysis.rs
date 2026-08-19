@@ -1,6 +1,6 @@
 //! Purpose:
 //! Precomputes local-slot facts consumed repeatedly by EIR assembly lowering.
-//! Tracks explicit stores, ref-cell representation changes, and owned parameter slots.
+//! Tracks local loads and stores, ref-cell representation changes, and owned parameter slots.
 //!
 //! Called from:
 //! - `crate::codegen::context::FunctionContext::new()`.
@@ -24,6 +24,7 @@ use crate::types::PhpType;
 /// Cached local-slot facts for one EIR function.
 pub(super) struct LocalSlotAnalysis {
     stored_slots: HashSet<LocalSlotId>,
+    loaded_slots: HashSet<LocalSlotId>,
     ever_ref_cell_slots: HashSet<LocalSlotId>,
     dynamic_ref_cell_slots: HashSet<LocalSlotId>,
     ref_cell_slots_before_inst: HashSet<(InstId, LocalSlotId)>,
@@ -36,11 +37,15 @@ impl LocalSlotAnalysis {
     pub(super) fn new(function: &Function) -> Self {
         let initially_ref_cell_slots = initially_ref_cell_slots(function);
         let mut stored_slots = HashSet::new();
+        let mut loaded_slots = HashSet::new();
         let mut ever_ref_cell_slots = initially_ref_cell_slots.clone();
         for inst in &function.instructions {
-            if inst.op == Op::StoreLocal {
-                if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
+            if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
+                if inst.op == Op::StoreLocal {
                     stored_slots.insert(slot);
+                }
+                if matches!(inst.op, Op::LoadLocal | Op::LoadRefCell) {
+                    loaded_slots.insert(slot);
                 }
             }
             if let Some(slot) =
@@ -64,6 +69,7 @@ impl LocalSlotAnalysis {
         let dynamic_ref_cell_slots = dynamic_ref_cell_slots(function, &ever_ref_cell_slots);
         Self {
             stored_slots,
+            loaded_slots,
             ever_ref_cell_slots,
             dynamic_ref_cell_slots,
             ref_cell_slots_before_inst,
@@ -75,6 +81,11 @@ impl LocalSlotAnalysis {
     /// Returns whether this slot receives an owned value via `StoreLocal`.
     pub(super) fn has_store(&self, slot: LocalSlotId) -> bool {
         self.stored_slots.contains(&slot)
+    }
+
+    /// Returns whether this slot is read directly or used as an indirect write destination.
+    pub(super) fn has_load(&self, slot: LocalSlotId) -> bool {
+        self.loaded_slots.contains(&slot)
     }
 
     /// Returns whether any instruction can rewrite this slot to a ref-cell pointer.
@@ -386,6 +397,41 @@ mod tests {
     use crate::codegen::generate_user_asm_from_ir;
     use crate::codegen::platform::{Arch, Platform, Target};
     use crate::ir::{Builder, FunctionParam, IrType, LocalKind, Module, Ownership};
+
+    /// Verifies a loaded local is tracked even when its value is written back indirectly.
+    #[test]
+    fn loaded_local_without_explicit_store_needs_lifetime_tracking() {
+        let mut function = Function::new(
+            "loaded_local".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        let slot = function.add_local(
+            Some("output".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.emit(
+                Op::LoadLocal,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                IrType::Heap(crate::ir::IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Borrowed,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert!(analysis.has_load(slot));
+        assert!(!analysis.has_store(slot));
+    }
 
     /// Verifies a later promotion does not flow backward into an earlier deferred release.
     #[test]

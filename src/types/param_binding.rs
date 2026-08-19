@@ -30,6 +30,69 @@ use crate::parser::ast::{CallableTarget, CastType, Expr, ExprKind, StaticReceive
 use crate::names::Name;
 use crate::types::PhpType;
 
+/// Extracts the sole named object accepted by a nominal object boundary.
+///
+/// Nullable object unions are supported because PHP preserves null while checking every object
+/// value against the named class or interface. Any union with another value category is left to
+/// the ordinary compatibility and gradual-boundary rules.
+pub(crate) fn nominal_object_boundary_target(expected: &PhpType) -> Option<String> {
+    match expected {
+        PhpType::Object(name) if !name.trim_start_matches('\\').is_empty() => Some(name.clone()),
+        PhpType::Union(members) => {
+            let mut target = None;
+            for member in members {
+                match member {
+                    PhpType::Void | PhpType::Never => {}
+                    PhpType::Object(name) if !name.trim_start_matches('\\').is_empty() => {
+                        if target.as_ref().is_some_and(|existing| existing != name) {
+                            return None;
+                        }
+                        target = Some(name.clone());
+                    }
+                    _ => return None,
+                }
+            }
+            target
+        }
+        _ => None,
+    }
+}
+
+/// Returns whether a known object can cross `expected` only after a runtime nominal check.
+pub(crate) fn object_requires_runtime_nominal_guard(
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    matches!(actual.codegen_repr(), PhpType::Object(_))
+        && nominal_object_boundary_target(expected).is_some()
+}
+
+/// Returns whether a gradual value needs a runtime object-or-null return-boundary check.
+///
+/// This is deliberately separate from parameter binding: a union such as `Object|false` is
+/// represented as boxed Mixed at runtime, so a declared nullable-object return must validate its
+/// active tag and class at either a parameter or return boundary.
+pub(crate) fn gradual_object_requires_runtime_nominal_guard(
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    matches!(actual.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && nominal_object_boundary_target(expected).is_some()
+}
+
+/// Returns whether a nullable integer must be checked before crossing an `int` parameter.
+///
+/// PHP accepts the program and throws `TypeError` only if the runtime value is null. Elephc's
+/// compact `TaggedScalar` representation carries exactly the payload and null tag needed to make
+/// that decision at the call boundary.
+pub(crate) fn nullable_int_requires_runtime_param_guard(
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    expected.codegen_repr() == PhpType::Int
+        && actual.codegen_repr() == PhpType::TaggedScalar
+}
+
 /// How a declared parameter binds an argument whose type does not already match.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ParamBinding {
@@ -75,6 +138,9 @@ pub(crate) fn classify_param_binding(
     if *expected == PhpType::Callable {
         return classify_callable_string_binding(actual, arg);
     }
+    if weak_binding_selects_string_for_all_variants(expected, actual) {
+        return ParamBinding::Cast(CastType::String);
+    }
     match (expected.codegen_repr(), actual.codegen_repr()) {
         // `string $s` accepts every other scalar. `(string)` is total for int, float and
         // bool, produces no PHP notice, and elephc's cast already matches PHP byte for byte
@@ -90,6 +156,89 @@ pub(crate) fn classify_param_binding(
         (PhpType::Int, PhpType::Float | PhpType::Str)
         | (PhpType::Float, PhpType::Str) => classify_numeric_binding(expected, arg),
         _ => ParamBinding::Rejected,
+    }
+}
+
+/// Returns whether a boxed gradual argument needs an active-tag check for a declared union.
+///
+/// The supported union members map directly to stable Mixed runtime tags, so the guard can
+/// preserve the boxed ABI value unchanged after validation. Nominal objects, callables,
+/// iterables, resources, and the literal `false` subtype need richer checks and deliberately
+/// stay on their existing paths.
+pub(crate) fn gradual_union_requires_runtime_param_guard(
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    if expected == actual
+        || expected.codegen_repr() != PhpType::Mixed
+        || actual.codegen_repr() != PhpType::Mixed
+    {
+        return false;
+    }
+    let PhpType::Union(members) = expected else {
+        return false;
+    };
+    !members.is_empty()
+        && members.iter().all(|member| {
+            matches!(
+                member,
+                PhpType::Int
+                    | PhpType::Float
+                    | PhpType::Str
+                    | PhpType::Bool
+                    | PhpType::Void
+                    | PhpType::Array(_)
+                    | PhpType::AssocArray { .. }
+            )
+        })
+}
+
+/// Returns whether weak PHP binding selects `string` for every possible source variant.
+///
+/// Exact scalar arms and PHP's numeric-preference rules take precedence over string coercion.
+/// Restricting this fallback to unions without `int`, `float`, or `bool` therefore covers total
+/// scalar conversion without guessing about lossy numeric union selection. A nullable source is
+/// accepted only when the target is nullable too; lowering then preserves null and casts only the
+/// non-null scalar branch.
+fn weak_binding_selects_string_for_all_variants(
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    let (target_accepts_string, target_accepts_null) = match expected {
+        PhpType::Str => (true, false),
+        PhpType::Union(members) => {
+            let mut has_string = false;
+            let mut has_null = false;
+            for member in members {
+                match member {
+                    PhpType::Str => has_string = true,
+                    PhpType::Void => has_null = true,
+                    PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False => {
+                        return false;
+                    }
+                    _ => {}
+                }
+            }
+            (has_string, has_null)
+        }
+        _ => (false, false),
+    };
+    if !target_accepts_string {
+        return false;
+    }
+    match actual {
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False => true,
+        PhpType::Union(members) => !members.is_empty()
+            && members.iter().all(|member| match member {
+                PhpType::Str
+                | PhpType::Int
+                | PhpType::Float
+                | PhpType::Bool
+                | PhpType::False => true,
+                PhpType::Void => target_accepts_null,
+                _ => false,
+            }),
+        _ => false,
     }
 }
 
@@ -653,6 +802,35 @@ mod tests {
         assert_eq!(
             classify_param_binding(&PhpType::Bool, &PhpType::Str, &string_arg("a")),
             ParamBinding::Cast(CastType::Bool)
+        );
+    }
+
+    /// Verifies a union with `string` as its only scalar arm performs total weak conversion.
+    #[test]
+    fn scalar_to_sole_string_union_binding_uses_the_cast() {
+        let expected = PhpType::Union(vec![
+            PhpType::Str,
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            PhpType::Void,
+        ]);
+        let arg = Expr::new(ExprKind::IntLiteral(42), crate::span::Span::dummy());
+        assert_eq!(
+            classify_param_binding(&expected, &PhpType::Int, &arg),
+            ParamBinding::Cast(CastType::String)
+        );
+        let numeric_union = PhpType::Union(vec![PhpType::Int, PhpType::Str]);
+        assert_eq!(
+            classify_param_binding(&numeric_union, &PhpType::Bool, &arg),
+            ParamBinding::Rejected
+        );
+        let nullable_scalar = PhpType::Union(vec![PhpType::Int, PhpType::Void]);
+        assert_eq!(
+            classify_param_binding(&expected, &nullable_scalar, &arg),
+            ParamBinding::Cast(CastType::String)
+        );
+        assert_eq!(
+            classify_param_binding(&PhpType::Str, &nullable_scalar, &arg),
+            ParamBinding::Rejected
         );
     }
 

@@ -52,7 +52,7 @@ pub(super) fn object_name_satisfies_interface_for_ir(
 }
 
 /// Returns whether a lowered class implements an interface, following parents.
-pub(super) fn class_implements_interface_for_ir(
+pub(in crate::ir_lower) fn class_implements_interface_for_ir(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
     interface_name: &str,
@@ -139,4 +139,3 @@ pub(super) fn interface_method_return_type_for_ir(
     }
     None
 }
-

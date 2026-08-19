@@ -35,7 +35,7 @@ pub(super) fn class_interfaces_require_missing_method_symbols(
             class_name,
             class_info,
             interface_info,
-            &emitted_methods,
+            emitted_methods,
         ) {
             return true;
         }
@@ -77,17 +77,11 @@ pub(super) fn interface_requires_missing_method_symbol(
     false
 }
 
-/// Returns instance-method keys emitted by the EIR backend.
-pub(super) fn emitted_instance_method_keys(ctx: &FunctionContext<'_>) -> HashSet<(String, String)> {
-    ctx.module
-        .class_methods
-        .iter()
-        .filter(|function| !function.flags.is_static)
-        .filter_map(|function| {
-            let (class_name, method_name) = function.name.rsplit_once("::")?;
-            Some((class_name.to_string(), php_symbol_key(method_name)))
-        })
-        .collect()
+/// Borrows instance-method keys emitted by the EIR backend for contains-only validation.
+pub(super) fn emitted_instance_method_keys<'ctx>(
+    ctx: &'ctx FunctionContext<'_>,
+) -> &'ctx HashSet<(String, String)> {
+    ctx.shared.emitted_instance_method_keys()
 }
 
 /// Returns true when the current EIR module includes a class method body.
@@ -97,15 +91,8 @@ pub(super) fn class_method_already_emitted(
     method_key: &str,
     is_static: bool,
 ) -> bool {
-    ctx.module.class_methods.iter().any(|function| {
-        function.flags.is_static == is_static
-            && function
-                .name
-                .rsplit_once("::")
-                .is_some_and(|(candidate_class, candidate_method)| {
-                    candidate_class == class_name && php_symbol_key(candidate_method) == method_key
-                })
-    })
+    ctx.shared
+        .emitted_method_contains(class_name, method_key, is_static)
 }
 
 /// Collects property high-word offsets that should start with the typed-property sentinel.

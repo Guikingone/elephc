@@ -421,6 +421,10 @@ fn resolve_integer_arg_to_result(
         PhpType::Int | PhpType::Bool => {
             ctx.load_value_to_result(value)?;
         }
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             load_value_to_first_int_arg(ctx, value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");

@@ -137,7 +137,7 @@ pub(in crate::codegen::lower_inst::builtins) fn load_string_arg_to_regs(
 }
 
 /// Materializes an arbitrary EIR value as a PHP string in caller-selected registers.
-pub(in crate::codegen::lower_inst::builtins) fn load_value_as_string_to_regs(
+pub(in crate::codegen::lower_inst) fn load_value_as_string_to_regs(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     name: &str,
@@ -188,10 +188,73 @@ pub(in crate::codegen::lower_inst::builtins) fn load_value_as_string_to_regs(
             move_string_result_to_regs(ctx, ptr_reg, len_reg);
             Ok(())
         }
+        PhpType::Object(class_name) => {
+            load_object_as_borrowed_string_to_regs(
+                ctx,
+                value,
+                &class_name,
+                ptr_reg,
+                len_reg,
+            )
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} string coercion for PHP type {:?}",
             name, other
         ))),
+    }
+}
+
+/// Invokes a concrete object's `__toString()`, copies its owned result into concat scratch, and
+/// releases the temporary heap string before returning a borrowed pointer/length pair.
+fn load_object_as_borrowed_string_to_regs(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    class_name: &str,
+    ptr_reg: &str,
+    len_reg: &str,
+) -> Result<()> {
+    let normalized = class_name.trim_start_matches('\\');
+    if !crate::codegen::lower_inst::output_values::object_class_has_tostring(ctx, normalized) {
+        crate::codegen::lower_inst::output_values::emit_missing_tostring_fatal(ctx, normalized);
+        return Ok(());
+    }
+    let return_ty = crate::codegen::lower_inst::output_values::emit_object_tostring_call(
+        ctx,
+        value,
+        normalized,
+    )?;
+    if !matches!(return_ty.codegen_repr(), PhpType::Str) {
+        return Err(CodegenIrError::unsupported(format!(
+            "__toString return value for PHP type {:?}",
+            return_ty
+        )));
+    }
+    copy_owned_string_to_concat_and_release(ctx);
+    move_string_result_to_regs(ctx, ptr_reg, len_reg);
+    Ok(())
+}
+
+/// Copies the current owned string result into concat scratch and frees its original heap owner.
+fn copy_owned_string_to_concat_and_release(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                  // preserve the owned __toString result before copying it
+            abi::emit_call_label(ctx.emitter, "__rt_strcopy");
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                  // preserve the concat-backed copy while releasing the owner
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                      // reload the original owned string pointer
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                   // restore the borrowed concat-backed result
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                // preserve the owned __toString result before copying it
+            abi::emit_call_label(ctx.emitter, "__rt_strcopy");
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                // preserve the concat-backed copy while releasing the owner
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload the original owned string pointer
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");                 // restore the borrowed concat-backed result
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+        }
     }
 }
 

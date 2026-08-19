@@ -30,16 +30,19 @@ pub(super) fn collect_property_defaults(
             continue;
         }
         let offset = 8 + index * 16;
-        let resolved = crate::codegen::eval_class_constant_helpers::resolve_class_like_constant_literal(
+        let resolved = crate::codegen::eval_class_constant_helpers::resolve_class_like_constants_in_literal(
             module,
             class_name,
             &default_expr.kind,
-        )
-        .unwrap_or_else(|| default_expr.kind.clone());
+        );
+        let resolved = crate::codegen::literal_defaults::resolve_literal_default_global_constants(
+            &resolved,
+            &module.global_constants,
+        );
         defaults.push(PropertyDefault {
             offset,
             value: literal_default_value(
-                &format!("property ${}", property),
+                &format!("property {}::${}", class_name, property),
                 php_type,
                 &resolved,
                 inst.op.name(),

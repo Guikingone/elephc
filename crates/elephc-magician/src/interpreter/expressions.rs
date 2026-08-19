@@ -203,8 +203,11 @@ pub(in crate::interpreter) fn eval_expr(
             fallback_name,
         } => eval_namespaced_const_fetch(name, fallback_name, context, values),
         EvalExpr::NewObject { class_name, args } => {
-            let args = eval_method_call_arg_values(args, context, scope, values)?;
-            let class_name = eval_new_object_class_name(class_name, context)?;
+            let args = eval_method_call_arg_values(args, context, scope, values)
+                .map_err(|status| trace_new_object_error("arguments", class_name, status, context))?;
+            let class_name = eval_new_object_class_name(class_name, context).map_err(|status| {
+                trace_new_object_error("class_name", class_name, status, context)
+            })?;
             eval_new_object_result(&class_name, args, context, scope, values)
         }
         EvalExpr::NewAnonymousClass { class, args } => {
@@ -352,6 +355,14 @@ pub(in crate::interpreter) fn eval_expr(
                 eval_expr(else_branch, context, scope, values)
             }
         }
+        EvalExpr::Throw(inner) => {
+            let thrown = eval_expr(inner, context, scope, values)?;
+            if values.type_tag(thrown)? != EVAL_TAG_OBJECT {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            context.set_pending_throw(thrown);
+            Err(EvalStatus::UncaughtThrowable)
+        }
         EvalExpr::Unary { op, expr } => {
             let value = eval_expr(expr, context, scope, values)?;
             match op {
@@ -368,6 +379,7 @@ pub(in crate::interpreter) fn eval_expr(
                     values.bool_value(!truthy)
                 }
                 EvalUnaryOp::BitNot => values.bit_not(value),
+                EvalUnaryOp::ErrorSuppress => Ok(value),
             }
         }
         EvalExpr::Binary { op, left, right } => {

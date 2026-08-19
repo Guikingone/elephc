@@ -6,7 +6,7 @@
 //! - `crate::types::checker::stmt_check::control_flow` when checking `StmtKind::If`.
 //!
 //! Key details:
-//! - Recognizes scalar, null, array, countable, and callable `is_*($var)` predicates (and aliases),
+//! - Recognizes scalar, null, array, object, countable, and callable `is_*($var)` predicates (and aliases),
 //!   `$var instanceof Class`, `=== null` / `=== false` and their `!==` forms, and single-operand
 //!   `isset(...)`. Bare locals and simple local assignments also narrow representable null/false
 //!   members on their truthy edge. `!==` and `isset` are self-negating guards, which combine with a leading `!`
@@ -62,8 +62,12 @@ enum GuardTarget {
     UnknownObject,
     /// Any indexed or associative array, regardless of its element types.
     AnyArray,
+    /// Any object, regardless of its nominal class.
+    AnyObject,
     /// Any indexed/associative array or object implementing `Countable`.
     Countable,
+    /// A value accepted by `is_numeric()`, including runtime-validated numeric strings.
+    Numeric,
 }
 
 impl GuardTarget {
@@ -71,7 +75,10 @@ impl GuardTarget {
     fn fallback_type(&self) -> PhpType {
         match self {
             Self::Exact(ty) => ty.clone(),
-            Self::NonNull | Self::UnknownObject | Self::AnyArray => PhpType::Mixed,
+            Self::AnyArray => PhpType::Array(Box::new(PhpType::Mixed)),
+            Self::AnyObject => PhpType::Object(String::new()),
+            Self::NonNull | Self::UnknownObject => PhpType::Mixed,
+            Self::Numeric => PhpType::Mixed,
             Self::Countable => PhpType::Union(vec![
                 PhpType::Array(Box::new(PhpType::Mixed)),
                 PhpType::Object("Countable".to_string()),
@@ -186,10 +193,13 @@ impl Checker {
 
     /// Narrows a local truthiness guard, including a simple assignment used as the condition.
     ///
-    /// Assignment conditions use the right-hand side's precise type rather than the local's
-    /// storage-wide join: PHP evaluates the assignment before testing it, so a preceding value of
-    /// another type cannot reach either branch. Only fully representable falsey members (`null`
-    /// and literal `false`) are removed; zero and empty strings/arrays remain conservative.
+    /// Assignment conditions use the local type installed by the condition's already-completed
+    /// assignment-effects pass. Re-inferring the right-hand side here would execute its type
+    /// effects twice and can make a self-referential assignment resolve its receiver through the
+    /// newly assigned type. Ordinary locals therefore retain the precise assigned type, while an
+    /// explicitly typed local conservatively retains its declaration. Only fully representable
+    /// falsey members (`null` and literal `false`) are removed; zero and empty strings/arrays
+    /// remain conservative.
     fn truthy_binding_guard_narrowing(
         &mut self,
         condition: &Expr,
@@ -205,7 +215,7 @@ impl Checker {
             }
             ExprKind::Assignment {
                 target,
-                value,
+                value: _,
                 result_target: None,
                 prelude,
                 conditional_value_temp: None,
@@ -214,7 +224,10 @@ impl Checker {
                 let ExprKind::Variable(var) = &target.kind else {
                     return Ok(None);
                 };
-                (var.clone(), self.infer_type(value, env)?, true)
+                let Some(current) = env.get(var) else {
+                    return Ok(None);
+                };
+                (var.clone(), current.clone(), true)
             }
             _ => return Ok(None),
         };
@@ -294,6 +307,13 @@ impl Checker {
     fn guard_env_key(&self, receiver: &Expr) -> Option<String> {
         match &receiver.kind {
             ExprKind::Variable(var) => Some(var.clone()),
+            ExprKind::Assignment {
+                target,
+                result_target: None,
+                prelude,
+                conditional_value_temp: None,
+                ..
+            } if prelude.is_empty() => self.guard_env_key(target),
             ExprKind::PropertyAccess { object, property } => {
                 Self::narrowed_property_env_key(object, property)
             }
@@ -304,6 +324,15 @@ impl Checker {
             ExprKind::This => Some(Self::narrowed_this_env_key().to_string()),
             _ => None,
         }
+    }
+
+    /// Returns the stable environment key for a method receiver used by flow-effect inference.
+    ///
+    /// Short-circuit inference uses this to retain an already-proven nominal type while invoking
+    /// a zero-argument method through that exact property. The wrapper deliberately exposes only
+    /// the key construction; guard recognition and stability validation remain owned here.
+    pub(crate) fn flow_guard_env_key(&self, receiver: &Expr) -> Option<String> {
+        self.guard_env_key(receiver)
     }
 
     /// Records the flow fact produced by a completed property or static-property write.
@@ -387,6 +416,20 @@ impl Checker {
         env.retain(|key, _| !key.starts_with(&prefix));
     }
 
+    /// Drops instance/static property facts for one written property name across all aliases.
+    ///
+    /// A direct write to `$a->p` can invalidate a fact for `$b->p` when both locals alias the
+    /// same object, but it cannot change the storage named `q`. Calls and computed writes still
+    /// use the all-property invalidation path because they may execute arbitrary user code.
+    pub(crate) fn purge_property_narrowings_for_property(env: &mut TypeEnv, property: &str) {
+        let instance_suffix = format!("->{property}");
+        let static_suffix = format!("::${property}");
+        env.retain(|key, _| {
+            !key.starts_with('\u{1}')
+                || (!key.ends_with(&instance_suffix) && !key.ends_with(&static_suffix))
+        });
+    }
+
     /// Returns whether a property guard can invoke user code on either read. Hooked or magic
     /// properties are not stable flow bindings because two reads may produce different values.
     fn property_guard_receiver_is_unstable(
@@ -417,6 +460,12 @@ impl Checker {
     /// so `Mixed` and incompatible concrete types use the target fallback; a `Union` keeps matching
     /// members; a concrete match is preserved, including its array element or object class type.
     fn narrow_to(&self, current: &PhpType, target: &GuardTarget) -> PhpType {
+        if matches!(target, GuardTarget::Numeric) {
+            return match current {
+                PhpType::Int | PhpType::Float => current.clone(),
+                _ => PhpType::Mixed,
+            };
+        }
         match current {
             PhpType::Union(members) => {
                 let kept: Vec<PhpType> = members
@@ -470,6 +519,7 @@ impl Checker {
             GuardTarget::AnyArray => {
                 matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })
             }
+            GuardTarget::AnyObject => matches!(member, PhpType::Object(_)),
             GuardTarget::Countable => match member {
                 PhpType::Array(_) | PhpType::AssocArray { .. } => true,
                 PhpType::Object(class_name) => {
@@ -478,8 +528,16 @@ impl Checker {
                 }
                 _ => false,
             },
+            GuardTarget::Numeric => {
+                matches!(member, PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Mixed)
+            }
             GuardTarget::Exact(PhpType::Object(target_class)) => {
-                matches!(member, PhpType::Object(member_class) if member_class == target_class)
+                matches!(member, PhpType::Object(member_class)
+                    if php_symbol_key(member_class) == php_symbol_key(target_class))
+                    || (matches!(member, PhpType::Callable)
+                        && target_class
+                            .trim_start_matches('\\')
+                            .eq_ignore_ascii_case("Closure"))
             }
             GuardTarget::Exact(PhpType::Bool) => {
                 matches!(member, PhpType::Bool | PhpType::False)
@@ -585,9 +643,31 @@ fn guard_receiver_and_target<'a>(
 ) -> Option<(&'a Expr, GuardTarget, bool)> {
     match &cond.kind {
         ExprKind::FunctionCall { name, args } if args.len() == 1 => {
+            let function_key = php_symbol_key(name.trim_start_matches('\\'));
+            if function_key == "is_string" {
+                if let ExprKind::NullCoalesce { value, .. } = &args[0].kind {
+                    if let ExprKind::Assignment {
+                        target,
+                        prelude,
+                        ..
+                    } = &value.kind
+                    {
+                        if prelude.is_empty() && matches!(target.kind, ExprKind::Variable(_)) {
+                            return Some((
+                                target,
+                                GuardTarget::Exact(PhpType::Union(vec![
+                                    PhpType::Str,
+                                    PhpType::Void,
+                                ])),
+                                false,
+                            ));
+                        }
+                    }
+                }
+            }
             // `php_symbol_key` rather than a plain lowercase: it also folds the leading `\` and
             // the namespace qualification, so `\is_int($x)` and `Ns\is_int($x)` narrow too.
-            let target = match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+            let target = match function_key.as_str() {
                 "is_int" | "is_integer" | "is_long" => GuardTarget::Exact(PhpType::Int),
                 "is_float" | "is_double" | "is_real" => GuardTarget::Exact(PhpType::Float),
                 "is_string" => GuardTarget::Exact(PhpType::Str),
@@ -598,9 +678,11 @@ fn guard_receiver_and_target<'a>(
                 "is_null" => GuardTarget::Exact(PhpType::Void),
                 "is_callable" => GuardTarget::Exact(PhpType::Callable),
                 "is_array" => GuardTarget::AnyArray,
+                "is_object" => GuardTarget::AnyObject,
                 // A true result proves exactly the two families accepted by `count()`. Keep
                 // unguarded `iterable` strict because it may be a non-Countable Traversable.
                 "is_countable" => GuardTarget::Countable,
+                "is_numeric" => GuardTarget::Numeric,
                 // `isset($x)` is the exact negation of `$x === null` for a keyable place: true
                 // exactly when the storage holds a non-null value. This is what makes
                 // `if (!isset(self::$inst)) { self::$inst = new S(); }` narrow.
@@ -618,6 +700,16 @@ fn guard_receiver_and_target<'a>(
             let class_name = checker
                 .resolve_instanceof_target_name(class, cond.span)
                 .ok()?;
+            if class_name
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("Closure")
+            {
+                return Some((
+                    value,
+                    GuardTarget::Exact(PhpType::Callable),
+                    false,
+                ));
+            }
             let target_is_known = checker.classes.contains_key(&class_name)
                 || checker.interfaces.contains_key(&class_name)
                 || checker.enums.contains_key(&class_name)
@@ -625,14 +717,7 @@ fn guard_receiver_and_target<'a>(
             if !target_is_known {
                 return Some((value, GuardTarget::UnknownObject, false));
             }
-            let narrowed_type = if class_name
-                .trim_start_matches('\\')
-                .eq_ignore_ascii_case("Closure")
-            {
-                PhpType::Callable
-            } else {
-                PhpType::Object(class_name)
-            };
+            let narrowed_type = PhpType::Object(class_name);
             Some((
                 value,
                 GuardTarget::Exact(narrowed_type),

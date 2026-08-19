@@ -58,6 +58,11 @@ pub(super) fn branch_merge_result_type(
 ) -> PhpType {
     let then_ty = materialized_expr_type_for_merge(ctx, then_expr);
     let else_ty = materialized_expr_type_for_merge(ctx, else_expr);
+    let then_repr = then_ty.codegen_repr();
+    let else_repr = else_ty.codegen_repr();
+    if then_repr == else_repr {
+        return then_repr;
+    }
     let branch_ty = nullable_aware_branch_merge_type(&then_ty, &else_ty);
     if php_type_allows_null(&branch_ty) {
         return branch_ty;
@@ -160,6 +165,22 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
             property_access_expr_type_for_ir(ctx, object, property)
                 .unwrap_or_else(|| fallback_expr_type(expr))
         }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_result_type(ctx, receiver, property, expr)
+        }
+        ExprKind::FunctionCall { name, .. } => call_return_type(ctx, name.as_str(), &[]),
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)
+                .unwrap_or_else(|| fallback_expr_type(expr))
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method)
+                .unwrap_or_else(|| fallback_expr_type(expr))
+        }
+        ExprKind::StaticMethodCall {
+            receiver, method, ..
+        } => static_method_call_expr_type_for_ir(ctx, receiver, method)
+            .unwrap_or_else(|| fallback_expr_type(expr)),
         _ => fallback_expr_type(expr),
     }
 }
@@ -244,14 +265,22 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
             // runtime. Normalize both layouts through the checked sparse-container operation;
             // selecting the indexed-only runtime conversion from the declared `array<mixed>`
             // target would reinterpret an associative payload with the wrong layout. The
-            // converted hash owns its payload independently, and `array<mixed>` consumers
-            // dynamically dispatch on the runtime heap kind.
+            // converted hash owns its payload independently and must keep an associative result
+            // type so typed call boundaries can adapt its values to their concrete ABI storage.
             let cell_is_owning = ctx.value_is_owning_temporary(value);
+            let result_ty = if matches!(target_ty, PhpType::Array(_)) {
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                }
+            } else {
+                target_ty.clone()
+            };
             let converted = ctx.emit_value(
                 Op::MixedToHash,
                 vec![value.value],
                 None,
-                target_ty.clone(),
+                result_ty,
                 Op::MixedToHash.default_effects(),
                 span,
             );

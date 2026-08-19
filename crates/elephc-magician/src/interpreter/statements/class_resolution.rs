@@ -174,7 +174,9 @@ pub(super) fn eval_dynamic_class_new_object_with_ref_mode(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let object = eval_dynamic_class_allocate_object(class, context, caller_scope, values)?;
+    let object = eval_dynamic_class_allocate_object(class, context, caller_scope, values).map_err(
+        |status| trace_eval_class_new_error("allocation", class.name(), None, status, context),
+    )?;
     if let Some((constructor_class, constructor)) =
         context.class_method(class.name(), "__construct")
     {
@@ -200,7 +202,16 @@ pub(super) fn eval_dynamic_class_new_object_with_ref_mode(
             by_ref_mode,
             context,
             values,
-        )?;
+        )
+        .map_err(|status| {
+            trace_eval_class_new_error(
+                "constructor",
+                class.name(),
+                Some(constructor.name()),
+                status,
+                context,
+            )
+        })?;
         eval_release_value(context, values, result)?;
     } else if !evaluated_args.is_empty() {
         if let Some(parent) = context.class_native_parent_name(class.name()) {
@@ -235,6 +246,25 @@ pub(super) fn eval_dynamic_class_new_object_with_ref_mode(
         }
     }
     Ok(object)
+}
+
+/// Emits the eval-class construction stage that failed under opt-in runtime tracing.
+fn trace_eval_class_new_error(
+    stage: &str,
+    class_name: &str,
+    member: Option<&str>,
+    status: EvalStatus,
+    context: &ElephcEvalContext,
+) -> EvalStatus {
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let call_site = context.call_site();
+        eprintln!(
+            "[elephc-eval-trace] phase=eval_class_new_error stage={stage} class={class_name:?} member={member:?} status={status:?} file={:?} line={}",
+            call_site.0,
+            call_site.2,
+        );
+    }
+    status
 }
 
 /// Creates a PHP shallow clone and invokes an eval-declared `__clone()` hook when present.
@@ -279,6 +309,14 @@ pub(in crate::interpreter) fn eval_object_clone_result(
     if let Some(class_name) = dynamic_class_name {
         let clone_identity = values.object_identity(clone)?;
         context.register_dynamic_object(clone_identity, &class_name);
+        for (property, value) in context.dynamic_property_values_for_clone(identity) {
+            let value = values.retain(value)?;
+            if let Some(replaced) =
+                context.set_dynamic_property_value(clone_identity, &property, value)
+            {
+                values.release(replaced)?;
+            }
+        }
         context.clone_dynamic_property_aliases(identity, clone_identity);
         if let Some((declaring_class, method)) = clone_method {
             let result = eval_dynamic_method_with_values(
@@ -474,8 +512,12 @@ pub(super) fn eval_dynamic_class_allocate_object(
     let backing_class = context
         .class_native_parent_name(class.name())
         .unwrap_or_else(|| String::from("stdClass"));
-    let object = values.new_object(&backing_class)?;
-    let identity = values.object_identity(object)?;
+    let object = values.new_object(&backing_class).map_err(|status| {
+        trace_eval_class_new_error("backing_object", class.name(), None, status, context)
+    })?;
+    let identity = values.object_identity(object).map_err(|status| {
+        trace_eval_class_new_error("object_identity", class.name(), None, status, context)
+    })?;
     context.register_dynamic_object(identity, class.name());
     let mut class_chain = context.class_chain(class.name());
     if class_chain.is_empty() {
@@ -495,7 +537,16 @@ pub(super) fn eval_dynamic_class_allocate_object(
                     context,
                     caller_scope,
                     values,
-                )?)
+                )
+                .map_err(|status| {
+                    trace_eval_class_new_error(
+                        "property_default",
+                        class.name(),
+                        Some(property.name()),
+                        status,
+                        context,
+                    )
+                })?)
             } else if property.property_type().is_none() {
                 Some(values.null()?)
             } else {
@@ -503,7 +554,11 @@ pub(super) fn eval_dynamic_class_allocate_object(
             };
             let storage_name = eval_instance_property_storage_name(class.name(), property);
             if let Some(value) = value {
-                values.property_set(object, &storage_name, value)?;
+                if let Some(replaced) =
+                    context.set_dynamic_property_value(identity, &storage_name, value)
+                {
+                    values.release(replaced)?;
+                }
                 context.mark_dynamic_property_initialized(identity, &storage_name);
             }
         }

@@ -7,7 +7,7 @@
 //! Key details:
 //! - Retains constructor, visibility, eval-barrier, callable, and late-static-binding checks.
 
-use super::{body_must_not_use_this, merge_null_coalesce_result_type, Checker};
+use super::{body_must_not_use_this, merge_null_coalesce_checked_result_type, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{packed_type_size, PhpType, TypeEnv};
@@ -46,7 +46,10 @@ impl Checker {
                     return self.check_extern_function_call(name.as_str(), &args, expr.span, env);
                 }
                 if let Some(ty) = self.check_builtin(name.as_str(), &args, expr.span, env)? {
-                    self.builtin_call_types.insert(expr.span, ty.clone());
+                    self.builtin_call_types.insert(
+                        (self.current_loop_storage_scope.clone(), expr.span),
+                        ty.clone(),
+                    );
                     return Ok(ty);
                 }
                 self.check_function_call(name.as_str(), &args, expr.span, env)
@@ -70,7 +73,15 @@ impl Checker {
             }
             ExprKind::BitNot(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                if !matches!(ty, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void) {
+                if !matches!(
+                    ty,
+                    PhpType::Int
+                        | PhpType::Bool
+                        | PhpType::False
+                        | PhpType::Void
+                        | PhpType::Mixed
+                        | PhpType::Union(_)
+                ) {
                     return Err(CompileError::new(
                         expr.span,
                         "Bitwise NOT requires integer operand",
@@ -93,7 +104,11 @@ impl Checker {
                 } else {
                     vt
                 };
-                Ok(merge_null_coalesce_result_type(non_null_value, dt))
+                Ok(merge_null_coalesce_checked_result_type(
+                    self,
+                    non_null_value,
+                    dt,
+                ))
             }
             ExprKind::Pipe { value, callable } => {
                 self.infer_pipe_type(value, callable, expr, env)
@@ -161,7 +176,10 @@ impl Checker {
                 match ty {
                     PhpType::Array(elem_ty) => Ok(*elem_ty),
                     PhpType::AssocArray { value, .. } => Ok(*value),
-                    PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+                    PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+                    PhpType::Object(name) if self.object_type_implements_iterable(&name) => {
+                        Ok(PhpType::Mixed)
+                    }
                     _ => Err(CompileError::new(
                         expr.span,
                         "Spread operator requires an array",

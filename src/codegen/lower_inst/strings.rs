@@ -320,7 +320,7 @@ pub(super) fn lower_str_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
-/// Lowers string indexing to a one-byte string or an empty string when out of bounds.
+/// Lowers string indexing to an owned one-byte string or an owned empty string when out of bounds.
 pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let string = expect_operand(inst, 0)?;
     let index = expect_operand(inst, 1)?;
@@ -369,6 +369,7 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.emitter.label(&end);
         }
     }
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     store_if_result(ctx, inst)
 }
 

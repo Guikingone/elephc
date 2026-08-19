@@ -283,6 +283,19 @@ pub(crate) fn emit_copy_static_descriptor_to_runtime(
     }
 }
 
+/// Copies a fixed descriptor header from a runtime-selected template pointer.
+pub(crate) fn emit_copy_descriptor_template_to_runtime(
+    emitter: &mut Emitter,
+    dest_reg: &str,
+    source_reg: &str,
+) {
+    let word_reg = abi::secondary_scratch_reg(emitter);
+    for offset in (0..CALLABLE_DESC_STATIC_SIZE).step_by(8) {
+        abi::emit_load_from_address(emitter, word_reg, source_reg, offset);
+        abi::emit_store_to_address(emitter, word_reg, dest_reg, offset);
+    }
+}
+
 /// Stores the current result registers into a runtime descriptor capture slot.
 pub(crate) fn emit_store_current_result_to_runtime_capture(
     emitter: &mut Emitter,

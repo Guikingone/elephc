@@ -23,6 +23,17 @@ pub(crate) const IS_COUNTABLE_NAME: &str = "__elephc_is_countable";
 /// Reserved helper used for ordinary positional `array_slice()` calls.
 pub(crate) const ARRAY_SLICE_NAME: &str = "__elephc_array_slice";
 
+/// Reserved helper used when `array_splice()` receives a gradual replacement value.
+pub(crate) const ARRAY_SPLICE_MIXED_REPLACEMENT_NAME: &str =
+    "__elephc_array_splice_mixed_replacement";
+
+/// Reserved helper used for `array_unshift()` with one trailing positional spread.
+pub(crate) const ARRAY_UNSHIFT_TRAILING_SPREAD_NAME: &str =
+    "__elephc_array_unshift_trailing_spread";
+
+/// Reserved helper used for three-argument `preg_replace()` calls with an array of patterns.
+pub(crate) const PREG_REPLACE_ARRAY_NAME: &str = "__elephc_preg_replace_array";
+
 /// Reserved helper used for supported integer-only `pack()` formats.
 pub(crate) const PACK_INTEGER_NAME: &str = "__elephc_pack_integer";
 
@@ -208,6 +219,54 @@ function __elephc_array_slice(mixed $input, int $offset, ?int $length = null, bo
         $position++;
     }
     return $result;
+}
+"#;
+
+/// Sequential regex replacement for the three-argument array-pattern form.
+const PREG_REPLACE_ARRAY_SRC: &str = r#"<?php
+function __elephc_preg_replace_array(array $patterns, array|string $replacement, string $subject): string {
+    $result = $subject;
+    $index = 0;
+    foreach ($patterns as $pattern) {
+        if (is_array($replacement)) {
+            $current = $replacement[$index] ?? '';
+        } else {
+            $current = $replacement;
+        }
+        $result = preg_replace((string) $pattern, (string) $current, $result);
+        $index++;
+    }
+    return $result;
+}
+"#;
+
+/// Normalizes a gradual `array_splice()` replacement through PHP's ordinary array cast.
+const ARRAY_SPLICE_MIXED_REPLACEMENT_SRC: &str = r#"<?php
+function __elephc_array_splice_mixed_replacement(array &$array, int $offset, ?int $length = null, mixed $replacement = []): array {
+    $normalized = (array) $replacement;
+    return array_splice($array, $offset, $length, $normalized);
+}
+"#;
+
+/// Prepends fixed values followed by one trailing spread while retaining source order.
+const ARRAY_UNSHIFT_TRAILING_SPREAD_SRC: &str = r#"<?php
+function __elephc_array_unshift_trailing_spread(mixed &$array, array $leading, array $spread): int {
+    if (!is_array($array)) {
+        throw new TypeError('array_unshift(): Argument #1 ($array) must be of type array');
+    }
+    $normalized = (array) $array;
+    $index = count($spread);
+    while ($index > 0) {
+        $index--;
+        array_unshift($normalized, $spread[$index]);
+    }
+    $index = count($leading);
+    while ($index > 0) {
+        $index--;
+        array_unshift($normalized, $leading[$index]);
+    }
+    $array = $normalized;
+    return count($normalized);
 }
 "#;
 
@@ -706,6 +765,15 @@ pub fn inject_if_used(program: Program) -> Program {
     }
     if usage.references("array_slice") {
         sources.push(ARRAY_SLICE_SRC);
+    }
+    if usage.references("array_splice") {
+        sources.push(ARRAY_SPLICE_MIXED_REPLACEMENT_SRC);
+    }
+    if usage.references("array_unshift") {
+        sources.push(ARRAY_UNSHIFT_TRAILING_SPREAD_SRC);
+    }
+    if usage.references("preg_replace") {
+        sources.push(PREG_REPLACE_ARRAY_SRC);
     }
     if usage.references("pack") {
         sources.push(PACK_INTEGER_SRC);

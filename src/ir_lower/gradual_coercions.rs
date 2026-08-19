@@ -71,11 +71,11 @@ pub(super) fn coerce_gradual_value_to_boundary(
             )
         }
         PhpType::Callable => ctx.emit_value(
-            Op::MixedUnbox,
+            Op::NormalizeCallable,
             vec![value.value],
-            Some(Immediate::I64(10)),
+            None,
             target.clone(),
-            Op::MixedUnbox.default_effects(),
+            Op::NormalizeCallable.default_effects(),
             span,
         ),
         PhpType::Iterable => ctx.emit_value(
@@ -86,14 +86,19 @@ pub(super) fn coerce_gradual_value_to_boundary(
             Op::MixedUnbox.default_effects(),
             span,
         ),
-        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => ctx.emit_value(
-            Op::MixedToHash,
-            vec![value.value],
-            None,
-            target.clone(),
-            Op::MixedToHash.default_effects(),
-            span,
-        ),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
+            ctx.emit_value(
+                Op::MixedToHash,
+                vec![value.value],
+                None,
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                },
+                Op::MixedToHash.default_effects(),
+                span,
+            )
+        }
         PhpType::AssocArray { key, value: element }
             if key.codegen_repr() == PhpType::Mixed
                 && element.codegen_repr() == PhpType::Mixed =>

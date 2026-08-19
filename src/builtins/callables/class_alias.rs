@@ -5,9 +5,8 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - The check hook always errors: `class_alias()` is only supported as a top-level
-//!   statement with literal class names (handled by the AST-level resolver before
-//!   reaching the type checker). Any direct call that reaches this hook is rejected.
+//! - The check hook accepts calls whose class strings are statically resolvable after
+//!   name resolution. Dynamic class strings remain unsupported in the AOT class table.
 //! - Arguments are pre-inferred by the registry common path before the hook runs.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -22,13 +21,15 @@ builtin! {
     ),
 }
 
-/// Rejects any direct `class_alias()` call that reaches the type checker.
-///
-/// AOT compilation resolves `class_alias()` at the top-level statement stage only.
-/// Direct calls in other contexts are not supported and must be rejected here.
+/// Accepts statically resolved alias calls and rejects runtime-dependent class strings.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    if let Some((_, alias)) = crate::autoload::resolved_class_alias_args(cx.args) {
+        if cx.checker.classes.contains_key(&alias) {
+            return Ok(PhpType::Bool);
+        }
+    }
     Err(CompileError::new(
         cx.span,
-        "class_alias() is only supported as a top-level statement with literal class names",
+        "class_alias() requires statically resolvable class names",
     ))
 }

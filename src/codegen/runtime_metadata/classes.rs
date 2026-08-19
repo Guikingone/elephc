@@ -236,10 +236,17 @@ pub(in crate::codegen) fn module_uses_dynamic_instanceof(module: &Module) -> boo
 
 /// Returns class names safe to include in dynamic lookup metadata for the current EIR slice.
 pub(in crate::codegen) fn dynamic_instanceof_class_names(module: &Module) -> HashSet<String> {
+    let emitted_methods = emitted_class_method_keys(module);
     module
         .class_infos
         .keys()
-        .filter(|name| class_metadata_supported_for_dynamic_instanceof(name, module))
+        .filter(|name| {
+            class_metadata_supported_for_dynamic_instanceof_with_methods(
+                name,
+                module,
+                &emitted_methods,
+            )
+        })
         .cloned()
         .collect()
 }
@@ -256,9 +263,12 @@ pub(in crate::codegen) fn dynamic_instanceof_interface_names(module: &Module) ->
         .collect()
 }
 
-/// Returns true when class metadata can be emitted for dynamic `instanceof` lookup.
-pub(in crate::codegen) fn class_metadata_supported_for_dynamic_instanceof(class_name: &str, module: &Module) -> bool {
-    let emitted_methods = emitted_class_method_keys(module);
+/// Returns whether one class is safe for dynamic lookup using precomputed emitted methods.
+fn class_metadata_supported_for_dynamic_instanceof_with_methods(
+    class_name: &str,
+    module: &Module,
+    emitted_methods: &HashSet<(String, String, bool)>,
+) -> bool {
     let mut seen = HashSet::new();
     let mut current = Some(class_name);
     while let Some(name) = current {
@@ -277,7 +287,7 @@ pub(in crate::codegen) fn class_metadata_supported_for_dynamic_instanceof(class_
             false,
             &class_info.vtable_methods,
             &class_info.method_impl_classes,
-            &emitted_methods,
+            emitted_methods,
         ) {
             return false;
         }
@@ -287,7 +297,7 @@ pub(in crate::codegen) fn class_metadata_supported_for_dynamic_instanceof(class_
             true,
             &class_info.static_vtable_methods,
             &class_info.static_method_impl_classes,
-            &emitted_methods,
+            emitted_methods,
         ) {
             return false;
         }

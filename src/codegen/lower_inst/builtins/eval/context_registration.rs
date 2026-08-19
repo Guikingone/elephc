@@ -17,19 +17,47 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
-    register_eval_regex_provider(ctx);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_context_new");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::store_at_offset(ctx.emitter, result_reg, offset);
-    register_eval_declared_symbols(ctx, offset);
-    register_eval_native_functions(ctx, offset)?;
-    register_eval_native_method_signatures(ctx, offset);
+    let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::load_at_offset(ctx.emitter, context_arg, offset);
+    if let Some(label) = ctx.shared.eval_registration_helper() {
+        abi::emit_call_label(ctx.emitter, &label);
+    } else {
+        let label = ctx.next_label("eval_register_module");
+        ctx.shared.cache_eval_registration_helper(label.clone());
+        abi::emit_call_label(ctx.emitter, &label);
+        let helper_done = ctx.next_label("eval_register_module_done");
+        abi::emit_jump(ctx.emitter, &helper_done);
+        emit_eval_registration_helper(ctx, &label)?;
+        ctx.emitter.label(&helper_done);
+    }
     ctx.emitter.label(&ready);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
+    Ok(())
+}
+
+/// Emits the single module-wide body that registers all generated eval metadata.
+///
+/// The helper is called once after each distinct context allocation, but its
+/// assembly body is emitted only at the first eval site. A dedicated ABI frame
+/// preserves both the incoming context handle and the caller's return address.
+fn emit_eval_registration_helper(ctx: &mut FunctionContext<'_>, label: &str) -> Result<()> {
+    ctx.emitter.label_shared(label);
+    abi::emit_frame_prologue(ctx.emitter, EVAL_CONTEXT_HELPER_FRAME_SIZE);
+    let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::store_at_offset(ctx.emitter, context_arg, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);
+    register_eval_regex_provider(ctx);
+    register_eval_declared_symbols(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);
+    register_eval_native_functions(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET)?;
+    register_eval_native_method_signatures(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);
+    abi::emit_frame_restore(ctx.emitter, EVAL_CONTEXT_HELPER_FRAME_SIZE);
+    abi::emit_return(ctx.emitter);
     Ok(())
 }
 

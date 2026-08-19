@@ -17,7 +17,7 @@ mod language_constructs;
 pub(crate) mod spl;
 
 use crate::errors::CompileError;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::Checker;
@@ -59,6 +59,60 @@ impl Checker {
         {
             self.required_libraries.push(library.to_string());
         }
+    }
+
+    /// Validates writable storage for every fixed or variadic by-reference builtin argument.
+    fn validate_registry_by_ref_args(
+        &mut self,
+        def: &crate::builtins::registry::BuiltinDef,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let regular_param_count = def
+            .params
+            .len()
+            .saturating_sub(usize::from(def.variadic.is_some()));
+        for (arg_index, arg) in args.iter().enumerate() {
+            let param_index = if arg_index < regular_param_count {
+                arg_index
+            } else if def.variadic.is_some() {
+                def.params.len().saturating_sub(1)
+            } else {
+                continue;
+            };
+            if !def.ref_params.get(param_index).copied().unwrap_or(false) {
+                continue;
+            }
+            let param_name = def
+                .params
+                .get(param_index)
+                .map(|(name, _)| name.as_str())
+                .unwrap_or("arg");
+            if matches!(arg.kind, ExprKind::Spread(_)) {
+                return Err(CompileError::new(
+                    arg.span,
+                    &format!(
+                        "{}() cannot unpack into by-reference parameter ${}",
+                        def.name, param_name
+                    ),
+                ));
+            }
+            if !self.is_by_ref_argument_lvalue(arg, env)? {
+                let parameter_kind = if param_index >= regular_param_count {
+                    "variadic parameter"
+                } else {
+                    "parameter"
+                };
+                return Err(CompileError::new(
+                    arg.span,
+                    &format!(
+                        "{}() {} ${} must be passed a variable",
+                        def.name, parameter_kind, param_name
+                    ),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Type-checks a PHP builtin function call, returning the inferred return type or `None` if unhandled.
@@ -118,6 +172,7 @@ impl Checker {
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
             crate::builtins::registry::check_arity(name, args.len(), span)?;
+            self.validate_registry_by_ref_args(def, args, env)?;
             let requirement_input = crate::builtins::semantics::BuiltinRequirementInput {
                 args,
             };

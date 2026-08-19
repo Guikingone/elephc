@@ -388,6 +388,13 @@ impl Parser {
                 expr: Box::new(expr),
             });
         }
+        if self.consume(TokenKind::At) {
+            let expr = self.parse_unary()?;
+            return Ok(EvalExpr::Unary {
+                op: EvalUnaryOp::ErrorSuppress,
+                expr: Box::new(expr),
+            });
+        }
         self.parse_instanceof()
     }
 

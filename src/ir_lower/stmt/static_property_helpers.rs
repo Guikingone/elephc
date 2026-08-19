@@ -113,7 +113,7 @@ pub(in crate::ir_lower) fn object_property_type(
     ctx.classes
         .get(class_name.trim_start_matches('\\'))?
         .visible_property(property)
-        .map(|(_, (_, property_ty))| normalize_value_php_type(property_ty.codegen_repr()))
+        .map(|(_, (_, property_ty))| normalize_value_php_type(property_ty.clone()))
 }
 
 /// Resolves an array-like property type for a receiver declared as bare PHP `object`.
@@ -134,7 +134,7 @@ pub(in crate::ir_lower) fn generic_object_array_property_type(
         .filter_map(|class_info| {
             class_info
                 .visible_property(property)
-                .map(|(_, (_, property_ty))| normalize_value_php_type(property_ty.codegen_repr()))
+                .map(|(_, (_, property_ty))| normalize_value_php_type(property_ty.clone()))
         })
         .filter(|property_ty| {
             matches!(

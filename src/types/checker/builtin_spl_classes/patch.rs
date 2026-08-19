@@ -29,6 +29,16 @@ pub(super) fn patch_builtin_spl_storage_signatures(checker: &mut Checker) {
             }
         }
     }
+    if let Some(class_info) = checker.classes.get_mut("ArrayObject") {
+        if let Some(sig) = class_info.methods.get_mut("__construct") {
+            if let Some((_, ty)) = sig.params.first_mut() {
+                *ty = PhpType::Union(vec![
+                    PhpType::Array(Box::new(PhpType::Mixed)),
+                    PhpType::Object(String::new()),
+                ]);
+            }
+        }
+    }
     if let Some(class_info) = checker.classes.get_mut("SplDoublyLinkedList") {
         if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__debugInfo")) {
             sig.return_type = PhpType::AssocArray {

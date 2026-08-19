@@ -298,6 +298,16 @@ pub(crate) fn collect_constants(
             PhpType::Int,
         ),
     );
+    for name in [
+        "PHP_WINDOWS_VERSION_MAJOR",
+        "PHP_WINDOWS_VERSION_MINOR",
+        "PHP_WINDOWS_VERSION_BUILD",
+    ] {
+        constants.insert(
+            name.to_string(),
+            (ExprKind::IntLiteral(0), PhpType::Int),
+        );
+    }
     constants.insert(
         "LC_CTYPE".to_string(),
         (

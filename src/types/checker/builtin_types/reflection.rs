@@ -35,6 +35,7 @@ mod injection;
 mod ast_literals;
 mod basic_methods;
 mod function_parameter_classes;
+mod reference_class;
 mod type_classes;
 mod class_model;
 mod class_scalar_methods;
@@ -59,6 +60,8 @@ use ast_literals::*;
 use basic_methods::*;
 #[allow(unused_imports)]
 use function_parameter_classes::*;
+#[allow(unused_imports)]
+use reference_class::*;
 #[allow(unused_imports)]
 use type_classes::*;
 #[allow(unused_imports)]

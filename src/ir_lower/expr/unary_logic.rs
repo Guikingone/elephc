@@ -56,7 +56,22 @@ pub(super) fn lower_int_unary(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, o
         let narrowed = lower_tagged_scalar_to_int(ctx, value, Some(expr.span));
         ctx.emit_value(op, vec![narrowed.value], None, PhpType::Int, op.default_effects(), Some(expr.span))
     } else {
-        ctx.emit_value(Op::RuntimeCall, vec![value.value], None, PhpType::Mixed, Effects::all(), Some(expr.span))
+        let narrowed = ctx.emit_value(
+            Op::Cast,
+            vec![value.value],
+            Some(Immediate::CastTarget(IrType::I64)),
+            PhpType::Int,
+            Op::Cast.default_effects(),
+            Some(expr.span),
+        );
+        ctx.emit_value(
+            op,
+            vec![narrowed.value],
+            None,
+            PhpType::Int,
+            op.default_effects(),
+            Some(expr.span),
+        )
     }
 }
 
@@ -79,6 +94,9 @@ pub(super) fn lower_tagged_scalar_to_int(
 /// Lowers logical negation.
 pub(super) fn lower_not(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    if ctx.builder.insertion_block_is_terminated() {
+        return value;
+    }
     let value = ctx.truthy_consuming(value, Some(expr.span));
     let zero = lower_int_literal(ctx, 0, expr);
     ctx.emit_value(
@@ -238,4 +256,3 @@ pub(super) fn lower_truthy_bool(
     }
     result
 }
-

@@ -170,6 +170,47 @@ counter();
     assert_eq!(implicit, explicit);
 }
 
+/// Verifies untyped static locals preserve null and later heap-backed value representations.
+#[test]
+fn test_static_local_boxes_values_that_change_representation() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticBox {
+    public string $value;
+
+    public function __construct(string $value) {
+        $this->value = $value;
+    }
+}
+
+function cachedCallable(): callable {
+    static $callback;
+    return $callback ??= static fn (): string => 'called';
+}
+
+function cachedObject(): StaticBox {
+    static $object = null;
+    if ($object === null) {
+        $object = new StaticBox('object');
+    }
+    return $object;
+}
+
+function cachedArray(): mixed {
+    static $values = [];
+    if (!$values) {
+        $values = [1, 'two'];
+    }
+    return $values;
+}
+
+$values = cachedArray();
+echo (cachedCallable())(), ':', cachedObject()->value, ':', $values[0], ':', $values[1];
+"#,
+    );
+    assert_eq!(out, "called:object:1:two");
+}
+
 /// Verifies a persistent associative static slot accepts a more precise string-keyed initializer
 /// while retaining the generic associative-array storage representation across calls.
 #[test]
@@ -617,6 +658,76 @@ echo count($c);
     assert_eq!(out, "3");
 }
 
+/// Verifies gradual indexed-array values are checked and unboxed before argument unpacking.
+#[test]
+fn test_gradual_array_spread_into_dynamic_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_pair(bool $present): mixed {
+    return $present ? ['left', 'right'] : null;
+}
+
+class GradualSpreadReceiver {
+    public function join(string $left, string $right): string {
+        return $left . ':' . $right;
+    }
+}
+
+$receiver = new GradualSpreadReceiver();
+$method = 'join';
+echo $receiver->{$method}(...gradual_pair(true));
+"#,
+    );
+    assert_eq!(out, "left:right");
+}
+
+/// Verifies a gradual argument container preserves its runtime keys for a known method call.
+#[test]
+fn test_gradual_array_spread_into_known_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_named_pair(bool $present): mixed {
+    return $present ? ['right' => 'R', 'left' => 'L'] : null;
+}
+
+class KnownSpreadReceiver {
+    public function join(string $left, string $right): string {
+        return $left . ':' . $right;
+    }
+}
+
+$receiver = new KnownSpreadReceiver();
+echo $receiver->join(...gradual_named_pair(true));
+"#,
+    );
+    assert_eq!(out, "L:R");
+}
+
+/// Verifies a fixed-ABI parent call expands the caller's runtime argument array.
+#[test]
+fn test_func_get_args_spread_into_parent_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+class SpreadParent {
+    public function join(string $first, ?string $second = null, bool $upper = false): string {
+        $value = $first . ':' . ($second ?? 'none');
+        return $upper ? strtoupper($value) : $value;
+    }
+}
+
+class SpreadChild extends SpreadParent {
+    public function join(string $first, ?string $second = null, bool $upper = false): string {
+        $args = func_get_args();
+        return parent::join(...$args);
+    }
+}
+
+echo (new SpreadChild())->join('left', 'right', true);
+"#,
+    );
+    assert_eq!(out, "LEFT:RIGHT");
+}
+
 /// Regression for #354: spread of an associative array into a new array literal flattens its
 /// string-keyed entries instead of inserting the source as a single nested value.
 #[test]
@@ -639,6 +750,21 @@ $b = [...$a];
 foreach ($b as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
 "#);
     assert_eq!(out, "[0:a][x:b]");
+}
+
+/// Verifies array unpack accepts Traversable sources, reindexing integer keys and preserving strings.
+#[test]
+fn test_spread_iterable_mixed_keys() {
+    let out = compile_and_run(r#"<?php
+function values(): iterable {
+    yield 7 => 'a';
+    yield 'x' => 'b';
+    yield 3 => 'c';
+}
+$spread = ['z', ...values()];
+foreach ($spread as $key => $value) { echo '[' . $key . ':' . $value . ']'; }
+"#);
+    assert_eq!(out, "[0:z][1:a][x:b][2:c]");
 }
 
 /// Regression for #354: later spread operands overwrite earlier ones on string-key collision.
@@ -717,6 +843,27 @@ echo sum(1, 2, 3, 4);
 "#,
     );
     assert_eq!(out, "10");
+}
+
+/// Verifies a typed method variadic preserves its integer element type through `foreach`.
+#[test]
+fn test_typed_method_variadic_foreach_keeps_element_type() {
+    let out = compile_and_run(
+        r#"<?php
+class VariadicCodePointProbe {
+    public static function fold(int ...$codes): int {
+        $sum = 0;
+        foreach ($codes as $code) {
+            $code %= 100;
+            $sum += $code;
+        }
+        return $sum;
+    }
+}
+echo VariadicCodePointProbe::fold(101, 202, 303);
+"#,
+    );
+    assert_eq!(out, "6");
 }
 
 /// Verifies a typed `string ...$parts` variadic joins its string arguments.
@@ -899,4 +1046,22 @@ echo $ok ? "yes" : "no";
 "#,
     );
     assert_eq!(out, "42|yes");
+}
+
+/// Verifies a callable can be narrowed against an unrelated interface without backend refusal.
+#[test]
+fn test_callable_parameter_supports_object_interface_narrowing() {
+    let out = compile_and_run(
+        r#"<?php
+interface HandlerMarker {}
+
+function selectHandler(callable $candidate): ?HandlerMarker {
+    return $candidate instanceof HandlerMarker ? $candidate : null;
+}
+
+$selected = selectHandler(static function (): void {});
+echo $selected === null ? "none" : "handler";
+"#,
+    );
+    assert_eq!(out, "none");
 }

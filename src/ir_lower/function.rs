@@ -79,6 +79,7 @@ pub(crate) fn lower_main(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.flow_typed_property_accesses,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.by_ref_local_storage_types,
@@ -284,6 +285,7 @@ pub(crate) fn lower_user_function(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.flow_typed_property_accesses,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.by_ref_local_storage_types,
@@ -387,6 +389,7 @@ pub(crate) fn lower_class_method(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.flow_typed_property_accesses,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.by_ref_local_storage_types,
@@ -455,6 +458,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.flow_typed_property_accesses,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.by_ref_local_storage_types,
@@ -563,6 +567,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.flow_typed_property_accesses,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.by_ref_local_storage_types,
@@ -665,6 +670,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.packed_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.flow_typed_property_accesses,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.by_ref_local_storage_types,
@@ -866,6 +872,7 @@ fn lower_closure_function_with_signature(
         parent.packed_classes,
         parent.throw_access_sites,
         parent.builtin_call_types,
+        parent.flow_typed_property_accesses,
         parent.loop_storage_types,
         parent.string_incdec_locals,
         parent.by_ref_local_storage_types,
@@ -903,8 +910,9 @@ fn lower_body_into_function(
     enums: &std::collections::HashMap<String, crate::types::EnumInfo>,
     interfaces: &std::collections::HashMap<String, crate::types::InterfaceInfo>,
     packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
-    throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    throw_access_sites: &std::collections::HashMap<(String, Span), crate::types::ThrowAccessInfo>,
+    builtin_call_types: &std::collections::HashMap<(String, Span), PhpType>,
+    flow_typed_property_accesses: &std::collections::HashMap<(String, Span), PhpType>,
     loop_storage_types: &crate::types::LoopStorageTypes,
     string_incdec_locals: &std::collections::HashSet<(String, String)>,
     by_ref_local_storage_types: &std::collections::HashMap<(String, String), PhpType>,
@@ -928,6 +936,7 @@ fn lower_body_into_function(
 ) -> Vec<Function> {
     let owner_name = function.name.clone();
     let function_by_ref_return = function.flags.by_ref_return;
+    let function_is_generator = function.flags.is_generator;
     let by_ref_params = function
         .params
         .iter()
@@ -953,6 +962,7 @@ fn lower_body_into_function(
         packed_classes,
         throw_access_sites,
         builtin_call_types,
+        flow_typed_property_accesses,
         loop_storage_types,
         string_incdec_locals,
         by_ref_local_storage_types,
@@ -1008,7 +1018,7 @@ fn lower_body_into_function(
     for stmt in body {
         crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
     }
-    terminate_open_block(&mut ctx);
+    terminate_open_block(&mut ctx, function_is_generator);
     // Final storage types are now known: erase deferred loop-store releases that
     // guard slots which never widened to lifetime-tracked storage (issue #534).
     ctx.builder.prune_untracked_release_local_slot_ops();
@@ -1094,7 +1104,7 @@ fn generator_body_return_type(body: &[Stmt], signature_return: &PhpType) -> PhpT
 }
 
 /// Adds a default function terminator when the current block can still fall through.
-fn terminate_open_block(ctx: &mut LoweringContext<'_, '_>) {
+fn terminate_open_block(ctx: &mut LoweringContext<'_, '_>, is_generator: bool) {
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
@@ -1102,6 +1112,32 @@ fn terminate_open_block(ctx: &mut LoweringContext<'_, '_>) {
         let message = ctx
             .intern_string("Fatal error: A never-returning function must not implicitly return\n");
         ctx.builder.terminate(Terminator::Fatal { message });
+        return;
+    }
+    if matches!(ctx.return_php_type, PhpType::Mixed) {
+        ctx.emit_eval_scope_finalizer(None);
+        if is_generator {
+            let value = emit_default_return_value(ctx);
+            ctx.builder
+                .terminate(Terminator::Return { value: Some(value) });
+            return;
+        }
+        let span = Span::dummy();
+        let error_expr = Expr::new(
+            ExprKind::NewObject {
+                class_name: crate::names::Name::unqualified("TypeError"),
+                args: vec![Expr::new(
+                    ExprKind::StringLiteral(
+                        "Return value must be of type mixed, none returned".to_string(),
+                    ),
+                    span,
+                )],
+            },
+            span,
+        );
+        let error = crate::ir_lower::expr::lower_expr(ctx, &error_expr);
+        ctx.builder
+            .terminate(Terminator::Throw { value: error.value });
         return;
     }
     if ctx.return_type == IrType::Void {

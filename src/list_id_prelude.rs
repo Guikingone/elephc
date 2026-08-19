@@ -63,13 +63,17 @@ function __elephc_list_identifiers($timezoneGroup = 2047, $countryCode = "") {
 /// hoisted function declarations only, so prepending does not change top-level
 /// execution order. Tokenize/parse failure is a compiler bug and panics rather
 /// than degrading silently.
-pub fn inject_if_used(program: Program) -> Program {
+pub fn inject_if_used(
+    program: Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
     if !detect::program_uses_list_identifiers(&program) {
         return program;
     }
     let src = LIST_ID_PRELUDE_TEMPLATE.replace("__ELEPHC_TZ_GROUPS_TABLE__", table::TIMEZONE_GROUPS_TABLE);
     let tokens = crate::lexer::tokenize(&src).expect("list-id prelude must tokenize");
     let mut combined = crate::parser::parse_internal(&tokens).expect("list-id prelude must parse");
+    inventory.record_program("list_id", &combined);
     combined.extend(program);
     combined
 }

@@ -219,7 +219,10 @@ pub const ECHO_HELPER: &str = "__elephc_var_export_echo";
 /// clobbered. The prelude is hoisted function declarations only, so prepending does not
 /// change top-level execution order. The source is static and tested, so a
 /// tokenize/parse failure is a compiler bug and panics rather than degrading silently.
-pub fn inject_if_used(program: Program) -> Program {
+pub fn inject_if_used(
+    program: Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
     if !detect::program_references_var_export(&program)
         || detect::program_declares_var_export(&program)
     {
@@ -227,6 +230,7 @@ pub fn inject_if_used(program: Program) -> Program {
     }
     let tokens = crate::lexer::tokenize(VAR_EXPORT_PRELUDE_SRC).expect("var_export prelude must tokenize");
     let mut combined = crate::parser::parse_internal(&tokens).expect("var_export prelude must parse");
+    inventory.record_program("var_export", &combined);
     combined.extend(program);
     combined
 }

@@ -36,6 +36,24 @@ echo count($c);
     assert_eq!(out, "2");
 }
 
+/// Verifies `array_diff()` accepts an array flowing through gradual storage and preserves values.
+#[test]
+fn test_array_diff_gradual_first_operand() {
+    let out = compile_and_run(
+        r#"<?php
+function without_sent_values(mixed $previous, array $current): array {
+    if ($previous !== null) {
+        return array_diff($previous, $current);
+    }
+    return $current;
+}
+$result = without_sent_values(["first", "second", "third"], ["second"]);
+echo count($result), ":", $result[0], ":", $result[2];
+"#,
+    );
+    assert_eq!(out, "2:first:third");
+}
+
 /// Verifies `array_intersect()` returns values present in both `$a` and `$b`; count of `[1,2,3,4]` vs `[2,4,6]` is 2.
 #[test]
 fn test_array_intersect() {

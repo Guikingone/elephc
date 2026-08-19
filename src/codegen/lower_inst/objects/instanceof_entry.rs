@@ -24,7 +24,7 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
     }
     if !matches!(
         value_ty,
-        PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+        PhpType::Callable | PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
     ) {
         emit_false(ctx);
         return store_if_result(ctx, inst);
@@ -37,6 +37,10 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
         return store_if_result(ctx, inst);
     };
     match value_ty {
+        PhpType::Callable => {
+            emit_callable_object_capture_or_null(ctx, value)?;
+            emit_match_call(ctx, target_id, target_kind, "__rt_exception_matches");
+        }
         PhpType::Object(_) => {
             ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
             emit_match_call(ctx, target_id, target_kind, "__rt_exception_matches");

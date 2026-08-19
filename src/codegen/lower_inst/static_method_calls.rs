@@ -72,7 +72,7 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
         ))
     })?;
     let Some(callee_sig) = impl_info.static_methods.get(&method_key) else {
-        if is_lexical_instance_static_receiver(receiver_label)
+        if is_lexical_instance_static_receiver(ctx, receiver_label, receiver.as_str())
             && receiver_info.methods.contains_key(&method_key)
         {
             return lower_lexical_instance_static_method_call(
@@ -170,6 +170,15 @@ pub(super) fn lower_lexical_instance_static_method_call(
     let mut target =
         resolve_method_call_target(ctx, receiver, method_name, inst.operands.len() + 1)?;
     target.dynamic_slot = None;
+    if objects::lower_builtin_throwable_parent_constructor_call(
+        ctx,
+        inst,
+        &target.impl_class,
+        method_name,
+        this_slot,
+    )? {
+        return Ok(());
+    }
     let receiver_ty = PhpType::Object(receiver.to_string());
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(receiver_ty.clone());
@@ -317,9 +326,32 @@ pub(super) fn is_late_bound_static_receiver(receiver: &str) -> bool {
     receiver.trim_start_matches('\\') == "static"
 }
 
-/// Returns true when PHP static-call syntax should bind an instance method lexically.
-pub(super) fn is_lexical_instance_static_receiver(receiver: &str) -> bool {
-    matches!(receiver.trim_start_matches('\\'), "self" | "parent")
+/// Returns true when static-call syntax names `self`, `parent`, the current class, or an ancestor.
+pub(super) fn is_lexical_instance_static_receiver(
+    ctx: &FunctionContext<'_>,
+    receiver_label: &str,
+    resolved_receiver: &str,
+) -> bool {
+    if matches!(receiver_label.trim_start_matches('\\'), "self" | "parent") {
+        return true;
+    }
+    let Ok(mut current) = current_method_class(ctx) else {
+        return false;
+    };
+    loop {
+        if php_symbol_key(current) == php_symbol_key(resolved_receiver) {
+            return true;
+        }
+        let Some(parent) = ctx
+            .module
+            .class_infos
+            .get(current)
+            .and_then(|class_info| class_info.parent.as_deref())
+        else {
+            return false;
+        };
+        current = parent;
+    }
 }
 
 /// Returns the lexical class recorded for a closure or encoded in a class-method function name.

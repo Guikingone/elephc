@@ -8,6 +8,7 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use crate::ir::IrHeapKind;
 
 /// Lowers an assignment with a declared type.
 pub(super) fn lower_typed_assign(
@@ -29,6 +30,9 @@ pub(super) fn lower_typed_assign(
         .as_ref()
         .map(|assignment| assignment.value)
         .unwrap_or_else(|| lower_expr(ctx, value));
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     let lowered = coerce_typed_assign_value(ctx, lowered, &php_type, span);
     ctx.declare_local(name, php_type.clone());
     ctx.store_local(name, lowered, php_type, Some(span));
@@ -68,8 +72,34 @@ pub(super) fn coerce_typed_assign_value(
     if source_ty == target_ty {
         return value;
     }
+    if crate::types::param_binding::object_requires_runtime_nominal_guard(php_type, &source_ty)
+        || crate::types::param_binding::gradual_object_requires_runtime_nominal_guard(
+            php_type,
+            &source_ty,
+        )
+    {
+        if let Some(target_name) =
+            crate::types::param_binding::nominal_object_boundary_target(php_type)
+        {
+            let target_data = ctx.intern_class_name(&target_name);
+            return ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                Some(Immediate::NominalObject {
+                    target: target_data,
+                    boundary: crate::ir::NominalObjectBoundary::Property,
+                }),
+                PhpType::Object(target_name),
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+        }
+    }
     match target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
+        PhpType::Str if matches!(source_ty, PhpType::Object(_)) => {
+            coerce_to_string_at_span(ctx, value, Some(span))
+        }
         target @ (PhpType::Callable | PhpType::Object(_)) if source_ty == PhpType::Mixed => {
             ctx.emit_value(
                 Op::MixedUnbox,
@@ -98,11 +128,19 @@ pub(super) fn lower_foreach(
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
     let (source, source_is_borrowed_fetch) = lower_foreach_source(ctx, array, value_by_ref);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     // Orthogonal to the borrowed fetch-for-write pin taken after `IterStart` below: that one
     // keeps a by-reference element or property container alive, while this one takes the loop's
     // reference on an object source. Borrowed fetch-for-write sources are containers, never
     // objects, so `retain_object_foreach_source` returns them untouched and the flag still
     // describes `source`.
+    let source = if value_by_ref {
+        source
+    } else {
+        normalize_plain_object_foreach_source(ctx, source, array.span)
+    };
     let source = retain_object_foreach_source(ctx, source, array.span);
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
@@ -256,6 +294,52 @@ pub(super) fn lower_foreach(
     if let Some(pin) = source_pin {
         crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
     }
+}
+
+/// Casts an ordinary concrete object to its visible property hash before `foreach` iteration.
+fn normalize_plain_object_foreach_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(source.value).codegen_repr() else {
+        return source;
+    };
+    let traversable = class_name.trim_start_matches('\\').eq_ignore_ascii_case("Traversable")
+        || crate::ir_lower::expr::array_access_types::class_implements_interface_for_ir(
+            ctx,
+            &class_name,
+            "Iterator",
+        )
+        || crate::ir_lower::expr::array_access_types::class_implements_interface_for_ir(
+            ctx,
+            &class_name,
+            "IteratorAggregate",
+        );
+    if traversable {
+        return source;
+    }
+    if !ctx.current_class.as_deref().is_some_and(|current| {
+        php_symbol_key(current) == php_symbol_key(&class_name)
+    }) {
+        return source;
+    }
+    let result_type = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let result = ctx.emit_value(
+        Op::Cast,
+        vec![source.value],
+        Some(Immediate::CastTarget(IrType::Heap(IrHeapKind::Hash))),
+        result_type,
+        Op::Cast.default_effects(),
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+    result
 }
 
 /// Lowers the `foreach` source expression under the loop's binding mode.

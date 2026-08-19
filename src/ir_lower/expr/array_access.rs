@@ -219,9 +219,9 @@ pub(super) fn lower_array_access_from_value(
             let index_is_mixed = matches!(index_value.ir_type, IrType::Heap(IrHeapKind::Mixed));
             if index_is_mixed {
                 if warn_on_missing {
-                    Op::ArrayGet
+                    Op::ArrayGetMixedKey
                 } else {
-                    Op::ArrayGetSilent
+                    Op::ArrayGetMixedKeySilent
                 }
             } else if index_ty == PhpType::Int {
                 index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
@@ -352,8 +352,18 @@ pub(crate) fn lower_array_access_from_lowered_receiver(
 
 /// Returns the statically-known key type for an array index expression.
 /// Used to decide between Op::ArrayGet (int key) and Op::ArrayGetMixedKey.
-pub(crate) fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
-    let ty = infer_expr_type_syntactic(index);
+pub(crate) fn index_expr_key_type(ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
+    let ty = match &index.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| infer_expr_type_syntactic(index))
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_result_type(ctx, receiver, property, index)
+        }
+        _ => infer_expr_type_syntactic(index),
+    };
     normalized_array_key_type(index, ty)
 }
 
@@ -411,15 +421,11 @@ pub(super) fn array_access_result_type(
     match op {
         Op::StrCharAt => PhpType::Str,
         Op::ArrayGet | Op::ArrayGetSilent => match ctx.builder.value_php_type(array).codegen_repr() {
-            PhpType::Array(elem_ty) => {
-                array_access_element_result_type(normalize_value_php_type(*elem_ty))
-            }
+            PhpType::Array(elem_ty) => array_access_element_result_type(*elem_ty),
             _ => fallback_expr_type(expr),
         },
         Op::HashGet | Op::HashGetSilent => match ctx.builder.value_php_type(array).codegen_repr() {
-            PhpType::AssocArray { value, .. } => {
-                array_access_element_result_type(normalize_value_php_type(*value))
-            }
+            PhpType::AssocArray { value, .. } => array_access_element_result_type(*value),
             _ => fallback_expr_type(expr),
         },
         Op::BufferGet => match ctx.builder.value_php_type(array).codegen_repr() {
@@ -437,7 +443,11 @@ pub(super) fn array_access_result_type(
 
 /// Returns the materialized result type for a PHP array read, including miss-capable int reads.
 pub(crate) fn array_access_element_result_type(element_ty: PhpType) -> PhpType {
-    if crate::codegen::sentinels::null_repr_is_tagged() && matches!(element_ty, PhpType::Int) {
+    if matches!(element_ty, PhpType::Never) {
+        PhpType::Mixed
+    } else if crate::codegen::sentinels::null_repr_is_tagged()
+        && matches!(element_ty, PhpType::Int)
+    {
         PhpType::TaggedScalar
     } else {
         element_ty

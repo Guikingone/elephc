@@ -513,3 +513,51 @@ echo read_limit();
     );
     assert_eq!(out, "2");
 }
+
+/// Verifies an object-valued conditional receiver keeps its checked class for `::CONST`.
+#[test]
+fn test_dynamic_scoped_constant_uses_lowered_receiver_type() {
+    let out = compile_and_run(
+        r#"<?php
+class ConditionalConstantReceiver {
+    public const VALUE = 'ready';
+}
+
+$left = new ConditionalConstantReceiver();
+$right = new ConditionalConstantReceiver();
+echo ($argc > 0 ? $left : $right)::VALUE;
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Verifies a mixed local narrowed by `instanceof` retains its nominal type for `::CONST`.
+#[test]
+fn test_dynamic_scoped_constant_uses_instanceof_narrowed_local() {
+    let out = compile_and_run(
+        r#"<?php
+class NarrowedConstantReceiver {
+    public const VALUE = 'ready';
+
+    public static function read(mixed $value): string {
+        if ($value instanceof self) {
+            return $value::VALUE;
+        }
+        return 'other';
+    }
+
+    public static function readTernary(mixed $value): string {
+        return $value instanceof self ? $value::VALUE : 'other';
+    }
+}
+
+class NarrowedConstantChild extends NarrowedConstantReceiver {
+    public const VALUE = 'child';
+}
+
+echo NarrowedConstantReceiver::read(new NarrowedConstantChild()), ':';
+echo NarrowedConstantReceiver::readTernary(new NarrowedConstantChild());
+"#,
+    );
+    assert_eq!(out, "child:child");
+}

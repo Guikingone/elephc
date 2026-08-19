@@ -34,7 +34,8 @@ mod keys;
 mod search;
 mod shift;
 mod unshift;
-pub(in crate::codegen::lower_inst::builtins) mod values;
+mod unshift_dynamic;
+pub(in crate::codegen::lower_inst) mod values;
 mod basic;
 mod filter;
 mod map_dispatch;
@@ -255,6 +256,7 @@ fn emit_mixed_splice_replacement_insert(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     replacement: &SpliceReplacement,
+    receiver_is_slot_address: bool,
 ) -> Result<()> {
     if !replacement.inserts_values() {
         return Ok(());
@@ -267,7 +269,7 @@ fn emit_mixed_splice_replacement_insert(
     abi::emit_push_reg_pair(ctx.emitter, removed_reg, at_reg);
     emit_splice_replacement_pointer(ctx, replacement)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    ctx.load_value_to_reg(array, cell_reg)?;
+    load_mixed_splice_receiver_cell(ctx, array, cell_reg, receiver_is_slot_address)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x0, [x10, #8]");                       // read the converted indexed array out of the Mixed cell
@@ -283,7 +285,7 @@ fn emit_mixed_splice_replacement_insert(
         ctx.emitter,
         array_splice_insert_runtime_helper(replacement, &PhpType::Mixed),
     );
-    ctx.load_value_to_reg(array, cell_reg)?;
+    load_mixed_splice_receiver_cell(ctx, array, cell_reg, receiver_is_slot_address)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("str x0, [x10, #8]");                       // republish the possibly-relocated indexed array into the Mixed cell
@@ -300,6 +302,20 @@ fn emit_mixed_splice_replacement_insert(
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    Ok(())
+}
+
+/// Loads a boxed gradual receiver cell, dereferencing an array-element place when required.
+fn load_mixed_splice_receiver_cell(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    cell_reg: &str,
+    receiver_is_slot_address: bool,
+) -> Result<()> {
+    ctx.load_value_to_reg(array, cell_reg)?;
+    if receiver_is_slot_address {
+        abi::emit_load_from_address(ctx.emitter, cell_reg, cell_reg, 0);
+    }
     Ok(())
 }
 
@@ -576,8 +592,8 @@ fn lower_hash_link_sort(
 /// PHP's `?int $length` treats `null` as "to the end of the array", and every other `i64` — including
 /// `-1` — is a real length, so the runtime helpers cannot recognise "no length" from the length value
 /// itself. The flag is therefore materialized separately: an omitted or statically `Void` argument is
-/// the immediate `0`, a statically typed integer is the immediate `1`, and a boxed `Mixed` argument is
-/// unboxed at runtime so a `null` payload (runtime tag 8) also reports `0`.
+/// the immediate `0`, a statically typed integer is the immediate `1`, and gradual or tagged
+/// nullable arguments inspect their runtime tag so a `null` payload also reports `0`.
 fn resolve_slice_length_present_to_result(
     ctx: &mut FunctionContext<'_>,
     length: Option<ValueId>,
@@ -588,6 +604,27 @@ fn resolve_slice_length_present_to_result(
         return Ok(());
     }
     let length = length.expect("length present");
+    if ctx.value_php_type(length)?.codegen_repr() == PhpType::TaggedScalar {
+        ctx.load_value_to_result(length)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!(
+                    "cmp x1, #{}",
+                    crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
+                )); // compare the nullable scalar tag with PHP null
+                ctx.emitter.instruction("cset x0, ne");                         // report a length only for the integer variant
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!(
+                    "cmp rdx, {}",
+                    crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
+                )); // compare the nullable scalar tag with PHP null
+                ctx.emitter.instruction("setne al");                            // report a length only for the integer variant
+                ctx.emitter.instruction("movzx rax, al");                       // widen the presence flag to a full integer word
+            }
+        }
+        return Ok(());
+    }
     if !matches!(
         ctx.value_php_type(length)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
@@ -614,7 +651,8 @@ fn resolve_slice_length_present_to_result(
 /// Reports whether the `array_slice`/`array_splice` length argument is absent at compile time.
 ///
 /// A missing operand and a statically `Void` operand both mean the PHP call omitted `$length` (or
-/// passed a literal `null`), which selects the "slice to the end of the array" behavior.
+/// passed a literal `null`), which selects the "slice to the end of the array" behavior. A tagged
+/// nullable scalar remains runtime-dependent and is handled by the presence/value materializers.
 fn slice_length_is_statically_absent(
     ctx: &mut FunctionContext<'_>,
     length: Option<ValueId>,
@@ -754,8 +792,9 @@ impl SpliceReplacement {
             if &inner == elem_ty && splice_insert_slot_is_supported(elem_ty) {
                 return Ok(Self::Array(replacement));
             }
-            // A heterogeneous receiver stores boxed Mixed cells, so a typed scalar replacement
-            // has to be boxed element by element before it lands in the payload.
+            // A heterogeneous receiver stores boxed Mixed cells, so every typed replacement
+            // payload has to be boxed element by element before it lands in the destination.
+            // `__rt_mixed_from_value` persists strings and retains refcounted children.
             if elem_ty == &PhpType::Mixed && splice_boxable_scalar_slot(&inner) {
                 let tag = runtime_value_tag("array_splice", &inner)?;
                 return Ok(Self::BoxedArray(replacement, tag));
@@ -816,17 +855,15 @@ impl SpliceReplacement {
     }
 }
 
-/// Reports whether a replacement element type can be boxed one slot at a time into a Mixed cell.
+/// Reports whether a replacement element can be boxed one slot at a time into a Mixed cell.
 ///
-/// `__rt_mixed_from_value` stores the raw payload word without retaining it, so only the
-/// non-refcounted scalars whose slot IS the value qualify. `Str` qualifies too: the boxing helper
-/// reads its wider pointer/length slot and `__rt_mixed_from_value` persists the bytes itself, so
-/// the Mixed cell owns storage the replacement array still holds independently.
+/// Scalar slots are copied directly, string bytes are persisted, and refcounted payloads are
+/// retained by `__rt_mixed_from_value`, so the destination and replacement remain independent.
 fn splice_boxable_scalar_slot(elem_ty: &PhpType) -> bool {
     matches!(
         elem_ty,
         PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
-    )
+    ) || elem_ty.is_refcounted()
 }
 
 /// Reports whether the splice insert helpers can move this element type's payload slots.

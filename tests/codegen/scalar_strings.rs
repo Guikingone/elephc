@@ -114,6 +114,22 @@ fn test_strlen_empty() {
     assert_eq!(out, "0");
 }
 
+/// Verifies weak-mode scalar arguments are converted using PHP string coercion before measuring.
+#[test]
+fn test_strlen_weak_scalar_coercions() {
+    let out = compile_and_run(
+        "<?php echo strlen(123), ':', strlen(1.5), ':', strlen(true), ':', strlen(false), ':', strlen(null);",
+    );
+    assert_eq!(out, "3:3:1:0:0");
+}
+
+/// Verifies the bottom element type of an empty array reaches the existing null-string coercion.
+#[test]
+fn test_strlen_empty_array_read_coerces_to_empty_string() {
+    let out = compile_and_run("<?php $values = []; echo strlen($values[0]);");
+    assert_eq!(out, "0");
+}
+
 /// Compiles `<?php echo intval("42");` and asserts stdout is `42` (string to int conversion).
 #[test]
 fn test_intval_string() {

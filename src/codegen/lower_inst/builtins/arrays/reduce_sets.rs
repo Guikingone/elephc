@@ -403,11 +403,17 @@ pub(super) fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Inst
 pub(crate) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_splice", 2, 4)?;
     let array = expect_operand(inst, 0)?;
-    if matches!(
-        ctx.value_php_type(array)?.codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ) {
+    let array_ty = ctx.value_php_type(array)?.codegen_repr();
+    if matches!(array_ty, PhpType::Mixed | PhpType::Union(_)) {
         return lower_mixed_array_splice(ctx, inst);
+    }
+    if matches!(array_ty, PhpType::Pointer(_)) {
+        let addressed_ty = crate::codegen::lower_inst::reference_arguments::array_element_address_value_type(
+            ctx, array,
+        )?;
+        if matches!(addressed_ty, Some(PhpType::Mixed | PhpType::Union(_))) {
+            return lower_mixed_array_splice(ctx, inst);
+        }
     }
     let offset = expect_operand(inst, 1)?;
     let length = inst.operands.get(2).copied();
@@ -427,16 +433,34 @@ pub(crate) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instructi
 /// Lowers `array_splice()` for an indexed array stored inside a boxed Mixed cell.
 pub(super) fn lower_mixed_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
+    let receiver_is_slot_address =
+        crate::codegen::lower_inst::reference_arguments::value_is_array_element_address(
+            ctx, array,
+        )?;
     let offset = expect_operand(inst, 1)?;
     let length = inst.operands.get(2).copied();
     let replacement =
         SpliceReplacement::resolve(ctx, inst.operands.get(3).copied(), &PhpType::Mixed)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            lower_mixed_array_splice_aarch64(ctx, array, offset, length, &replacement)?
+            lower_mixed_array_splice_aarch64(
+                ctx,
+                array,
+                offset,
+                length,
+                &replacement,
+                receiver_is_slot_address,
+            )?
         }
         Arch::X86_64 => {
-            lower_mixed_array_splice_x86_64(ctx, array, offset, length, &replacement)?
+            lower_mixed_array_splice_x86_64(
+                ctx,
+                array,
+                offset,
+                length,
+                &replacement,
+                receiver_is_slot_address,
+            )?
         }
     }
     normalize_array_splice_result(ctx, &PhpType::Mixed, &inst.result_php_type.codegen_repr())?;

@@ -283,6 +283,10 @@ impl Checker {
             return Ok(());
         }
 
+        if self.reflection_class_arg_is_deferred_absent_constant(&normalized_args[0])? {
+            return Ok(());
+        }
+
         let reflected_class =
             self.reflection_class_literal_arg(class_name, &normalized_args[0], env)?;
         match class_name {
@@ -736,6 +740,26 @@ impl Checker {
             arg.kind,
             ExprKind::StringLiteral(_) | ExprKind::ClassConstant { .. }
         ))
+    }
+
+    /// Returns whether a class-constant reflection target must be resolved at runtime.
+    ///
+    /// A class-like name referenced inside a function may be supplied by a runtime loader and is
+    /// already allowed by the general absent-class policy. Static reflection metadata validation
+    /// cannot inspect such a declaration, so defer it to the reflection runtime instead of
+    /// reporting a compile-time undefined-class error. Top-level construction remains strict.
+    fn reflection_class_arg_is_deferred_absent_constant(
+        &self,
+        arg: &Expr,
+    ) -> Result<bool, CompileError> {
+        if !self.allows_absent_runtime_class() {
+            return Ok(false);
+        }
+        let ExprKind::ClassConstant { receiver } = &arg.kind else {
+            return Ok(false);
+        };
+        let class_name = self.resolve_reflection_class_constant(receiver, arg.span)?;
+        Ok(self.resolve_reflection_class_name(&class_name).is_none())
     }
 
     /// Extracts the class name argument from a reflection constructor call.

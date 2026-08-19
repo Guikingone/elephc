@@ -103,6 +103,9 @@ fn parse_ref_assign(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     *pos += 1;
+    if let Some(stmt) = try_parse_reference_append_source(tokens, pos, &target, span)? {
+        return Ok(stmt);
+    }
     let source = parse_expr(tokens, pos)?;
     if !is_valid_reference_source(&source.kind) {
         return Err(CompileError::new(
@@ -112,6 +115,85 @@ fn parse_ref_assign(
     }
     expect_semicolon(tokens, pos)?;
     Ok(Stmt::new(StmtKind::RefAssign { target, source }, span))
+}
+
+/// Parses `$target =& $array[]` by sharing a fresh temporary cell with the appended slot.
+///
+/// The temporary avoids evaluating the append target twice and avoids mutating any cell that
+/// `target` might have referenced before it is rebound. Existing append-by-reference lowering
+/// then owns container growth, nested write-back, copy-on-write, and target-specific storage.
+fn try_parse_reference_append_source(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    target: &str,
+    span: Span,
+) -> Result<Option<Stmt>, CompileError> {
+    let source_start = *pos;
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut cursor = source_start;
+    let semicolon = loop {
+        let Some((token, _)) = tokens.get(cursor) else {
+            return Ok(None);
+        };
+        match token {
+            Token::LParen => paren_depth += 1,
+            Token::RParen => paren_depth = paren_depth.saturating_sub(1),
+            Token::LBracket => bracket_depth += 1,
+            Token::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
+            Token::LBrace => brace_depth += 1,
+            Token::RBrace => brace_depth = brace_depth.saturating_sub(1),
+            Token::Semicolon if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                break cursor;
+            }
+            _ => {}
+        }
+        cursor += 1;
+    };
+    if semicolon < source_start + 2
+        || tokens[semicolon - 2].0 != Token::LBracket
+        || tokens[semicolon - 1].0 != Token::RBracket
+    {
+        return Ok(None);
+    }
+
+    let source_tokens = &tokens[source_start..semicolon - 2];
+    let mut source_pos = 0usize;
+    let append_target = parse_expr(source_tokens, &mut source_pos)?;
+    if source_pos != source_tokens.len() {
+        return Err(CompileError::new(span, "Invalid reference append target"));
+    }
+
+    let temp = format!(
+        "__elephc_ref_append_{}_{}_{}",
+        span.line, span.col, source_start
+    );
+    let temp_expr = Expr::new(ExprKind::Variable(temp.clone()), span);
+    let init = Stmt::new(
+        StmtKind::Assign {
+            name: temp.clone(),
+            value: Expr::new(ExprKind::Null, span),
+        },
+        span,
+    );
+    let append = super::postfix::assignment_target_append_stmt(
+        append_target,
+        Expr::new(ExprKind::ArrayReference(Box::new(temp_expr.clone())), span),
+        span,
+    )?;
+    let bind = Stmt::new(
+        StmtKind::RefAssign {
+            target: target.to_string(),
+            source: temp_expr,
+        },
+        span,
+    );
+    *pos = semicolon + 1;
+    Ok(Some(Stmt::new(
+        StmtKind::Synthetic(vec![init, append, bind]),
+        span,
+    )))
 }
 
 /// Returns true when an expression is a legal source for `$x = &<source>`.

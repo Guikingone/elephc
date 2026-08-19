@@ -226,7 +226,10 @@ pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr:
             Some(object_ty.clone()),
         )
     } else {
-        unreachable!("clone expressions must be type-checked as object-capable values before lowering");
+        unreachable!(
+            "clone expressions must be type-checked as object-capable values before lowering: {object_ty:?} at {:?}",
+            inner.span
+        );
     };
     let data = ctx.intern_class_name(&class_name);
     let result_ty = PhpType::Object(class_name.clone());
@@ -456,7 +459,9 @@ pub(super) fn lower_new_dynamic(
     expr: &Expr,
 ) -> LoweredValue {
     let args = expand_static_call_spread_args(args);
-    if let Some(value) = lower_new_dynamic_planned_dispatch(ctx, name_expr, &args, expr) {
+    if let Some(value) =
+        lower_new_dynamic_planned_dispatch(ctx, name_expr, &args, expr, None)
+    {
         return value;
     }
     let name_value = lower_expr(ctx, name_expr);

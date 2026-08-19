@@ -298,7 +298,7 @@ fn infer_arrow_captures(
 
     let mut captures = Vec::new();
     let mut seen = HashSet::new();
-    collect_arrow_expr_captures(body_expr, &bound, &mut seen, &mut captures);
+    collect_arrow_expr_captures(body_expr, &mut bound, &mut seen, &mut captures);
     captures.retain(|name| !crate::globals_array::is_alias(name));
     captures
 }
@@ -321,7 +321,7 @@ fn push_arrow_capture(
 /// Recursively collects variables that an arrow function body reads from its enclosing scope.
 fn collect_arrow_expr_captures(
     expr: &Expr,
-    bound: &HashSet<String>,
+    bound: &mut HashSet<String>,
     seen: &mut HashSet<String>,
     captures: &mut Vec<String>,
 ) {
@@ -359,17 +359,21 @@ fn collect_arrow_expr_captures(
         | ExprKind::YieldFrom(inner) => collect_arrow_expr_captures(inner, bound, seen, captures),
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             collect_arrow_expr_captures(value, bound, seen, captures);
-            collect_arrow_expr_captures(default, bound, seen, captures);
+            let mut default_bound = bound.clone();
+            collect_arrow_expr_captures(default, &mut default_bound, seen, captures);
         }
         ExprKind::Pipe { value, callable } => {
             collect_arrow_expr_captures(value, bound, seen, captures);
             collect_arrow_expr_captures(callable, bound, seen, captures);
         }
         ExprKind::Assignment { target, value, .. } => {
-            if !matches!(target.kind, ExprKind::Variable(_)) {
+            if let ExprKind::Variable(name) = &target.kind {
+                collect_arrow_expr_captures(value, bound, seen, captures);
+                bound.insert(name.clone());
+            } else {
                 collect_arrow_expr_captures(target, bound, seen, captures);
+                collect_arrow_expr_captures(value, bound, seen, captures);
             }
-            collect_arrow_expr_captures(value, bound, seen, captures);
         }
         ExprKind::FunctionCall { args, .. }
         | ExprKind::NewObject { args, .. }
@@ -422,14 +426,23 @@ fn collect_arrow_expr_captures(
             default,
         } => {
             collect_arrow_expr_captures(subject, bound, seen, captures);
+            let branch_entry = bound.clone();
+            let mut branch_exit: Option<HashSet<String>> = None;
             for (patterns, result) in arms {
+                let mut arm_bound = branch_entry.clone();
                 for pattern in patterns {
-                    collect_arrow_expr_captures(pattern, bound, seen, captures);
+                    collect_arrow_expr_captures(pattern, &mut arm_bound, seen, captures);
                 }
-                collect_arrow_expr_captures(result, bound, seen, captures);
+                collect_arrow_expr_captures(result, &mut arm_bound, seen, captures);
+                intersect_arrow_bound(&mut branch_exit, arm_bound);
             }
             if let Some(default) = default {
-                collect_arrow_expr_captures(default, bound, seen, captures);
+                let mut default_bound = branch_entry.clone();
+                collect_arrow_expr_captures(default, &mut default_bound, seen, captures);
+                intersect_arrow_bound(&mut branch_exit, default_bound);
+            }
+            if let Some(branch_exit) = branch_exit {
+                *bound = branch_exit;
             }
         }
         ExprKind::ArrayAccess { array, index } => {
@@ -442,8 +455,12 @@ fn collect_arrow_expr_captures(
             else_expr,
         } => {
             collect_arrow_expr_captures(condition, bound, seen, captures);
-            collect_arrow_expr_captures(then_expr, bound, seen, captures);
-            collect_arrow_expr_captures(else_expr, bound, seen, captures);
+            let mut then_bound = bound.clone();
+            let mut else_bound = bound.clone();
+            collect_arrow_expr_captures(then_expr, &mut then_bound, seen, captures);
+            collect_arrow_expr_captures(else_expr, &mut else_bound, seen, captures);
+            then_bound.retain(|name| else_bound.contains(name));
+            *bound = then_bound;
         }
         ExprKind::Closure { captures: nested, .. } => {
             for name in nested {
@@ -512,6 +529,18 @@ fn collect_arrow_expr_captures(
         ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
             collect_arrow_expr_captures(receiver, bound, seen, captures);
         }
+    }
+}
+
+/// Intersects one arrow-function branch exit with the exits collected so far.
+fn intersect_arrow_bound(
+    branch_exit: &mut Option<HashSet<String>>,
+    current: HashSet<String>,
+) {
+    if let Some(existing) = branch_exit {
+        existing.retain(|name| current.contains(name));
+    } else {
+        *branch_exit = Some(current);
     }
 }
 

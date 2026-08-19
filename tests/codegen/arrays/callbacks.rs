@@ -11,6 +11,19 @@ use crate::support::*;
 
 // --- Callback-based array functions ---
 
+/// Verifies an internal array callback may pass a value to a zero-parameter
+/// user closure, matching PHP's acceptance of surplus user-call arguments.
+#[test]
+fn test_array_map_zero_parameter_closure_ignores_supplied_value() {
+    let out = compile_and_run(
+        r#"<?php
+$mapped = array_map(static fn (): string => "?", [10, 20, 30]);
+echo implode("", $mapped);
+"#,
+    );
+    assert_eq!(out, "???");
+}
+
 // Tests `array_map` with a user-defined callback that doubles each element.
 /// Verifies that array map.
 #[test]
@@ -1970,4 +1983,26 @@ foreach (mapGradual($callback, [2 => "a", "b" => 9]) as $key => $value) {
         "expected a clean heap, got: {}",
         out.stderr
     );
+}
+
+/// Verifies user sorting normalizes a Closure stored in a gradual property union.
+#[test]
+fn test_uasort_accepts_closure_from_gradual_property_union() {
+    let out = compile_and_run(
+        r#"<?php
+class GradualSorter {
+    private Closure|int $sort;
+    public function __construct() {
+        $this->sort = static fn (int $left, int $right): int => $left <=> $right;
+    }
+    public function sort(array $values): array {
+        uasort($values, $this->sort);
+        return $values;
+    }
+}
+$sorted = (new GradualSorter())->sort([3, 1, 2]);
+foreach ($sorted as $value) { echo $value, ','; }
+"#,
+    );
+    assert_eq!(out, "1,2,3,");
 }

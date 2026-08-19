@@ -293,6 +293,33 @@ echo $box->interfaceValue, ":", $box->selfValue, ":", $box->parentValue, ":", Bo
     assert_eq!(out, "41:40:1:41");
 }
 
+/// Verifies scoped constants nested in literal property defaults are resolved for instance and
+/// static storage, including an instance selected by a runtime class string.
+#[test]
+fn test_array_property_defaults_resolve_nested_scoped_constants() {
+    let out = compile_and_run(
+        r#"<?php
+class DefaultMap {
+    private const CREATED = 'c';
+    private const ALIGN = 'left';
+
+    public array $values = [self::CREATED => 1, 'align' => self::ALIGN];
+    public static array $staticValues = [self::CREATED => 2, 'align' => self::ALIGN];
+}
+
+function instantiate(string $class): object {
+    return new $class();
+}
+
+$direct = new DefaultMap();
+$dynamic = instantiate('DefaultMap');
+echo $direct->values['c'], ':', $dynamic->values['align'], ':';
+echo DefaultMap::$staticValues['c'], ':', DefaultMap::$staticValues['align'];
+"#,
+    );
+    assert_eq!(out, "1:left:2:left");
+}
+
 /// Verifies that a nullable typed static property with an explicit `= null` default
 /// is considered initialized (`is_null()` returns true), and that a typed static
 /// property without a default remains uninitialized and throws a catchable Error;
@@ -305,7 +332,6 @@ fn test_nullable_static_property_default_null_is_initialized() {
 class WithDefault {
     public static ?int $value = null;
 }
-
 echo is_null(WithDefault::$value);
 "#,
     );
@@ -324,6 +350,27 @@ echo WithoutDefault::$value;
         err.contains("Fatal error: Typed static property WithoutDefault::$value must not be accessed before initialization"),
         "{err}"
     );
+}
+
+/// Verifies a nullable integer narrowed by a null check can populate an integer static property.
+#[test]
+fn test_narrowed_nullable_int_static_property_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticIntTarget {
+    public static int $value = 0;
+
+    public static function assign(?int $value): void {
+        if (null !== $value) {
+            self::$value = $value;
+        }
+    }
+}
+StaticIntTarget::assign(7);
+echo StaticIntTarget::$value;
+"#,
+    );
+    assert_eq!(out, "7");
 }
 
 /// Verifies that an untyped instance property with a `= null` default is strictly

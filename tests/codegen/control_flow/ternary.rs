@@ -289,6 +289,22 @@ echo gettype(pick(7)), "|", pick(7), "|", gettype(pick(0)), "|", pick(0);
     assert_eq!(out, "integer|7|string|fallback");
 }
 
+/// Verifies short-ternary merge storage uses a function's declared return type rather than
+/// parser-only fallback inference before passing the selected value to a string operation.
+#[test]
+fn test_short_ternary_function_call_preserves_declared_string_union() {
+    let out = compile_and_run(
+        r#"<?php
+function maybe_setting(bool $present): string|false {
+    return $present ? 'AbC' : false;
+}
+$value = maybe_setting(true) ?: maybe_setting(false);
+echo strtolower($value);
+"#,
+    );
+    assert_eq!(out, "abc");
+}
+
 /// Regression for issue #494: inferred ternary returns must retain nullability
 /// for object/null branches, including the assignment-effects path.
 #[test]

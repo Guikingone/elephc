@@ -192,6 +192,7 @@ pub enum EvalExpr {
         then_branch: Option<Box<EvalExpr>>,
         else_branch: Box<EvalExpr>,
     },
+    Throw(Box<EvalExpr>),
     Unary {
         op: EvalUnaryOp,
         expr: Box<EvalExpr>,
@@ -353,4 +354,5 @@ pub enum EvalUnaryOp {
     Negate,
     LogicalNot,
     BitNot,
+    ErrorSuppress,
 }

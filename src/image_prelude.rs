@@ -5992,12 +5992,17 @@ function cairo_matrix_transform_point(CairoMatrix $matrix, float $x, float $y): 
 /// `force` (set by `--with-image`) bypasses the usage scan so the image surface
 /// is always injected, making it available even when auto-detection would not see
 /// the usage.
-pub fn inject_if_used(program: crate::parser::ast::Program, force: bool) -> crate::parser::ast::Program {
+pub fn inject_if_used(
+    program: crate::parser::ast::Program,
+    force: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> crate::parser::ast::Program {
     if !force && !detect::program_uses_image(&program) {
         return program;
     }
     let tokens = crate::lexer::tokenize(IMAGE_PRELUDE_SRC).expect("image prelude must tokenize");
     let mut combined = crate::parser::parse_internal(&tokens).expect("image prelude must parse");
+    inventory.record_program("image", &combined);
     combined.extend(program);
     combined
 }

@@ -46,6 +46,11 @@ impl Checker {
                     },
                 );
             }
+            if *op == BinOp::And {
+                self.install_truthy_short_circuit_effects(left, &mut right_env)?;
+            } else {
+                self.install_falsy_short_circuit_effects(left, &mut right_env)?;
+            }
         }
         let rt = self.infer_type(right, &right_env)?;
         match op {
@@ -811,7 +816,10 @@ impl Checker {
         match self.infer_type(inner, env)? {
             PhpType::Array(elem_ty) => Ok(*elem_ty),
             PhpType::AssocArray { value, .. } => Ok(*value),
-            PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+            PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+            PhpType::Object(name) if self.object_type_implements_iterable(&name) => {
+                Ok(PhpType::Mixed)
+            }
             _ => Err(CompileError::new(
                 arg.span,
                 "Spread operator requires an array",

@@ -78,7 +78,11 @@ const INI_RESTORE_TEMPLATE: &str = r#"function ini_restore(string $option): void
 /// Injection is hoisted function declarations only, so prepending cannot change top-level
 /// execution order. Tokenize/parse failure is a compiler bug and panics rather than
 /// degrading silently, matching the other preludes.
-pub fn inject_if_used(program: Program, php_version: PhpVersion) -> Program {
+pub fn inject_if_used(
+    program: Program,
+    php_version: PhpVersion,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
     let mut src = String::new();
     for (name, template) in [
         ("zend_version", ZEND_VERSION_TEMPLATE),
@@ -98,6 +102,7 @@ pub fn inject_if_used(program: Program, php_version: PhpVersion) -> Program {
         .replace("__ELEPHC_ZEND_VERSION__", php_version.zend_version());
     let tokens = crate::lexer::tokenize(&src).expect("version prelude must tokenize");
     let mut combined = crate::parser::parse_internal(&tokens).expect("version prelude must parse");
+    inventory.record_program("version", &combined);
     combined.extend(program);
     combined
 }
@@ -123,6 +128,12 @@ mod tests {
         crate::parser::parse(&tokens).expect("fixture must parse")
     }
 
+    /// Injects the version prelude with a throwaway declaration inventory.
+    fn inject_for_test(program: Program, php_version: PhpVersion) -> Program {
+        let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+        inject_if_used(program, php_version, &mut inventory)
+    }
+
     /// Returns whether an injected program declares a free function.
     fn declares(program: &Program, expected: &str) -> bool {
         program.iter().any(|stmt| {
@@ -137,7 +148,7 @@ mod tests {
     #[test]
     fn unrelated_program_gets_nothing() {
         let program = parse("<?php echo 1;");
-        let injected = inject_if_used(program, PhpVersion::Php85);
+        let injected = inject_for_test(program, PhpVersion::Php85);
         assert!(!declares(&injected, "zend_version"));
         assert!(!declares(&injected, "php_sapi_name"));
         assert!(!declares(&injected, "ini_restore"));
@@ -146,12 +157,12 @@ mod tests {
     /// Each function is injected independently of the others.
     #[test]
     fn each_function_is_injected_independently() {
-        let injected = inject_if_used(parse("<?php echo zend_version();"), PhpVersion::Php85);
+        let injected = inject_for_test(parse("<?php echo zend_version();"), PhpVersion::Php85);
         assert!(declares(&injected, "zend_version"));
         assert!(!declares(&injected, "php_sapi_name"));
         assert!(!declares(&injected, "ini_restore"));
 
-        let injected = inject_if_used(parse("<?php ini_restore('x');"), PhpVersion::Php85);
+        let injected = inject_for_test(parse("<?php ini_restore('x');"), PhpVersion::Php85);
         assert!(declares(&injected, "ini_restore"));
         assert!(!declares(&injected, "zend_version"));
     }
@@ -160,7 +171,7 @@ mod tests {
     #[test]
     fn user_declaration_is_not_clobbered() {
         let source = "<?php function ini_restore(string $o): void {} ini_restore('x');";
-        let injected = inject_if_used(parse(source), PhpVersion::Php85);
+        let injected = inject_for_test(parse(source), PhpVersion::Php85);
         let count = injected
             .iter()
             .filter(|stmt| {
@@ -189,7 +200,7 @@ mod tests {
                 "{profile:?} must bake {expected} into zend_version()",
             );
             // The injected program must still parse with the substituted literal.
-            let injected = inject_if_used(parse("<?php echo zend_version();"), profile);
+            let injected = inject_for_test(parse("<?php echo zend_version();"), profile);
             assert!(declares(&injected, "zend_version"));
         }
     }
@@ -197,7 +208,7 @@ mod tests {
     /// A string-literal reference (the `function_exists` / callable form) still injects.
     #[test]
     fn string_literal_reference_injects() {
-        let injected = inject_if_used(
+        let injected = inject_for_test(
             parse("<?php var_dump(function_exists('php_sapi_name'));"),
             PhpVersion::Php85,
         );

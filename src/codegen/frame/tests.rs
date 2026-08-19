@@ -10,7 +10,9 @@
 use super::*;
 use crate::codegen::generate_user_asm_from_ir;
 use crate::codegen::platform::{Arch, Platform, Target};
-use crate::ir::{Builder, FunctionParam, IrType, Module, Terminator};
+use crate::ir::{
+    Builder, FunctionParam, Instruction, IrHeapKind, IrType, Module, Op, Ownership, Terminator,
+};
 
 /// Verifies AArch64 saves a later Mixed argument before retaining an earlier string.
 #[test]
@@ -67,6 +69,29 @@ fn owned_string_parameter_is_persisted_once() {
 
         assert_eq!(asm.matches(call).count(), 1, "{asm}");
     }
+}
+
+/// Verifies descriptor invocation reserves the hand-managed nested-call register.
+#[test]
+fn callable_descriptor_invoke_reserves_nested_call_register() {
+    let mut function = Function::new(
+        "callable_descriptor_frame_fixture".to_string(),
+        IrType::Void,
+        PhpType::Void,
+    );
+    function.instructions.push(Instruction::new(
+        Op::CallableDescriptorInvoke,
+        Vec::new(),
+        None,
+        None,
+        IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Mixed,
+        Ownership::Owned,
+        Op::CallableDescriptorInvoke.default_effects(),
+        None,
+    ));
+
+    assert!(function_uses_nested_call_reg(&function));
 }
 
 /// Builds a callable with an owned string parameter followed by a borrowed Mixed parameter.

@@ -44,7 +44,7 @@ enum BuiltInRecipe {
 /// Resolves a package and immutable recipe revision to its built-in executor.
 fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
     match (package, revision) {
-        ("pcre2", 2) => Some(BuiltInRecipe::Pcre2),
+        ("pcre2", 3) => Some(BuiltInRecipe::Pcre2),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
         _ => None,
     }
@@ -89,6 +89,6 @@ mod tests {
     /// Verifies the revised PCRE2 shim is not reused under its previous recipe identity.
     #[test]
     fn previous_pcre2_recipe_revision_is_not_dispatched() {
-        assert!(built_in_recipe("pcre2", 1).is_none());
+        assert!(built_in_recipe("pcre2", 2).is_none());
     }
 }

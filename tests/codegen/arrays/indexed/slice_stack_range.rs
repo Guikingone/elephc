@@ -176,6 +176,47 @@ foreach ($renumbered as $key => $value) { echo $key, '=', $value, ';'; }
     assert_eq!(out, "5=20;b=30;|0=20;b=30;");
 }
 
+/// Verifies compatibility routing reads precise static-property metadata before lowering an
+/// associative slice with key preservation.
+#[test]
+fn test_array_slice_associative_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+class SliceCache {
+    public static array $buffer = ['a' => 1, 'b' => 2];
+
+    public static function trim(): void {
+        self::$buffer = array_slice(self::$buffer, 1, null, true);
+    }
+}
+SliceCache::trim();
+echo SliceCache::$buffer['b'];
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Verifies an array-typed helper result is promoted before replacing associative instance
+/// property storage.
+#[test]
+fn test_array_slice_associative_instance_property() {
+    let out = compile_and_run(
+        r#"<?php
+class SliceBuffer {
+    public array $values = ['a' => 1, 'b' => 2];
+
+    public function trim(): void {
+        $this->values = array_slice($this->values, 1, null, true);
+    }
+}
+$buffer = new SliceBuffer();
+$buffer->trim();
+echo $buffer->values['b'];
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
 /// Verifies a nullable integer slice length is handled after a non-null branch narrows it.
 #[test]
 fn test_array_slice_nullable_integer_length() {
@@ -224,6 +265,22 @@ echo trace_unshift($trace), "|", $trace[0]["function"], "|", $trace[0]["line"];
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "2|new Demo|319");
+}
+
+/// Verifies an empty local array widens before a gradual value is prepended by reference.
+#[test]
+fn test_array_unshift_mixed_value_into_empty_local() {
+    let out = compile_and_run(
+        r#"<?php
+function prepend(mixed $value): string {
+    $values = [];
+    $count = array_unshift($values, $value);
+    return $count . ":" . $values[0];
+}
+echo prepend("ready");
+"#,
+    );
+    assert_eq!(out, "1:ready");
 }
 
 /// A boxed gradual operand that contains an associative array routes through the

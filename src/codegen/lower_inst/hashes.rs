@@ -823,6 +823,7 @@ pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: V
             emit_empty_string_hash_key_aarch64(ctx);
             Ok(())
         }
+        PhpType::TaggedScalar => materialize_tagged_scalar_hash_key_aarch64(ctx, key),
         PhpType::Mixed | PhpType::Union(_) => {
             materialize_mixed_hash_key_aarch64(ctx, key)
         }
@@ -859,6 +860,7 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
             emit_empty_string_hash_key_x86_64(ctx);
             Ok(())
         }
+        PhpType::TaggedScalar => materialize_tagged_scalar_hash_key_x86_64(ctx, key),
         PhpType::Mixed | PhpType::Union(_) => {
             materialize_mixed_hash_key_x86_64(ctx, key)
         }
@@ -867,6 +869,42 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
             other
         ))),
     }
+}
+
+/// Materializes an inline nullable integer as an integer key or PHP's empty-string null key.
+fn materialize_tagged_scalar_hash_key_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    key: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_result(key)?;
+    let null_label = ctx.next_label("tagged_hash_key_null");
+    let done_label = ctx.next_label("tagged_hash_key_done");
+    crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &null_label);
+    ctx.emitter.instruction("mov x1, x0");                                      // place the non-null integer payload in the hash key low word
+    abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    emit_empty_string_hash_key_aarch64(ctx);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Materializes an inline nullable integer as an integer key or PHP's empty-string null key.
+fn materialize_tagged_scalar_hash_key_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    key: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_result(key)?;
+    let null_label = ctx.next_label("tagged_hash_key_null");
+    let done_label = ctx.next_label("tagged_hash_key_done");
+    crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &null_label);
+    ctx.emitter.instruction("mov rsi, rax");                                    // place the non-null integer payload in the hash key low word
+    abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    emit_empty_string_hash_key_x86_64(ctx);
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Emits PHP's undefined-key warning for a normalized associative key on AArch64.

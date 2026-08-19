@@ -377,6 +377,22 @@ var_dump(flipGradual([2 => "a", "b" => 9]));
     );
 }
 
+/// Verifies a gradual array element can produce a statically associative flip result whose
+/// values are the original integer indexes.
+#[test]
+fn test_array_flip_gradual_source_with_associative_result() {
+    let out = compile_and_run(
+        r#"<?php
+function flipFirst(array $groups): array {
+    return array_flip($groups[0]);
+}
+$flipped = flipFirst([['first', 'second']]);
+echo $flipped['first'], ':', $flipped['second'];
+"#,
+    );
+    assert_eq!(out, "0:1");
+}
+
 /// Verifies the compatibility helper searches Mixed lists with loose and strict comparison.
 #[test]
 fn test_array_search_mixed_compatibility_helper() {

@@ -12,6 +12,7 @@ use crate::errors::CompileError;
 use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::{CastType, Expr, ExprKind};
 use crate::span::Span;
+use crate::types::param_binding::param_accepts_weak_string_coercion;
 use crate::types::{
     merge_array_key_types, normalized_array_key_type, static_array_key_forces_hash_storage,
     PhpType, TypeEnv,
@@ -227,10 +228,8 @@ pub(super) fn check_property_array_assign(
             }
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
-            if let PhpType::Object(prop_class_name) = &prop_ty {
-                if checker.object_type_implements_interface(prop_class_name, "ArrayAccess") {
-                    return Ok(());
-                }
+            if type_satisfies_array_access(checker, &prop_ty) {
+                return Ok(());
             }
             if !is_php_array_key_type(&normalized_idx_ty) {
                 return Err(CompileError::new(span, "Array index must be integer"));
@@ -446,7 +445,7 @@ fn check_object_property_write(
             // compile-time rejection. Record the throw site so EIR lowering
             // emits the throw sequence, and let lowering proceed.
             checker.throw_access_sites.insert(
-                span,
+                (checker.current_loop_storage_scope.clone(), span),
                 crate::types::ThrowAccessInfo {
                     span,
                     kind: crate::types::ThrowAccessKind::ReadonlyProperty {
@@ -484,12 +483,25 @@ fn check_object_property_write(
             ));
         }
         if class_info.visible_property_is_declared(property) {
-            checker.require_compatible_arg_type(
-                &expected_ty,
-                val_ty,
-                span,
-                &format!("Property {}::${}", class_name, property),
-            )?;
+            let accepts_stringable_object = !checker.strict_types
+                && param_accepts_weak_string_coercion(&expected_ty)
+                && matches!(val_ty.codegen_repr(), PhpType::Object(ref name) if checker.object_supports_weak_string_coercion(name));
+            let defers_nominal_object_check =
+                crate::types::param_binding::object_requires_runtime_nominal_guard(
+                    &expected_ty,
+                    val_ty,
+                ) || crate::types::param_binding::gradual_object_requires_runtime_nominal_guard(
+                    &expected_ty,
+                    val_ty,
+                );
+            if !accepts_stringable_object && !defers_nominal_object_check {
+                checker.require_compatible_arg_type(
+                    &expected_ty,
+                    val_ty,
+                    span,
+                    &format!("Property {}::${}", class_name, property),
+                )?;
+            }
         }
     }
     Ok(())

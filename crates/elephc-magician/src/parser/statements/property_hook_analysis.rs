@@ -416,6 +416,7 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
         | EvalExpr::Cast { expr: path, .. }
         | EvalExpr::Clone(path)
         | EvalExpr::Print(path)
+        | EvalExpr::Throw(path)
         | EvalExpr::Unary { expr: path, .. } => eval_expr_uses_this_property(path, property_name),
         EvalExpr::InstanceOf { value, target } => {
             eval_expr_uses_this_property(value, property_name)

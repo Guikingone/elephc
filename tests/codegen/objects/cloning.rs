@@ -223,3 +223,33 @@ echo read_gradual_clone(duplicate_gradual(new GradualCloneValue()));
     );
     assert_eq!(out, "ready");
 }
+
+/// Verifies name resolution reaches a static method call nested under `clone`.
+#[test]
+fn test_clone_resolves_nested_static_method_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+namespace CloneResolution;
+
+class CloneStyle {
+    public string $name = 'ready';
+}
+
+class CloneFactory {
+    public static function make(): CloneStyle {
+        return new CloneStyle();
+    }
+}
+
+class CloneConsumer {
+    public static function read(): string {
+        $copy = clone CloneFactory::make();
+        return $copy->name;
+    }
+}
+
+echo CloneConsumer::read();
+"#,
+    );
+    assert_eq!(out, "ready");
+}

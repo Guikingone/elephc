@@ -105,6 +105,21 @@ fn test_string_indexing_last_valid_index() {
     assert_eq!(out, "c");
 }
 
+/// Verifies string-offset reads dispatch correctly when the receiver uses a boxed union.
+#[test]
+fn test_string_indexing_boxed_union_preserves_large_and_negative_offsets() {
+    let out = compile_and_run(
+        r#"<?php
+function readAt(string|false $value, int $offset): string {
+    return $value[$offset];
+}
+$value = str_repeat("a", 1137) . "=";
+echo readAt($value, 1137) . readAt($value, -1) . "[" . readAt($value, 2000) . "]";
+"#,
+    );
+    assert_eq!(out, "==[]");
+}
+
 /// Verifies array assign.
 #[test]
 fn test_array_assign() {

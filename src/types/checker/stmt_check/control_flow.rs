@@ -155,10 +155,54 @@ fn join_fallthrough_type_envs(checker: &Checker, branches: &[TypeEnv]) -> Option
                 joined.insert(name, PhpType::Mixed);
             }
         } else {
-            joined.insert(name, checker.normalize_union_type(types));
+            joined.insert(name, join_fallthrough_binding_types(checker, &types));
         }
     }
     Some(joined)
+}
+
+/// Joins one binding's types across reachable branch exits without losing container shape.
+///
+/// A compatible supertype wins when it accepts every observed value. Differing array element
+/// types widen inside the same array container, because representing them as a union of whole
+/// arrays would collapse to boxed `Mixed` storage in codegen and make subsequent element access
+/// or reference binding lose the fact that the runtime value is definitely an array.
+fn join_fallthrough_binding_types(checker: &Checker, types: &[PhpType]) -> PhpType {
+    let mut joined = types.first().cloned().unwrap_or(PhpType::Never);
+    for next in types.iter().skip(1) {
+        joined = if checker.type_accepts(&joined, next) {
+            joined
+        } else if checker.type_accepts(next, &joined) {
+            next.clone()
+        } else {
+            match (&joined, next) {
+                (PhpType::Array(left), PhpType::Array(right)) => PhpType::Array(Box::new(
+                    PhpType::widen_array_branch_element((**left).clone(), (**right).clone()),
+                )),
+                (
+                    PhpType::AssocArray {
+                        key: left_key,
+                        value: left_value,
+                    },
+                    PhpType::AssocArray {
+                        key: right_key,
+                        value: right_value,
+                    },
+                ) => PhpType::AssocArray {
+                    key: Box::new(PhpType::widen_array_branch_element(
+                        (**left_key).clone(),
+                        (**right_key).clone(),
+                    )),
+                    value: Box::new(PhpType::widen_array_branch_element(
+                        (**left_value).clone(),
+                        (**right_value).clone(),
+                    )),
+                },
+                _ => checker.normalize_union_type(vec![joined, next.clone()]),
+            }
+        };
+    }
+    joined
 }
 
 impl Checker {
@@ -217,17 +261,23 @@ impl Checker {
                         .trim_start_matches('\\')
                         .eq_ignore_ascii_case("Traversable")
                         || self.interface_extends_interface(class_name, "Traversable");
-                    if !is_iter && !is_iter_agg && !is_traversable_marker {
-                        return Err(CompileError::new(
-                            stmt.span,
-                            &format!(
-                                "foreach over object requires {} to implement Iterator or IteratorAggregate",
-                                class_name
-                            ),
-                        ));
-                    }
-                    let (key_ty, value_ty) =
-                        self.foreach_object_key_value_types(class_name, array);
+                    let (key_ty, value_ty) = if !is_iter && !is_iter_agg && !is_traversable_marker {
+                        if !self.current_class.as_deref().is_some_and(|current| {
+                            crate::names::php_symbol_key(current)
+                                == crate::names::php_symbol_key(class_name)
+                        }) {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!(
+                                    "foreach over object requires {} to implement Iterator or IteratorAggregate outside its declaring scope",
+                                    class_name
+                                ),
+                            ));
+                        }
+                        (PhpType::Str, PhpType::Mixed)
+                    } else {
+                        self.foreach_object_key_value_types(class_name, array)
+                    };
                     if let Some(k) = key_var {
                         env.insert(k.clone(), key_ty);
                         self.clear_foreach_callable_metadata(k);

@@ -26,6 +26,10 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::runtime_callable_invoker::RuntimeCallableInvoker;
 use crate::ir::{Function, LocalKind, Module};
+use crate::codegen::lower_inst::builtins::eval::{
+    eval_native_function_bridge_supported, eval_native_instance_method_bridge_supported,
+    eval_native_static_method_bridge_supported,
+};
 use crate::names::{function_symbol, method_symbol, php_symbol_key, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
@@ -45,6 +49,16 @@ const EVAL_DYNAMIC_CONTEXT_CAPTURE: usize = 0;
 const EVAL_DYNAMIC_CALLBACK_CAPTURE: usize = 1;
 const EVAL_DYNAMIC_CALLABLE_CAPTURE_BYTES: usize = 32;
 const AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET: i64 = 16;
+const EVAL_CALLABLE_LOOKUP_FRAME_SIZE: usize = 32;
+const EVAL_CALLABLE_LOOKUP_SELECTOR_OFFSET: usize = 16;
+const EVAL_CALLABLE_STRING_SELECTOR_BYTES: usize = 16;
+const EVAL_CALLABLE_ARRAY_SELECTOR_BYTES: usize = MIXED_SELECTOR_BYTES;
+const EVAL_CALLABLE_OBJECT_SELECTOR_BYTES: usize = SAVED_OBJECT_RECEIVER_BYTES;
+// Nested pushes grow below the reserved area and are balanced before the
+// epilogue, so the reserved sizes only need to cover the copied selectors.
+const EVAL_CALLABLE_STRING_SCRATCH_BYTES: usize = 16;
+const EVAL_CALLABLE_ARRAY_SCRATCH_BYTES: usize = 64;
+const EVAL_CALLABLE_OBJECT_SCRATCH_BYTES: usize = 16;
 
 /// Callable descriptors available to eval constructor and method bridges.
 pub(super) struct EvalCallableDescriptorSupport {
@@ -53,6 +67,9 @@ pub(super) struct EvalCallableDescriptorSupport {
     static_array_cases: Vec<RuntimeStaticMethodCallableCase>,
     object_cases: Vec<EvalInstanceMethodCallableCase>,
     dynamic_descriptor_label: Option<String>,
+    string_lookup_label: Option<String>,
+    array_lookup_label: Option<String>,
+    object_lookup_label: Option<String>,
 }
 
 /// Runtime instance-method callable case emitted specifically for eval bridges.
@@ -73,12 +90,23 @@ enum EvalInstanceCallableShape {
 /// Stable label allocator for eval bridge helper bodies emitted outside `FunctionContext`.
 struct EvalCallableEmitState {
     next_id: usize,
+    runtime_callable_invokers: Vec<EvalRuntimeCallableInvokerCacheEntry>,
+}
+
+/// Cached eval invoker body keyed by its complete ABI-relevant signature and captures.
+struct EvalRuntimeCallableInvokerCacheEntry {
+    signature: FunctionSig,
+    captures: Vec<(String, PhpType, bool)>,
+    label: String,
 }
 
 impl EvalCallableEmitState {
     /// Creates an empty label state for one eval callable-support emission pass.
     fn new() -> Self {
-        Self { next_id: 0 }
+        Self {
+            next_id: 0,
+            runtime_callable_invokers: Vec::new(),
+        }
     }
 
     /// Returns a unique global/local label for generated eval callable support.
@@ -87,27 +115,36 @@ impl EvalCallableEmitState {
         self.next_id += 1;
         format!("__elephc_eval_{}_{}", prefix, id)
     }
+
+    /// Returns the shared invoker body for an identical signature and capture layout.
+    fn runtime_callable_invoker(
+        &self,
+        signature: &FunctionSig,
+        captures: &[(String, PhpType, bool)],
+    ) -> Option<String> {
+        self.runtime_callable_invokers
+            .iter()
+            .find(|entry| entry.signature == *signature && entry.captures == captures)
+            .map(|entry| entry.label.clone())
+    }
+
+    /// Records an emitted invoker body for reuse by later eval descriptors.
+    fn cache_runtime_callable_invoker(
+        &mut self,
+        signature: &FunctionSig,
+        captures: &[(String, PhpType, bool)],
+        label: String,
+    ) {
+        self.runtime_callable_invokers
+            .push(EvalRuntimeCallableInvokerCacheEntry {
+                signature: signature.clone(),
+                captures: captures.to_vec(),
+                label,
+            });
+    }
 }
 
 impl EvalCallableDescriptorSupport {
-    /// Returns true when no callable descriptor case is available.
-    pub(super) fn is_empty(&self) -> bool {
-        self.string_cases.is_empty()
-            && self.instance_array_cases.is_empty()
-            && self.static_array_cases.is_empty()
-            && self.object_cases.is_empty()
-    }
-
-    /// Returns true when no callable-array descriptor case is available.
-    fn array_cases_empty(&self) -> bool {
-        self.instance_array_cases.is_empty() && self.static_array_cases.is_empty()
-    }
-
-    /// Returns true when no invokable-object descriptor case is available.
-    fn object_cases_empty(&self) -> bool {
-        self.object_cases.is_empty()
-    }
-
     /// Returns true when eval callback fallback descriptors can be materialized.
     fn has_dynamic_descriptor(&self) -> bool {
         self.dynamic_descriptor_label.is_some()
@@ -180,6 +217,9 @@ pub(super) fn emit_eval_callable_descriptor_support(
             static_array_cases: Vec::new(),
             object_cases: Vec::new(),
             dynamic_descriptor_label: None,
+            string_lookup_label: None,
+            array_lookup_label: None,
+            object_lookup_label: None,
         };
     }
     let mut state = EvalCallableEmitState::new();
@@ -189,13 +229,276 @@ pub(super) fn emit_eval_callable_descriptor_support(
     let object_cases = eval_invokable_object_callable_cases(module, emitter, data, &mut state);
     let dynamic_descriptor_label = Some(eval_dynamic_callable_descriptor(data));
     emit_eval_dynamic_callable_invoker(module, emitter, data);
-    EvalCallableDescriptorSupport {
+    let mut support = EvalCallableDescriptorSupport {
         string_cases,
         instance_array_cases,
         static_array_cases,
         object_cases,
         dynamic_descriptor_label,
+        string_lookup_label: None,
+        array_lookup_label: None,
+        object_lookup_label: None,
+    };
+    let string_lookup_label = state.next_label("callable_string_lookup");
+    let array_lookup_label = state.next_label("callable_array_lookup");
+    let object_lookup_label = state.next_label("callable_object_lookup");
+    emit_eval_callable_lookup_helpers(
+        emitter,
+        data,
+        &mut state,
+        &support,
+        &string_lookup_label,
+        &array_lookup_label,
+        &object_lookup_label,
+    );
+    support.string_lookup_label = Some(string_lookup_label);
+    support.array_lookup_label = Some(array_lookup_label);
+    support.object_lookup_label = Some(object_lookup_label);
+    support
+}
+
+/// Emits one module-wide static lookup helper for each eval callable category.
+///
+/// Call sites pass the address of their temporary selector area in the first
+/// integer argument register.  Each helper copies that area into a framed
+/// local stack region so the existing target-neutral selector comparisons and
+/// descriptor capture emitters can be shared without duplicating case tables.
+fn emit_eval_callable_lookup_helpers(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    state: &mut EvalCallableEmitState,
+    support: &EvalCallableDescriptorSupport,
+    string_label: &str,
+    array_label: &str,
+    object_label: &str,
+) {
+    emit_eval_string_callable_lookup_helper(
+        emitter,
+        data,
+        state,
+        &support.string_cases,
+        &support.static_array_cases,
+        string_label,
+    );
+    emit_eval_callable_array_lookup_helper(
+        emitter,
+        data,
+        state,
+        &support.instance_array_cases,
+        &support.static_array_cases,
+        array_label,
+    );
+    emit_eval_invokable_object_lookup_helper(
+        emitter,
+        state,
+        &support.object_cases,
+        object_label,
+    );
+}
+
+/// Emits a framed local selector area for a shared lookup helper.
+///
+/// The incoming pointer is copied before any selector-based comparison.  The
+/// local area grows below the helper frame, so nested pushes can never reach
+/// the saved return address or frame pointer.  The caller's stack is never
+/// installed as the helper stack pointer.
+fn emit_eval_callable_lookup_helper_prologue(
+    emitter: &mut Emitter,
+    label: &str,
+    selector_bytes: usize,
+    scratch_bytes: usize,
+) {
+    emitter.blank();
+    emitter.label_global(label);
+    abi::emit_frame_prologue(emitter, EVAL_CALLABLE_LOOKUP_FRAME_SIZE);
+    let arg_reg = abi::int_arg_reg_name(emitter.target, 0);
+    abi::store_at_offset(emitter, arg_reg, EVAL_CALLABLE_LOOKUP_SELECTOR_OFFSET);
+    abi::emit_reserve_temporary_stack(emitter, scratch_bytes);
+    emit_copy_eval_callable_selector_to_stack(emitter, selector_bytes);
+}
+
+/// Copies a caller-owned selector area into the helper's local temporary stack.
+fn emit_copy_eval_callable_selector_to_stack(emitter: &mut Emitter, selector_bytes: usize) {
+    let stack_reg = abi::secondary_scratch_reg(emitter);
+    abi::load_at_offset(
+        emitter,
+        stack_reg,
+        EVAL_CALLABLE_LOOKUP_SELECTOR_OFFSET,
+    );
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            for offset in (0..selector_bytes).step_by(8) {
+                let value_reg = "x11";
+                let source = if offset == 0 {
+                    format!("[{}]", stack_reg)
+                } else {
+                    format!("[{}, #{}]", stack_reg, offset)
+                };
+                emitter.instruction(&format!("ldr {}, {}", value_reg, source)); // copy one selector word from the caller-owned area
+                abi::emit_store_to_sp(emitter, value_reg, offset);
+            }
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            for offset in (0..selector_bytes).step_by(8) {
+                let value_reg = "r11";
+                let source = if offset == 0 {
+                    format!("[{}]", stack_reg)
+                } else {
+                    format!("[{} + {}]", stack_reg, offset)
+                };
+                emitter.instruction(&format!("mov {}, QWORD PTR {}", value_reg, source)); // copy one selector word from the caller-owned area
+                abi::emit_store_to_sp(emitter, value_reg, offset);
+            }
+        }
     }
+}
+
+/// Emits the miss path and frame restore shared by a lookup helper.
+fn emit_eval_callable_lookup_helper_epilogue(
+    emitter: &mut Emitter,
+    miss_label: &str,
+    done_label: &str,
+    scratch_bytes: usize,
+) {
+    emitter.label(miss_label);
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+    emitter.label(done_label);
+    abi::emit_release_temporary_stack(emitter, scratch_bytes);
+    abi::emit_frame_restore(emitter, EVAL_CALLABLE_LOOKUP_FRAME_SIZE);
+    abi::emit_return(emitter);
+}
+
+/// Emits a module-wide lookup helper for string and static-method callables.
+fn emit_eval_string_callable_lookup_helper(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    state: &mut EvalCallableEmitState,
+    string_cases: &[RuntimeCallableCase],
+    static_cases: &[RuntimeStaticMethodCallableCase],
+    label: &str,
+) {
+    emit_eval_callable_lookup_helper_prologue(
+        emitter,
+        label,
+        EVAL_CALLABLE_STRING_SELECTOR_BYTES,
+        EVAL_CALLABLE_STRING_SCRATCH_BYTES,
+    );
+    let done_label = state.next_label("callable_string_lookup_done");
+    let miss_label = state.next_label("callable_string_lookup_miss");
+    let result_reg = abi::int_result_reg(emitter);
+    let selector = RuntimeCallableSelector::StringNameStack {
+        ptr_offset: 0,
+        len_offset: 8,
+        call_reg: result_reg,
+    };
+    for (index, case) in string_cases
+        .iter()
+        .chain(static_cases.iter().map(|case| &case.case))
+        .enumerate()
+    {
+        let next_case = state.next_label(&format!("callable_string_lookup_next_{}", index));
+        let matched_label = state.next_label(&format!("callable_string_lookup_match_{}", index));
+        callable_dispatch::emit_branch_if_callable_case_mismatch(
+            &selector,
+            case,
+            &next_case,
+            emitter,
+            &matched_label,
+            data,
+        );
+        abi::emit_jump(emitter, &done_label);
+        emitter.label(&next_case);
+    }
+    abi::emit_jump(emitter, &miss_label);
+    emit_eval_callable_lookup_helper_epilogue(
+        emitter,
+        &miss_label,
+        &done_label,
+        EVAL_CALLABLE_STRING_SCRATCH_BYTES,
+    );
+}
+
+/// Emits a module-wide lookup helper for instance and static callable arrays.
+fn emit_eval_callable_array_lookup_helper(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    state: &mut EvalCallableEmitState,
+    instance_cases: &[EvalInstanceMethodCallableCase],
+    static_cases: &[RuntimeStaticMethodCallableCase],
+    label: &str,
+) {
+    emit_eval_callable_lookup_helper_prologue(
+        emitter,
+        label,
+        EVAL_CALLABLE_ARRAY_SELECTOR_BYTES,
+        EVAL_CALLABLE_ARRAY_SCRATCH_BYTES,
+    );
+    let done_label = state.next_label("callable_array_lookup_done");
+    let miss_label = state.next_label("callable_array_lookup_miss");
+    let result_reg = abi::int_result_reg(emitter);
+    for (index, case) in instance_cases.iter().enumerate() {
+        let next_case = state.next_label(&format!("callable_array_lookup_instance_next_{}", index));
+        emit_branch_if_instance_callable_array_case_mismatch(emitter, data, case, &next_case);
+        emit_runtime_descriptor_with_saved_receiver_capture(
+            emitter,
+            &case.case.descriptor_label,
+            MIXED_RECEIVER_PAYLOAD_OFFSET,
+            result_reg,
+        );
+        abi::emit_jump(emitter, &done_label);
+        emitter.label(&next_case);
+    }
+    for (index, case) in static_cases.iter().enumerate() {
+        let next_case = state.next_label(&format!("callable_array_lookup_static_next_{}", index));
+        emit_branch_if_static_callable_array_case_mismatch(emitter, data, case, &next_case);
+        abi::emit_symbol_address(emitter, result_reg, &case.case.descriptor_label);
+        abi::emit_jump(emitter, &done_label);
+        emitter.label(&next_case);
+    }
+    abi::emit_jump(emitter, &miss_label);
+    emit_eval_callable_lookup_helper_epilogue(
+        emitter,
+        &miss_label,
+        &done_label,
+        EVAL_CALLABLE_ARRAY_SCRATCH_BYTES,
+    );
+}
+
+/// Emits a module-wide lookup helper for invokable-object callables.
+fn emit_eval_invokable_object_lookup_helper(
+    emitter: &mut Emitter,
+    state: &mut EvalCallableEmitState,
+    object_cases: &[EvalInstanceMethodCallableCase],
+    label: &str,
+) {
+    emit_eval_callable_lookup_helper_prologue(
+        emitter,
+        label,
+        EVAL_CALLABLE_OBJECT_SELECTOR_BYTES,
+        EVAL_CALLABLE_OBJECT_SCRATCH_BYTES,
+    );
+    let done_label = state.next_label("callable_object_lookup_done");
+    let miss_label = state.next_label("callable_object_lookup_miss");
+    let result_reg = abi::int_result_reg(emitter);
+    for (index, case) in object_cases.iter().enumerate() {
+        let next_case = state.next_label(&format!("callable_object_lookup_next_{}", index));
+        emit_branch_if_receiver_class_id_mismatch(emitter, case.class_id, 0, &next_case);
+        emit_runtime_descriptor_with_saved_receiver_capture(
+            emitter,
+            &case.case.descriptor_label,
+            0,
+            result_reg,
+        );
+        abi::emit_jump(emitter, &done_label);
+        emitter.label(&next_case);
+    }
+    abi::emit_jump(emitter, &miss_label);
+    emit_eval_callable_lookup_helper_epilogue(
+        emitter,
+        &miss_label,
+        &done_label,
+        EVAL_CALLABLE_OBJECT_SCRATCH_BYTES,
+    );
 }
 
 /// Emits the static descriptor template for eval-owned callback values.
@@ -385,7 +688,10 @@ fn eval_user_function_callable_cases(
     let mut functions = eval_user_function_sigs(module);
     functions.sort_by(|left, right| left.0.cmp(&right.0));
     let mut cases = Vec::with_capacity(functions.len());
-    for (name, sig) in functions {
+    for (name, sig, bridge_supported) in functions {
+        if bridge_supported {
+            continue;
+        }
         let case_sig = callable_wrapper_sig(&sig);
         let invoker_label =
             emit_eval_runtime_callable_invoker_inline(emitter, data, state, &case_sig, &[]);
@@ -401,7 +707,6 @@ fn eval_user_function_callable_cases(
             Some(&invoker_label),
         );
         cases.push(RuntimeCallableCase {
-            label: function_symbol(&name),
             descriptor_label,
             php_name: Some(name),
         });
@@ -410,7 +715,7 @@ fn eval_user_function_callable_cases(
 }
 
 /// Collects user function signatures available to eval string-callable descriptors.
-fn eval_user_function_sigs(module: &Module) -> Vec<(String, FunctionSig)> {
+fn eval_user_function_sigs(module: &Module) -> Vec<(String, FunctionSig, bool)> {
     let mut functions = module
         .functions
         .iter()
@@ -421,11 +726,12 @@ fn eval_user_function_sigs(module: &Module) -> Vec<(String, FunctionSig)> {
             (
                 function.name.clone(),
                 super::lower_inst::function_signature_from_eir(function),
+                eval_native_function_bridge_supported(function),
             )
         })
         .collect::<Vec<_>>();
     for group in super::function_variants::collect_dispatch_groups(module) {
-        if functions.iter().any(|(name, _)| name == &group.name) {
+        if functions.iter().any(|(name, _, _)| name == &group.name) {
             continue;
         }
         if let Some(function) = super::function_variants::variant_callee_for_group(module, &group.name)
@@ -433,6 +739,7 @@ fn eval_user_function_sigs(module: &Module) -> Vec<(String, FunctionSig)> {
             functions.push((
                 group.name.clone(),
                 super::lower_inst::function_signature_from_eir(function),
+                eval_native_function_bridge_supported(function),
             ));
         }
     }
@@ -487,6 +794,9 @@ fn eval_instance_callable_cases(
     for (class_name, class_info) in &module.class_infos {
         for (method_name, sig) in &class_info.methods {
             if !include_method(method_name) {
+                continue;
+            }
+            if eval_native_instance_method_bridge_supported(class_info, method_name, sig) {
                 continue;
             }
             if !class_info
@@ -551,6 +861,9 @@ fn eval_static_method_callable_cases(
     let mut candidates = Vec::new();
     for (class_name, class_info) in &module.class_infos {
         for (method_name, sig) in &class_info.static_methods {
+            if eval_native_static_method_bridge_supported(class_info, method_name, sig) {
+                continue;
+            }
             if !class_info
                 .static_method_visibilities
                 .get(method_name)
@@ -613,7 +926,6 @@ fn eval_static_method_callable_cases(
                     class_name,
                     method_name,
                     case: RuntimeCallableCase {
-                        label: entry_label,
                         descriptor_label,
                         php_name: Some(php_name),
                     },
@@ -692,7 +1004,6 @@ fn receiver_bound_instance_method_case(
         Some(&invoker_label),
     );
     RuntimeCallableCase {
-        label: entry_label,
         descriptor_label,
         php_name: Some(php_name),
     }
@@ -706,6 +1017,9 @@ fn emit_eval_runtime_callable_invoker_inline(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
 ) -> String {
+    if let Some(label) = state.runtime_callable_invoker(sig, captures) {
+        return label;
+    }
     let label = state.next_label("callable_invoker");
     let done_label = state.next_label("callable_invoker_done");
     let invoker = RuntimeCallableInvoker {
@@ -716,6 +1030,7 @@ fn emit_eval_runtime_callable_invoker_inline(
     abi::emit_jump(emitter, &done_label);
     super::runtime_callable_invoker::emit_runtime_callable_invoker(emitter, data, &invoker);
     emitter.label(&done_label);
+    state.cache_runtime_callable_invoker(sig, captures, label.clone());
     label
 }
 
@@ -1209,14 +1524,18 @@ pub(super) fn emit_aarch64_cast_eval_callable_arg(
     );
     abi::emit_jump(emitter, &format!("{}_callable_cast_done", label_prefix));
     emitter.label(&object_label);
-    abi::emit_push_reg(emitter, "x1");
-    emit_eval_invokable_object_descriptor_lookup(
-        emitter,
-        support,
-        label_prefix,
-        miss_label,
-        "x0",
-    );
+    if support.has_dynamic_descriptor() {
+        abi::emit_jump(emitter, &dynamic_label);
+    } else {
+        abi::emit_push_reg(emitter, "x1");
+        emit_eval_invokable_object_descriptor_lookup(
+            emitter,
+            support,
+            label_prefix,
+            miss_label,
+            "x0",
+        );
+    }
     if support.has_dynamic_descriptor() {
         emitter.label(&dynamic_label);
         emit_aarch64_eval_dynamic_callable_descriptor(
@@ -1285,14 +1604,18 @@ pub(super) fn emit_x86_64_cast_eval_callable_arg(
     );
     abi::emit_jump(emitter, &format!("{}_callable_cast_done", label_prefix));
     emitter.label(&object_label);
-    abi::emit_push_reg(emitter, "rdi");
-    emit_eval_invokable_object_descriptor_lookup(
-        emitter,
-        support,
-        label_prefix,
-        miss_label,
-        "rax",
-    );
+    if support.has_dynamic_descriptor() {
+        abi::emit_jump(emitter, &dynamic_label);
+    } else {
+        abi::emit_push_reg(emitter, "rdi");
+        emit_eval_invokable_object_descriptor_lookup(
+            emitter,
+            support,
+            label_prefix,
+            miss_label,
+            "rax",
+        );
+    }
     if support.has_dynamic_descriptor() {
         emitter.label(&dynamic_label);
         emit_x86_64_eval_dynamic_callable_descriptor(
@@ -1426,49 +1749,22 @@ fn emit_x86_64_eval_dynamic_callable_descriptor(
 fn emit_eval_string_callable_descriptor_lookup(
     _module: &Module,
     emitter: &mut Emitter,
-    data: &mut DataSection,
+    _data: &mut DataSection,
     support: &EvalCallableDescriptorSupport,
-    label_prefix: &str,
+    _label_prefix: &str,
     fail_label: &str,
-    result_reg: &str,
+    _result_reg: &str,
 ) {
-    let done_label = format!("{}_callable_done", label_prefix);
-    let miss_label = format!("{}_callable_missing", label_prefix);
-    if support.is_empty() {
+    if let Some(lookup_label) = support.string_lookup_label.as_deref() {
+        let arg_reg = abi::int_arg_reg_name(emitter.target, 0);
+        abi::emit_temporary_stack_address(emitter, arg_reg, 0);
+        abi::emit_call_label(emitter, lookup_label);
+        abi::emit_release_temporary_stack(emitter, 16);
+        abi::emit_branch_if_int_result_zero(emitter, fail_label);
+    } else {
         abi::emit_release_temporary_stack(emitter, 16);
         abi::emit_jump(emitter, fail_label);
-        return;
     }
-    let selector = RuntimeCallableSelector::StringNameStack {
-        ptr_offset: 0,
-        len_offset: 8,
-        call_reg: result_reg,
-    };
-    for (index, case) in support
-        .string_cases
-        .iter()
-        .chain(support.static_array_cases.iter().map(|case| &case.case))
-        .enumerate()
-    {
-        let next_case = format!("{}_eval_callable_next_{}", label_prefix, index);
-        let matched_label = format!("{}_eval_callable_match_{}", label_prefix, index);
-        callable_dispatch::emit_branch_if_callable_case_mismatch(
-            &selector,
-            case,
-            &next_case,
-            emitter,
-            &matched_label,
-            data,
-        );
-        abi::emit_jump(emitter, &done_label);
-        emitter.label(&next_case);
-    }
-    abi::emit_jump(emitter, &miss_label);
-    emitter.label(&miss_label);
-    abi::emit_release_temporary_stack(emitter, 16);
-    abi::emit_jump(emitter, fail_label);
-    emitter.label(&done_label);
-    abi::emit_release_temporary_stack(emitter, 16);
 }
 
 /// Saves the receiver and method slots from an ARM64 boxed eval callable array.
@@ -1530,94 +1826,42 @@ fn emit_x86_64_push_mixed_unbox_payload(emitter: &mut Emitter) {
 /// Looks up a descriptor from saved callable-array selector slots.
 fn emit_eval_callable_array_descriptor_lookup(
     emitter: &mut Emitter,
-    data: &mut DataSection,
+    _data: &mut DataSection,
     support: &EvalCallableDescriptorSupport,
-    label_prefix: &str,
+    _label_prefix: &str,
     fail_label: &str,
-    result_reg: &str,
+    _result_reg: &str,
 ) {
-    let done_label = format!("{}_callable_array_done", label_prefix);
-    let miss_label = format!("{}_callable_array_missing", label_prefix);
-    if support.array_cases_empty() {
+    if let Some(lookup_label) = support.array_lookup_label.as_deref() {
+        let arg_reg = abi::int_arg_reg_name(emitter.target, 0);
+        abi::emit_temporary_stack_address(emitter, arg_reg, 0);
+        abi::emit_call_label(emitter, lookup_label);
+        abi::emit_release_temporary_stack(emitter, MIXED_SELECTOR_BYTES);
+        abi::emit_branch_if_int_result_zero(emitter, fail_label);
+    } else {
         abi::emit_release_temporary_stack(emitter, MIXED_SELECTOR_BYTES);
         abi::emit_jump(emitter, fail_label);
-        return;
     }
-    for (index, case) in support.instance_array_cases.iter().enumerate() {
-        let next_case = format!("{}_callable_array_instance_next_{}", label_prefix, index);
-        emit_branch_if_instance_callable_array_case_mismatch(
-            emitter,
-            data,
-            case,
-            &next_case,
-        );
-        emit_runtime_descriptor_with_saved_receiver_capture(
-            emitter,
-            &case.case.descriptor_label,
-            MIXED_RECEIVER_PAYLOAD_OFFSET,
-            result_reg,
-        );
-        abi::emit_jump(emitter, &done_label);
-        emitter.label(&next_case);
-    }
-    for (index, case) in support.static_array_cases.iter().enumerate() {
-        let next_case = format!("{}_callable_array_next_{}", label_prefix, index);
-        emit_branch_if_static_callable_array_case_mismatch(
-            emitter,
-            data,
-            case,
-            &next_case,
-        );
-        abi::emit_symbol_address(emitter, result_reg, &case.case.descriptor_label);
-        abi::emit_jump(emitter, &done_label);
-        emitter.label(&next_case);
-    }
-    abi::emit_jump(emitter, &miss_label);
-    emitter.label(&miss_label);
-    abi::emit_release_temporary_stack(emitter, MIXED_SELECTOR_BYTES);
-    abi::emit_jump(emitter, fail_label);
-    emitter.label(&done_label);
-    abi::emit_release_temporary_stack(emitter, MIXED_SELECTOR_BYTES);
 }
 
 /// Looks up a descriptor from a saved invokable-object receiver.
 fn emit_eval_invokable_object_descriptor_lookup(
     emitter: &mut Emitter,
     support: &EvalCallableDescriptorSupport,
-    label_prefix: &str,
+    _label_prefix: &str,
     fail_label: &str,
-    result_reg: &str,
+    _result_reg: &str,
 ) {
-    let done_label = format!("{}_callable_object_done", label_prefix);
-    let miss_label = format!("{}_callable_object_missing", label_prefix);
-    if support.object_cases_empty() {
+    if let Some(lookup_label) = support.object_lookup_label.as_deref() {
+        let arg_reg = abi::int_arg_reg_name(emitter.target, 0);
+        abi::emit_temporary_stack_address(emitter, arg_reg, 0);
+        abi::emit_call_label(emitter, lookup_label);
+        abi::emit_release_temporary_stack(emitter, SAVED_OBJECT_RECEIVER_BYTES);
+        abi::emit_branch_if_int_result_zero(emitter, fail_label);
+    } else {
         abi::emit_release_temporary_stack(emitter, SAVED_OBJECT_RECEIVER_BYTES);
         abi::emit_jump(emitter, fail_label);
-        return;
     }
-    for (index, case) in support.object_cases.iter().enumerate() {
-        let next_case = format!("{}_callable_object_next_{}", label_prefix, index);
-        emit_branch_if_receiver_class_id_mismatch(
-            emitter,
-            case.class_id,
-            0,
-            &next_case,
-        );
-        emit_runtime_descriptor_with_saved_receiver_capture(
-            emitter,
-            &case.case.descriptor_label,
-            0,
-            result_reg,
-        );
-        abi::emit_jump(emitter, &done_label);
-        emitter.label(&next_case);
-    }
-    abi::emit_jump(emitter, &miss_label);
-    emitter.label(&miss_label);
-    abi::emit_release_temporary_stack(emitter, SAVED_OBJECT_RECEIVER_BYTES);
-    abi::emit_jump(emitter, fail_label);
-    emitter.label(&done_label);
-    abi::emit_release_temporary_stack(emitter, SAVED_OBJECT_RECEIVER_BYTES);
 }
 
 /// Branches unless saved selector slots match one instance callable-array case.

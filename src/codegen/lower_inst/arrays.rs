@@ -160,6 +160,20 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
             ctx.emitter.instruction(&format!("b {}", done));                    // finish after reusing an existing hash payload
             ctx.emitter.label(&convert);
             abi::emit_pop_reg(ctx.emitter, "x0");
+            if result_value_ty != PhpType::Mixed {
+                if release_source {
+                    abi::emit_push_reg(ctx.emitter, "x0");
+                }
+                abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");        // copy uniform elements with their concrete runtime representation
+                if release_source {
+                    abi::emit_push_reg(ctx.emitter, "x0");
+                    ctx.emitter.instruction("ldr x0, [sp, #16]");               // reload the transferable source indexed array from the stack
+                    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+                    abi::emit_pop_reg(ctx.emitter, "x0");
+                    abi::emit_pop_reg(ctx.emitter, "x1");
+                }
+                ctx.emitter.instruction(&format!("b {}", done));                // skip the boxed-Mixed union path for uniform payloads
+            }
             abi::emit_push_reg(ctx.emitter, "x0");
             abi::emit_load_int_immediate(ctx.emitter, "x0", 16);
             abi::emit_load_int_immediate(ctx.emitter, "x1", runtime_value_tag(&PhpType::Mixed) as i64);
@@ -207,6 +221,20 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
             ctx.emitter.instruction(&format!("jmp {}", done));                  // finish after reusing an existing hash payload
             ctx.emitter.label(&convert);
             abi::emit_pop_reg(ctx.emitter, "rdi");
+            if result_value_ty != PhpType::Mixed {
+                if release_source {
+                    abi::emit_push_reg(ctx.emitter, "rdi");
+                }
+                abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");        // copy uniform elements with their concrete runtime representation
+                if release_source {
+                    abi::emit_push_reg(ctx.emitter, "rax");
+                    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");   // reload the transferable source indexed array from the stack
+                    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+                    abi::emit_pop_reg(ctx.emitter, "rax");
+                    abi::emit_pop_reg(ctx.emitter, "rsi");
+                }
+                ctx.emitter.instruction(&format!("jmp {}", done));              // skip the boxed-Mixed union path for uniform payloads
+            }
             abi::emit_push_reg(ctx.emitter, "rdi");
             abi::emit_load_int_immediate(ctx.emitter, "rdi", 16);
             abi::emit_load_int_immediate(ctx.emitter, "rsi", runtime_value_tag(&PhpType::Mixed) as i64);
@@ -2280,6 +2308,9 @@ fn require_array_get_result(elem_ty: &PhpType, inst: &Instruction) -> Result<()>
     if matches!(elem_ty, PhpType::Void | PhpType::Never)
         && matches!(result_ty, PhpType::Void | PhpType::Never)
     {
+        return Ok(());
+    }
+    if matches!(elem_ty, PhpType::Void | PhpType::Never) && result_ty == PhpType::Mixed {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(

@@ -293,3 +293,77 @@ echo implode(",", $b->items);
     );
     assert_eq!(out, "7,3,2,1,0");
 }
+
+/// Verifies a gradual by-reference local receiver is normalized and mutated.
+#[test]
+fn test_array_unshift_mutates_mixed_receiver_places() {
+    let out = compile_and_run(
+        r#"<?php
+function prepend(mixed &$values): int {
+    return array_unshift($values, 'first', 'second');
+}
+$local = ['tail'];
+echo prepend($local), ':', implode(',', $local);
+"#,
+    );
+    assert_eq!(out, "3:first,second,tail");
+}
+
+/// Verifies a gradual receiver backed by associative storage preserves string keys and
+/// renumbers existing integer keys after prepending.
+#[test]
+fn test_array_unshift_mutates_mixed_assoc_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+function prependAssoc(mixed &$values): int {
+    return array_unshift($values, 'first');
+}
+$local = ['name' => 'tail', 2 => 'two'];
+echo prependAssoc($local), ':';
+foreach ($local as $key => $value) {
+    echo $key, '=', $value, ';';
+}
+"#,
+    );
+    assert_eq!(out, "3:0=first;name=tail;1=two;");
+}
+
+/// Verifies an array-valued element reached through a declared property is adapted through a
+/// writable temporary and published back after a by-reference mutation.
+#[test]
+fn test_array_unshift_mutates_gradual_property_element_place() {
+    let out = compile_and_run(
+        r#"<?php
+class GroupBox {
+    public array $groups = [];
+}
+
+function prependGroup(GroupBox $box, string $name): int {
+    return array_unshift($box->groups[$name], 'first');
+}
+
+$box = new GroupBox();
+$box->groups['main'] = ['tail'];
+echo prependGroup($box, 'main'), ':', implode(',', $box->groups['main']);
+"#,
+    );
+    assert_eq!(out, "2:first,tail");
+}
+
+/// Verifies a variadic spread after a by-reference property does not suppress place write-back.
+#[test]
+fn test_array_unshift_property_with_variadic_spread() {
+    let out = compile_and_run(
+        r#"<?php
+class SpreadArrayBox {
+    public array $values = ['tail'];
+}
+function prependSpread(SpreadArrayBox $box, array $extra): int {
+    return array_unshift($box->values, 'first', ...$extra);
+}
+$box = new SpreadArrayBox();
+echo prependSpread($box, ['second', 'third']), ':', implode(',', $box->values);
+"#,
+    );
+    assert_eq!(out, "4:first,second,third,tail");
+}

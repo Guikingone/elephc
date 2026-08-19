@@ -116,10 +116,10 @@ pub(super) fn lower_array_fetch_for_write_runtime_call(
                     abi::emit_push_reg(ctx.emitter, "rdi");
                     ctx.emitter.instruction("mov rax, rdi");                    // classify the receiver through the runtime helper's result-register ABI
                     abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
-                    ctx.emitter.instruction("cmp rax, 3");                     // detect hash storage even when the static PHP type remains generic array
+                    ctx.emitter.instruction("cmp rax, 3");                      // detect hash storage even when the static PHP type remains generic array
                     abi::emit_load_int_immediate(ctx.emitter, "rsi", 4);
                     abi::emit_load_int_immediate(ctx.emitter, "r8", 5);
-                    ctx.emitter.instruction("cmove rsi, r8");                  // pass runtime payload tag 5 for hashes and 4 for indexed arrays
+                    ctx.emitter.instruction("cmove rsi, r8");                   // pass runtime payload tag 5 for hashes and 4 for indexed arrays
                     abi::emit_pop_reg(ctx.emitter, "rdi");
                     abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");
                 }
@@ -148,10 +148,48 @@ pub(super) fn lower_mixed_array_runtime_set(ctx: &mut FunctionContext<'_>, inst:
             )))
         }
     }
+    let object_label = ctx.next_label("mixed_array_set_array_access");
+    let native_label = ctx.next_label("mixed_array_set_native");
+    let done_label = ctx.next_label("mixed_array_set_done");
+    emit_mixed_array_set_object_guard(ctx, receiver, &object_label, &native_label)?;
+
+    ctx.emitter.label(&native_label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_mixed_array_runtime_set_aarch64(ctx, receiver, key, value)?,
         Arch::X86_64 => lower_mixed_array_runtime_set_x86_64(ctx, receiver, key, value)?,
     }
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&object_label);
+    array_access_runtime::lower_boxed_array_access_interface_call(ctx, inst, "offsetSet")?;
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Branches boxed object payloads to module-aware ArrayAccess dispatch before the shared helper.
+fn emit_mixed_array_set_object_guard(
+    ctx: &mut FunctionContext<'_>,
+    receiver: ValueId,
+    object_label: &str,
+    native_label: &str,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(receiver, "x0")?;
+            ctx.emitter.instruction(&format!("cbz x0, {}", native_label));      // absent Mixed cells stay on the null-safe runtime path
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect the boxed runtime payload tag
+            ctx.emitter.instruction("cmp x9, #6");                              // object payloads require module-aware interface dispatch
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // call the concrete ArrayAccess::offsetSet implementation
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(receiver, "rax")?;
+            ctx.emitter.instruction("test rax, rax");                           // absent Mixed cells stay on the null-safe runtime path
+            ctx.emitter.instruction(&format!("je {}", native_label));
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 6");                  // object payloads require module-aware interface dispatch
+            ctx.emitter.instruction(&format!("je {}", object_label));           // call the concrete ArrayAccess::offsetSet implementation
+        }
+    }
+    abi::emit_jump(ctx.emitter, native_label);
     Ok(())
 }
 

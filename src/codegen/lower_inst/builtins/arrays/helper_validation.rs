@@ -75,6 +75,10 @@ pub(super) fn require_set_op_result_type(
 pub(super) fn assoc_array_key_set_operand_type(ty: PhpType, name: &str, position: &str) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::AssocArray { key, value } => Ok(PhpType::AssocArray { key, value }),
+        PhpType::Array(value) => Ok(PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value,
+        }),
         other => Err(CodegenIrError::unsupported(format!(
             "{} {} argument PHP type {:?}",
             name, position, other

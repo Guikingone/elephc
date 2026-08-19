@@ -38,6 +38,7 @@ use super::super::super::context::FunctionContext;
 
 mod owner_dispatch;
 mod owner_emission;
+mod materializer;
 mod class_metadata;
 mod callable_metadata;
 mod property_metadata;
@@ -61,6 +62,7 @@ mod type_object_emit;
 mod flags_offsets;
 
 use owner_emission::*;
+use materializer::*;
 use class_metadata::*;
 use callable_metadata::*;
 use property_metadata::*;
@@ -88,6 +90,7 @@ pub(super) use owner_dispatch::{
 };
 
 /// Compile-time metadata used to populate one Reflection owner object.
+#[derive(Debug, PartialEq)]
 struct ReflectionOwnerMetadata {
     reflected_name: Option<String>,
     attr_names: Vec<String>,
@@ -145,7 +148,7 @@ struct ReflectionClassConstantMetadata {
 }
 
 /// Metadata for one member object returned by `ReflectionClass::getMethods()` or `getProperties()`.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 struct ReflectionListedMember {
     name: String,
     declaring_class_name: Option<String>,
@@ -167,7 +170,7 @@ struct ReflectionListedMember {
 }
 
 /// Metadata for one object returned by `ReflectionMethod::getParameters()`.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 struct ReflectionParameterMember {
     name: String,
     declaring_class_name: Option<String>,
@@ -189,7 +192,7 @@ struct ReflectionParameterMember {
 }
 
 /// Metadata needed for `ReflectionParameter::getDeclaringFunction()`.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 enum ReflectionDeclaringFunctionMember {
     Function {
         name: String,
@@ -214,7 +217,7 @@ enum ReflectionDeclaringFunctionMember {
 }
 
 /// Metadata for one `ReflectionType` object returned by `ReflectionParameter::getType()`.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 enum ReflectionParameterTypeMetadata {
     Named(ReflectionNamedTypeMetadata),
     Union(ReflectionUnionTypeMetadata),
@@ -222,7 +225,7 @@ enum ReflectionParameterTypeMetadata {
 }
 
 /// Metadata for one `ReflectionNamedType` returned by `ReflectionParameter::getType()`.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 struct ReflectionNamedTypeMetadata {
     name: String,
     allows_null: bool,
@@ -230,20 +233,20 @@ struct ReflectionNamedTypeMetadata {
 }
 
 /// Metadata for one `ReflectionUnionType` returned by `ReflectionParameter::getType()`.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 struct ReflectionUnionTypeMetadata {
     types: Vec<ReflectionNamedTypeMetadata>,
     allows_null: bool,
 }
 
 /// Metadata for one `ReflectionIntersectionType` returned by `ReflectionParameter::getType()`.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 struct ReflectionIntersectionTypeMetadata {
     types: Vec<ReflectionNamedTypeMetadata>,
 }
 
 /// Compile-time default forms returned by `ReflectionParameter::getDefaultValue()`.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 enum ReflectionParameterDefaultValue {
     Int(i64),
     Bool(bool),
@@ -259,34 +262,35 @@ enum ReflectionParameterDefaultValue {
 }
 
 /// Metadata for one key/value pair in an associative Reflection default array.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 struct ReflectionDefaultAssocEntry {
     key: ReflectionDefaultArrayKey,
     value: ReflectionParameterDefaultValue,
 }
 
 /// Normalized PHP key forms for associative Reflection default arrays.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 enum ReflectionDefaultArrayKey {
     Int(i64),
     Str(String),
 }
 
 /// Metadata for one constant entry returned by `ReflectionClass::getConstants()`.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 struct ReflectionConstantMember {
     name: String,
     value: ReflectionConstantValue,
 }
 
 /// Metadata for one property entry returned by `ReflectionClass::getDefaultProperties()`.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 struct ReflectionDefaultPropertyMember {
     name: String,
     value: ReflectionParameterDefaultValue,
 }
 
 /// Metadata for one live static-property value exposed by ReflectionClass.
+#[derive(Debug, PartialEq)]
 struct ReflectionStaticPropertyMember {
     name: String,
     declaring_class_name: String,
@@ -295,7 +299,7 @@ struct ReflectionStaticPropertyMember {
 }
 
 /// Compile-time value forms supported by Reflection constant metadata emission.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 enum ReflectionConstantValue {
     Int(i64),
     Bool(bool),
@@ -316,7 +320,7 @@ enum ReflectionParameterSelector {
 }
 
 /// Boolean metadata exposed by ReflectionMethod and ReflectionProperty predicates.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct ReflectionMemberFlags {
     is_static: bool,
     is_public: bool,

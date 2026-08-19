@@ -281,6 +281,16 @@ pub fn collect_aliases(program: Program) -> Program {
     alias::collect_aliases(program)
 }
 
+/// Collects static class-string aliases after name resolution and autoload expansion.
+pub(crate) fn collect_resolved_aliases(program: Program) -> Program {
+    alias::collect_resolved_aliases(program)
+}
+
+/// Returns the canonical class pair when alias arguments are statically resolvable.
+pub(crate) fn resolved_class_alias_args(args: &[crate::parser::ast::Expr]) -> Option<(String, String)> {
+    alias::resolved_class_alias_args(args)
+}
+
 /// Inserts PHP's built-in class-like names into `declared` so that references
 /// to types like `Exception`, `stdClass`, and `Iterator` are never treated as
 /// autoload demands. Called at the start of each autoload iteration.
@@ -524,5 +534,89 @@ mod tests {
                 .map(String::as_str),
             Some("/tmp/Thing.php")
         );
+    }
+
+    /// Verifies declaration signatures and catch clauses contribute every named type to autoload.
+    #[test]
+    fn reference_points_include_named_declaration_types() {
+        let tokens = crate::lexer::tokenize(
+            r#"<?php
+namespace Fixtures;
+class Carrier {
+    private PropertyType $property;
+    use PrimaryTrait, SecondaryTrait { PrimaryTrait::run insteadof SecondaryTrait; }
+    public function method(MethodParam $param, MethodVariadic ...$rest): MethodReturn {}
+}
+function free(FunctionParam $param, FunctionVariadic ...$rest): FunctionReturn {}
+$closure = function (ClosureParam $param, ClosureVariadic ...$rest): ClosureReturn {};
+try {} catch (CaughtOne|CaughtTwo) {}
+enum Choice implements EnumContract {
+    use EnumTrait;
+    public function accept(EnumMethodParam $param): EnumMethodReturn {}
+}
+"#,
+        )
+        .expect("tokenization should succeed");
+        let parsed = crate::parser::parse(&tokens).expect("parsing should succeed");
+        let resolved = crate::name_resolver::resolve(parsed).expect("resolution should succeed");
+        let references = collect_reference_points(&resolved)
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect::<HashSet<_>>();
+        let expected = [
+            "Fixtures\\PropertyType",
+            "Fixtures\\PrimaryTrait",
+            "Fixtures\\SecondaryTrait",
+            "Fixtures\\MethodParam",
+            "Fixtures\\MethodVariadic",
+            "Fixtures\\MethodReturn",
+            "Fixtures\\FunctionParam",
+            "Fixtures\\FunctionVariadic",
+            "Fixtures\\FunctionReturn",
+            "Fixtures\\ClosureParam",
+            "Fixtures\\ClosureVariadic",
+            "Fixtures\\ClosureReturn",
+            "Fixtures\\CaughtOne",
+            "Fixtures\\CaughtTwo",
+            "Fixtures\\EnumContract",
+            "Fixtures\\EnumTrait",
+            "Fixtures\\EnumMethodParam",
+            "Fixtures\\EnumMethodReturn",
+        ];
+        for name in expected {
+            assert!(
+                references.contains(name),
+                "missing autoload reference {name}; collected {references:?}"
+            );
+        }
+    }
+
+    /// Verifies attribute-only class strings become autoload discovery roots, including nesting.
+    #[test]
+    fn reference_points_include_attribute_class_constant_dependencies() {
+        let tokens = crate::lexer::tokenize(
+            r#"<?php
+namespace Fixtures;
+#[Metadata(Dependency::class, nested: [NestedDependency::class])]
+class Carrier {}
+"#,
+        )
+        .expect("tokenization should succeed");
+        let parsed = crate::parser::parse(&tokens).expect("parsing should succeed");
+        let resolved = crate::name_resolver::resolve(parsed).expect("resolution should succeed");
+        let references = collect_reference_points(&resolved)
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect::<HashSet<_>>();
+        for name in [
+            "Fixtures\\Metadata",
+            "Fixtures\\Dependency",
+            "Fixtures\\NestedDependency",
+        ] {
+            assert!(
+                references.contains(name),
+                "missing attribute dependency {name}; collected {references:?}"
+            );
+        }
     }
 }

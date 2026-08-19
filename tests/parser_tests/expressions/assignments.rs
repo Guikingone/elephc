@@ -276,6 +276,30 @@ fn test_parse_nested_array_reference_assignment_target() {
     }
 }
 
+/// Verifies a reference to a fresh nested array slot lowers through one shared cell.
+#[test]
+fn test_parse_reference_to_nested_array_append_slot() {
+    let stmts = parse_source("<?php $closure = &$this->optimized[$eventName][];");
+    let StmtKind::Synthetic(body) = &stmts[0].kind else {
+        panic!("expected synthetic reference append lowering");
+    };
+    assert_eq!(body.len(), 3);
+    let temp = match &body[0].kind {
+        StmtKind::Assign { name, value } => {
+            assert!(matches!(value.kind, ExprKind::Null));
+            name.clone()
+        }
+        other => panic!("expected temporary initialization, got {:?}", other),
+    };
+    assert!(matches!(body[1].kind, StmtKind::Synthetic(_)));
+    assert!(matches!(
+        &body[2].kind,
+        StmtKind::RefAssign { target, source }
+            if target == "closure"
+                && matches!(&source.kind, ExprKind::Variable(name) if name == &temp)
+    ));
+}
+
 /// Verifies that nested append (`$items[0][] = 2`) lowers to a synthetic
 /// read/append/write-back sequence instead of overwriting `$items[0]` directly.
 #[test]

@@ -57,15 +57,21 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     if value.ir_type == IrType::I64 && param_ty == PhpType::Float {
         return coerce_to_float(ctx, value, arg);
     }
-    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
-    if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+    let source_php_ty = ctx.builder.value_php_type(value.value).clone();
+    let source_ty = source_php_ty.codegen_repr();
+    if bindable && param_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
+        return ctx.box_value_as_mixed(value, PhpType::Mixed, Some(arg.span));
+    }
+    if param_ty == PhpType::Str
+        && matches!(source_ty, PhpType::Mixed | PhpType::TaggedScalar | PhpType::Union(_))
+    {
         return coerce_to_string(ctx, value, arg);
     }
-    if bindable
+    if (bindable || matches!(source_ty, PhpType::Object(_)))
         && !param_accepts_object_without_string_coercion(ctx, declared_param_ty, &source_ty)
     {
         if let Some(cast) =
-            crate::types::param_binding::scalar_param_cast(declared_param_ty, &source_ty)
+            crate::types::param_binding::scalar_param_cast(declared_param_ty, &source_php_ty)
         {
             return apply_scalar_param_cast(
                 ctx,
@@ -79,6 +85,21 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     if sig.ref_params.get(index).copied().unwrap_or(false) {
         return value;
     }
+    let value = if bindable {
+        guard_nominal_object_param(ctx, value, declared_param_ty, Some(arg.span))
+    } else {
+        value
+    };
+    let value = if bindable {
+        guard_nullable_int_param(ctx, value, declared_param_ty, Some(arg.span))
+    } else {
+        value
+    };
+    let value = if bindable {
+        guard_gradual_union_param(ctx, value, declared_param_ty, Some(arg.span))
+    } else {
+        value
+    };
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
     let value = crate::ir_lower::expr::coerce_container_to_mixed_payload(
         ctx,
@@ -95,6 +116,110 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     )
 }
 
+/// Checks the active tag of a boxed gradual value against a declared scalar/array union.
+fn guard_gradual_union_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    expected: &PhpType,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    let source_type = ctx.builder.value_php_type(value.value).clone();
+    if !crate::types::param_binding::gradual_union_requires_runtime_param_guard(
+        expected,
+        &source_type,
+    ) {
+        return value;
+    }
+    let type_name = ctx.intern_string(&expected.to_string());
+    ctx.emit_value(
+        Op::RuntimeCall,
+        vec![value.value],
+        Some(Immediate::TypeName(type_name)),
+        expected.clone(),
+        effects_lookup::runtime_effects(),
+        span,
+    )
+}
+
+/// Checks a compact nullable integer before passing it to a declared `int` parameter.
+fn guard_nullable_int_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    expected: &PhpType,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    let source_type = ctx.builder.value_php_type(value.value).codegen_repr();
+    if !crate::types::param_binding::nullable_int_requires_runtime_param_guard(
+        expected,
+        &source_type,
+    ) {
+        return value;
+    }
+    ctx.emit_value(
+        Op::RuntimeCall,
+        vec![value.value],
+        None,
+        PhpType::Int,
+        effects_lookup::runtime_effects(),
+        span,
+    )
+}
+
+/// Inserts the runtime class guard required by a declared object parameter.
+///
+/// The checker only admits this path for by-value source declarations. Nullable target storage
+/// is boxed again after the object check so the callee still receives its declared union ABI.
+fn guard_nominal_object_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    expected: &PhpType,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    let source_type = ctx.builder.value_php_type(value.value).codegen_repr();
+    let gradual_source =
+        crate::types::param_binding::gradual_object_requires_runtime_nominal_guard(
+            expected,
+            &source_type,
+        );
+    let needs_nominal_guard = gradual_source
+        || crate::types::param_binding::object_requires_runtime_nominal_guard(
+            expected,
+            &source_type,
+        );
+    if !needs_nominal_guard
+        || param_accepts_object_without_string_coercion(ctx, expected, &source_type)
+    {
+        return value;
+    }
+    let Some(target_name) =
+        crate::types::param_binding::nominal_object_boundary_target(expected)
+    else {
+        return value;
+    };
+    let target_data = ctx.intern_class_name(&target_name);
+    let guarded_type = if gradual_source {
+        expected.clone()
+    } else {
+        PhpType::Object(target_name.clone())
+    };
+    let guarded = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![value.value],
+        Some(Immediate::NominalObject {
+            target: target_data,
+            boundary: crate::ir::NominalObjectBoundary::Parameter,
+        }),
+        guarded_type,
+        effects_lookup::runtime_effects(),
+        span,
+    );
+    if !gradual_source && expected.codegen_repr() == PhpType::Mixed {
+        ctx.box_value_as_mixed(guarded, expected.clone(), span)
+    } else {
+        guarded
+    }
+}
+
 /// Returns whether an object argument already satisfies a declared parameter without selecting
 /// a weakly coercive `string` arm.
 ///
@@ -102,7 +227,7 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
 /// remains an object for `string|iterable`, even when it also implements `Stringable`. This
 /// mirrors the checker's object/iterable/callable acceptance so lowering only consumes the
 /// checker's weak-string proof when no non-string member already accepts the object.
-pub(super) fn param_accepts_object_without_string_coercion(
+pub(in crate::ir_lower) fn param_accepts_object_without_string_coercion(
     ctx: &LoweringContext<'_, '_>,
     expected: &PhpType,
     actual: &PhpType,
@@ -137,13 +262,19 @@ pub(super) fn param_accepts_object_without_string_coercion(
 /// conversions, while objects reach `(string)` only after checker proof of `Stringable`.
 /// When PHP selects a scalar member of a union, the converted value is boxed back into the
 /// union's `Mixed` ABI storage before the callee receives it.
-pub(super) fn apply_scalar_param_cast(
+pub(crate) fn apply_scalar_param_cast(
     ctx: &mut LoweringContext<'_, '_>,
     cast: CastType,
     value: LoweredValue,
     declared_param_ty: &PhpType,
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
+    if cast == CastType::String
+        && value_is_nullable(ctx, value.value)
+        && php_type_accepts_null(declared_param_ty)
+    {
+        return apply_nullable_string_param_cast(ctx, value, declared_param_ty, span);
+    }
     let converted = match cast {
         CastType::String => coerce_to_string_at_span(ctx, value, span),
         CastType::Bool => lower_truthy_bool(ctx, value, span),
@@ -160,6 +291,101 @@ pub(super) fn apply_scalar_param_cast(
         ctx.box_value_as_mixed(converted, declared_param_ty.clone(), span)
     } else {
         converted
+    }
+}
+
+/// Preserves PHP null while coercing every non-null scalar member to a string union arm.
+///
+/// The source has already been evaluated once. Each control-flow edge consumes that same value:
+/// the null edge stores a boxed null and releases an owning source cell, while the non-null edge
+/// uses the ordinary string coercer and its existing ownership cleanup.
+fn apply_nullable_string_param_cast(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    declared_param_ty: &PhpType,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    let source_span = span.unwrap_or_else(crate::span::Span::dummy);
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![value.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        span,
+    );
+    let temp_name = ctx.declare_owned_hidden_temp(declared_param_ty.clone());
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let null_block = ctx
+        .builder
+        .create_named_block("param_cast.null", Vec::new());
+    let scalar_block = ctx
+        .builder
+        .create_named_block("param_cast.scalar", Vec::new());
+    let merge_block = ctx
+        .builder
+        .create_named_block("param_cast.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: scalar_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    let null_value = ctx.emit_value(
+        Op::ConstNull,
+        Vec::new(),
+        None,
+        PhpType::Void,
+        Op::ConstNull.default_effects(),
+        span,
+    );
+    store_value_into_temp(
+        ctx,
+        &temp_name,
+        declared_param_ty.clone(),
+        null_value,
+        source_span,
+    );
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+    }
+    let null_initialized = ctx.initialized_slots_snapshot();
+    branch_to(ctx, merge_block);
+
+    ctx.builder.position_at_end(scalar_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    let converted = coerce_to_string_at_span(ctx, value, span);
+    store_value_into_temp(
+        ctx,
+        &temp_name,
+        declared_param_ty.clone(),
+        converted,
+        source_span,
+    );
+    let scalar_initialized = ctx.initialized_slots_snapshot();
+    branch_to(ctx, merge_block);
+
+    ctx.builder.position_at_end(merge_block);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &split_initialized,
+        null_initialized,
+        true,
+        scalar_initialized,
+        true,
+    ));
+    take_owned_temp(ctx, &temp_name, source_span)
+}
+
+/// Returns whether a declared parameter union admits PHP null without coercion.
+fn php_type_accepts_null(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Mixed | PhpType::Void => true,
+        PhpType::Union(members) => members.iter().any(php_type_accepts_null),
+        _ => false,
     }
 }
 
@@ -184,23 +410,59 @@ pub(super) fn coerce_operands_to_params(
             continue;
         };
         let value = operands[index];
-        let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
+        let value = if sig.declared_params.get(index).copied().unwrap_or(false) {
+            guard_nominal_object_param(ctx, LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            }, declared_param_ty, None)
+        } else {
+            LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            }
+        };
+        let value = if sig.declared_params.get(index).copied().unwrap_or(false) {
+            guard_nullable_int_param(ctx, value, declared_param_ty, None)
+        } else {
+            value
+        };
+        operands[index] = value.value;
+        let value = value.value;
+        let operand_php_ty = ctx.builder.value_php_type(value).clone();
+        let operand_ty = operand_php_ty.codegen_repr();
         let param_ty = declared_param_ty.codegen_repr();
-        if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
+        if sig.declared_params.get(index).copied().unwrap_or(false)
+            && param_ty == PhpType::Mixed
+            && operand_ty != PhpType::Mixed
+        {
+            let lowered = LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            };
+            operands[index] = ctx
+                .box_value_as_mixed(lowered, PhpType::Mixed, None)
+                .value;
+        } else if param_ty == PhpType::Float
+            && matches!(operand_ty, PhpType::Int | PhpType::Bool)
+        {
             let lowered = LoweredValue {
                 value,
                 ir_type: IrType::I64,
             };
             operands[index] = coerce_to_float_at_span(ctx, lowered, None).value;
         } else if param_ty == PhpType::Str
-            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
+            && matches!(
+                operand_ty,
+                PhpType::Mixed | PhpType::TaggedScalar | PhpType::Union(_)
+            )
         {
             let lowered = LoweredValue {
                 value,
                 ir_type: ctx.builder.value_type(value),
             };
             operands[index] = coerce_to_string_at_span(ctx, lowered, None).value;
-        } else if sig.declared_params.get(index).copied().unwrap_or(false)
+        } else if (sig.declared_params.get(index).copied().unwrap_or(false)
+            || matches!(operand_ty, PhpType::Object(_)))
             && !param_accepts_object_without_string_coercion(
                 ctx,
                 declared_param_ty,
@@ -211,7 +473,10 @@ pub(super) fn coerce_operands_to_params(
             // parameter order because named and spread arguments are lowered in source order
             // and only reordered afterwards.
             if let Some(cast) =
-                crate::types::param_binding::scalar_param_cast(declared_param_ty, &operand_ty)
+                crate::types::param_binding::scalar_param_cast(
+                    declared_param_ty,
+                    &operand_php_ty,
+                )
             {
                 let lowered = LoweredValue {
                     value,
@@ -293,14 +558,10 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
     let ExprKind::Variable(array_name) = &array.kind else {
         return None;
     };
-    let PhpType::Array(elem_ty) = ctx.local_type(array_name).codegen_repr() else {
+    let PhpType::Array(_) = ctx.local_type(array_name).codegen_repr() else {
         return None;
     };
-    let (_, param_ty) = sig.params.get(index)?;
-    let element_ty = match normalize_value_php_type(*elem_ty) {
-        PhpType::Void => normalize_value_php_type(param_ty.codegen_repr()),
-        other => other,
-    };
+    sig.params.get(index)?;
     let array_value = ctx.load_local(array_name, Some(array.span));
     let element_index = lower_expr(ctx, element_index);
     let element_index = coerce_to_int_at_span(ctx, element_index, Some(arg.span));
@@ -311,7 +572,7 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
             vec![array_value.value, element_index.value],
             None,
             IrType::I64,
-            element_ty,
+            PhpType::Pointer(None),
             Ownership::NonHeap,
             Op::ArrayElemAddr.default_effects(),
             Some(arg.span),

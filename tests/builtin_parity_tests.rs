@@ -221,7 +221,7 @@ fn assert_signature_shape(
         .params
         .iter()
         .map(|param| param.name)
-        .chain(expected.variadic)
+        .chain(expected.variadic.map(|variadic| variadic.name))
         .collect::<Vec<_>>();
     let expected_defaults = expected
         .params
@@ -229,12 +229,15 @@ fn assert_signature_shape(
         .filter(|param| param.default.is_some())
         .count()
         + usize::from(expected.variadic.is_some());
-    let expected_by_ref = expected
+    let mut expected_by_ref = expected
         .params
         .iter()
         .filter(|param| param.by_ref)
         .map(|param| param.name)
         .collect::<Vec<_>>();
+    if let Some(variadic) = expected.variadic.filter(|variadic| variadic.is_by_reference()) {
+        expected_by_ref.push(variadic.name);
+    }
 
     assert_eq!(actual_params, expected_params, "{name} parameter names");
     assert_eq!(
@@ -243,6 +246,10 @@ fn assert_signature_shape(
         "{name} required parameter count"
     );
     assert_eq!(actual_defaults, expected_defaults, "{name} default count");
-    assert_eq!(actual_variadic, expected.variadic, "{name} variadic name");
+    assert_eq!(
+        actual_variadic,
+        expected.variadic.map(|variadic| variadic.name),
+        "{name} variadic name"
+    );
     assert_eq!(actual_by_ref, expected_by_ref, "{name} by-reference params");
 }

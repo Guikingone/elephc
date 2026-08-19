@@ -127,6 +127,13 @@ pub(crate) struct Checker {
     /// Canonical class names declared in the program, available for forward references
     /// before the full class definitions are available.
     pub declared_classes: HashSet<String>,
+    /// Declared parent classes, available before full `ClassInfo` construction.
+    ///
+    /// Override covariance may mention a sibling class whose metadata has not been built yet, so
+    /// nominal subtype checks must not depend on lexicographic class-processing order.
+    pub declared_class_parents: HashMap<String, Option<String>>,
+    /// Directly declared interfaces for each class, available before full metadata construction.
+    pub declared_class_interfaces: HashMap<String, Vec<String>>,
     /// Enum definitions collected during the first pass, keyed by canonical name.
     pub enums: HashMap<String, EnumInfo>,
     /// Canonical interface names declared in the program, available for forward references
@@ -199,7 +206,12 @@ pub(crate) struct Checker {
     /// would be applied to returns that execute before it, silently accepting a nullable
     /// return. The address key is exact because both passes borrow the same immutable AST; the
     /// span is carried alongside so a recycled address can never be mistaken for a hit.
-    pub flow_typed_returns: HashMap<usize, (Span, PhpType)>,
+    pub flow_typed_returns: HashMap<(String, usize), (Span, PhpType)>,
+    /// Checker-proven result types for property reads whose receiver was flow-narrowed.
+    ///
+    /// EIR lowering cannot reconstruct synthetic property facts from statement-local checker
+    /// environments, so these scoped source sites preserve the required storage representation.
+    pub flow_typed_property_accesses: HashMap<(String, Span), PhpType>,
     /// Whether the statements being checked belong to the top-level (global) scope rather than a
     /// function, method, or closure body. `with_local_storage_context` clears it for every local
     /// scope, so `null_probe` only records deferred roots for the scope whose environment
@@ -242,12 +254,13 @@ pub(crate) struct Checker {
     /// checking bodies and applied to `classes` after checking so every access lowers
     /// through the property's ref-cell. See `apply_reference_property_promotions`.
     pub reference_property_promotions: HashSet<(String, String)>,
-    /// Statically-decided access violations that must lower to a catchable
-    /// `Error` throw instead of a compile-time error, keyed by source span.
-    pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
-    /// Authoritative result type of each checked builtin call, keyed by call span.
+    /// Statically-decided access violations that must lower to a catchable `Error` throw instead
+    /// of a compile-time error, keyed by function-like scope and source span.
+    pub throw_access_sites: HashMap<(String, Span), ThrowAccessInfo>,
+    /// Authoritative result type of each checked builtin call, keyed by function-like scope and
+    /// call span so separately loaded sources may reuse the same line and column safely.
     /// EIR lowering consumes this instead of reimplementing builtin return inference.
-    pub builtin_call_types: HashMap<Span, PhpType>,
+    pub builtin_call_types: HashMap<(String, Span), PhpType>,
     /// Fixed-point storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: crate::types::LoopStorageTypes,
     /// `(scope, local)` pairs for `string` locals used as a `++`/`--` target.
@@ -355,6 +368,7 @@ pub fn check_types(
         warnings,
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
+        flow_typed_property_accesses: checker.flow_typed_property_accesses,
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,
         by_ref_local_storage_types: checker.by_ref_local_storage_types,

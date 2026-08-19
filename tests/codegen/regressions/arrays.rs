@@ -1171,6 +1171,58 @@ var_dump(isset_of($a, "k"));
     assert_eq!(out.stdout, "bool(true)\nbool(false)\n");
 }
 
+/// Verifies an `isset()` probe over a temporary array receiver normalizes a boxed runtime key
+/// instead of treating the Mixed-cell pointer itself as a packed-array integer offset.
+#[test]
+fn test_temporary_indexed_array_isset_accepts_runtime_mixed_key() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function values(): array {
+    return ["zero", "one"];
+}
+function probe(mixed $key): bool {
+    return isset(values()[$key]);
+}
+var_dump(probe(1));
+var_dump(probe("1"));
+var_dump(probe("missing"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\nbool(false)\n");
+}
+
+/// Verifies that `isset` keeps dynamic iteration and string keys on the generic PHP array-key
+/// path instead of requiring the backend's packed-array integer probe.
+#[test]
+fn test_isset_array_offset_accepts_dynamic_iteration_and_string_keys() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function table_probe(array $headers, array $rows): bool {
+    foreach ($headers as $i => $header) {
+        foreach ($rows as $row) {
+            if (isset($row[$i])) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+function path_probe(string $id, array $path): bool {
+    return isset($path[$id]);
+}
+function config_probe(string $key, array $config): bool {
+    return isset($config[$key]);
+}
+var_dump(table_probe(["header"], [["value"]]));
+var_dump(path_probe("id", ["id" => true]));
+var_dump(config_probe("missing", []));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\nbool(false)\n");
+}
+
 /// Verifies `array_key_exists($k, $arr)` answers `true`/`false` correctly for a
 /// non-literal string key once `$arr` has been promoted to runtime hash storage via a
 /// dynamic mixed-key write, while `$arr` stays statically `Array(Mixed)` (not
@@ -1559,6 +1611,25 @@ $key = 1;
 $groups[$key][] = 7;
 $groups[$key][] = 8;
 echo count($groups[1]), ":", $groups[1][0], $groups[1][1], "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2:78\n");
+}
+
+/// Verifies nested append probing preserves a runtime Mixed key on an indexed outer array before
+/// auto-vivifying the missing bucket.
+#[test]
+fn test_indexed_nested_append_auto_vivifies_runtime_mixed_key() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function append_value(array $groups, mixed $key, int $value): array {
+    $groups[$key][] = $value;
+    return $groups;
+}
+$groups = append_value([], "alpha", 7);
+$groups = append_value($groups, "alpha", 8);
+echo count($groups["alpha"]), ":", $groups["alpha"][0], $groups["alpha"][1], "\n";
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);

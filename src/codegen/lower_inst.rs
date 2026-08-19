@@ -21,7 +21,8 @@ use crate::codegen_support::try_handlers::{
 use crate::intrinsics::{IntrinsicCall, IntrinsicCallKind};
 use crate::ir::{
     BlockId, Builder, CmpPredicate, Function, FunctionParam, Immediate, InstId, Instruction,
-    IrType, LocalKind, LocalSlotId, Module, Op, Ownership, Terminator, ValueDef, ValueId,
+    IrType, LocalKind, LocalSlotId, Module, NominalObjectBoundary, Op, Ownership, Terminator,
+    ValueDef, ValueId,
 };
 use crate::names::{
     function_symbol, ir_global_symbol, method_symbol, php_symbol_key,
@@ -94,6 +95,7 @@ use array_access_runtime::*;
 use call_cleanup::*;
 use call_operands::*;
 use callable_descriptors::*;
+pub(in crate::codegen) use callables::lower_mixed_callable_descriptor_invoke_inline;
 use core_closures::*;
 use core_includes::*;
 use core_misc::*;
@@ -124,6 +126,9 @@ pub(super) use array_access_runtime::lower_runtime_object_method_call;
 pub(super) use call_operands::{
     direct_call_stack_pad_bytes, emit_mixed_string_for_persistent_store,
     load_value_to_first_int_arg, resolve_int_operand_to_result,
+};
+pub(in crate::codegen) use conversions::{
+    emit_mixed_string_dispatch_from_result, MixedStringContextMode,
 };
 pub(super) use core_closures::function_signature_from_eir;
 pub(super) use descriptor_entries::emit_static_method_descriptor_entry_wrapper;
@@ -159,6 +164,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ConstStr => strings::lower_const_str(ctx, &inst),
         Op::ConstClassName => strings::lower_const_class_name(ctx, &inst),
         Op::LoadCalledClassId => strings::lower_load_called_class_id(ctx, &inst),
+        Op::ObjectClassId => objects::lower_object_class_id(ctx, &inst),
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
         Op::UnsetLocal => lower_unset_local(ctx, &inst),

@@ -740,6 +740,90 @@ echo ([choose_runtime_literal_string(RuntimeLiteralLabeler::class), choose_runti
     assert_eq!(out, "id:9");
 }
 
+/// Verifies a literal static callable array can be invoked without grouping parentheses.
+#[test]
+fn test_literal_callable_array_static_method_direct_call() {
+    let out = compile_and_run(
+        r#"<?php
+final class LiteralSubscriber {
+    public static function getSubscribedEvents(): array {
+        return ["event" => "ready"];
+    }
+}
+$subscriber = LiteralSubscriber::class;
+$events = [$subscriber, "getSubscribedEvents"]();
+echo $events["event"];
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Verifies first-class callable syntax normalizes an object-method callable array value.
+#[test]
+fn test_first_class_callable_from_runtime_array_value() {
+    let out = compile_and_run(
+        r#"<?php
+final class ArrayCallableReceiver {
+    public function render(string $value): string { return "<" . $value . ">"; }
+}
+$listener = [new ArrayCallableReceiver(), "render"];
+$copy = $listener(...);
+echo $copy("ready");
+"#,
+    );
+    assert_eq!(out, "<ready>");
+}
+
+/// Verifies callable normalization dispatches to an invokable runtime subclass.
+#[test]
+fn test_first_class_callable_from_non_invokable_base_typed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableBase {}
+final class CallableChild extends CallableBase {
+    public function __invoke(string $value): string { return "child:" . $value; }
+}
+function copyCallable(CallableBase $value): callable {
+    if (is_callable($value)) {
+        return $value(...);
+    }
+    return static fn (string $arg): string => "fallback:" . $arg;
+}
+echo copyCallable(new CallableChild())("ready");
+"#,
+    );
+    assert_eq!(out, "child:ready");
+}
+
+/// Verifies an object universe without an invokable candidate fails at runtime, not compilation.
+#[test]
+fn test_first_class_callable_from_non_invokable_object_is_runtime_fatal() {
+    let out = compile_and_run_capture(
+        r#"<?php
+final class PlainCallableCandidate {}
+$value = new PlainCallableCandidate();
+$copy = $value(...);
+echo "unreachable";
+"#,
+    );
+    assert!(!out.success, "non-invokable callable creation must fail");
+    assert_eq!(out.stdout, "");
+}
+
+/// Verifies a runtime string callback can select the standard object class-name operation.
+#[test]
+fn test_array_map_runtime_get_class_callback() {
+    let out = compile_and_run(
+        r#"<?php
+final class RuntimeClassNameA {}
+final class RuntimeClassNameB {}
+$callback = "get_class";
+echo implode("|", array_map($callback, [new RuntimeClassNameA(), new RuntimeClassNameB()]));
+"#,
+    );
+    assert_eq!(out, "RuntimeClassNameA|RuntimeClassNameB");
+}
+
 /// Verifies runtime-selected literal instance callable arrays preserve by-reference arguments.
 #[test]
 fn test_runtime_literal_callable_array_instance_method_preserves_by_ref_argument() {
@@ -1753,6 +1837,81 @@ echo dispatch(["Handler", "greet"]);
         out.stderr
     );
     assert_eq!(out.stdout, "I:idS:id");
+}
+
+/// Verifies linear composite tables resolve instance, static, and invokable callbacks.
+#[test]
+fn test_open_mixed_callable_shapes_use_linear_composite_lookup() {
+    let mut source = "<?php\n".to_string();
+    for index in 0..10 {
+        source.push_str(&format!(
+            "class Lookup{index} {{\n\
+             public function run(string $id): string {{ return \"I{index}:\" . $id; }}\n\
+             public static function stat(string $id): string {{ return \"S{index}:\" . $id; }}\n\
+             public function __invoke(string $id): string {{ return \"V{index}:\" . $id; }}\n\
+             }}\n"
+        ));
+    }
+    source.push_str(
+        r#"
+function dispatch_lookup(mixed $callback): string {
+    return (string)call_user_func($callback, "id");
+}
+$receiver = new Lookup9();
+echo dispatch_lookup([$receiver, "RUN"]);
+echo "|";
+echo dispatch_lookup(["\\LOOKUP8", "STAT"]);
+echo "|";
+echo dispatch_lookup(new Lookup7());
+"#,
+    );
+    let out = compile_and_run_capture(&source);
+    assert!(
+        out.success,
+        "composite callable lookup failed: stdout={:?} stderr={:?}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(out.stdout, "I9:id|S8:id|V7:id");
+}
+
+/// Verifies an invokable universe above 256 entries executes through the hash resolver.
+#[test]
+fn test_open_mixed_invokable_shape_uses_hashed_composite_lookup() {
+    let mut source = r#"<?php
+class HashLookupBase {
+    public function __invoke(string $id): string { return "H:" . $id; }
+}
+"#
+    .to_string();
+    for index in 0..257 {
+        source.push_str(&format!(
+            "class HashLookup{index} extends HashLookupBase {{}}\n"
+        ));
+    }
+    source.push_str("function make_hash_lookup(int $index): mixed {\n");
+    for index in 0..256 {
+        source.push_str(&format!(
+            "if ($index === {index}) {{ return new HashLookup{index}(); }}\n"
+        ));
+    }
+    source.push_str("return new HashLookup256();\n}\n");
+    source.push_str(
+        r#"
+function dispatch_hash_lookup(mixed $callback): string {
+    return (string)call_user_func($callback, "id");
+}
+echo dispatch_hash_lookup(make_hash_lookup($argc));
+"#,
+    );
+    let out = compile_and_run_capture(&source);
+    assert!(
+        out.success,
+        "hashed invokable lookup failed: stdout={:?} stderr={:?}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(out.stdout, "H:id");
 }
 
 /// Regression: a boxed callable array shorter than two elements must take a

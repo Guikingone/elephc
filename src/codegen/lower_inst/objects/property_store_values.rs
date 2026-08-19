@@ -47,6 +47,14 @@ pub(super) fn load_property_store_value_to_result(
         emit_loaded_indexed_array_to_mixed(ctx, &source_elem.codegen_repr());
         return Ok(());
     }
+    if can_convert_indexed_array_to_assoc_property(&value_ty, slot_ty) {
+        let first_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        ctx.load_value_to_reg(value, first_arg)?;
+        // The conversion builds a fresh hash and retains every refcounted payload, so the
+        // original SSA array remains independently owned until its normal release.
+        abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+        return Ok(());
+    }
     if can_store_assoc_array_as_mixed_property(&value_ty, slot_ty) {
         let loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
         let PhpType::AssocArray {
@@ -66,6 +74,11 @@ pub(super) fn load_property_store_value_to_result(
         if source_value.codegen_repr() != PhpType::Mixed {
             emit_loaded_assoc_array_to_mixed(ctx);
         }
+        return Ok(());
+    }
+    if can_widen_int_to_float_property(&value_ty, slot_ty) {
+        ctx.load_value_to_result(value)?;
+        abi::emit_int_result_to_float_result(ctx.emitter);
         return Ok(());
     }
     if can_store_value_as_tagged_scalar_property(&value_ty, slot_ty) {
@@ -93,6 +106,9 @@ pub(super) fn load_property_store_value_to_result(
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
             PhpType::Object(_) => property_values::emit_mixed_object_for_property_store(ctx),
+            PhpType::Array(_) | PhpType::AssocArray { .. } => {
+                property_values::emit_mixed_array_for_property_store(ctx, slot_ty)
+            }
             _ => {}
         }
         return Ok(());

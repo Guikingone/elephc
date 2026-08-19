@@ -9,6 +9,73 @@
 
 use super::*;
 
+/// Verifies boolean negation evaluates a type-changing assignment expression only once during
+/// checking, so the RHS receiver keeps its pre-assignment class contract.
+#[test]
+fn test_not_assignment_expression_uses_pre_assignment_receiver_type() {
+    let out = compile_and_run(
+        r#"<?php
+class NextValue {}
+class ValueSource {
+    public function next(): ?NextValue { return null; }
+}
+
+$value = new ValueSource();
+if (!$value = $value->next()) {
+    echo "none";
+}
+"#,
+    );
+    assert_eq!(out, "none");
+}
+
+/// Verifies branch joins widen heterogeneous array elements inside one array container, allowing
+/// a later element reference to remain writable on either path.
+#[test]
+fn test_branch_join_preserves_array_container_for_element_reference() {
+    let out = compile_and_run(
+        r#"<?php
+class BranchValue {}
+
+function replaceBranchValue(bool $objectBranch): string {
+    $values = [];
+    if ($objectBranch) {
+        $values[] = new BranchValue();
+    } else {
+        $values[] = "initial";
+    }
+    $slot = &$values[0];
+    $slot = "replaced";
+    return $values[0];
+}
+
+echo replaceBranchValue(true).":".replaceBranchValue(false);
+"#,
+    );
+    assert_eq!(out, "replaced:replaced");
+}
+
+/// Verifies a null final branch does not erase the concrete storage type at the join load.
+#[test]
+fn test_branch_join_load_uses_concrete_storage_after_null_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+function selectCallback(bool $enabled): callable|null {
+    if ($enabled) {
+        $callback = static fn (): string => "selected";
+    } else {
+        $callback = null;
+    }
+    return $callback;
+}
+
+$callback = selectCallback(true);
+echo $callback(), ":", selectCallback(false) === null ? "null" : "wrong";
+"#,
+    );
+    assert_eq!(out, "selected:null");
+}
+
 /// Verifies that if (true) executes the branch.
 #[test]
 fn test_if_true() {
@@ -386,6 +453,49 @@ foreach ([0, 1] as $iteration) {
 "#,
     );
     assert_eq!(out, "ready");
+}
+
+/// Verifies a `break`-terminated switch case cannot leak its local type into a sibling case.
+#[test]
+fn test_switch_break_restores_direct_entry_local_types() {
+    let out = compile_and_run(
+        r#"<?php
+function select_choice(bool $takeFirst, mixed $key): string {
+    $choices = ["chosen" => "ok"];
+    switch (true) {
+        case $takeFirst:
+            $key = ["not", "a", "key"];
+            break;
+        case true:
+            return $choices[$key] ?? "missing";
+    }
+    return "first";
+}
+echo select_choice(false, "chosen");
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies assignments in a while condition define the logical type on its ordinary exit.
+#[test]
+fn test_while_exit_uses_condition_assignment_type() {
+    let out = compile_and_run(
+        r#"<?php
+final class LoopKey {
+    public function __construct(public string $value) {}
+    public function __toString(): string { return $this->value; }
+}
+$definitions = ["chosen" => "ok"];
+$target = new LoopKey("chosen");
+$iteration = 0;
+while (($target = (string) $target) && $iteration++ < 1) {
+    $target = new LoopKey("chosen");
+}
+echo $definitions[$target];
+"#,
+    );
+    assert_eq!(out, "ok");
 }
 
 // --- Ternary operator ---

@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Builtin fallback and case-insensitive symbol lookup must match PHP visibility rules.
+//! - Static class-string aliases are materialized only after every name in their call is canonical.
 
 mod expressions;
 mod names;
@@ -46,7 +47,8 @@ struct Symbols {
 pub fn resolve(program: Program) -> Result<Program, CompileError> {
     let mut symbols = Symbols::default();
     symbols::collect_symbols(&program, None, &mut symbols);
-    statements::resolve_stmt_list(&program, None, &Imports::default(), &symbols)
+    let resolved = statements::resolve_stmt_list(&program, None, &Imports::default(), &symbols)?;
+    Ok(crate::autoload::collect_resolved_aliases(resolved))
 }
 
 /// Rewrites string literal arguments for functions that invoke callable names.
@@ -147,6 +149,11 @@ pub(crate) fn canonical_compat_prelude_function_name(name: &str) -> Option<Strin
         "cli_set_process_title",
         "setproctitle",
         "str_getcsv",
+        "error_reporting",
+        "set_error_handler",
+        "restore_error_handler",
+        "ini_get",
+        "ini_set",
     ];
     let bare = name.trim_start_matches('\\');
     FUNCTIONS

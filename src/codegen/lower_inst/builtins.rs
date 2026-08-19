@@ -39,7 +39,7 @@ pub(crate) mod buffers;
 pub(crate) mod class_relations;
 pub(crate) mod ctype;
 pub(crate) mod debug;
-mod eval;
+pub(crate) mod eval;
 mod eval_facade;
 mod filter;
 pub(crate) mod io;

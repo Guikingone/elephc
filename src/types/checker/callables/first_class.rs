@@ -293,6 +293,15 @@ impl Checker {
                     PhpType::Mixed | PhpType::Union(_) if method == "__invoke" => {
                         Ok(dynamic_first_class_callable_sig())
                     }
+                    PhpType::Array(element)
+                        if method == "__invoke"
+                            && matches!(
+                                element.codegen_repr(),
+                                PhpType::Mixed | PhpType::Str
+                            ) =>
+                    {
+                        Ok(dynamic_first_class_callable_sig())
+                    }
                     _ => Err(CompileError::new(
                         span,
                         "First-class method callable requires an object receiver",

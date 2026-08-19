@@ -141,6 +141,14 @@ impl Checker {
                         }
                         Ok(())
                     })?;
+                    if std::env::var("ELEPHC_BACKEND_INVENTORY").as_deref() == Ok("1") {
+                        for error in &mut method_errors {
+                            error.message = format!(
+                                "{}::{}: {}",
+                                class.name, method.name, error.message
+                            );
+                        }
+                    }
                     let method_has_errors = !method_errors.is_empty();
                     pass_errors.extend(method_errors);
 

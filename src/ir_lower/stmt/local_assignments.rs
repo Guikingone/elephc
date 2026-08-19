@@ -50,6 +50,9 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
                 .flatten()
         })
         .unwrap_or_else(|| lower_expr(ctx, value));
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     let (lowered, php_type) = contextualize_local_assignment(ctx, name, value, lowered, span);
     ctx.store_local(name, lowered, php_type, Some(span));
     let callable_result = if direct_closure {

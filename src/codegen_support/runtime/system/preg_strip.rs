@@ -13,15 +13,15 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// Emits the `__rt_preg_strip` runtime helper for stripping PHP regex delimiters.
 ///
 /// Transforms PHP PCRE patterns by removing leading/trailing '/' delimiters and extracting
-/// PCRE2 POSIX-wrapper flags. For example, `"/pattern/i"` becomes
-/// `("pattern", REG_ICASE)`.
+/// PCRE2 POSIX-wrapper and Elephc shim flags. For example, `"/pattern/i"` becomes
+/// `("pattern", REG_ICASE)`, while `A` requests matching at the supplied offset.
 ///
 /// Dispatches to `emit_preg_strip_linux_x86_64` on x86_64; ARM64 uses inline scalar
 /// loads/stores in the main emitter. Undelimited patterns (no leading '/') are returned
 /// unchanged with flags=0.
 ///
 /// Input:  x1=pattern ptr, x2=pattern len
-/// Output: x1=stripped pattern ptr, x2=stripped len, x3=PCRE2 POSIX cflags
+/// Output: x1=stripped pattern ptr, x2=stripped len, x3=PCRE2/shim cflags
 pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_preg_strip_linux_x86_64(emitter);
@@ -80,8 +80,13 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
     emitter.label("__rt_preg_strip_flag_U");
     emitter.instruction("cmp w9, #85");                                         // check for 'U' ungreedy modifier
-    emitter.instruction("b.ne __rt_preg_strip_skip_flag");                      // ignore unsupported trailing modifiers for now
+    emitter.instruction("b.ne __rt_preg_strip_flag_A");                         // try the anchored-at-offset modifier
     emitter.instruction("orr x3, x3, #512");                                    // add REG_UNGREEDY for inverted quantifier greediness
+    emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
+    emitter.label("__rt_preg_strip_flag_A");
+    emitter.instruction("cmp w9, #65");                                         // check for PHP's 'A' anchored-at-offset modifier
+    emitter.instruction("b.ne __rt_preg_strip_skip_flag");                      // ignore unsupported trailing modifiers for now
+    emitter.instruction("orr x3, x3, #8192");                                   // request anchored execution from the managed regex shim
     emitter.label("__rt_preg_strip_save_flag");
     emitter.instruction("str x3, [sp, #16]");                                   // save accumulated PCRE2 POSIX flags
     emitter.label("__rt_preg_strip_skip_flag");
@@ -149,8 +154,13 @@ fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
     emitter.label("__rt_preg_strip_flag_U_linux_x86_64");
     emitter.instruction("cmp r8d, 85");                                         // detect the trailing 'U' ungreedy modifier
-    emitter.instruction("jne __rt_preg_strip_skip_flag_linux_x86_64");          // ignore unsupported trailing modifiers for now
+    emitter.instruction("jne __rt_preg_strip_flag_A_linux_x86_64");             // try the anchored-at-offset modifier
     emitter.instruction("or rcx, 512");                                         // record REG_UNGREEDY for inverted quantifier greediness
+    emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
+    emitter.label("__rt_preg_strip_flag_A_linux_x86_64");
+    emitter.instruction("cmp r8d, 65");                                         // detect PHP's trailing 'A' anchored-at-offset modifier
+    emitter.instruction("jne __rt_preg_strip_skip_flag_linux_x86_64");          // ignore unsupported trailing modifiers for now
+    emitter.instruction("or rcx, 8192");                                        // request anchored execution from the managed regex shim
 
     emitter.label("__rt_preg_strip_skip_flag_linux_x86_64");
     emitter.instruction("sub r9, 1");                                           // move the reverse scan cursor one byte closer to the opening delimiter

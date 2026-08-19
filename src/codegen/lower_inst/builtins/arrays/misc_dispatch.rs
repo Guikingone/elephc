@@ -237,6 +237,10 @@ pub(crate) fn lower_natcasesort(ctx: &mut FunctionContext<'_>, inst: &Instructio
 
 /// Lowers `shuffle()` for indexed arrays with 8-byte slots by mutating the source array in place.
 pub(crate) fn lower_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return pop_shift_dynamic::lower_shuffle_dynamic(ctx, inst, array);
+    }
     lower_indexed_array_shuffle(ctx, inst)
 }
 
@@ -582,7 +586,7 @@ pub(crate) fn lower_array_replace(ctx: &mut FunctionContext<'_>, inst: &Instruct
             None,
         );
     }
-    lower_two_hash_arg_builtin(ctx, inst, "array_replace", "__rt_array_replace", None, false)
+    lower_two_hash_arg_builtin(ctx, inst, "array_replace", "__rt_array_replace", None, true)
 }
 
 /// Lowers `array_replace_recursive()` (recursive right-wins hash merge).

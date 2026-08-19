@@ -61,6 +61,29 @@ fn test_psr4_dynamic_new_from_literal_array_default() {
     assert_eq!(out, "dynamic");
 }
 
+/// Verifies an assignment-expression class default seeds a later dynamic static call.
+#[test]
+fn test_psr4_dynamic_static_call_from_assignment_expression_default() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Handler.php",
+                "<?php\nnamespace App;\nclass Handler { public static function register(bool $enabled): void { echo $enabled ? 'ok' : 'bad'; } }\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$options = [];\nif (false !== $handler = ($options['handler'] ?? App\\Handler::class)) {\n    $handler::register(true);\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies a front controller below the manifest root discovers the parent autoload index and
 /// uses a class-string default from an included runtime bootstrap to seed dynamic `new`.
 #[test]
@@ -139,6 +162,37 @@ fn test_psr4_transitive_autoload() {
         "main.php",
     );
     assert_eq!(out, "hi Ada");
+}
+
+/// Verifies an autoloaded trait retains its own class imports when composed into a class.
+#[test]
+fn test_psr4_autoloaded_trait_method_resolves_imported_constructor() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Demo\\":"src/"}}}"#,
+            ),
+            (
+                "src/Product.php",
+                "<?php\nnamespace Demo;\nclass Product { public function name(): string { return 'ok'; } }\n",
+            ),
+            (
+                "src/Traits/FactoryTrait.php",
+                "<?php\nnamespace Demo\\Traits;\nuse Demo\\Product as ImportedProduct;\ntrait FactoryTrait {\n    public function make(): iterable { yield new ImportedProduct(); }\n    public function makeFrom(): iterable { yield from [new ImportedProduct()]; }\n}\n",
+            ),
+            (
+                "src/Factory.php",
+                "<?php\nnamespace Demo;\nuse Demo\\Traits\\FactoryTrait;\nclass Factory { use FactoryTrait; }\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$factory = new Demo\\Factory();\nforeach ($factory->make() as $product) { echo $product->name(); }\nforeach ($factory->makeFrom() as $product) { echo $product->name(); }\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "okok");
 }
 
 /// Verifies transitive class discovery reaches a fixpoint beyond an arbitrary depth cap.
@@ -1731,6 +1785,30 @@ echo $a->tag();
 "#,
     );
     assert_eq!(out, "alias-case");
+}
+
+/// Verifies resolved class constants create aliases from a nested method body.
+#[test]
+fn test_class_alias_from_resolved_class_constants_in_method() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Model;
+class Original {
+    public function tag(): string { return "resolved"; }
+}
+class Bootstrap {
+    public static function register(): void {
+        if (!class_exists(AliasName::class)) {
+            class_alias(Original::class, AliasName::class);
+        }
+    }
+}
+Bootstrap::register();
+$value = new AliasName();
+echo $value->tag();
+"#,
+    );
+    assert_eq!(out, "resolved");
 }
 
 /// Verifies PSR-4 empty prefix root namespace.

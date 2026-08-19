@@ -48,7 +48,7 @@ pub(super) fn eval_assoc_array(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut array = values.assoc_new(elements.len())?;
     let mut next_key = None;
-    for element in elements {
+    for (element_index, element) in elements.iter().enumerate() {
         let (key, value, target) = match element {
             EvalArrayElement::Value(value) => {
                 let key = match next_key {
@@ -57,7 +57,9 @@ pub(super) fn eval_assoc_array(
                 };
                 let one = values.int(1)?;
                 next_key = Some(values.add(key, one)?);
-                let value = eval_expr(value, context, scope, values)?;
+                let value = eval_expr(value, context, scope, values).map_err(|status| {
+                    trace_array_literal_error("value", element_index, status, context)
+                })?;
                 (key, value, None)
             }
             EvalArrayElement::Reference(value) => {
@@ -72,9 +74,13 @@ pub(super) fn eval_assoc_array(
                 (key, value, Some(target))
             }
             EvalArrayElement::KeyValue { key, value } => {
-                let key = eval_expr(key, context, scope, values)?;
+                let key = eval_expr(key, context, scope, values).map_err(|status| {
+                    trace_array_literal_error("key", element_index, status, context)
+                })?;
                 next_key = eval_array_next_key_after_explicit_key(key, next_key, values)?;
-                let value = eval_expr(value, context, scope, values)?;
+                let value = eval_expr(value, context, scope, values).map_err(|status| {
+                    trace_array_literal_error("value", element_index, status, context)
+                })?;
                 (key, value, None)
             }
             EvalArrayElement::KeyReference { key, value } => {
@@ -85,12 +91,32 @@ pub(super) fn eval_assoc_array(
                 (key, value, Some(target))
             }
         };
-        array = values.array_set(array, key, value)?;
+        array = values.array_set(array, key, value).map_err(|status| {
+            trace_array_literal_error("store", element_index, status, context)
+        })?;
         if let Some(target) = target {
             bind_array_element_reference(context, array, key, target, values)?;
         }
     }
     Ok(array)
+}
+
+/// Emits the associative-array element stage that failed under opt-in runtime tracing.
+fn trace_array_literal_error(
+    stage: &str,
+    index: usize,
+    status: EvalStatus,
+    context: &ElephcEvalContext,
+) -> EvalStatus {
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let call_site = context.call_site();
+        eprintln!(
+            "[elephc-eval-trace] phase=array_literal_error stage={stage} index={index} status={status:?} file={:?} line={}",
+            call_site.0,
+            call_site.2,
+        );
+    }
+    status
 }
 
 /// Evaluates a by-reference array literal element and captures its writable source target.

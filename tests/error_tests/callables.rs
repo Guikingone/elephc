@@ -198,11 +198,11 @@ fn test_error_get_declared_traits_wrong_args() {
 #[test]
 fn test_error_class_alias_rejects_runtime_call_shape() {
     // Verifies `class_alias()` with a runtime variable as the second argument
-    // produces a diagnostic because only top-level statements with literal
-    // class names are supported in AOT mode.
+    // produces a diagnostic because runtime-dependent class names cannot be
+    // inserted into the closed-world class table.
     expect_error(
         r#"<?php class Original {} $alias = "Alias"; class_alias("Original", $alias);"#,
-        "class_alias() is only supported as a top-level statement with literal class names",
+        "class_alias() requires statically resolvable class names",
     );
 }
 

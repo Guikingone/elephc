@@ -35,7 +35,7 @@ pub(super) fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Ex
                 let source = lower_expr(ctx, inner);
                 if matches!(
                     ctx.builder.value_php_type(source.value).codegen_repr(),
-                    PhpType::AssocArray { .. }
+                    PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Object(_)
                 ) {
                     any_assoc_spread = true;
                 }
@@ -218,10 +218,12 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
     source: LoweredValue,
     span: crate::span::Span,
 ) {
-    let source_is_hash = matches!(
-        ctx.builder.value_php_type(source.value).codegen_repr(),
-        PhpType::AssocArray { .. }
-    );
+    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+    if matches!(source_ty, PhpType::Iterable | PhpType::Object(_)) {
+        lower_iterable_spread_into_hash(ctx, hash, source, span);
+        return;
+    }
+    let source_is_hash = matches!(source_ty, PhpType::AssocArray { .. });
     let spread_source = if source_is_hash {
         source
     } else {
@@ -253,6 +255,106 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
     }
 }
 
+/// Materializes an iterable into keyed hash storage before applying PHP array-unpack semantics.
+fn lower_iterable_spread_into_hash(
+    ctx: &mut LoweringContext<'_, '_>,
+    hash: LoweredValue,
+    source: LoweredValue,
+    span: crate::span::Span,
+) {
+    let materialized = ctx.emit_value(
+        Op::HashNew,
+        Vec::new(),
+        Some(Immediate::Capacity(0)),
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+        Op::HashNew.default_effects(),
+        Some(span),
+    );
+    let iterator = ctx.emit_value(
+        Op::IterStart,
+        vec![source.value],
+        None,
+        PhpType::Iterable,
+        Op::IterStart.default_effects(),
+        Some(span),
+    );
+    let header = ctx
+        .builder
+        .create_named_block("iterable.spread.next", Vec::new());
+    let body = ctx
+        .builder
+        .create_named_block("iterable.spread.body", Vec::new());
+    let exit = ctx
+        .builder
+        .create_named_block("iterable.spread.exit", Vec::new());
+    ctx.builder.terminate(Terminator::Br {
+        target: header,
+        args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(header);
+    let has_next = ctx.emit_value(
+        Op::IterNext,
+        vec![iterator.value],
+        None,
+        PhpType::Bool,
+        Op::IterNext.default_effects(),
+        Some(span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: has_next.value,
+        then_target: body,
+        then_args: Vec::new(),
+        else_target: exit,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(body);
+    let key = ctx.emit_value(
+        Op::IterCurrentKey,
+        vec![iterator.value],
+        None,
+        PhpType::Mixed,
+        Op::IterCurrentKey.default_effects(),
+        Some(span),
+    );
+    let value = ctx.emit_value(
+        Op::IterCurrentValue,
+        vec![iterator.value],
+        None,
+        PhpType::Mixed,
+        Op::IterCurrentValue.default_effects(),
+        Some(span),
+    );
+    ctx.emit_void(
+        Op::HashSet,
+        vec![materialized.value, key.value, value.value],
+        None,
+        Op::HashSet.default_effects(),
+        Some(span),
+    );
+    ctx.builder.terminate(Terminator::Br {
+        target: header,
+        args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(exit);
+    ctx.emit_void(
+        Op::HashSpread,
+        vec![hash.value, materialized.value],
+        None,
+        Op::HashSpread.default_effects(),
+        Some(span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, materialized, Some(span));
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+}
+
 /// Lowers an indexed-array spread by appending each source element to the destination.
 pub(super) fn lower_indexed_array_spread_into_array(
     ctx: &mut LoweringContext<'_, '_>,
@@ -265,6 +367,7 @@ pub(super) fn lower_indexed_array_spread_into_array(
         PhpType::Array(elem_ty) => elem_ty.codegen_repr(),
         _ => PhpType::Mixed,
     };
+    let source = narrow_gradual_indexed_spread_source(ctx, source, span);
     let len = ctx.emit_value(
         Op::ArrayLen,
         vec![source.value],
@@ -329,6 +432,30 @@ pub(super) fn lower_indexed_array_spread_into_array(
     if ctx.value_is_owning_temporary(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
+}
+
+/// Unboxes a gradual spread source after checking that its active runtime value is indexed-array storage.
+pub(super) fn narrow_gradual_indexed_spread_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+    if !matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+        return source;
+    }
+    let narrowed = ctx.emit_value(
+        Op::MixedUnbox,
+        vec![source.value],
+        Some(Immediate::I64(4)),
+        PhpType::Array(Box::new(PhpType::Mixed)),
+        Op::MixedUnbox.default_effects(),
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+    narrowed
 }
 
 /// Emits an integer constant at a specific source span.

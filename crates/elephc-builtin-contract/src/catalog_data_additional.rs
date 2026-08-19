@@ -7,7 +7,10 @@
 //! Key details:
 //! - Entries remain backend-neutral; checker, lowering, and interpreter hooks join by `BuiltinId`.
 
-use crate::{Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, TypeSpec};
+use crate::{
+    Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, TypeSpec,
+    VariadicSpec,
+};
 
 macro_rules! param {
     ($name:literal, $ty:ident) => {
@@ -152,7 +155,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         "setlocale",
         System,
         [param!("category", Int), param!("locales", Mixed)],
-        Some("rest"),
+        Some(VariadicSpec::value("rest")),
         Mixed,
         "Sets locale information for the process.",
         "function.setlocale"

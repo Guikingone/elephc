@@ -36,15 +36,16 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let ty2 = cx.checker.infer_type(&cx.args[1], cx.env)?;
     let accepted = |t: &PhpType| {
-        matches!(t, PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_))
-            || t.is_scalar_indexed_array()
-            || matches!(t, PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed)
+        matches!(
+            t,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+        )
     };
     if !accepted(&ty1) || !accepted(&ty2) {
         return Err(CompileError::new(
             cx.span,
             &format!(
-                "{}() arguments must be associative arrays or indexed arrays of scalars",
+                "{}() arguments must be arrays",
                 cx.name
             ),
         ));

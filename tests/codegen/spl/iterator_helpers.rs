@@ -242,6 +242,38 @@ foreach ($items as $k => $v) {
     assert_eq!(out, "0=10 1=11 2=12 ");
 }
 
+/// Verifies a gradual source is checked at runtime, traversed when it contains an Iterator,
+/// and rejected with a catchable TypeError when it contains a non-Traversable scalar.
+#[test]
+fn test_iterator_to_array_accepts_gradual_traversable_source() {
+    let out = compile_and_run(
+        r#"<?php
+class GradualRange implements Iterator {
+    private int $i = 0;
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i + 4; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+function gradualSource(bool $valid): mixed {
+    return $valid ? new GradualRange() : 42;
+}
+$copy = iterator_to_array(gradualSource(true), false);
+echo implode(',', $copy), '|';
+try {
+    iterator_to_array(gradualSource(false), false);
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "4,5|iterator_to_array(): Argument #1 ($iterator) must be of type Traversable, int given"
+    );
+}
+
 /// Verifies that iterator to array preserves iterator keys.
 #[test]
 fn test_iterator_to_array_preserves_iterator_keys() {

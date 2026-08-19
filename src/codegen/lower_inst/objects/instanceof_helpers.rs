@@ -66,6 +66,9 @@ pub(super) fn emit_normalized_dynamic_instanceof_value(
         PhpType::Object(_) => {
             ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
         }
+        PhpType::Callable => {
+            emit_callable_object_capture_or_null(ctx, value)?;
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
             emit_mixed_instanceof_value_normalization(ctx);
@@ -74,6 +77,64 @@ pub(super) fn emit_normalized_dynamic_instanceof_value(
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         }
     }
+    Ok(())
+}
+
+/// Extracts an invokable-object receiver from a callable descriptor, or returns null.
+pub(super) fn emit_callable_object_capture_or_null(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+) -> Result<()> {
+    let descriptor_reg = abi::int_result_reg(ctx.emitter).to_string();
+    let kind_reg = abi::secondary_scratch_reg(ctx.emitter).to_string();
+    let false_label = ctx.next_label("callable_instanceof_not_object");
+    let done_label = ctx.next_label("callable_instanceof_object_done");
+    ctx.load_value_to_reg(value, &descriptor_reg)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz {}, {}", descriptor_reg, false_label)); // null descriptors are not object values
+            abi::emit_load_from_address(ctx.emitter, &kind_reg, &descriptor_reg, 0);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::symbol_scratch_reg(ctx.emitter),
+                callable_descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE as i64,
+            );
+            ctx.emitter.instruction(&format!(
+                "cmp {}, {}",
+                kind_reg,
+                abi::symbol_scratch_reg(ctx.emitter)
+            )); // identify descriptors created from invokable objects
+            ctx.emitter
+                .instruction(&format!("b.ne {}", false_label));               // non-object callable forms fail instanceof
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!(
+                "test {}, {}",
+                descriptor_reg, descriptor_reg
+            )); // null descriptors are not object values
+            ctx.emitter
+                .instruction(&format!("jz {}", false_label));                  // skip descriptor metadata loads for null
+            abi::emit_load_from_address(ctx.emitter, &kind_reg, &descriptor_reg, 0);
+            ctx.emitter.instruction(&format!(
+                "cmp {}, {}",
+                kind_reg,
+                callable_descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE
+            )); // identify descriptors created from invokable objects
+            ctx.emitter
+                .instruction(&format!("jne {}", false_label));                 // non-object callable forms fail instanceof
+        }
+    }
+    callable_descriptor::emit_load_runtime_capture_to_result(
+        ctx.emitter,
+        &descriptor_reg,
+        0,
+        &PhpType::Object(String::new()),
+    );
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&false_label);
+    abi::emit_load_int_immediate(ctx.emitter, &descriptor_reg, 0);
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 
@@ -255,13 +316,10 @@ pub(in crate::codegen::lower_inst) fn classify_named_target(
     ctx: &FunctionContext<'_>,
     class_name: &str,
 ) -> Option<(u64, i64)> {
-    let normalized = class_name.trim_start_matches('\\');
-    if let Some(class_info) = ctx.module.class_infos.get(normalized) {
+    if let Some(class_info) = class_info_by_name(ctx, class_name) {
         return Some((class_info.class_id, 0));
     }
-    ctx.module
-        .interface_infos
-        .get(normalized)
+    interface_info_by_name(ctx, class_name)
         .map(|interface_info| (interface_info.interface_id, 1))
 }
 

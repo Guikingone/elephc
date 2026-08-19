@@ -310,6 +310,22 @@ pub(super) fn cast_loaded_mixed_pointer_to_result(
         PhpType::Int => "__rt_mixed_cast_int",
         PhpType::Float => "__rt_mixed_cast_float",
         PhpType::Bool => "__rt_mixed_cast_bool",
+        PhpType::Void | PhpType::Never => {
+            if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the unused boxed result to the Mixed release helper
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                0,
+            );
+            return Ok(());
+        }
+        PhpType::TaggedScalar => {
+            emit_mixed_result_as_tagged_scalar(ctx);
+            return Ok(());
+        }
         PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Callable
@@ -331,4 +347,3 @@ pub(super) fn cast_loaded_mixed_pointer_to_result(
     abi::emit_call_label(ctx.emitter, label);
     Ok(())
 }
-

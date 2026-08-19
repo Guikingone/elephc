@@ -312,6 +312,33 @@ echo describe("items", $items);
     );
 }
 
+/// Verifies object-to-string coercion used by formatted string arguments releases each temporary
+/// `__toString()` result after copying it into request-lifetime scratch storage.
+#[test]
+fn test_stringable_format_arguments_are_heap_debug_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class FormattedValue {
+    public function __construct(private int $number) {}
+    public function __toString(): string { return 'value-'.$this->number; }
+}
+
+$formatted = '';
+for ($i = 0; $i < 20; ++$i) {
+    $formatted = sprintf('[%s]', new FormattedValue($i));
+}
+echo $formatted;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[value-19]");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected object string temporaries to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies self-reassignment retains a borrowed string slice before freeing its source slot.
 #[test]
 fn test_string_self_reassignment_preserves_borrowed_builtin_slice() {
@@ -784,6 +811,61 @@ echo "done";
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a boxed indexed array is unboxed before crossing a typed method-call boundary.
+#[test]
+fn test_mixed_indexed_array_argument_is_unboxed_for_typed_method_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class Forwarder {
+    public function forwardValue(array $values): string {
+        return $this->firstValue($values);
+    }
+
+    private function firstValue(array $values): string {
+        return in_array('ok', $values, true) ? 'ok' : 'bad';
+    }
+}
+
+$forwarder = new Forwarder();
+$method = $argv[1] ?? 'forwardValue';
+echo $forwarder->$method(['ok']);
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a runtime-selected receiver normalizes a boxed indexed array before a typed method call.
+#[test]
+fn test_mixed_receiver_normalizes_mixed_indexed_array_for_typed_method_parameter() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Receiver {
+    public function acceptsArray(array $values): string {
+        return in_array('ok', $values, true) ? 'ok' : 'bad';
+    }
+}
+
+function receiver(): mixed {
+    return new Receiver();
+}
+
+function values(): mixed {
+    return ['ok'];
+}
+
+$receiver = receiver();
+echo $receiver->acceptsArray(values());
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",

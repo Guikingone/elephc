@@ -281,32 +281,32 @@ impl Checker {
     /// Invalidates synthetic property facts affected by a completed statement assignment, then
     /// re-establishes the fact for the storage the statement itself wrote.
     ///
-    /// Property writes can mutate an aliased object and therefore clear every fact; local
-    /// rebindings clear only facts rooted at the rebound local. A plain
+    /// Direct named-property writes clear that property across every possible object alias;
+    /// computed writes and calls remain global barriers. Local rebindings clear only facts
+    /// rooted at the rebound local. A plain
     /// `$this->p = <non-null>` / `self::$p = <non-null>` write is the one case where the
     /// post-write type of a place is known, so `record_property_assignment_narrowing` puts that
     /// single fact back — this is what lets `if (self::$p === null) { self::$p = new S(); }`
     /// leave `self::$p` non-null on both paths.
     fn invalidate_property_narrowings_after_assignment(&mut self, stmt: &Stmt, env: &mut TypeEnv) {
         match &stmt.kind {
-            StmtKind::PropertyAssign { .. }
-            | StmtKind::PropertyRefAssign { .. }
-            | StmtKind::StaticPropertyAssign { .. } => {
-                Self::purge_property_narrowings(env);
+            StmtKind::PropertyAssign { property, .. }
+            | StmtKind::PropertyRefAssign { property, .. }
+            | StmtKind::StaticPropertyAssign { property, .. } => {
+                Self::purge_property_narrowings_for_property(env, property);
                 self.record_property_assignment_narrowing(stmt, env);
             }
-            StmtKind::PropertyArrayPush { .. } | StmtKind::PropertyArrayAssign { .. } => {
-                Self::purge_property_narrowings(env)
+            StmtKind::PropertyArrayPush { property, .. }
+            | StmtKind::PropertyArrayAssign { property, .. }
+            | StmtKind::StaticPropertyArrayPush { property, .. }
+            | StmtKind::StaticPropertyArrayAssign { property, .. }
+            | StmtKind::StaticPropertyElementRefAssign { property, .. } => {
+                Self::purge_property_narrowings_for_property(env, property)
             }
-            StmtKind::StaticPropertyArrayPush { .. }
-            | StmtKind::StaticPropertyArrayAssign { .. }
-            | StmtKind::StaticPropertyElementRefAssign { .. } => {
-                Self::purge_property_narrowings(env)
-            }
-            StmtKind::NestedArrayAssign { target, .. }
-                if assignment_target_may_write_property(target) =>
-            {
-                Self::purge_property_narrowings(env)
+            StmtKind::NestedArrayAssign { target, .. } => {
+                if let Some(property) = assignment_target_property_name(target) {
+                    Self::purge_property_narrowings_for_property(env, property);
+                }
             }
             StmtKind::Assign { name, .. }
             | StmtKind::TypedAssign { name, .. }
@@ -326,12 +326,12 @@ impl Checker {
     }
 }
 
-/// Returns whether a nested assignment target reaches an object property rather than only a local
-/// array, in which case every aliased property fact must be invalidated.
-fn assignment_target_may_write_property(target: &Expr) -> bool {
+/// Returns the named property reached by a nested array-assignment target.
+fn assignment_target_property_name(target: &Expr) -> Option<&str> {
     match &target.kind {
-        ExprKind::Variable(_) => false,
-        ExprKind::ArrayAccess { array, .. } => assignment_target_may_write_property(array),
-        _ => true,
+        ExprKind::ArrayAccess { array, .. } => assignment_target_property_name(array),
+        ExprKind::PropertyAccess { property, .. }
+        | ExprKind::StaticPropertyAccess { property, .. } => Some(property),
+        _ => None,
     }
 }

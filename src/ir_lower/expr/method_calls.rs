@@ -22,7 +22,9 @@ pub(super) fn lower_method_call(
     // scope raises a catchable `Error` in PHP rather than a compile-time error,
     // but the receiver expression must still be evaluated first.
     let throw_access_message = if op == Op::MethodCall {
-        ctx.throw_access_sites.get(&expr.span).and_then(|info| {
+        ctx.throw_access_sites
+            .get(&(ctx.loop_storage_scope.clone(), expr.span))
+            .and_then(|info| {
             if let ThrowAccessKind::PrivateMethod {
                 visibility,
                 class_name,
@@ -129,6 +131,13 @@ pub(super) fn lower_method_call(
             return result;
         }
     }
+    if op == Op::MethodCall {
+        if let Some(receiver) = object_static_method_receiver(ctx, object.value, method) {
+            let call = lower_static_method_call(ctx, &receiver, method, args, expr);
+            release_owning_receiver_temporary(ctx, object, expr.span);
+            return call;
+        }
+    }
     let magic_args;
     let (dispatch_method, args) = if let Some(args) =
         magic_call_dispatch_args(ctx, object.value, method, args, object_expr.span)
@@ -139,6 +148,16 @@ pub(super) fn lower_method_call(
         (method, args)
     };
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
+    if let Some(call) = lower_runtime_spread_method_call(
+        ctx,
+        object,
+        dispatch_method,
+        args,
+        result_type.clone(),
+        expr,
+    ) {
+        return call;
+    }
     let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
@@ -174,6 +193,77 @@ pub(super) fn lower_method_call(
     }
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
+}
+
+/// Routes a single runtime-shaped spread through the callable descriptor ABI.
+///
+/// Statically indexed sources stay on the direct fixed-ABI path. Associative or gradual sources
+/// must keep their runtime keys so the shared invoker can apply PHP positional/named argument
+/// rules before selecting the method wrapper.
+fn lower_runtime_spread_method_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+    args: &[Expr],
+    result_type: PhpType,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let [Expr {
+        kind: ExprKind::Spread(inner),
+        ..
+    }] = args
+    else {
+        return None;
+    };
+    if indexed_spread_source_type(ctx, inner)
+        .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Array(_)))
+    {
+        return None;
+    }
+    let data = ctx.intern_string(&format!("object::{}", method));
+    let descriptor = ctx.emit_value(
+        Op::FirstClassCallableNew,
+        vec![object.value],
+        Some(Immediate::ProfiledData {
+            data,
+            strict_php: crate::strict_php::is_enabled(),
+        }),
+        PhpType::Callable,
+        Op::FirstClassCallableNew.default_effects(),
+        Some(expr.span),
+    );
+    let arg_container = lower_expr(ctx, inner);
+    let call = emit_callable_descriptor_invoke(
+        ctx,
+        descriptor,
+        arg_container,
+        result_type,
+        expr.span,
+    );
+    Some(call)
+}
+
+/// Resolves a static-only method invoked through an object receiver.
+///
+/// PHP permits `$object->staticMethod()`. The object expression is still evaluated by the caller,
+/// but dispatch ignores its value and uses the receiver's class exactly like `Class::method()`.
+/// An ordinary instance method with the same name always wins.
+pub(super) fn object_static_method_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+) -> Option<StaticReceiver> {
+    let object_ty = ctx.builder.value_php_type(object);
+    let (class_name, _) = singular_object_class(&object_ty)?;
+    let normalized = class_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method);
+    let class_info = ctx.classes.get(normalized)?;
+    if class_info.methods.contains_key(&method_key) {
+        return None;
+    }
+    let receiver = StaticReceiver::Named(Name::from(normalized.to_string()));
+    static_method_implementation_signature(ctx, &receiver, method)?;
+    Some(receiver)
 }
 
 /// Lowers the `Closure` rebinding methods on a closure (`Callable`) receiver:

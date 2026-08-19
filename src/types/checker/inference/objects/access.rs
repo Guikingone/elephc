@@ -36,9 +36,20 @@ impl Checker {
                 return Ok(narrowed.clone());
             }
         }
+        let receiver_is_flow_narrowed = self
+            .flow_guard_env_key(object)
+            .is_some_and(|key| env.contains_key(&key));
         let obj_ty = self.infer_type(object, env)?;
         if let PhpType::Object(class_name) = &obj_ty {
-            return self.infer_property_on_class_type(class_name, property, object, expr);
+            let property_ty =
+                self.infer_property_on_class_type(class_name, property, object, expr)?;
+            if receiver_is_flow_narrowed {
+                self.flow_typed_property_accesses.insert(
+                    (self.current_loop_storage_scope.clone(), expr.span),
+                    property_ty.clone(),
+                );
+            }
+            return Ok(property_ty);
         }
         // Non-nullsafe property access on a nullable / union object type is
         // allowed when the union resolves to a single object class.
@@ -237,6 +248,9 @@ impl Checker {
             {
                 return Ok(property_ty);
             }
+            if self.null_probe_depth > 0 {
+                return Ok(PhpType::Mixed);
+            }
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined property: {}::{}", class_name, property),
@@ -284,6 +298,9 @@ impl Checker {
                 // reads are dispatched to the side-table hashtable; the
                 // value is statically `Mixed` because we cannot infer it.
                 return Ok(PhpType::Mixed);
+            }
+            if self.null_probe_depth > 0 {
+                return Ok(PhpType::Void);
             }
             return Err(CompileError::new(
                 expr.span,

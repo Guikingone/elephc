@@ -82,8 +82,12 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
         emit_static_property_release(emitter, &symbol, &php_type, &mut labels);
     }
     for name in &module.data.global_names {
-        if !superglobals::is_superglobal(name) && !module.extern_globals.contains_key(name) {
-            emit_ordinary_global_reset(emitter, &ir_global_symbol(name), &mut labels);
+        let symbol = ir_global_symbol(name);
+        if !superglobals::is_superglobal(name)
+            && !module.extern_globals.contains_key(name)
+            && data.has_comm(&symbol)
+        {
+            emit_ordinary_global_reset(emitter, &symbol, &mut labels);
         }
     }
     // Request superglobals ($_SERVER/$_GET/$_POST) live in `_eir_global_*` symbol

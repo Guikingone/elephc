@@ -124,6 +124,7 @@ pub(crate) fn lower_elephc_callable_ptr(
                 value,
                 "__elephc_callable_ptr",
                 false,
+                crate::strict_php::is_enabled(),
             )?;
         }
         PhpType::Str => {
@@ -185,6 +186,7 @@ pub(crate) fn lower_elephc_normalize_callable(
                 value,
                 "__elephc_normalize_callable",
                 true,
+                crate::strict_php::is_enabled(),
             )?;
         }
         PhpType::Str => {

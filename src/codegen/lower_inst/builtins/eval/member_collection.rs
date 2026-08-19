@@ -344,8 +344,8 @@ pub(super) fn collect_eval_native_instance_methods(
         if method_name == "__construct" {
             continue;
         }
-        let bridge_supported = class_method_visibility_bridge_supported(class_info, method_name)
-            && method_signature_can_bridge_with_eval(signature);
+        let bridge_supported =
+            super::eval_native_instance_method_bridge_supported(class_info, method_name, signature);
         registrations.push(EvalNativeMethodRegistration {
             class_name: class_name.to_string(),
             method_name: method_name.clone(),
@@ -365,9 +365,11 @@ pub(super) fn collect_eval_native_static_methods(
     let mut methods = class_info.static_methods.iter().collect::<Vec<_>>();
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method_name, signature) in methods {
-        let bridge_supported =
-            class_static_method_visibility_bridge_supported(class_info, method_name)
-                && method_signature_can_bridge_with_eval(signature);
+        let bridge_supported = super::eval_native_static_method_bridge_supported(
+            class_info,
+            method_name,
+            signature,
+        );
         registrations.push(EvalNativeMethodRegistration {
             class_name: class_name.to_string(),
             method_name: method_name.clone(),

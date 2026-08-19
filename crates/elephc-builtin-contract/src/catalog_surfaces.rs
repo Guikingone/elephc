@@ -11,7 +11,10 @@
 //!   not a registry binding.
 //! - Backend support is joined separately and must not be inferred from this file.
 
-use crate::{Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, TypeSpec};
+use crate::{
+    Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, TypeSpec,
+    VariadicSpec,
+};
 
 macro_rules! param {
     ($name:literal, $ty:ident) => {
@@ -185,7 +188,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Types,
         LanguageConstruct,
         [param!("var", Mixed)],
-        Some("vars"),
+        Some(VariadicSpec::value("vars")),
         Bool,
         "Determines whether variables are set and are not null."
     ),
@@ -194,7 +197,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Types,
         LanguageConstruct,
         [param!("var", Mixed)],
-        Some("vars"),
+        Some(VariadicSpec::value("vars")),
         Void,
         "Unsets the given variables."
     ),

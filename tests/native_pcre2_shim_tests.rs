@@ -126,6 +126,26 @@ static int check_startend_offsets(void) {
     return 0;
 }
 
+static int check_anchored_at_offset(void) {
+    void *handle = NULL;
+    uint64_t slots = 0;
+    int64_t pairs[2] = {0, 5};
+    int32_t result;
+
+    result = elephc_pcre2_v1_compile(&handle, "foo", 0x2000, &slots);
+    CHECK(result == 0 && handle != NULL && slots == 1, "anchored fixture must compile");
+    result = elephc_pcre2_v1_exec(handle, "xxfoo", 1, pairs, 0x0080);
+    CHECK(result != 0, "anchored execution must reject a later match");
+
+    pairs[0] = 2;
+    pairs[1] = 5;
+    result = elephc_pcre2_v1_exec(handle, "xxfoo", 1, pairs, 0x0080);
+    CHECK(result == 0, "anchored execution must accept a match at the supplied offset");
+    CHECK(pairs[0] == 2 && pairs[1] == 5, "anchored execution must preserve absolute offsets");
+    elephc_pcre2_v1_free(handle);
+    return 0;
+}
+
 static int check_guard_contracts(void) {
     void *handle = (void *)(uintptr_t)1;
     uint64_t slots = UINT64_MAX;
@@ -179,6 +199,10 @@ int main(void) {
         return result;
     }
     result = check_startend_offsets();
+    if (result != 0) {
+        return result;
+    }
+    result = check_anchored_at_offset();
     if (result != 0) {
         return result;
     }

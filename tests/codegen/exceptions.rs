@@ -332,6 +332,103 @@ fn test_throw_expression_in_ternary() {
     assert_eq!(out, "23");
 }
 
+/// Verifies a terminating operand of logical negation does not emit a dead condition branch.
+#[test]
+fn test_throw_expression_under_not_in_if_condition() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    if (!(throw new Exception("stop"))) {
+        echo "unreachable";
+    }
+} catch (Exception $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "stop");
+}
+
+/// Verifies a terminating assignment receiver inside `return` does not emit a stale result load.
+#[test]
+fn test_terminating_returned_assignment_receiver_stops_lowering() {
+    let error = compile_and_run_expect_failure(
+        r#"<?php
+class AssignedAfterTermination {
+    public int $value = 0;
+    public function __construct(int $value) {
+        $this->value = $value;
+    }
+}
+
+function assign_after_termination(array $arguments): int {
+    $reflection = new ReflectionClass(AssignedAfterTermination::class);
+    return $reflection->newInstanceArgs($arguments)->value = 1;
+}
+
+assign_after_termination([0]);
+"#,
+    );
+    assert!(
+        error.contains("unsupported ReflectionClass::newInstanceArgs() argument array"),
+        "{error}"
+    );
+}
+
+/// Verifies a terminating foreach source does not emit an iterator in the dead block.
+#[test]
+fn test_terminating_foreach_source_stops_lowering() {
+    let error = compile_and_run_expect_failure(
+        r#"<?php
+class IteratedAfterTermination implements IteratorAggregate {
+    public function __construct(int $value) {}
+
+    public function getIterator(): Traversable {
+        return new ArrayIterator([]);
+    }
+}
+
+function iterate_after_termination(array $arguments): void {
+    $reflection = new ReflectionClass(IteratedAfterTermination::class);
+    foreach ($reflection->newInstanceArgs($arguments) as $value) {
+        echo $value;
+    }
+}
+
+iterate_after_termination([0]);
+"#,
+    );
+    assert!(
+        error.contains("unsupported ReflectionClass::newInstanceArgs() argument array"),
+        "{error}"
+    );
+}
+
+/// Verifies a terminating property RHS does not emit the property store in the dead block.
+#[test]
+fn test_terminating_property_assignment_value_stops_lowering() {
+    let error = compile_and_run_expect_failure(
+        r#"<?php
+class PropertyValueAfterTermination {
+    public mixed $value = null;
+    public function __construct(int $value) {}
+}
+
+function write_after_termination(array $arguments): void {
+    $target = new PropertyValueAfterTermination(0);
+    $reflection = new ReflectionClass(PropertyValueAfterTermination::class);
+    $target->value = $reflection->newInstanceArgs($arguments);
+}
+
+write_after_termination([0]);
+"#,
+    );
+    assert!(
+        error.contains("unsupported ReflectionClass::newInstanceArgs() argument array"),
+        "{error}"
+    );
+}
+
 /// Throws a custom exception from a callee and catches it in the caller.
 /// Verifies the unwind across function boundaries and that the catch runs.
 #[test]
@@ -921,14 +1018,18 @@ echo $error->getMessage(), ":", $error->getCode(), ":", $error->path, ":", $erro
 /// storage reaches the general object backend instead of the compact builtin Throwable path.
 #[test]
 fn test_throwable_child_inherits_user_constructor_and_property_layout() {
-    let dir = make_cli_test_dir("elephc_throwable_child_user_parent_layout");
-    let (user_asm, _runtime_asm, _requirements) = compile_source_to_asm_with_options(
+    let out = compile_and_run(
         r#"<?php
 class ContextError extends Error {
     public array $context;
 
-    public function __construct(string $message, array $context) {
-        parent::__construct($message);
+    public function __construct(
+        string $message,
+        array $context,
+        int $code = 0,
+        ?Throwable $previous = null,
+    ) {
+        parent::__construct($message, $code, $previous);
         $this->context = $context;
     }
 }
@@ -938,12 +1039,8 @@ class ChildContextError extends ContextError {}
 $error = new ChildContextError("boom", ["source" => "child"]);
 echo $error->getMessage(), ":", $error->context["source"];
 "#,
-        &dir,
-        8_388_608,
-        false,
-        false,
     );
-    assert!(!user_asm.is_empty());
+    assert_eq!(out, "boom:child");
 }
 
 /// Verifies gradual `mixed` throws transfer valid Throwables and raise PHP's dynamic Errors for
@@ -978,4 +1075,22 @@ try {
         out,
         "ok:Can only throw objects:Cannot throw objects that do not implement Throwable"
     );
+}
+
+/// Verifies builtin throwable construction applies ordinary weak string coercion to gradual messages.
+#[test]
+fn test_builtin_throwable_coerces_mixed_message() {
+    let out = compile_and_run(
+        r#"<?php
+function fail_with(mixed $message): void {
+    throw new RuntimeException($message);
+}
+try {
+    fail_with(42);
+} catch (RuntimeException $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "42");
 }

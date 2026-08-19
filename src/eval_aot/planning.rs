@@ -157,7 +157,9 @@ where
 {
     let mut scope_access = collect_scope_accesses(&program);
     scope_access.reads = collect_scope_reads_before_writes(&program);
-    let folded_program = fold_static_builtin_calls_in_program(program.clone());
+    let folded_program = with_implicit_eval_return(fold_static_builtin_calls_in_program(
+        program.clone(),
+    ));
     let support = EirStaticCallPredicates {
         function: &static_call_supported,
         static_method: &static_method_supported,
@@ -219,4 +221,17 @@ where
         fallback_reason: (!is_fully_static_no_bridge && !has_scope_eir)
             .then(|| classify_fallback_reason(&program)),
     }
+}
+
+/// Gives an AOT eval fragment PHP's implicit `null` result on every fallthrough path.
+fn with_implicit_eval_return(mut program: Program) -> Program {
+    let span = program
+        .last()
+        .map(|statement| statement.span)
+        .unwrap_or_else(Span::dummy);
+    program.push(Stmt::new(
+        StmtKind::Return(Some(Expr::new(ExprKind::Null, span))),
+        span,
+    ));
+    crate::optimize::eliminate_dead_code(program)
 }

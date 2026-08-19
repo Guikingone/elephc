@@ -27,6 +27,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionMethod",
         "ReflectionProperty",
         "ReflectionParameter",
+        "ReflectionReference",
         "ReflectionType",
         "ReflectionNamedType",
         "ReflectionUnionType",
@@ -156,6 +157,10 @@ pub(crate) fn inject_builtin_reflection(
     class_map.insert(
         "ReflectionParameter".to_string(),
         builtin_reflection_parameter(),
+    );
+    class_map.insert(
+        "ReflectionReference".to_string(),
+        builtin_reflection_reference(),
     );
     class_map.insert("ReflectionType".to_string(), builtin_reflection_type());
     class_map.insert("ReflectionNamedType".to_string(), builtin_reflection_named_type());

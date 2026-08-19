@@ -67,7 +67,22 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 Ok(EvalExpr::Print(Box::new(expr)))
             }
+            TokenKind::Ident(name) if ident_eq(name, "throw") => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                Ok(EvalExpr::Throw(Box::new(expr)))
+            }
+            TokenKind::AttributeStart => self.parse_attributed_closure_expr(),
+            TokenKind::Ident(name) if ident_eq(name, "fn") => {
+                self.parse_arrow_closure_expr(false, Vec::new())
+            }
             TokenKind::Ident(name) if ident_eq(name, "function") => self.parse_closure_expr(false),
+            TokenKind::Ident(name)
+                if ident_eq(name, "static")
+                    && matches!(self.peek(), TokenKind::Ident(next) if ident_eq(next, "fn")) =>
+            {
+                self.parse_arrow_closure_expr(true, Vec::new())
+            }
             TokenKind::Ident(name)
                 if ident_eq(name, "static")
                     && matches!(self.peek(), TokenKind::Ident(next) if ident_eq(next, "function")) =>

@@ -232,7 +232,7 @@ fn build_json(include_internal: bool) -> Value {
             "internal": spec.internal,
             "extension": spec.extension,
             "params": params,
-            "variadic": spec.variadic,
+            "variadic": spec.variadic.map(|variadic| variadic.name),
             "returns": type_spec_str(&spec.returns),
             "by_ref_return": spec.by_ref_return,
             "min_args": spec.min_args,

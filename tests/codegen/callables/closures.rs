@@ -86,6 +86,21 @@ echo $f();
     assert_eq!(out, "1");
 }
 
+/// Verifies a local assigned before its first arrow-body read is not captured from the parent scope.
+#[test]
+fn test_arrow_function_assignment_defines_local_before_read() {
+    let out = compile_and_run(
+        r#"<?php
+$format = static fn($name) => match ($name) {
+    'parent' => ($parent = 'base') ? $parent . '!' : 'none',
+    default => 'other',
+};
+echo $format('parent');
+"#,
+    );
+    assert_eq!(out, "base!");
+}
+
 /// Verifies closure with typed parameter, return type annotation, and `use` clause capturing a string variable.
 #[test]
 fn test_closure_return_type_annotation() {
@@ -1340,6 +1355,47 @@ echo $a(), " ", $b();
     assert_eq!(out, "42 42");
 }
 
+/// Verifies an explicit null-receiver bind scope controls lexical `self` static-property access.
+#[test]
+fn test_closure_bind_null_receiver_rebinds_static_scope() {
+    let out = compile_and_run(
+        r#"<?php
+final class BoundStaticScope {
+    private static ?array $formats = ["html"];
+
+    public static function reset(): void {
+        $reset = Closure::bind(static fn () => self::$formats = null, null, self::class);
+        $reset();
+    }
+
+    public static function state(): string {
+        return null === self::$formats ? "reset" : "set";
+    }
+}
+BoundStaticScope::reset();
+echo BoundStaticScope::state();
+"#,
+    );
+    assert_eq!(out, "reset");
+}
+
+/// Verifies a null-receiver scope bind preserves ordinary lexical captures.
+#[test]
+fn test_closure_bind_null_receiver_preserves_use_captures() {
+    let out = compile_and_run(
+        r#"<?php
+final class CapturedStaticScope {
+}
+$base = 40;
+$bound = Closure::bind(function () use ($base): int {
+    return $base + 2;
+}, null, CapturedStaticScope::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
 /// Verifies `$closure->call($newThis, ...$args)` binds `$this` and invokes the
 /// closure in one step, passing through the trailing arguments.
 #[test]
@@ -1683,4 +1739,49 @@ var_dump($plain);
         "int(9223372036854775807)\nfloat(9.223372036854776E+18)\n\
          int(9223372036854775807)\nfloat(9.223372036854776E+18)\n"
     );
+}
+
+/// Verifies nested closure return records remain visible during array and callback specialization.
+#[test]
+fn test_nested_closure_return_scope_drives_array_and_callback_types() {
+    let out = compile_and_run(
+        r#"<?php
+function relativeParts(string $endPath, string $startPath): string {
+    $splitPath = static function ($path) {
+        $result = [];
+        foreach (explode('/', trim($path, '/')) as $segment) {
+            if ('' !== $segment) {
+                $result[] = $segment;
+            }
+        }
+        return $result;
+    };
+
+    $startPathArr = $splitPath($startPath);
+    $endPathArr = $splitPath($endPath);
+    $index = 0;
+    while (isset($startPathArr[$index]) && isset($endPathArr[$index]) && $startPathArr[$index] === $endPathArr[$index]) {
+        ++$index;
+    }
+    if (1 === count($startPathArr) && '' === $startPathArr[0]) {
+        $depth = 0;
+    } else {
+        $depth = count($startPathArr) - $index;
+    }
+
+    return str_repeat('../', $depth).implode('/', array_slice($endPathArr, $index));
+}
+
+function replacePart(bool $upper, string $part): string {
+    $callback = $upper
+        ? static fn ($matches) => strtoupper($matches[1])
+        : static fn ($matches) => $matches[1];
+
+    return preg_replace_callback('/([a-z]+)/', $callback, $part);
+}
+
+echo relativeParts('/a/b/c', '/a/d').'|'.replacePart(true, 'ab');
+"#,
+    );
+    assert_eq!(out, "../b/c|AB");
 }

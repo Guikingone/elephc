@@ -97,33 +97,43 @@ impl Checker {
         !self.is_subclass_of(a, b) && !self.is_subclass_of(b, a)
     }
 
-    /// Returns true if `class_name` is or inherits from `ancestor_name` (excluding self equality).
-    /// Walks the parent chain via `class_info.parent`.
+    /// Returns true if `class_name` inherits from `ancestor_name` (excluding self equality).
+    ///
+    /// Prefers complete class metadata and falls back to the declaration graph while a sibling
+    /// class is still being constructed. The visited set also makes malformed inheritance cycles
+    /// harmless to diagnostics.
     pub(crate) fn is_subclass_of(&self, class_name: &str, ancestor_name: &str) -> bool {
-        let mut current = self
-            .classes
-            .get(class_name)
-            .and_then(|class| class.parent.clone());
+        let parent_of = |name: &str| {
+            self.classes
+                .get(name)
+                .and_then(|class| class.parent.clone())
+                .or_else(|| self.declared_class_parents.get(name).cloned().flatten())
+        };
+        let mut current = parent_of(class_name);
+        let mut seen = HashSet::new();
         while let Some(parent_name) = current {
             if parent_name == ancestor_name {
                 return true;
             }
-            current = self
-                .classes
-                .get(&parent_name)
-                .and_then(|class| class.parent.clone());
+            if !seen.insert(parent_name.clone()) {
+                break;
+            }
+            current = parent_of(&parent_name);
         }
         false
     }
 
     /// Returns true if `class_name` directly implements `interface_name` (not via inheritance).
     pub(crate) fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
-        self.classes.get(class_name).is_some_and(|class_info| {
-            class_info
-                .interfaces
-                .iter()
-                .any(|name| name == interface_name)
-        })
+        self.classes
+            .get(class_name)
+            .map(|class_info| class_info.interfaces.as_slice())
+            .or_else(|| {
+                self.declared_class_interfaces
+                    .get(class_name)
+                    .map(Vec::as_slice)
+            })
+            .is_some_and(|interfaces| interfaces.iter().any(|name| name == interface_name))
     }
 
     /// Returns true if `type_name` (a class or interface) implements `interface_name`,

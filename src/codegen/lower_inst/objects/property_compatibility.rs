@@ -54,7 +54,16 @@ pub(super) fn ensure_property_value_supported(
     if can_convert_indexed_array_to_mixed_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if can_convert_indexed_array_to_assoc_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     if can_store_assoc_array_as_mixed_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
+    if can_store_array_as_iterable_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
+    if can_widen_int_to_float_property(value_ty, &slot.php_type) {
         return Ok(());
     }
     if can_store_value_as_tagged_scalar_property(value_ty, &slot.php_type) {
@@ -76,6 +85,9 @@ pub(super) fn ensure_property_value_supported(
         return Ok(());
     }
     if property_values::can_unbox_mixed_to_object_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
+    if property_values::can_unbox_mixed_to_array_property(value_ty, &slot.php_type) {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(
@@ -277,6 +289,27 @@ pub(super) fn can_convert_indexed_array_to_mixed_property(value_ty: &PhpType, sl
     slot_elem.codegen_repr() == PhpType::Mixed && value_elem.codegen_repr() != PhpType::Mixed
 }
 
+/// Returns true when indexed storage can be represented by a compatible integer-keyed hash.
+pub(in crate::codegen::lower_inst) fn can_convert_indexed_array_to_assoc_property(
+    value_ty: &PhpType,
+    slot_ty: &PhpType,
+) -> bool {
+    let (
+        PhpType::Array(source_value),
+        PhpType::AssocArray {
+            key: slot_key,
+            value: slot_value,
+        },
+    ) = (value_ty.codegen_repr(), slot_ty.codegen_repr())
+    else {
+        return false;
+    };
+    let slot_key = slot_key.codegen_repr();
+    let slot_value = slot_value.codegen_repr();
+    matches!(slot_key, PhpType::Int | PhpType::Mixed)
+        && (slot_value == PhpType::Mixed || slot_value == source_value.codegen_repr())
+}
+
 /// Returns true when associative-array storage can satisfy a generic `array` property.
 pub(in crate::codegen::lower_inst) fn can_store_assoc_array_as_mixed_property(
     value_ty: &PhpType,
@@ -290,6 +323,20 @@ pub(in crate::codegen::lower_inst) fn can_store_assoc_array_as_mixed_property(
         PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
         _ => false,
     }
+}
+
+/// Returns true when concrete PHP array storage satisfies an iterable property declaration.
+pub(super) fn can_store_array_as_iterable_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    slot_ty.codegen_repr() == PhpType::Iterable
+        && matches!(
+            value_ty.codegen_repr(),
+            PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. }
+        )
+}
+
+/// Returns true for PHP's lossless integer widening into a float property.
+pub(super) fn can_widen_int_to_float_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    value_ty.codegen_repr() == PhpType::Int && slot_ty.codegen_repr() == PhpType::Float
 }
 
 /// Returns true when a value can initialize a pointer-sized slot as null.

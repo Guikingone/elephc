@@ -11,6 +11,18 @@
 
 use super::*;
 
+/// Verifies the standard ReflectionReference surface accepts an ordinary array element.
+#[test]
+fn test_reflection_reference_non_reference_element_is_null() {
+    let out = compile_and_run(
+        r#"<?php
+$values = ["plain"];
+echo null === ReflectionReference::fromArrayElement($values, 0) ? "null" : "reference";
+"#,
+    );
+    assert_eq!(out, "null");
+}
+
 /// Verifies member reflectors accept an object and derive its declaring class at runtime.
 #[test]
 fn test_reflection_member_constructors_accept_object() {
@@ -134,4 +146,135 @@ $ref->newInstance(right: "N", left: "M");
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "AC|XY|MN|");
+}
+
+/// Verifies `newLazyGhost()` bypasses the target constructor, invokes its initializer once, and
+/// accepts an initializer that ignores the supplied object argument.
+#[test]
+fn test_reflection_class_new_lazy_ghost_initializes_constructorless_object() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReflectionGhostTarget {
+    public string $value = "default";
+    public function __construct() { echo "ctor"; }
+}
+
+$reflection = new ReflectionClass(ReflectionGhostTarget::class);
+$ghost = $reflection->newLazyGhost(static function ($object) {
+    $object->value = "ready";
+});
+echo $ghost->value . "|";
+echo (int) (bool) $reflection->newLazyGhost(static fn () => null);
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "ready|1");
+}
+
+/// Verifies `newLazyProxy()` accepts an object factory and returns its usable object result.
+#[test]
+fn test_reflection_class_new_lazy_proxy_materializes_factory_result() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReflectionProxyTarget {
+    public string $value = "ready";
+}
+
+$reflection = new ReflectionClass(ReflectionProxyTarget::class);
+$proxy = $reflection->newLazyProxy(static function (): object {
+    echo "factory:";
+    return new ReflectionProxyTarget();
+});
+echo $proxy->value;
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(out.stdout, "factory:ready");
+}
+
+/// Verifies repeated literal constructors allocate independent objects and member arrays.
+#[test]
+fn test_reflection_literal_materializer_preserves_fresh_runtime_graphs() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class SharedReflectionTarget {
+    public function first(): void {}
+    public function second(): void {}
+}
+
+$first = new ReflectionClass(SharedReflectionTarget::class);
+$second = new ReflectionClass(SharedReflectionTarget::class);
+$methods = $first->getMethods();
+array_pop($methods);
+echo ($first === $second ? "same" : "fresh") . ":";
+echo count($methods) . ":" . count($second->getMethods());
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "fresh:1:2");
+}
+
+/// Verifies repeated identical literal constructors reuse one generated materializer body.
+#[test]
+fn test_reflection_literal_materializer_reuses_generated_body() {
+    let single_dir = make_cli_test_dir("elephc_reflection_materializer_single");
+    let repeated_dir = make_cli_test_dir("elephc_reflection_materializer_repeated");
+    let single = r#"<?php
+class SharedReflectionTarget {
+    public function first(): void {}
+    public function second(): void {}
+}
+$reflection = new ReflectionClass(SharedReflectionTarget::class);
+echo count($reflection->getMethods());
+"#;
+    let repeated = r#"<?php
+class SharedReflectionTarget {
+    public function first(): void {}
+    public function second(): void {}
+}
+$first = new ReflectionClass(SharedReflectionTarget::class);
+$second = new ReflectionClass(SharedReflectionTarget::class);
+$third = new ReflectionClass(SharedReflectionTarget::class);
+echo count($first->getMethods()) + count($second->getMethods()) + count($third->getMethods());
+"#;
+
+    let (single_asm, _, _) =
+        compile_source_to_asm_with_options(single, &single_dir, 8_388_608, false, false);
+    let (repeated_asm, _, _) =
+        compile_source_to_asm_with_options(repeated, &repeated_dir, 8_388_608, false, false);
+    let _ = fs::remove_dir_all(&single_dir);
+    let _ = fs::remove_dir_all(&repeated_dir);
+
+    let materializer_body_count = |asm: &str| {
+        asm.lines()
+            .filter(|line| {
+                line.trim_end().ends_with(':')
+                    && line.contains("reflection_materializer_")
+                    && !line.contains("reflection_materializer_done_")
+            })
+            .count()
+    };
+    let single_body_count = materializer_body_count(&single_asm);
+    let repeated_body_count = materializer_body_count(&repeated_asm);
+    assert!(single_body_count > 0);
+    assert_eq!(repeated_body_count, single_body_count);
+    assert!(
+        repeated_asm.len() < single_asm.len() + 100_000,
+        "repeated literal constructors grew assembly from {} to {} bytes",
+        single_asm.len(),
+        repeated_asm.len()
+    );
 }

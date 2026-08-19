@@ -18,6 +18,8 @@ use crate::codegen::platform::Arch;
 use crate::ir::Module;
 use crate::types::ClassInfo;
 
+const REFLECTION_OBJECT_ARRAY_UNBOX_LABEL: &str =
+    "__elephc_eval_reflection_object_array_unbox";
 
 /// Fixed object layout for one synthetic Reflection owner class.
 struct ReflectionOwnerLayout {
@@ -165,8 +167,14 @@ pub(super) fn emit_eval_reflection_owner_helpers(module: &Module, emitter: &mut 
         return;
     };
     match module.target.arch {
-        Arch::AArch64 => emit_reflection_owner_new_aarch64(emitter, &layouts),
-        Arch::X86_64 => emit_reflection_owner_new_x86_64(emitter, &layouts),
+        Arch::AArch64 => {
+            emit_reflection_owner_new_aarch64(emitter, &layouts);
+            emit_reflection_object_array_unbox_aarch64(emitter);
+        }
+        Arch::X86_64 => {
+            emit_reflection_owner_new_x86_64(emitter, &layouts);
+            emit_reflection_object_array_unbox_x86_64(emitter);
+        }
     }
 }
 
@@ -2153,22 +2161,22 @@ fn emit_set_owner_metadata_arrays_property_aarch64(
     fail_label: &str,
 ) {
     if let (Some(low), Some(high)) = (layout.interface_names_lo, layout.interface_names_hi) {
-        emit_set_owner_metadata_array_slot_aarch64(emitter, 80, low, high, fail_label);
+        emit_set_owner_metadata_array_slot_aarch64(emitter, 80, low, high, false, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.trait_names_lo, layout.trait_names_hi) {
-        emit_set_owner_metadata_array_slot_aarch64(emitter, 88, low, high, fail_label);
+        emit_set_owner_metadata_array_slot_aarch64(emitter, 88, low, high, false, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.method_names_lo, layout.method_names_hi) {
-        emit_set_owner_metadata_array_slot_aarch64(emitter, 104, low, high, fail_label);
+        emit_set_owner_metadata_array_slot_aarch64(emitter, 104, low, high, false, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.property_names_lo, layout.property_names_hi) {
-        emit_set_owner_metadata_array_slot_aarch64(emitter, 112, low, high, fail_label);
+        emit_set_owner_metadata_array_slot_aarch64(emitter, 112, low, high, false, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.method_objects_lo, layout.method_objects_hi) {
-        emit_set_owner_metadata_array_slot_aarch64(emitter, 120, low, high, fail_label);
+        emit_set_owner_metadata_array_slot_aarch64(emitter, 120, low, high, true, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.property_objects_lo, layout.property_objects_hi) {
-        emit_set_owner_metadata_array_slot_aarch64(emitter, 128, low, high, fail_label);
+        emit_set_owner_metadata_array_slot_aarch64(emitter, 128, low, high, true, fail_label);
     }
 }
 
@@ -2178,6 +2186,7 @@ fn emit_set_owner_metadata_array_slot_aarch64(
     boxed_slot: usize,
     low_offset: usize,
     high_offset: usize,
+    object_elements: bool,
     fail_label: &str,
 ) {
     emitter.instruction(&format!("ldr x0, [sp, #{}]", boxed_slot));             // reload the boxed ReflectionClass metadata-name array
@@ -2185,6 +2194,12 @@ fn emit_set_owner_metadata_array_slot_aarch64(
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the metadata-name array tag and payload pointer
     emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array metadata-name metadata
+    if object_elements {
+        emitter.instruction("mov x0, x1");                                      // pass the boxed-cell array to the object-slot normalizer
+        emitter.instruction(&format!("bl {}", REFLECTION_OBJECT_ARRAY_UNBOX_LABEL)); // rewrite validated Mixed(object) slots to raw pointers
+        emitter.instruction(&format!("cbz x0, {}", fail_label));                // reject malformed Reflection object arrays
+        emitter.instruction("mov x1, x0");                                      // restore the normalized array payload convention
+    }
     emitter.instruction("str x1, [sp, #40]");                                   // save the unboxed metadata-name array across incref
     emitter.instruction("mov x0, x1");                                          // move the array payload into the incref argument register
     emitter.instruction("bl __rt_incref");                                      // retain the metadata-name array for ReflectionClass storage
@@ -2202,22 +2217,22 @@ fn emit_set_owner_metadata_arrays_property_x86_64(
     fail_label: &str,
 ) {
     if let (Some(low), Some(high)) = (layout.interface_names_lo, layout.interface_names_hi) {
-        emit_set_owner_metadata_array_slot_x86_64(emitter, -88, low, high, fail_label);
+        emit_set_owner_metadata_array_slot_x86_64(emitter, -88, low, high, false, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.trait_names_lo, layout.trait_names_hi) {
-        emit_set_owner_metadata_array_slot_x86_64(emitter, -96, low, high, fail_label);
+        emit_set_owner_metadata_array_slot_x86_64(emitter, -96, low, high, false, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.method_names_lo, layout.method_names_hi) {
-        emit_set_owner_metadata_array_slot_x86_64(emitter, -112, low, high, fail_label);
+        emit_set_owner_metadata_array_slot_x86_64(emitter, -112, low, high, false, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.property_names_lo, layout.property_names_hi) {
-        emit_set_owner_metadata_array_slot_x86_64(emitter, -120, low, high, fail_label);
+        emit_set_owner_metadata_array_slot_x86_64(emitter, -120, low, high, false, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.method_objects_lo, layout.method_objects_hi) {
-        emit_set_owner_metadata_array_slot_x86_64(emitter, -128, low, high, fail_label);
+        emit_set_owner_metadata_array_slot_x86_64(emitter, -128, low, high, true, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.property_objects_lo, layout.property_objects_hi) {
-        emit_set_owner_metadata_array_slot_x86_64(emitter, -136, low, high, fail_label);
+        emit_set_owner_metadata_array_slot_x86_64(emitter, -136, low, high, true, fail_label);
     }
 }
 
@@ -2227,6 +2242,7 @@ fn emit_set_owner_metadata_array_slot_x86_64(
     boxed_slot: isize,
     low_offset: usize,
     high_offset: usize,
+    object_elements: bool,
     fail_label: &str,
 ) {
     let boxed_slot = if boxed_slot < 0 {
@@ -2240,6 +2256,13 @@ fn emit_set_owner_metadata_array_slot_x86_64(
     emitter.instruction("call __rt_mixed_unbox");                               // expose the metadata-name array tag and payload pointer
     emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
     emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array metadata-name metadata
+    if object_elements {
+        emitter.instruction("mov rax, rdi");                                    // pass the boxed-cell array to the object-slot normalizer
+        emitter.instruction(&format!("call {}", REFLECTION_OBJECT_ARRAY_UNBOX_LABEL)); // rewrite validated Mixed(object) slots to raw pointers
+        emitter.instruction("test rax, rax");                                   // did object-slot validation succeed?
+        emitter.instruction(&format!("jz {}", fail_label));                     // reject malformed Reflection object arrays
+        emitter.instruction("mov rdi, rax");                                    // restore the normalized array payload convention
+    }
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // save the unboxed metadata-name array across incref
     emitter.instruction("mov rax, rdi");                                        // move the array payload into the incref argument register
     emitter.instruction("call __rt_incref");                                    // retain the metadata-name array for ReflectionClass storage
@@ -2248,6 +2271,147 @@ fn emit_set_owner_metadata_array_slot_x86_64(
     abi::emit_store_to_address(emitter, "rdi", "r10", low_offset);
     abi::emit_load_int_immediate(emitter, "r11", 4);
     abi::emit_store_to_address(emitter, "r11", "r10", high_offset);
+}
+
+/// Emits the ARM64 helper that validates and unboxes a fresh eval array of Reflection objects.
+fn emit_reflection_object_array_unbox_aarch64(emitter: &mut Emitter) {
+    let validate_loop = "__elephc_eval_reflection_object_array_validate";
+    let convert_start = "__elephc_eval_reflection_object_array_convert_start";
+    let convert_loop = "__elephc_eval_reflection_object_array_convert";
+    let done = "__elephc_eval_reflection_object_array_done";
+    let fail = "__elephc_eval_reflection_object_array_fail";
+    emitter.blank();
+    emitter.comment("--- eval bridge: normalize Reflection object arrays ---");
+    emitter.label(REFLECTION_OBJECT_ARRAY_UNBOX_LABEL);
+    emitter.instruction("sub sp, sp, #48");                                     // reserve array, index, old-cell, and saved-frame slots
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame across runtime calls
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable helper frame pointer
+    emitter.instruction("str x0, [sp]");                                        // retain the borrowed indexed array during validation
+    emitter.instruction("str xzr, [sp, #8]");                                   // start validation at slot zero
+    emitter.instruction(&format!("cbz x0, {}", fail));                          // reject a missing array payload
+    emitter.label(validate_loop);
+    emitter.instruction("ldr x9, [sp]");                                        // reload the indexed array for validation
+    emitter.instruction("ldr x10, [x9]");                                       // load the logical Reflection object count
+    emitter.instruction("ldr x11, [sp, #8]");                                   // load the current validation index
+    emitter.instruction("cmp x11, x10");                                        // has every boxed object slot been validated?
+    emitter.instruction(&format!("b.hs {}", convert_start));                    // begin conversion after the final live slot
+    emitter.instruction("add x12, x9, #24");                                    // address the indexed-array payload
+    emitter.instruction("ldr x0, [x12, x11, lsl #3]");                          // load the candidate boxed Mixed(object) cell
+    emitter.instruction(&format!("cbz x0, {}", fail));                          // reject null object cells before unboxing
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    emitter.instruction("cmp x0, #6");                                          // runtime tag 6 is the required object payload
+    emitter.instruction(&format!("b.ne {}", fail));                             // reject non-object Reflection array members
+    emitter.instruction(&format!("cbz x1, {}", fail));                          // reject boxed object cells with a null payload
+    emitter.instruction("ldr x11, [sp, #8]");                                   // advance the validated slot index
+    emitter.instruction("add x11, x11, #1");
+    emitter.instruction("str x11, [sp, #8]");
+    emitter.instruction(&format!("b {}", validate_loop));                       // validate the next Reflection object cell
+    emitter.label(convert_start);
+    emitter.instruction("str xzr, [sp, #8]");                                   // restart at slot zero for ownership conversion
+    emitter.label(convert_loop);
+    emitter.instruction("ldr x9, [sp]");                                        // reload the indexed array for conversion
+    emitter.instruction("ldr x10, [x9]");                                       // load the logical Reflection object count
+    emitter.instruction("ldr x11, [sp, #8]");                                   // load the current conversion index
+    emitter.instruction("cmp x11, x10");                                        // has every boxed cell been converted?
+    emitter.instruction(&format!("b.hs {}", done));                             // finish after the final Reflection object
+    emitter.instruction("add x12, x9, #24");                                    // address the indexed-array payload
+    emitter.instruction("ldr x0, [x12, x11, lsl #3]");                          // load the validated boxed Mixed(object) cell
+    emitter.instruction("str x0, [sp, #16]");                                   // preserve the old cell for balanced release
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    emitter.instruction("mov x0, x1");                                          // move the raw object pointer into the retain ABI
+    abi::emit_call_label(emitter, "__rt_incref");
+    emitter.instruction("ldr x9, [sp]");                                        // reload the array after retaining the object
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the current destination index
+    emitter.instruction("add x12, x9, #24");                                    // recover the destination payload base
+    emitter.instruction("str x0, [x12, x11, lsl #3]");                          // replace the Mixed cell with its owned object pointer
+    emitter.instruction("ldr x0, [sp, #16]");                                   // release the replaced Mixed-cell owner
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
+    emitter.instruction("ldr x11, [sp, #8]");                                   // advance to the next conversion slot
+    emitter.instruction("add x11, x11, #1");
+    emitter.instruction("str x11, [sp, #8]");
+    emitter.instruction(&format!("b {}", convert_loop));                        // convert the next Reflection object cell
+    emitter.label(done);
+    emitter.instruction("ldr x0, [sp]");                                        // return the normalized borrowed array
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load packed array metadata
+    emitter.instruction("mov x10, #0x7f00");                                    // mask the previous runtime value-type byte
+    emitter.instruction("bic x9, x9, x10");
+    emitter.instruction("orr x9, x9, #0x600");                                  // stamp runtime object tag 6 into the value-type byte
+    emitter.instruction("str x9, [x0, #-8]");                                   // publish the raw object-slot representation
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame
+    emitter.instruction("add sp, sp, #48");                                     // release helper scratch storage
+    emitter.instruction("ret");                                                 // return the normalized array to the owner materializer
+    emitter.label(fail);
+    emitter.instruction("mov x0, xzr");                                         // report validation failure without mutating the array
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame after validation failure
+    emitter.instruction("add sp, sp, #48");                                     // release helper scratch storage after failure
+    emitter.instruction("ret");                                                 // return the null failure sentinel
+}
+
+/// Emits the x86_64 helper that validates and unboxes a fresh eval array of Reflection objects.
+fn emit_reflection_object_array_unbox_x86_64(emitter: &mut Emitter) {
+    let validate_loop = "__elephc_eval_reflection_object_array_validate_x";
+    let convert_start = "__elephc_eval_reflection_object_array_convert_start_x";
+    let convert_loop = "__elephc_eval_reflection_object_array_convert_x";
+    let done = "__elephc_eval_reflection_object_array_done_x";
+    let fail = "__elephc_eval_reflection_object_array_fail_x";
+    emitter.blank();
+    emitter.comment("--- eval bridge: normalize Reflection object arrays ---");
+    emitter.label(REFLECTION_OBJECT_ARRAY_UNBOX_LABEL);
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame
+    emitter.instruction("sub rsp, 32");                                         // reserve array, index, and old-cell slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // retain the borrowed indexed array during validation
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // start validation at slot zero
+    emitter.instruction("test rax, rax");                                       // is the array payload present?
+    emitter.instruction(&format!("jz {}", fail));                               // reject a missing array payload
+    emitter.label(validate_loop);
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the indexed array for validation
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the logical Reflection object count
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // load the current validation index
+    emitter.instruction("cmp r11, r10");                                        // has every boxed object slot been validated?
+    emitter.instruction(&format!("jae {}", convert_start));                     // begin conversion after the final live slot
+    emitter.instruction("mov rax, QWORD PTR [r9 + r11*8 + 24]");                // load the candidate boxed Mixed(object) cell
+    emitter.instruction("test rax, rax");                                       // is the boxed object cell present?
+    emitter.instruction(&format!("jz {}", fail));                               // reject null Reflection object cells
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    emitter.instruction("cmp rax, 6");                                          // runtime tag 6 is the required object payload
+    emitter.instruction(&format!("jne {}", fail));                              // reject non-object Reflection array members
+    emitter.instruction("test rdi, rdi");                                       // does the boxed cell contain an object pointer?
+    emitter.instruction(&format!("jz {}", fail));                               // reject boxed object cells with a null payload
+    emitter.instruction("inc QWORD PTR [rbp - 16]");                            // advance the validated slot index
+    emitter.instruction(&format!("jmp {}", validate_loop));                     // validate the next Reflection object cell
+    emitter.label(convert_start);
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // restart at slot zero for ownership conversion
+    emitter.label(convert_loop);
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the indexed array for conversion
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the logical Reflection object count
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // load the current conversion index
+    emitter.instruction("cmp r11, r10");                                        // has every boxed cell been converted?
+    emitter.instruction(&format!("jae {}", done));                              // finish after the final Reflection object
+    emitter.instruction("mov rax, QWORD PTR [r9 + r11*8 + 24]");                // load the validated boxed Mixed(object) cell
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the old cell for balanced release
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    emitter.instruction("mov rax, rdi");                                        // move the raw object pointer into the retain ABI
+    abi::emit_call_label(emitter, "__rt_incref");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the array after retaining the object
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the current destination index
+    emitter.instruction("mov QWORD PTR [r9 + r11*8 + 24], rax");                // replace the Mixed cell with its owned object pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // release the replaced Mixed-cell owner
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
+    emitter.instruction("inc QWORD PTR [rbp - 16]");                            // advance to the next conversion slot
+    emitter.instruction(&format!("jmp {}", convert_loop));                      // convert the next Reflection object cell
+    emitter.label(done);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the normalized borrowed array
+    emitter.instruction("mov r9, QWORD PTR [rax - 8]");                         // load packed array metadata
+    emitter.instruction("and r9, -32513");                                      // clear the previous runtime value-type byte
+    emitter.instruction("or r9, 1536");                                         // stamp runtime object tag 6 into the value-type byte
+    emitter.instruction("mov QWORD PTR [rax - 8], r9");                         // publish the raw object-slot representation
+    emitter.instruction("leave");                                               // restore the caller frame and stack pointer
+    emitter.instruction("ret");                                                 // return the normalized array to the owner materializer
+    emitter.label(fail);
+    emitter.instruction("xor eax, eax");                                        // report validation failure without mutating the array
+    emitter.instruction("leave");                                               // restore the caller frame after validation failure
+    emitter.instruction("ret");                                                 // return the null failure sentinel
 }
 
 /// Stores a retained ARM64 boxed ReflectionMethod-or-null constructor cell.
@@ -2499,6 +2663,7 @@ fn emit_set_owner_attrs_property_aarch64(
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the attribute array tag and payload pointer
     emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array attribute metadata
+    emit_normalize_attribute_array_aarch64(emitter, fail_label);
     emitter.instruction("str x1, [sp, #40]");                                   // save the unboxed attribute array across incref
     emitter.instruction("mov x0, x1");                                          // move the array payload into the incref argument register
     emitter.instruction("bl __rt_incref");                                      // retain the attribute array for Reflection owner storage
@@ -2521,6 +2686,7 @@ fn emit_set_owner_attrs_property_x86_64(
     emitter.instruction("call __rt_mixed_unbox");                               // expose the attribute array tag and payload pointer
     emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
     emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array attribute metadata
+    emit_normalize_attribute_array_x86_64(emitter, fail_label);
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // save the unboxed attribute array across incref
     emitter.instruction("mov rax, rdi");                                        // move the array payload into the incref argument register
     emitter.instruction("call __rt_incref");                                    // retain the attribute array for Reflection owner storage
@@ -2531,8 +2697,53 @@ fn emit_set_owner_attrs_property_x86_64(
     abi::emit_store_to_address(emitter, "r11", "r10", layout.attrs_hi);
 }
 
+/// Normalizes an ARM64 eval `array<mixed<object>>` into raw ReflectionAttribute slots.
+fn emit_normalize_attribute_array_aarch64(emitter: &mut Emitter, fail_label: &str) {
+    emitter.instruction("mov x0, x1");                                          // pass boxed attribute cells to the object-slot normalizer
+    emitter.instruction(&format!("bl {}", REFLECTION_OBJECT_ARRAY_UNBOX_LABEL)); // rewrite validated Mixed(object) slots to raw pointers
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed ReflectionAttribute arrays
+    emitter.instruction("mov x1, x0");                                          // restore the normalized attribute-array payload convention
+}
+
+/// Normalizes an x86_64 eval `array<mixed<object>>` into raw ReflectionAttribute slots.
+fn emit_normalize_attribute_array_x86_64(emitter: &mut Emitter, fail_label: &str) {
+    emitter.instruction("mov rax, rdi");                                        // pass boxed attribute cells to the object-slot normalizer
+    emitter.instruction(&format!("call {}", REFLECTION_OBJECT_ARRAY_UNBOX_LABEL)); // rewrite validated Mixed(object) slots to raw pointers
+    emitter.instruction("test rax, rax");                                       // did ReflectionAttribute slot validation succeed?
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed ReflectionAttribute arrays
+    emitter.instruction("mov rdi, rax");                                        // restore the normalized attribute-array payload convention
+}
+
 /// Emits a C-visible global label with target-specific symbol mangling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
     let symbol = module.target.extern_symbol(name);
     emitter.label_global(&symbol);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::{Platform, Target};
+
+    /// Verifies ARM64 ReflectionAttribute owner storage calls the shared object-slot normalizer.
+    #[test]
+    fn arm64_attribute_array_storage_normalizes_boxed_objects() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_normalize_attribute_array_aarch64(&mut emitter, "attribute_fail");
+        let output = emitter.output();
+        assert!(output.contains("bl __elephc_eval_reflection_object_array_unbox"));
+        assert!(output.contains("cbz x0, attribute_fail"));
+        assert!(output.contains("mov x1, x0"));
+    }
+
+    /// Verifies x86_64 ReflectionAttribute owner storage calls the shared object-slot normalizer.
+    #[test]
+    fn x86_64_attribute_array_storage_normalizes_boxed_objects() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_normalize_attribute_array_x86_64(&mut emitter, "attribute_fail");
+        let output = emitter.output();
+        assert!(output.contains("call __elephc_eval_reflection_object_array_unbox"));
+        assert!(output.contains("jz attribute_fail"));
+        assert!(output.contains("mov rdi, rax"));
+    }
 }

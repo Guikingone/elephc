@@ -20,7 +20,10 @@ pub(super) fn lower_property_assign(
     // A statically-decided readonly-property write outside the declaring
     // constructor raises a catchable `Error` in PHP rather than a compile-time
     // error, but the object and RHS expressions must still be evaluated first.
-    let throw_access_message = ctx.throw_access_sites.get(&span).and_then(|info| {
+    let throw_access_message = ctx
+        .throw_access_sites
+        .get(&(ctx.loop_storage_scope.clone(), span))
+        .and_then(|info| {
         if let ThrowAccessKind::ReadonlyProperty { class_name, property } = &info.kind {
             Some(format!("Cannot modify readonly property {}::${}", class_name, property))
         } else {
@@ -28,8 +31,14 @@ pub(super) fn lower_property_assign(
         }
     });
     let object = lower_expr(ctx, object);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     let value_expr = value;
     let lowered_value = lower_expr(ctx, value_expr);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     if let Some(message) = throw_access_message {
         if ctx.value_is_owning_temporary(object) {
             crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
@@ -89,7 +98,13 @@ pub(in crate::ir_lower) fn lower_raw_property_assign(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     let lowered_value = lower_expr(ctx, value);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     let lowered_value = contextualize_property_array_assignment(
         ctx,
         object.value,
@@ -130,6 +145,9 @@ pub(super) fn lower_property_ref_assign(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     let ExprKind::PropertyAccess {
         object: source_object,
         property: source_property,
@@ -140,6 +158,9 @@ pub(super) fn lower_property_ref_assign(
     let value_type = property_access_expr_type_for_ir(ctx, source_object, source_property)
         .unwrap_or(PhpType::Mixed);
     let source_object = lower_expr(ctx, source_object);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     let source_data = ctx.intern_string(source_property);
     let cell_ptr = ctx.emit_value(
         Op::LoadPropRefCell,
@@ -264,13 +285,10 @@ pub(super) fn contextualize_property_array_assignment(
     object: crate::ir::ValueId,
     property: &str,
     lowered: LoweredValue,
-    value_expr: &Expr,
+    _value_expr: &Expr,
     span: Span,
 ) -> LoweredValue {
     let php_type = ctx.builder.value_php_type(lowered.value);
-    if !matches!(value_expr.kind, ExprKind::ArrayLiteral(_)) {
-        return lowered;
-    }
     if !matches!(php_type.codegen_repr(), PhpType::Array(_)) {
         return lowered;
     }

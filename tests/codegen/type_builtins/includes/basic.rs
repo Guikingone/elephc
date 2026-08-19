@@ -448,3 +448,38 @@ fn test_require_value_without_return_yields_one() {
     );
     assert_eq!(out, "1:H");
 }
+
+/// Verifies builtin result metadata is isolated between equal coordinates in separate files.
+#[test]
+fn test_included_builtin_call_spans_do_not_share_result_types() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require __DIR__ . '/keys.php';
+require __DIR__ . '/slice.php';
+echo implode(',', selected_keys()) . ':' . implode(',', selected_slice());
+"#,
+            ),
+            (
+                "keys.php",
+                r#"<?php
+function selected_keys(): array {
+    return array_keys(['left' => 1, 'right' => 2]);
+}
+"#,
+            ),
+            (
+                "slice.php",
+                r#"<?php
+function selected_slice(): array {
+    return array_slice([10, 20, 30], 1);
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "left,right:20,30");
+}

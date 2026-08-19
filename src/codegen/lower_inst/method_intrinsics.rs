@@ -9,6 +9,14 @@
 
 use super::*;
 
+/// One concrete implementation of a static method declared by an interface.
+struct InterfaceStaticMethodCandidate {
+    class_id: u64,
+    class_name: String,
+    impl_class: String,
+    signature: FunctionSig,
+}
+
 /// Lowers an instance-method call through interface metadata.
 pub(super) fn lower_interface_method_call(
     ctx: &mut FunctionContext<'_>,
@@ -25,6 +33,19 @@ pub(super) fn lower_interface_method_call(
     }
     let normalized_interface = interface_name.trim_start_matches('\\');
     let method_key = php_symbol_key(method_name);
+    if ctx
+        .module
+        .interface_infos
+        .get(normalized_interface)
+        .is_some_and(|interface_info| interface_info.static_methods.contains_key(&method_key))
+    {
+        return lower_interface_static_method_call(
+            ctx,
+            inst,
+            normalized_interface,
+            method_name,
+        );
+    }
     if ctx
         .module
         .interface_infos
@@ -62,6 +83,138 @@ pub(super) fn lower_interface_method_call(
     store_call_result(ctx, inst, &return_ty)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+}
+
+/// Dispatches an object-syntax call to a static interface method by concrete class id.
+///
+/// PHP permits `$object->staticMethod()`. For an interface-typed receiver the concrete class
+/// selects the implementation and also supplies the hidden called-class id used by `static::`.
+fn lower_interface_static_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    interface_name: &str,
+    method_name: &str,
+) -> Result<()> {
+    let method_key = php_symbol_key(method_name);
+    let interface_signature = ctx
+        .module
+        .interface_infos
+        .get(interface_name)
+        .and_then(|interface_info| interface_info.static_methods.get(&method_key))
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "interface static method call to unknown method {}::{}",
+                interface_name, method_name
+            ))
+        })?
+        .clone();
+    if inst.operands.len() != interface_signature.params.len() + 1 {
+        return Err(CodegenIrError::unsupported(format!(
+            "interface static method call to {}::{} with {} operands for {} ABI params",
+            interface_name,
+            method_name,
+            inst.operands.len(),
+            interface_signature.params.len() + 1
+        )));
+    }
+
+    let mut candidates = Vec::new();
+    for (class_name, class_info) in &ctx.module.class_infos {
+        if !class_implements_interface(ctx, class_name, interface_name) {
+            continue;
+        }
+        let Some(signature) = class_info.static_methods.get(&method_key) else {
+            continue;
+        };
+        let impl_class = class_info
+            .static_method_impl_classes
+            .get(&method_key)
+            .cloned()
+            .unwrap_or_else(|| class_name.clone());
+        candidates.push(InterfaceStaticMethodCandidate {
+            class_id: class_info.class_id,
+            class_name: class_name.clone(),
+            impl_class,
+            signature: signature.clone(),
+        });
+    }
+    candidates.sort_by_key(|candidate| candidate.class_id);
+
+    let receiver = inst.operands[0];
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let no_match_label = ctx.next_label("interface_static_no_match");
+    let done_label = ctx.next_label("interface_static_done");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "interface_static_{}",
+                label_fragment(&candidate.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+    ctx.load_value_to_reg(receiver, receiver_reg)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("ldr x9, [{}]", receiver_reg)); // load the concrete receiver class id for static interface dispatch
+            for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
+                ctx.emitter.instruction("cmp x9, x10");                         // compare the runtime class id with this static implementation
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // branch to the matching concrete static method
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("mov r11, QWORD PTR [{}]", receiver_reg)); // load the concrete receiver class id for static interface dispatch
+            for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
+                ctx.emitter.instruction("cmp r11, r10");                        // compare the runtime class id with this static implementation
+                ctx.emitter.instruction(&format!("je {}", label));              // branch to the matching concrete static method
+            }
+        }
+    }
+    abi::emit_jump(ctx.emitter, &no_match_label);
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let param_types = candidate
+            .signature
+            .params
+            .iter()
+            .map(|(_, ty)| ty.codegen_repr())
+            .collect::<Vec<_>>();
+        let call_args = materialize_static_method_call_args_with_refs(
+            ctx,
+            &CalledClassIdArg::Immediate(candidate.class_id),
+            &inst.operands[1..],
+            &param_types,
+            &candidate.signature.ref_params,
+        )?;
+        let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+        abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+        abi::emit_call_label(
+            ctx.emitter,
+            &static_method_symbol(&candidate.impl_class, &method_key),
+        );
+        abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+        abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+        store_call_result(ctx, inst, &candidate.signature.return_type)?;
+        emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+        emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&no_match_label);
+    exceptions::emit_error(
+        ctx,
+        &format!(
+            "Call to undefined method {}::{}()",
+            interface_name, method_name
+        ),
+    );
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Resolves interface method metadata and validates the EIR ABI operand count.
@@ -177,6 +330,7 @@ pub(super) fn lower_nullable_receiver_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -275,6 +429,7 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
     abi::emit_jump(ctx.emitter, &done_label);
 

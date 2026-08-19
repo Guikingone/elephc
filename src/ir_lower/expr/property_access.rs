@@ -110,6 +110,12 @@ pub(crate) fn lower_ref_assign_array_elem(
         return;
     };
     let array_value = lower_expr(ctx, array);
+    let array_value = prepare_local_array_element_reference_container(
+        ctx,
+        array,
+        array_value,
+        span,
+    );
     let mut index_value = lower_expr(ctx, index);
     // Use the array's declared element type (the inline storage shape), not the
     // null-capable `TaggedScalar` result type that `array_access_result_type` widens
@@ -136,6 +142,48 @@ pub(crate) fn lower_ref_assign_array_elem(
         Some(span),
     );
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+}
+
+/// Widens a local array's element storage before exposing one element as a writable reference.
+///
+/// A PHP reference may later receive a value of any type. Concrete indexed/hash element layouts
+/// cannot represent such a write safely, so a plain local source is converted to Mixed-valued
+/// storage and written back before its element address is taken. Containers already using Mixed
+/// slots and non-local receiver shapes are left unchanged for their dedicated place lowerers.
+fn prepare_local_array_element_reference_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    array_value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let ExprKind::Variable(name) = &array.kind else {
+        return array_value;
+    };
+    let container_type = ctx.builder.value_php_type(array_value.value).codegen_repr();
+    let (op, target_type) = match container_type {
+        PhpType::Array(element) if element.codegen_repr() != PhpType::Mixed => (
+            Op::ArrayToMixed,
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        ),
+        PhpType::AssocArray { key, value } if value.codegen_repr() != PhpType::Mixed => (
+            Op::HashToMixed,
+            PhpType::AssocArray {
+                key,
+                value: Box::new(PhpType::Mixed),
+            },
+        ),
+        _ => return array_value,
+    };
+    let converted = ctx.emit_value(
+        op,
+        vec![array_value.value],
+        None,
+        target_type.clone(),
+        op.default_effects(),
+        Some(span),
+    );
+    ctx.store_mutated_local(name, converted, target_type, Some(span));
+    ctx.load_local(name, Some(span))
 }
 
 /// Lowers a named property read once the receiver is already evaluated.
@@ -221,6 +269,12 @@ pub(super) fn property_get_result_type(
     op: Op,
     expr: &Expr,
 ) -> PhpType {
+    if let Some(property_ty) = ctx
+        .flow_typed_property_accesses
+        .get(&(ctx.loop_storage_scope.clone(), expr.span))
+    {
+        return normalize_value_php_type(property_ty.clone());
+    }
     if op == Op::NullsafePropGet {
         return PhpType::Mixed;
     }

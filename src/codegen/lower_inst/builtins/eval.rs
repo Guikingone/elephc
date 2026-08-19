@@ -44,6 +44,8 @@ const EVAL_STACK_BYTES: usize = 96;
 const EVAL_RESULT_VALUE_CELL_OFFSET: usize = 8;
 const EVAL_RESULT_ERROR_OFFSET: usize = 16;
 const EVAL_CONTEXT_HANDLE_OFFSET: usize = 24;
+const EVAL_CONTEXT_HELPER_FRAME_SIZE: usize = 32;
+const EVAL_CONTEXT_HELPER_LOCAL_OFFSET: usize = 16;
 const EVAL_SCOPE_HANDLE_OFFSET: usize = 32;
 const EVAL_TEMP_CELL_OFFSET: usize = 40;
 const EVAL_CODE_PTR_OFFSET: usize = 48;
@@ -135,6 +137,31 @@ struct EvalNativeMethodRegistration {
     is_static: bool,
     signature: FunctionSig,
     bridge_supported: bool,
+}
+
+/// Returns true when a user function has a Magician registration that can bridge calls.
+pub(crate) fn eval_native_function_bridge_supported(function: &Function) -> bool {
+    function_has_eval_metadata(function) && function_signature_can_bridge_with_eval(function)
+}
+
+/// Returns true when an instance method has a Magician registration that can bridge calls.
+pub(crate) fn eval_native_instance_method_bridge_supported(
+    class_info: &ClassInfo,
+    method_name: &str,
+    signature: &FunctionSig,
+) -> bool {
+    class_method_visibility_bridge_supported(class_info, method_name)
+        && method_signature_can_bridge_with_eval(signature)
+}
+
+/// Returns true when a static method has a Magician registration that can bridge calls.
+pub(crate) fn eval_native_static_method_bridge_supported(
+    class_info: &ClassInfo,
+    method_name: &str,
+    signature: &FunctionSig,
+) -> bool {
+    class_static_method_visibility_bridge_supported(class_info, method_name)
+        && method_signature_can_bridge_with_eval(signature)
 }
 
 /// A module-local constructor signature that can be registered with the eval context.

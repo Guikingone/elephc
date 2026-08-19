@@ -35,7 +35,7 @@ pub use registry::{contracts, lookup, lookup_id};
 pub use runtime_id::{runtime_builtin_id, RuntimeBuiltinId, RuntimeBuiltinStatus};
 pub use spec::{
     Area, BuiltinContract, BuiltinKind, BuiltinRequirement, BuiltinSignature, DefaultSpec,
-    ParamSpec, PassingMode, TypeSpec,
+    ParamSpec, PassingMode, TypeSpec, VariadicSpec,
 };
 pub use support::{
     aot_support, backend_support, eval_execution, eval_support, BackendImplementation,

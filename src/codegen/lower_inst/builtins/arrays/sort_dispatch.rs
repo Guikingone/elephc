@@ -105,18 +105,7 @@ pub(super) fn lower_assoc_array_key_set_op(
     let first_ty = assoc_array_key_set_operand_type(ctx.value_php_type(first)?, name, "first")?;
     let _second_ty = assoc_array_key_set_operand_type(ctx.value_php_type(second)?, name, "second")?;
     require_assoc_array_key_set_result_type(name, &first_ty, &inst.result_php_type.codegen_repr())?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_value_to_reg(first, "x0")?;
-            ctx.load_value_to_reg(second, "x1")?;
-        }
-        Arch::X86_64 => {
-            ctx.load_value_to_reg(first, "rdi")?;
-            ctx.load_value_to_reg(second, "rsi")?;
-        }
-    }
-    abi::emit_call_label(ctx.emitter, helper);
-    store_if_result(ctx, inst)
+    lower_two_hash_arg_builtin(ctx, inst, name, helper, None, true)
 }
 
 /// Calls a mutating indexed-array sort helper after copy-on-write splitting.

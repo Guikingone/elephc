@@ -13,7 +13,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
-use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
@@ -81,9 +81,9 @@ pub(crate) use split::{lower_explode, lower_implode, lower_sscanf, lower_str_spl
 
 #[allow(unused_imports)]
 pub(super) use common::{
-    load_single_string_arg, load_string_arg_to_regs, load_value_as_string_to_regs,
-    materialize_truthy_flag,
+    load_single_string_arg, load_string_arg_to_regs, materialize_truthy_flag,
 };
+pub(in crate::codegen::lower_inst) use common::load_value_as_string_to_regs;
 #[allow(unused_imports)]
 pub(super) use printf::{
     pack_sprintf_like_arg, sprintf_spec_cats_for_format, SprintfSpecCat,

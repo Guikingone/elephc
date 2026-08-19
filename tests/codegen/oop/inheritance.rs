@@ -384,6 +384,36 @@ echo $child->total() . " " . $child->greet();
     assert_eq!(out, "42 hi!");
 }
 
+/// Verifies explicit ancestor syntax may invoke an inherited instance constructor
+/// while preserving the current child object as `$this`.
+#[test]
+fn test_explicit_ancestor_constructor_binds_current_instance() {
+    let out = compile_and_run(
+        r#"<?php
+class ExplicitAncestorBase {
+    protected string $value = "";
+
+    public function __construct(string $value) {
+        $this->value = $value;
+    }
+}
+
+final class ExplicitAncestorChild extends ExplicitAncestorBase {
+    public function __construct(string $value) {
+        ExplicitAncestorBase::__construct($value);
+    }
+
+    public function value(): string {
+        return $this->value;
+    }
+}
+
+echo (new ExplicitAncestorChild("ok"))->value();
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies protected method `readValue()` and protected property `$value` are accessible
 /// from a subclass via `$this`, returning 42.
 #[test]

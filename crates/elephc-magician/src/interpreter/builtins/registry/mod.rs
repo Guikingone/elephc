@@ -130,7 +130,8 @@ fn validate_declared_builtin_spec(spec: &EvalBuiltinSpec) {
         assert!(
             spec.params
                 .iter()
-                .any(|param| param.name == *by_ref_name && param.by_ref),
+                .any(|param| param.name == *by_ref_name && param.by_ref)
+                || spec.variadic == Some(*by_ref_name),
             "eval builtin {} lists {} as by-ref without marking the parameter",
             spec.name,
             by_ref_name
@@ -143,6 +144,13 @@ fn validate_declared_builtin_spec(spec: &EvalBuiltinSpec) {
             "eval builtin {} has a variadic name out of sync",
             spec.name
         );
+        if spec.by_ref_params.contains(&variadic) {
+            assert!(
+                !spec.params.iter().any(|param| param.name == variadic),
+                "eval builtin {} represents its by-reference variadic outside fixed params",
+                spec.name
+            );
+        }
     }
     if let Some(required_param_count) = spec.required_param_count {
         assert!(

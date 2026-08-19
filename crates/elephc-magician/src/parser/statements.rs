@@ -127,6 +127,7 @@ impl Parser {
                 self.expect_semicolon()?;
                 Ok(vec![EvalStmt::Return(Some(expr))])
             }
+            TokenKind::Ident(name) if ident_eq(name, "yield") => self.parse_yield_stmt(),
             TokenKind::Ident(name)
                 if ident_eq(name, "static") && self.current_starts_static_property_assignment() =>
             {
@@ -212,6 +213,34 @@ impl Parser {
                 self.parse_property_like_stmt_tail(expr, true)
             }
         }
+    }
+
+    /// Parses one yield statement into the closure-local generator marker representation.
+    fn parse_yield_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "from")) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        if self.consume_semicolon() {
+            return Ok(vec![EvalStmt::Expr(EvalExpr::Call {
+                name: EVAL_YIELD_INTRINSIC.to_string(),
+                args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::Null))],
+            })]);
+        }
+        let first = self.parse_expr()?;
+        let args = if self.consume(TokenKind::FatArrow) {
+            vec![
+                EvalCallArg::positional(first),
+                EvalCallArg::positional(self.parse_expr()?),
+            ]
+        } else {
+            vec![EvalCallArg::positional(first)]
+        };
+        self.expect_semicolon()?;
+        Ok(vec![EvalStmt::Expr(EvalExpr::Call {
+            name: EVAL_YIELD_INTRINSIC.to_string(),
+            args,
+        })])
     }
 
     /// Parses one declaration preceded by PHP attribute groups.

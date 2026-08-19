@@ -2611,6 +2611,22 @@ echo ($traitParams[2]->hasType() ? "T" : "t");
     );
 }
 
+/// Verifies an uncalled function may defer reflection of an absent class-like constant to a
+/// runtime loader, while the rest of the statically reachable program still compiles and runs.
+#[test]
+fn test_reflection_method_absent_class_constant_in_uncalled_function_is_deferred() {
+    let out = compile_and_run(
+        r#"<?php
+function optionalReflectionTarget(): ReflectionMethod {
+    return new ReflectionMethod(RuntimeProvidedTrait::class, "run");
+}
+
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies `ReflectionParameter::getDeclaringClass()` reports method owners and null for functions.
 #[test]
 fn test_reflection_parameter_get_declaring_class_reports_method_owner() {
@@ -3235,6 +3251,7 @@ class ReflectObjectDefaultValue {
         $this->extra = $extra;
     }
 }
+
 class ReflectObjectDefaultValueArgs {
     const ARG_LABEL = "arg";
     const ARG_EXTRA = 42;
@@ -3286,6 +3303,28 @@ echo $directMethodArgs instanceof ReflectObjectDefaultValueArgs ? ":direct-metho
         out.stdout,
         "D:object:ctor:default-extra:diff:direct:ctor:method:ctor:direct-method:ctor:args:arg:42:method-args:method-arg:M:direct-method-args:method-arg:M"
     );
+}
+
+/// Verifies flow-typed returns from another scope cannot retag synthetic reflection returns.
+#[test]
+fn test_flow_typed_return_scope_isolation_for_reflection_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+interface FlowTypedReturnScope {}
+class FlowTypedReturnImpl implements FlowTypedReturnScope {}
+class FlowTypedDefaultValue {}
+
+function flow_typed_return_scope(): FlowTypedReturnScope {
+    return new FlowTypedReturnImpl();
+}
+
+function flow_typed_reflected_default(FlowTypedDefaultValue $value = new FlowTypedDefaultValue()) {}
+
+$value = (new ReflectionParameter('flow_typed_reflected_default', 'value'))->getDefaultValue();
+echo get_class(flow_typed_return_scope()) . '|' . get_class($value);
+"#,
+    );
+    assert_eq!(out, "FlowTypedReturnImpl|FlowTypedDefaultValue");
 }
 
 /// Verifies `ReflectionParameter` exposes class-constant default metadata.

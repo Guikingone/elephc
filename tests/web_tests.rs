@@ -196,6 +196,15 @@ fn web_compile_produces_binary() {
     assert!(bin.exists(), "expected binary at {}", bin.display());
 }
 
+/// Verifies a dynamically probed constant name does not create an undefined reset symbol.
+#[test]
+fn web_compile_skips_reset_for_constant_probe_without_global_storage() {
+    let dir = make_test_dir("web_constant_probe");
+    let source = "<?php eval('$x = 1;'); echo defined('NEVER_DEFINED') ? 'bad' : 'ok';";
+    let bin = compile_web(&dir, source, "app");
+    assert!(bin.exists(), "expected binary at {}", bin.display());
+}
+
 /// Verifies per-request reset of top-level PHP variables between two real HTTP
 /// requests: each response body must be exactly "x" (not accumulated).
 #[test]
@@ -983,7 +992,7 @@ fn web_setcookie_emits_header() {
 #[test]
 fn web_env_superglobal_populated() {
     let dir = make_test_dir("web_env");
-    let src = "<?php echo ($_ENV['ELEPHC_WEB_TEST_ENV'] ?? '?');";
+    let src = "<?php echo ($_ENV['ELEPHC_WEB_TEST_ENV'] ?? '?').'|'.($_SERVER['ELEPHC_WEB_TEST_ENV'] ?? '?');";
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
@@ -998,7 +1007,11 @@ fn web_env_superglobal_populated() {
     let resp = http_request(&addr, "GET", "/", &[], "");
     let _ = child.kill();
     let _ = child.wait();
-    assert!(resp.ends_with("present"), "$_ENV not populated: {:?}", resp);
+    assert!(
+        resp.ends_with("present|present"),
+        "process environment not mirrored into $_ENV and $_SERVER: {:?}",
+        resp
+    );
 }
 
 /// Verifies the produced binary answers --help and --version (exit 0) (D4).

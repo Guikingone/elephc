@@ -73,6 +73,7 @@ pub(crate) enum TokenKind {
     Caret,
     CaretEqual,
     Tilde,
+    At,
     Dot,
     DotEqual,
     Ellipsis,

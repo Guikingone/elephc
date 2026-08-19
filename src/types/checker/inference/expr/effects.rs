@@ -15,7 +15,7 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::null_probe;
 use super::super::super::Checker;
-use super::{merge_match_arm_result_type, merge_null_coalesce_result_type};
+use super::{merge_match_arm_result_type, merge_null_coalesce_checked_result_type};
 
 impl Checker {
     /// Installs assignment effects that are guaranteed when a short-circuit condition is true.
@@ -78,7 +78,20 @@ impl Checker {
                 right,
             } if truthy => {
                 self.infer_short_circuit_outcome_effects(left, true, true, env)?;
+                let receiver_fact = zero_arg_method_receiver(right)
+                    .and_then(|receiver| self.flow_guard_env_key(receiver))
+                    .filter(|key| key.starts_with('\u{1}'))
+                    .and_then(|key| env.get(&key).cloned().map(|ty| (key, ty)));
                 self.infer_type_with_assignment_effects(right, env)?;
+                // Calling a method through the guarded property does not change the class of the
+                // receiver value that satisfied the preceding `instanceof`. Calls ordinarily
+                // invalidate every property fact conservatively; retain this one narrow fact so
+                // the next operand in the same successful `&&` chain sees the proven receiver.
+                // Restrict this to zero-argument calls: argument evaluation can contain an
+                // explicit write or by-reference mutation of the guarded storage.
+                if let Some((key, ty)) = receiver_fact {
+                    env.insert(key, ty);
+                }
                 self.infer_short_circuit_outcome_effects(right, true, true, env)
             }
             ExprKind::BinaryOp {
@@ -262,7 +275,8 @@ impl Checker {
                 } else {
                     value_ty
                 };
-                Ok(merge_null_coalesce_result_type(
+                Ok(merge_null_coalesce_checked_result_type(
+                    self,
                     non_null_value,
                     default_ty,
                 ))
@@ -376,8 +390,11 @@ impl Checker {
                 self.infer_type_with_assignment_effects(index, env)?;
                 self.infer_type(expr, env)
             }
+            ExprKind::Not(inner) => {
+                self.infer_type_with_assignment_effects(inner, env)?;
+                Ok(PhpType::Bool)
+            }
             ExprKind::Negate(inner)
-            | ExprKind::Not(inner)
             | ExprKind::BitNot(inner)
             | ExprKind::Throw(inner)
             | ExprKind::ErrorSuppress(inner)
@@ -457,7 +474,9 @@ impl Checker {
                         if contextual_callbacks.contains(&idx) {
                             continue;
                         }
-                        if (builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2)
+                        if ((builtin_name.eq_ignore_ascii_case("preg_match")
+                            || builtin_name.eq_ignore_ascii_case("preg_match_all"))
+                            && idx == 2)
                             || (builtin_name.eq_ignore_ascii_case("openssl_encrypt")
                                 && is_openssl_encrypt_tag_arg(arg, idx))
                         {
@@ -475,12 +494,31 @@ impl Checker {
                 }
                 let ty = self.infer_type(expr, env)?;
                 // The callee may mutate any reachable object; drop property narrowings. (The
-                // call's own argument checking above still saw them.)
-                Self::purge_property_narrowings(env);
-                if builtin_name.eq_ignore_ascii_case("preg_match") {
+                // call's own argument checking above still saw them.) A registry builtin with
+                // an empty semantic effect summary cannot mutate that storage; retaining facts
+                // for it keeps compound guards precise without a PHP-name allowlist.
+                if !registry_builtin_call_preserves_property_narrowings(builtin_name) {
+                    Self::purge_property_narrowings(env);
+                }
+                if builtin_name.eq_ignore_ascii_case("preg_match")
+                    || builtin_name.eq_ignore_ascii_case("preg_match_all")
+                {
                     if let Some(arg) = expanded_args.get(2) {
                         if let Some(name) = output_variable(arg) {
-                            env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
+                            let capture_type = if builtin_name
+                                .eq_ignore_ascii_case("preg_match_all")
+                            {
+                                if expanded_args.get(3).is_some() {
+                                    PhpType::Mixed
+                                } else {
+                                    PhpType::Array(Box::new(PhpType::Str))
+                                }
+                            } else if expanded_args.get(3).is_some() {
+                                PhpType::Mixed
+                            } else {
+                                PhpType::Str
+                            };
+                            env.insert(name.clone(), PhpType::Array(Box::new(capture_type)));
                         }
                     }
                 }
@@ -691,7 +729,10 @@ impl Checker {
         match self.infer_type_with_assignment_effects(inner, env)? {
             PhpType::Array(elem_ty) => Ok(*elem_ty),
             PhpType::AssocArray { value, .. } => Ok(*value),
-            PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+            PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+            PhpType::Object(name) if self.object_type_implements_iterable(&name) => {
+                Ok(PhpType::Mixed)
+            }
             _ => Err(CompileError::new(
                 arg.span,
                 "Spread operator requires an array",
@@ -899,33 +940,46 @@ impl Checker {
             self.normalize_named_call_args(signature, args, span, "call", env)?
         };
         let regular_param_count = crate::types::call_args::regular_param_count(signature);
+        let variadic_param_index = signature.variadic.as_ref().and_then(|name| {
+            signature
+                .params
+                .iter()
+                .position(|(param_name, _)| param_name == name)
+        });
         let mut param_index = 0usize;
         for argument in &normalized {
             if matches!(argument.kind, ExprKind::Spread(_)) {
                 continue;
             }
-            if param_index >= regular_param_count {
+            let is_variadic_binding = param_index >= regular_param_count;
+            let Some(binding_index) = (if is_variadic_binding {
+                variadic_param_index
+            } else {
+                Some(param_index)
+            }) else {
                 break;
-            }
+            };
             if signature
                 .ref_params
-                .get(param_index)
+                .get(binding_index)
                 .copied()
                 .unwrap_or(false)
             {
                 if let Some(name) = by_ref_output_variable(argument) {
                     let declared = signature
                         .declared_params
-                        .get(param_index)
+                        .get(binding_index)
                         .copied()
                         .unwrap_or(false);
                     let expected = signature
                         .params
-                        .get(param_index)
+                        .get(binding_index)
                         .map(|(_, ty)| ty)
                         .unwrap_or(&PhpType::Mixed);
                     let current = env.get(name).cloned();
-                    let storage = if internal_callable {
+                    let storage = if is_variadic_binding && *expected == PhpType::Mixed {
+                        Some(PhpType::Mixed)
+                    } else if internal_callable {
                         if *expected == PhpType::Mixed {
                             current.clone().or(Some(PhpType::Mixed))
                         } else {
@@ -996,7 +1050,7 @@ impl Checker {
                         Some(PhpType::Void)
                     };
                     if let Some(storage) = storage {
-                        if !internal_callable
+                        if (!internal_callable || is_variadic_binding)
                             && storage.codegen_repr() == PhpType::Mixed
                             && current
                                 .as_ref()
@@ -1082,6 +1136,41 @@ impl Checker {
             self.first_class_callable_targets.remove(&name);
         }
     }
+}
+
+/// Returns the receiver of a zero-argument method call used directly as an expression result.
+///
+/// A local assignment wrapper is transparent because it only captures the call result; calls
+/// with arguments remain excluded since their evaluation may mutate the guarded property.
+fn zero_arg_method_receiver(expr: &Expr) -> Option<&Expr> {
+    match &expr.kind {
+        ExprKind::MethodCall { object, args, .. } if args.is_empty() => Some(object),
+        ExprKind::Assignment { value, .. } => zero_arg_method_receiver(value),
+        _ => None,
+    }
+}
+
+/// Returns whether a registry builtin's shared contract cannot invalidate property type facts.
+///
+/// Shared/value-dependent effect resolvers remain conservative here because this flow pass does
+/// not own authoritative argument types. Read-only internal-array-pointer operations are also
+/// safe: they may allocate a result cell but do not move the cursor or mutate PHP storage.
+/// Unknown and user-defined functions return false.
+fn registry_builtin_call_preserves_property_narrowings(name: &str) -> bool {
+    let Some(def) = crate::builtins::registry::lookup(name) else {
+        return false;
+    };
+    if matches!(
+        def.spec.semantics.effects,
+        crate::builtins::semantics::BuiltinEffects::Static(effects) if effects.is_pure()
+    ) {
+        return true;
+    }
+    matches!(
+        def.spec.semantics.argument_lowering,
+        crate::builtins::semantics::BuiltinArgumentLowering::ArrayInternalPointer(op)
+            if op.seek_mode().is_none()
+    )
 }
 
 /// Merges storage effects from an expression arm that may not execute into its outer environment.

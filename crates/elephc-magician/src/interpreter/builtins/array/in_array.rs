@@ -31,6 +31,7 @@ pub(in crate::interpreter) fn eval_in_array_declared_values_result(
     _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [needle, array] = evaluated_args else { return Err(EvalStatus::RuntimeFatal); };
-    super::array_search::eval_array_search_result("in_array", *needle, *array, values)
+    let (needle, array, strict) =
+        super::array_search::eval_array_search_values(evaluated_args, values)?;
+    super::array_search::eval_array_search_result("in_array", needle, array, strict, values)
 }

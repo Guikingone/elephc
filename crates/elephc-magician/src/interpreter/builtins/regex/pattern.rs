@@ -107,6 +107,7 @@ pub(in crate::interpreter) fn eval_preg_modifiers(
             b's' => parsed.dot_matches_new_line = true,
             b'U' => parsed.swap_greed = true,
             b'u' => parsed.unicode = true,
+            b'A' => parsed.anchored = true,
             _ => return Err(EvalStatus::RuntimeFatal),
         }
     }

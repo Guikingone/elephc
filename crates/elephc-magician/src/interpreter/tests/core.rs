@@ -61,6 +61,28 @@ fn execute_program_propagates_throw_as_uncaught_outcome() {
         EvalOutcome::Value(value) => panic!("expected Throwable, got {:?}", values.get(value)),
     }
 }
+/// Verifies a throw expression in a match arm reaches the ordinary catch channel.
+#[test]
+fn execute_program_catches_throw_expression_from_match() {
+    let program = parse_fragment(
+        br#"try {
+    return match (1) {
+        2 => 0,
+        default => throw new Exception("missing"),
+    };
+} catch (Throwable) {
+    return 42;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("catch should handle the throw expression");
+
+    assert_eq!(values.get(result), FakeValue::Int(42));
+}
 /// Verifies eval `try/catch` catches a thrown object and binds the catch variable.
 #[test]
 fn execute_program_catches_throwable_inside_eval() {

@@ -130,7 +130,10 @@ impl Checker {
                     // only holds further down the body to this return. See
                     // `Checker::flow_typed_returns`.
                     self.flow_typed_returns.insert(
-                        stmt as *const Stmt as usize,
+                        (
+                            self.current_loop_storage_scope.clone(),
+                            stmt as *const Stmt as usize,
+                        ),
                         (stmt.span, returned),
                     );
                     // `function &f() { return $obj->prop; }` returns a reference to the

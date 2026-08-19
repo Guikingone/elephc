@@ -92,6 +92,30 @@ fn parse_fragment_accepts_throw_source() {
         })]
     );
 }
+/// Verifies `throw` lowers as an expression inside a generated-style match arm.
+#[test]
+fn parse_fragment_accepts_throw_expression_in_match_default() {
+    let program = parse_fragment(
+        br#"return match ($name) {
+    "known" => 1,
+    default => throw new Exception("missing"),
+};"#,
+    )
+    .expect("throw expression should parse");
+
+    let [EvalStmt::Return(Some(EvalExpr::Match {
+        default: Some(default),
+        ..
+    }))] = program.statements()
+    else {
+        panic!("expected a match return expression");
+    };
+    assert!(matches!(
+        default.as_ref(),
+        EvalExpr::Throw(inner)
+            if matches!(inner.as_ref(), EvalExpr::NewObject { class_name, .. } if class_name == "Exception")
+    ));
+}
 /// Verifies try/catch statements lower supported Throwable clauses into EvalIR.
 #[test]
 fn parse_fragment_accepts_try_catch_throwable_source() {

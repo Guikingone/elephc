@@ -1751,6 +1751,22 @@ fn test_preg_match_simple() {
     assert_eq!(out, "1");
 }
 
+/// Verifies regex string arguments accept gradual values while preserving every converted pair.
+#[test]
+fn test_regex_builtins_coerce_mixed_string_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+function regex_values(mixed $pattern, mixed $subject, ?int $limit): void {
+    echo preg_match($pattern, $subject) . "|";
+    echo preg_replace($pattern, "X", $subject, $limit) . "|";
+    echo implode(",", preg_split($pattern, $subject, $limit));
+}
+regex_values("/[0-9]+/", "a1b22c", -1);
+"#,
+    );
+    assert_eq!(out, "1|aXbXc|a,b,c");
+}
+
 /// Verifies literal `call_user_func()` dispatch to `preg_match()` includes regex runtime helpers.
 #[test]
 fn test_preg_match_call_user_func_literal() {
@@ -1845,6 +1861,54 @@ fn test_preg_match_populates_matches_array() {
         r#"<?php
 $ok = preg_match("/(a)(b)/", "zab", $matches);
 echo $ok . "|" . count($matches) . "|" . $matches[0] . "," . $matches[1] . "," . $matches[2];
+"#,
+    );
+    assert_eq!(out, "1|3|ab,a,b");
+}
+
+/// Verifies `preg_match()` honors positive and negative starting offsets without rebasing anchors.
+#[test]
+fn test_preg_match_capture_starting_offset() {
+    let out = compile_and_run(
+        r#"<?php
+$first = preg_match('/a/', 'ab', $firstMatches, 0, 1);
+$second = preg_match('/b/', 'ab', $secondMatches, 0, -1);
+$anchored = preg_match('/^b/', 'ab', $anchoredMatches, 0, 1);
+echo $first . ':' . count($firstMatches) . '|';
+echo $second . ':' . $secondMatches[0] . '|';
+echo $anchored . ':' . count($anchoredMatches);
+"#,
+    );
+    assert_eq!(out, "0:0|1:b|0:0");
+}
+
+/// Verifies the `A` modifier anchors matching at the requested byte offset.
+#[test]
+fn test_preg_match_anchored_modifier() {
+    let out = compile_and_run(
+        r#"<?php
+$lineEnd = preg_match('/[ \t]*+(?:#.*)?$/Am', "dev\n", $lineMatches, 0, 0);
+$atOffset = preg_match('/foo/A', 'xxfoo', $offsetMatches, 0, 2);
+$fromStart = preg_match('/foo/A', 'xxfoo', $startMatches, 0, 0);
+echo $lineEnd . ':' . count($lineMatches) . '|';
+echo $atOffset . ':' . $offsetMatches[0] . '|';
+echo $fromStart . ':' . count($startMatches);
+"#,
+    );
+    assert_eq!(out, "0:0|1:foo|0:0");
+}
+
+/// Verifies a nullable by-reference parameter receives the capture array through its ref-cell.
+#[test]
+fn test_preg_match_capture_writes_through_nullable_ref_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function wrapped(string $pattern, string $subject, ?array &$matches = null, int $flags = 0, int $offset = 0): int {
+    return preg_match($pattern, $subject, $matches, $flags, $offset);
+}
+$matches = null;
+$ok = wrapped('/(a)(b)/', 'zab', $matches);
+echo $ok . '|' . count($matches) . '|' . $matches[0] . ',' . $matches[1] . ',' . $matches[2];
 "#,
     );
     assert_eq!(out, "1|3|ab,a,b");
@@ -1966,6 +2030,15 @@ fn test_preg_match_all_count() {
     assert_eq!(out, "3");
 }
 
+/// Verifies the full `preg_match_all()` call shape preserves the integer match count.
+#[test]
+fn test_preg_match_all_with_capture_destination_count() {
+    let out = compile_and_run(
+        r#"<?php echo preg_match_all('/[0-9]+/', 'a1b2c3', $matches, PREG_PATTERN_ORDER);"#,
+    );
+    assert_eq!(out, "3");
+}
+
 /// Verifies `preg_match_all` returns 0 when the pattern has no matches in the subject.
 #[test]
 fn test_preg_match_all_no_matches() {
@@ -2002,11 +2075,39 @@ fn test_preg_replace_simple() {
     assert_eq!(out, "hello PHP");
 }
 
+/// Verifies weak builtin string binding invokes `__toString()` before regex replacement.
+#[test]
+fn test_preg_replace_accepts_stringable_subject() {
+    let out = compile_and_run(
+        r#"<?php
+class RegexSubject implements Stringable {
+    public function __toString(): string { return 'abc'; }
+}
+echo preg_replace('/b/', 'B', new RegexSubject());
+"#,
+    );
+    assert_eq!(out, "aBc");
+}
+
 /// Verifies `preg_replace` substitutes all non-overlapping matches of a digit pattern.
 #[test]
 fn test_preg_replace_pattern() {
     let out = compile_and_run(r#"<?php echo preg_replace("/[0-9]+/", "X", "a1b2c3");"#);
     assert_eq!(out, "aXbXcX");
+}
+
+/// Verifies the array-pattern form applies each pattern in order and selects array replacements
+/// by position, using an empty string when the replacement array is shorter.
+#[test]
+fn test_preg_replace_array_patterns() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_replace(['/a/', '/b/'], 'x', 'aba'), '|';
+echo preg_replace(['/a/', '/b/'], ['x', 'y'], 'aba'), '|';
+echo preg_replace(['/a/', '/b/'], ['x'], 'aba');
+"#,
+    );
+    assert_eq!(out, "xxx|xyx|xx");
 }
 
 /// Verifies the optional limit stops replacement after the requested number of matches.
@@ -2084,6 +2185,26 @@ echo $result;
 "#,
     );
     assert_eq!(out, "price: [123] and [456]");
+}
+
+/// Verifies literal pattern arrays apply each callback replacement in source order.
+#[test]
+fn test_preg_replace_callback_literal_pattern_array() {
+    let out = compile_and_run(
+        r#"<?php
+$calls = 0;
+$result = preg_replace_callback(
+    ["/[a-z]+/", "/[0-9]+/"],
+    static function (array $matches) use (&$calls): string {
+        ++$calls;
+        return "[" . strtoupper($matches[0]) . "]";
+    },
+    "ab12"
+);
+echo $result, "|", $calls;
+"#,
+    );
+    assert_eq!(out, "[AB][12]|2");
 }
 
 /// Verifies callback replacement honors the limit and initializes its by-reference counter.

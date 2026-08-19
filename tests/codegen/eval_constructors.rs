@@ -458,3 +458,30 @@ return gettype($box->value) . ":" . $box->value;');
         "Exception:eval-ctor-lvalue:integer:12|Exception:eval-ctor-lvalue:integer:16"
     );
 }
+
+/// Verifies an eval child may replace an AOT array property with either PHP array shape.
+#[test]
+fn test_eval_child_constructor_reassigns_aot_array_property_shape() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalArrayShapeAotParent {
+    protected $items = [];
+
+    public function selected(): string {
+        return $this->items["selected"] ? "yes" : "no";
+    }
+}
+
+echo eval('class EvalArrayShapeRuntimeChild extends EvalArrayShapeAotParent {
+    public function __construct() {
+        $this->items = ["selected" => true];
+    }
+}
+
+$child = new EvalArrayShapeRuntimeChild();
+return $child->selected();');
+"#,
+    );
+
+    assert_eq!(out, "yes");
+}

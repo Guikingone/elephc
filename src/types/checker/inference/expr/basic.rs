@@ -50,6 +50,11 @@ impl Checker {
                     PhpType::Mixed | PhpType::Bool | PhpType::False | PhpType::Void => {
                         Ok(PhpType::Mixed)
                     }
+                    PhpType::Union(members)
+                        if members.iter().all(is_numeric_negate_member_type) =>
+                    {
+                        Ok(PhpType::Mixed)
+                    }
                     _ => Err(CompileError::new(
                         expr.span,
                         "Cannot negate a non-numeric value",
@@ -81,6 +86,9 @@ impl Checker {
                 Some(PhpType::Bool) | Some(PhpType::False) | Some(PhpType::Void) => {
                     Ok(PhpType::Int)
                 }
+                Some(PhpType::Union(members)) if members.iter().all(is_inc_dec_member_type) => {
+                    Ok(PhpType::Mixed)
+                }
                 Some(other) => Err(CompileError::new(
                     expr.span,
                     &increment_type_error(name, other),
@@ -106,6 +114,9 @@ impl Checker {
                 }
                 // The post-forms yield the float the local held before the update.
                 Some(PhpType::Float) => Ok(PhpType::Float),
+                Some(PhpType::Union(members)) if members.iter().all(is_inc_dec_member_type) => {
+                    Ok(PhpType::Mixed)
+                }
                 Some(other) => Err(CompileError::new(
                     expr.span,
                     &increment_type_error(name, other),
@@ -175,14 +186,14 @@ impl Checker {
                     return Ok(PhpType::Array(Box::new(PhpType::Never)));
                 }
                 if elems.iter().any(|elem| {
-                    matches!(
-                        &elem.kind,
-                        ExprKind::Spread(inner)
-                            if matches!(
-                                self.infer_type(inner, env),
-                                Ok(PhpType::AssocArray { .. })
-                            )
-                    )
+                    let ExprKind::Spread(inner) = &elem.kind else {
+                        return false;
+                    };
+                    match self.infer_type(inner, env) {
+                        Ok(PhpType::AssocArray { .. } | PhpType::Iterable) => true,
+                        Ok(PhpType::Object(name)) => self.object_type_implements_iterable(&name),
+                        _ => false,
+                    }
                 }) {
                     let value_ty = self.assoc_spread_literal_value_type(elems, env);
                     return Ok(PhpType::AssocArray {
@@ -223,6 +234,11 @@ impl Checker {
                             // promotes to hash at runtime. Return the element type
                             // widened to Mixed so ?? / isset / reads type-check.
                             Ok(PhpType::Mixed)
+                        } else if matches!(elem_ty.as_ref(), PhpType::Never) {
+                            // `Never` is the bottom element type of an empty array, not the
+                            // observable result of an offset read. A missing offset yields null,
+                            // and later writes can also populate the same runtime container.
+                            Ok(PhpType::Mixed)
                         } else {
                             Ok(*elem_ty.clone())
                         }
@@ -259,6 +275,8 @@ impl Checker {
                                     if normalized_idx_ty != PhpType::Int {
                                         // String key on indexed array: PHP promotes
                                         // to hash at runtime; element may be Mixed.
+                                        result_members.push(PhpType::Mixed);
+                                    } else if matches!(elem_ty.as_ref(), PhpType::Never) {
                                         result_members.push(PhpType::Mixed);
                                     } else {
                                         result_members.push(*elem_ty.clone());
@@ -413,6 +431,33 @@ impl Checker {
             _ => unreachable!("non-basic expression routed to basic inference"),
         }
     }
+}
+
+/// Returns whether one union member supports PHP numeric unary negation.
+fn is_numeric_negate_member_type(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Void
+            | PhpType::Mixed
+    )
+}
+
+/// Returns whether one union member supports PHP's local increment/decrement operators.
+fn is_inc_dec_member_type(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Void
+            | PhpType::Str
+            | PhpType::Mixed
+    )
 }
 
 /// Formats the diagnostic for `++`/`--` applied to a local elephc cannot update in place.

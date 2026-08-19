@@ -10,6 +10,113 @@
 
 use super::*;
 
+/// Lowers `shuffle($array)` when flow narrowing proved a boxed gradual value is an array.
+///
+/// The runtime value may use indexed or associative storage. Both cases are copied into a fresh
+/// indexed array before shuffling, which both enforces copy-on-write and implements PHP's key
+/// reindexing rule. The fresh container is then transferred into a replacement Mixed cell and
+/// published back to the caller-visible local variable.
+pub(super) fn lower_shuffle_dynamic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "shuffle", 1)?;
+    let source_local = source_load_local_slot(ctx, array)?.ok_or_else(|| {
+        CodegenIrError::unsupported(
+            "shuffle for a gradual by-reference receiver that is not a local variable slot"
+                .to_string(),
+        )
+    })?;
+
+    ctx.load_value_to_result(array)?;                                          // load the borrowed boxed Mixed cell
+    let old_cell_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);                        // [sp+0]=old cell, [sp+8]=fresh array, [sp+16]=new cell
+    abi::emit_store_to_sp(ctx.emitter, old_cell_reg, 0);                       // preserve the local's old cell until replacement
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                    // tag in result register, payload low in the first argument register
+
+    let indexed_label = ctx.next_label("shuffle_dyn_indexed");
+    let hash_label = ctx.next_label("shuffle_dyn_hash");
+    let wrong_tag_label = ctx.next_label("shuffle_dyn_wrong_tag");
+    let shuffle_label = ctx.next_label("shuffle_dyn_apply");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // tag 4 = indexed array
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_label));
+            ctx.emitter.instruction("cmp x0, #5");                              // tag 5 = associative array
+            ctx.emitter.instruction(&format!("b.eq {}", hash_label));
+            ctx.emitter.instruction(&format!("b {}", wrong_tag_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // tag 4 = indexed array
+            ctx.emitter.instruction(&format!("je {}", indexed_label));
+            ctx.emitter.instruction("cmp rax, 5");                              // tag 5 = associative array
+            ctx.emitter.instruction(&format!("je {}", hash_label));
+            ctx.emitter.instruction(&format!("jmp {}", wrong_tag_label));
+        }
+    }
+    super::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &wrong_tag_label,
+        &|given| {
+            format!(
+                "shuffle(): Argument #1 ($array) must be of type array, {} given",
+                given
+            )
+        },
+    );
+
+    ctx.emitter.label(&indexed_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // pass the unboxed indexed array to the clone helper
+        Arch::X86_64 => {}                                                       // the unboxed payload is already in rdi
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");            // clone before the mutating shuffle
+    abi::emit_jump(ctx.emitter, &shuffle_label);
+
+    ctx.emitter.label(&hash_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // load the unboxed hash for value extraction
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // value extraction consumes the hash from the result register
+    }
+    super::values::emit_loaded_assoc_array_values(ctx, &PhpType::Mixed)?;       // copy values and reindex keys
+
+    ctx.emitter.label(&shuffle_label);
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 8);    // preserve the fresh indexed array across shuffle and boxing
+    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, array_arg_reg, 8);
+    abi::emit_call_label(ctx.emitter, "__rt_shuffle");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 8);         // Mixed payload low = fresh indexed array
+            ctx.emitter.instruction("mov x2, xzr");                             // indexed arrays do not use the payload high word
+            ctx.emitter.instruction("mov x0, #4");                              // Mixed tag 4 = indexed array
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 8);        // Mixed payload low = fresh indexed array
+            ctx.emitter.instruction("xor rsi, rsi");                            // indexed arrays do not use the payload high word
+            ctx.emitter.instruction("mov rax, 4");                              // Mixed tag 4 = indexed array
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");                // retain the fresh container into a replacement cell
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);   // preserve the replacement cell while balancing owners
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 8);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");                     // transfer the fresh container's original owner to the Mixed cell
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");                   // release the old raw-local Mixed-cell owner
+
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    ctx.store_result_value(array)?;
+    ctx.store_value_to_local(source_local, array)?;
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        0x7fff_ffff_ffff_fffe,
+    );
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `array_pop($array)` when `$array` is a checker-accepted Mixed / array-union receiver.
 ///
 /// The by-ref slot holds a boxed Mixed cell. This unboxes it, dispatches on the runtime array kind

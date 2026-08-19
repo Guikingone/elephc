@@ -1857,6 +1857,29 @@ echo $out[0];
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Verifies callable returns inspect runtime array slots when flow inference retained an older
+/// indexed element type from a prior assignment.
+#[test]
+fn test_callable_return_normalizes_stale_indexed_array_element_type() {
+    let source = r#"<?php
+class StaleArrayCallableTarget {
+    public static function run(): string {
+        return "ok";
+    }
+}
+
+function make_stale_array_callable(): callable {
+    $callback = [1, 2];
+    $callback = [StaleArrayCallableTarget::class, "run"];
+    return $callback;
+}
+
+echo (make_stale_array_callable())();
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "ok");
+}
+
 /// Verifies callable-array variables use descriptor callback environments in array_map.
 #[test]
 fn test_array_map_callable_array_variable_uses_descriptor_receiver() {
@@ -2551,4 +2574,20 @@ echo "ok";
 "#,
     );
     assert_eq!(out, "ok");
+}
+
+/// Verifies a null-coalesced nullable status code reaches `header()` as an integer.
+#[test]
+fn test_header_accepts_narrowed_nullable_response_code() {
+    let out = compile_and_run(
+        r#"<?php
+function sendStatus(?int $code = null): void {
+    $code ??= 201;
+    header('X-Test: value', true, $code);
+    echo $code;
+}
+sendStatus();
+"#,
+    );
+    assert_eq!(out, "201");
 }

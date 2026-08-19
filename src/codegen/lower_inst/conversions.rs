@@ -62,12 +62,30 @@ pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         IrType::F64 => lower_cast_to_float(ctx, inst),
         IrType::Str => lower_cast_to_string(ctx, inst),
         IrType::Heap(crate::ir::IrHeapKind::Array) => lower_cast_to_array(ctx, inst),
+        IrType::Heap(crate::ir::IrHeapKind::Hash) => lower_object_to_foreach_array(ctx, inst),
         IrType::Heap(crate::ir::IrHeapKind::Object) => lower_cast_to_object(ctx, inst),
         target => Err(CodegenIrError::unsupported(format!(
             "cast to EIR type {:?}",
             target
         ))),
     }
+}
+
+/// Converts a concrete object to a property hash with bare names for in-scope `foreach`.
+fn lower_object_to_foreach_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let PhpType::Object(_) = ctx.value_php_type(value)?.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "object foreach conversion for PHP type {:?}",
+            ctx.value_php_type(value)?.codegen_repr()
+        )));
+    };
+    load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_object_to_foreach_array");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers an associative-array cast to a fresh hash-backed stdClass instance.
@@ -157,6 +175,11 @@ fn lower_cast_to_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
             store_if_result(ctx, inst)
         }
         PhpType::Array(_) => super::arrays::lower_array_to_mixed(ctx, inst),
+        PhpType::Object(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_object_to_array");
+            store_if_result(ctx, inst)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "array cast for PHP type {:?}",
             other
@@ -204,6 +227,10 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             predicates::emit_array_truthiness(ctx, value)?;
         }
+        PhpType::Object(class_name) => {
+            emit_object_to_int_warning(ctx, &class_name);
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "int cast for PHP type {:?}",
@@ -212,6 +239,16 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Emits PHP's warning for an object-to-integer cast; PHP still produces integer `1` afterward.
+fn emit_object_to_int_warning(ctx: &mut FunctionContext<'_>, class_name: &str) {
+    let message = format!(
+        "Warning: Object of class {} could not be converted to int\n",
+        class_name.trim_start_matches('\\')
+    );
+    let (label, len) = ctx.data.add_string(message.as_bytes());
+    crate::codegen::emit_write_literal_stderr(ctx.emitter, &label, len);
 }
 
 /// Lowers an explicit cast to PHP float for concrete scalar operands.
@@ -322,13 +359,27 @@ pub(super) fn emit_mixed_string_context_stdout(
 }
 
 /// Describes whether a Mixed string context should leave a string result or write it.
-enum MixedStringContextMode {
+pub(in crate::codegen) enum MixedStringContextMode {
     Result,
     Stdout,
 }
 
 /// Handles PHP string contexts for boxed Mixed values with an object-aware branch.
 fn emit_mixed_string_context(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    mode: MixedStringContextMode,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    if let Some(label) = crate::codegen::shared_mixed_string::shared_ladder_label(ctx, &mode) {
+        abi::emit_call_label(ctx.emitter, label);
+        return Ok(());
+    }
+    emit_mixed_string_dispatch_from_result(ctx, value, mode)
+}
+
+/// Emits the object-aware string dispatch for a boxed Mixed already in the result register.
+pub(in crate::codegen) fn emit_mixed_string_dispatch_from_result(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     mode: MixedStringContextMode,
@@ -348,7 +399,6 @@ fn emit_mixed_string_context(
         })
         .collect::<Vec<_>>();
 
-    ctx.load_value_to_result(value)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_if_unboxed_mixed_object(ctx, &object_label);

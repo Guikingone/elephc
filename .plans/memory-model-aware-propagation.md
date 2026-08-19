@@ -47,7 +47,9 @@ Extend `src/optimize/propagate/` so that:
   full-barrier model; lifting it interacts with refcount balance, COW
   ensure-unique, and backend call-clobber assumptions — separate work).
 - Loop fixed-point propagation, object/property facts, nested-array facts,
-  `count()`/`isset()` folding over facts, and `$GLOBALS` (unsupported).
+  `count()`/`isset()` folding over facts, and PHP-compatible `$GLOBALS` runtime
+  alias storage (unsupported; declaration reachability still models its aliases
+  conservatively for method retention).
 - Changing `Effect`-based DCE/pruning observability decisions. `Effect` keeps
   answering "is this observable?"; the new analysis answers "which locals can
   this write?". The two are deliberately separate.

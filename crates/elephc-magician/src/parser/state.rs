@@ -20,6 +20,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const EVAL_TRACE_ENV: &str = "ELEPHC_EVAL_TRACE";
+pub(super) const EVAL_YIELD_INTRINSIC: &str = "__elephc_eval_yield";
 
 static ANONYMOUS_CLASS_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static CLOSURE_FUNCTION_COUNTER: AtomicUsize = AtomicUsize::new(0);

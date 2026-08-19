@@ -1436,6 +1436,25 @@ var_dump($m);
     );
 }
 
+/// Verifies increment accepts a runtime key union whose members are all valid PHP scalar
+/// increment operands and dispatches according to the value returned at runtime.
+#[test]
+fn test_increment_runtime_int_string_key_union() {
+    let out = compile_and_run(
+        r#"<?php
+function findKey(mixed $values): int|string|false {
+    return array_search("needle", $values, true);
+}
+
+$key = findKey(["other", "needle"]);
+if (false !== $key) {
+    echo ++$key;
+}
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
 
 /// Verifies the int/float boundary of a numeric-string increment: a value that still fits
 /// stays an `int`, `PHP_INT_MAX` promotes to `float`, a 20-digit string is already a float,
@@ -1455,4 +1474,16 @@ $d = "9223372036854775807"; $d--; var_dump($d);
         "int(9223372036854775807)\nfloat(9.223372036854776E+18)\n\
          float(1.0E+20)\nint(9223372036854775806)\n"
     );
+}
+
+/// Verifies bitwise NOT accepts a boxed `mixed` integer through PHP's integer coercion path.
+#[test]
+fn test_bitwise_not_mixed_integer() {
+    let out = compile_and_run(
+        r#"<?php
+function invert_mixed(mixed $value): int { return ~$value; }
+echo invert_mixed(2);
+"#,
+    );
+    assert_eq!(out, "-3");
 }

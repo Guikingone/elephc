@@ -9,6 +9,7 @@
 //! - EIR is the compiler's codegen contract for emitted user assembly.
 //! - `crate::codegen_support` owns shared target, runtime, ABI, and metadata helpers.
 
+mod aarch64_relax;
 mod block_emit;
 mod callable_reachability;
 pub(crate) mod context;
@@ -31,6 +32,10 @@ pub(crate) mod lower_inst;
 mod lower_term;
 mod runtime_callable_invoker;
 mod runtime_metadata;
+mod shared_helper;
+mod shared_reflection;
+mod shared_mixed_callable;
+mod shared_mixed_string;
 mod shared_state;
 mod stack_guard;
 pub mod value_placement;
@@ -371,6 +376,7 @@ fn finalize_user_asm(
         user_asm.push('\n');
         user_asm.push_str(&runtime::emit_member_exists_registry_data(module));
     }
+    let user_asm = aarch64_relax::relax_conditional_branches(user_asm, module.target);
     if matches!(emit, Emit::Cdylib) && module.target.platform == Platform::Linux {
         let mut exported: HashSet<String> = exported_functions
             .values()

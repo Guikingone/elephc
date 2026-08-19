@@ -42,6 +42,179 @@ echo (new InlineIdCounter())->nextId();
     assert_eq!(out, ".autowire_inline.service.1");
 }
 
+/// Verifies coercive typed-property assignment invokes `__toString()` and stores
+/// the resulting string rather than the source object representation.
+#[test]
+fn test_string_property_assignment_accepts_stringable_object() {
+    let out = compile_and_run(
+        r#"<?php
+class PropertyText {
+    public function __toString(): string {
+        return "converted";
+    }
+}
+
+class PropertyTextHolder {
+    public string $value = "";
+
+    public function fill(): void {
+        $this->value = new PropertyText();
+    }
+}
+
+$holder = new PropertyTextHolder();
+$holder->fill();
+echo $holder->value;
+"#,
+    );
+    assert_eq!(out, "converted");
+}
+
+/// Verifies an interface-typed source is checked against a narrower nominal
+/// property at runtime, accepting matching objects and throwing for siblings.
+#[test]
+fn test_nominal_property_assignment_guards_interface_source() {
+    let out = compile_and_run(
+        r#"<?php
+interface PropertyPass {}
+class ExpectedPropertyPass implements PropertyPass {}
+class OtherPropertyPass implements PropertyPass {}
+
+class NominalPropertyHolder {
+    private ExpectedPropertyPass $pass;
+
+    public function set(PropertyPass $pass): void {
+        $this->pass = $pass;
+    }
+
+    public function valid(): bool {
+        return $this->pass instanceof ExpectedPropertyPass;
+    }
+}
+
+$holder = new NominalPropertyHolder();
+$holder->set(new ExpectedPropertyPass());
+echo $holder->valid() ? "ok" : "bad";
+try {
+    $holder->set(new OtherPropertyPass());
+} catch (TypeError $error) {
+    echo ":type";
+}
+"#,
+    );
+    assert_eq!(out, "ok:type");
+}
+
+/// Verifies null coalescing probes a statically undeclared property without a
+/// compile error or runtime read, while still evaluating the receiver once.
+#[test]
+fn test_null_coalesce_accepts_missing_declared_property() {
+    let out = compile_and_run(
+        r#"<?php
+class OptionalPropertyOwner {
+    public static int $constructed = 0;
+
+    public function __construct() {
+        self::$constructed++;
+    }
+}
+
+echo (new OptionalPropertyOwner())->missing ?? "fallback";
+echo ":", OptionalPropertyOwner::$constructed;
+"#,
+    );
+    assert_eq!(out, "fallback:1");
+}
+
+/// Verifies `??` and `??=` treat an uninitialized typed property as null before reading it.
+#[test]
+fn test_null_coalesce_initializes_uninitialized_typed_property() {
+    let out = compile_and_run(
+        r#"<?php
+class LazyTypedProperty {
+    private readonly stdClass $value;
+
+    public function peek(): ?object {
+        return $this->value ?? null;
+    }
+
+    public function resolve(): object {
+        return $this->value ??= new stdClass();
+    }
+}
+
+$box = new LazyTypedProperty();
+var_dump($box->peek());
+echo get_class($box->resolve()), ':', get_class($box->resolve());
+"#,
+    );
+    assert_eq!(out, "NULL\nstdClass:stdClass");
+}
+
+/// Verifies `??=` keeps working when a nullable object parameter uses the gradual receiver path.
+#[test]
+fn test_null_coalesce_assignment_on_nullable_object_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class GradualCoalesceBox {
+    public ?string $name = null;
+}
+
+function resolveGradualName(?GradualCoalesceBox $box): string {
+    return $box->name ??= 'fallback';
+}
+
+$box = new GradualCoalesceBox();
+echo resolveGradualName($box), ':', resolveGradualName($box);
+"#,
+    );
+    assert_eq!(out, "fallback:fallback");
+}
+
+/// Verifies a gradual union crossing a nullable nominal property is checked at runtime.
+#[test]
+fn test_guarded_union_assignment_to_nullable_nominal_property() {
+    let out = compile_and_run(
+        r#"<?php
+class NominalBase {}
+class NominalChild extends NominalBase {}
+class NominalHolder {
+    public ?NominalChild $value = null;
+    public function set(NominalBase|string $candidate): void {
+        $isChild = $candidate instanceof NominalChild;
+        $this->value = $isChild ? $candidate : null;
+    }
+}
+$holder = new NominalHolder();
+$holder->set(new NominalChild());
+echo get_class($holder->value);
+"#,
+    );
+    assert_eq!(out, "NominalChild");
+}
+
+/// Verifies `foreach ($this)` iterates ordinary object properties visible in class scope.
+#[test]
+fn test_foreach_plain_object_properties_inside_class() {
+    let out = compile_and_run(
+        r#"<?php
+class PropertyIterationProbe {
+    public int $publicValue = 1;
+    protected int $protectedValue = 2;
+    private int $privateValue = 3;
+
+    public function dump(): void {
+        foreach ($this as $name => $value) {
+            echo $name, '=', $value, ';';
+        }
+    }
+}
+(new PropertyIterationProbe())->dump();
+"#,
+    );
+    assert_eq!(out, "publicValue=1;protectedValue=2;privateValue=3;");
+}
+
 /// Compiles a loop over an array of class instances, reading the `price` field
 /// of each `Item` object via `$items[$i]->price` and accumulating the sum.
 #[test]
@@ -781,6 +954,32 @@ var_dump(isset($u->v), $u->v);
     assert_eq!(out, "bool(false)\nbool(true)\nbool(true)\nint(5)\n");
 }
 
+/// Verifies an inherited method sees its private typed slot as uninitialized on a child object.
+#[test]
+fn test_isset_on_inherited_private_uninitialized_typed_property_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+class PrivateTypedBase {
+    private string $path;
+    public function path(): string {
+        if (!isset($this->path)) {
+            $this->path = "initialized";
+        }
+        return $this->path;
+    }
+}
+class PrivateTypedMiddle extends PrivateTypedBase {
+    public string $middle = "middle";
+}
+final class PrivateTypedChild extends PrivateTypedMiddle {
+    public string $child = "child";
+}
+echo (new PrivateTypedChild())->path();
+"#,
+    );
+    assert_eq!(out, "initialized");
+}
+
 /// Verifies a bare `object` receiver selects the runtime class when property names collide.
 #[test]
 fn test_generic_object_property_write_dispatches_by_runtime_class() {
@@ -801,6 +1000,30 @@ echo $owner->value instanceof stdClass ? 'ok' : 'bad';
 "#,
     );
     assert_eq!(out, "ok");
+}
+
+/// Verifies an array write through a bare `object` receiver dispatches an anonymous class property
+/// before applying ArrayAccess offset assignment semantics.
+#[test]
+fn test_generic_object_anonymous_property_supports_array_writes() {
+    let out = compile_and_run(
+        r#"<?php
+class AnonymousArrayPropertyFactory {
+    public function fill(object $result, ArrayObject $storage): void {
+        $result->values = $storage;
+        $result->values[0] = 'first';
+    }
+}
+
+$storage = new ArrayObject();
+$value = new class {
+    public $values;
+};
+(new AnonymousArrayPropertyFactory())->fill($value, $storage);
+echo $storage[0];
+"#,
+    );
+    assert_eq!(out, "first");
 }
 
 /// Verifies a nullable attribute instance keeps its runtime class when a same-named property on
@@ -911,6 +1134,38 @@ echo count($registry->items), ':', $registry->items[0], ':', $registry->items[1]
     assert_eq!(out, "2:2:3");
 }
 
+/// Verifies an array property refined by string-key writes can later receive indexed storage;
+/// numeric keys must survive the representation change alongside subsequent string keys.
+#[test]
+fn test_indexed_array_replaces_string_key_refined_property() {
+    let out = compile_and_run(
+        r#"<?php
+class RefinedRegistry {
+    private array $items = [];
+
+    public function set(string $key, mixed $value): void {
+        $this->items[$key] = $value;
+    }
+
+    public function replace(array $items): void {
+        $this->items = $items;
+    }
+
+    public function values(): array {
+        return $this->items;
+    }
+}
+$registry = new RefinedRegistry();
+$registry->set('seed', 1);
+$registry->replace([2, 3]);
+$registry->set('tail', 4);
+$values = $registry->values();
+echo count($values), ':', $values[0], ':', $values[1], ':', $values['tail'];
+"#,
+    );
+    assert_eq!(out, "3:2:3:4");
+}
+
 /// Verifies runtime `mixed` property names use PHP string coercion for both declared-property
 /// writes and reads instead of reaching the backend as an unmaterializable boxed name.
 #[test]
@@ -969,4 +1224,65 @@ echo isset($dynamic->value) ? '1' : '0';
 "#,
     );
     assert_eq!(out, "000");
+}
+
+/// Verifies a Mixed source is runtime-checked and widened before entering a declared array slot.
+#[test]
+fn test_mixed_array_values_replace_declared_instance_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeArrayHolder {
+    public array $generic = [];
+    public array $associative = ['seed' => 0];
+
+    public function replaceGeneric(mixed $value): void {
+        $this->generic = $value;
+    }
+
+    public function replaceAssociative(mixed $value): void {
+        $this->associative = $value;
+    }
+}
+
+$holder = new RuntimeArrayHolder();
+$holder->replaceGeneric([1, 'two']);
+$holder->replaceAssociative(['name' => 'value', 'count' => 2]);
+echo $holder->generic[0], ':', $holder->generic[1], '|';
+echo $holder->associative['name'], ':', $holder->associative['count'];
+try {
+    $holder->replaceGeneric('not an array');
+} catch (TypeError $error) {
+    echo '|type';
+}
+"#,
+    );
+    assert_eq!(out, "1:two|value:2|type");
+}
+
+/// Verifies lossless numeric widening and array-to-iterable assignment for typed properties.
+#[test]
+fn test_declared_property_accepts_int_float_widening_and_array_iterable() {
+    let out = compile_and_run(
+        r#"<?php
+class WidenedPropertyHolder {
+    public float $ratio = 0.0;
+    public iterable $values = [];
+
+    public function fill(int $ratio, array $values): void {
+        $this->ratio = $ratio;
+        $this->values = $values;
+    }
+}
+
+$holder = new WidenedPropertyHolder();
+$holder->fill(7, ['left' => 2, 'right' => 3]);
+echo $holder->ratio, ':', count($holder->values);
+foreach ($holder->values as $key => $value) {
+    if ($key === 'right') {
+        echo ':', $value;
+    }
+}
+"#,
+    );
+    assert_eq!(out, "7:2:3");
 }

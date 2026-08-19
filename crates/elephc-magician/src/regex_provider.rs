@@ -91,7 +91,9 @@ mod test_provider {
 
     const REG_BADPAT: i32 = 3;
     const REG_ESPACE: i32 = 12;
+    const REG_NOMATCH: i32 = 17;
     const REG_STARTEND: u32 = 0x0080;
+    const ELEPHC_PCRE2_CFLAG_ANCHORED: u32 = 0x2000;
 
     /// PCRE2 POSIX `regex_t` layout for the supported host wrapper ABI.
     #[repr(C)]
@@ -116,6 +118,7 @@ mod test_provider {
     struct TestRegexHandle {
         regex: Pcre2Regex,
         slots: usize,
+        anchored: bool,
     }
 
     unsafe extern "C" {
@@ -168,7 +171,9 @@ mod test_provider {
             re_erroffset: 0,
             re_cflags: 0,
         };
-        let status = unsafe { pcre2_regcomp(&mut regex, pattern, flags as c_int) };
+        let anchored = flags & ELEPHC_PCRE2_CFLAG_ANCHORED != 0;
+        let posix_flags = flags & !ELEPHC_PCRE2_CFLAG_ANCHORED;
+        let status = unsafe { pcre2_regcomp(&mut regex, pattern, posix_flags as c_int) };
         if status != 0 {
             return status;
         }
@@ -180,7 +185,11 @@ mod test_provider {
             unsafe { pcre2_regfree(&mut regex) };
             return REG_ESPACE;
         };
-        let handle = Box::new(TestRegexHandle { regex, slots });
+        let handle = Box::new(TestRegexHandle {
+            regex,
+            slots,
+            anchored,
+        });
         unsafe {
             *slot_count_out = slots_u64;
             *handle_out = Box::into_raw(handle).cast();
@@ -210,7 +219,7 @@ mod test_provider {
             return REG_ESPACE;
         }
         let handle = unsafe { &mut *opaque_handle.cast::<TestRegexHandle>() };
-        let effective_slots = requested_slots.min(handle.slots);
+        let effective_slots = requested_slots.min(handle.slots).max(usize::from(handle.anchored));
         let input_range = if flags & REG_STARTEND != 0 && requested_slots > 0 {
             Some(unsafe { (*offset_pairs, *offset_pairs.add(1)) })
         } else {
@@ -233,7 +242,7 @@ mod test_provider {
             full_match.rm_so = start;
             full_match.rm_eo = end;
         }
-        let status = unsafe {
+        let mut status = unsafe {
             pcre2_regexec(
                 &handle.regex,
                 subject,
@@ -242,8 +251,15 @@ mod test_provider {
                 flags as c_int,
             )
         };
+        let expected_start = input_range.map_or(0, |(start, _)| start);
+        if status == 0
+            && handle.anchored
+            && matches.first().is_some_and(|matched| i64::from(matched.rm_so) != expected_start)
+        {
+            status = REG_NOMATCH;
+        }
         if status == 0 {
-            for (index, matched) in matches.into_iter().enumerate() {
+            for (index, matched) in matches.into_iter().take(requested_slots).enumerate() {
                 unsafe {
                     *offset_pairs.add(index * 2) = i64::from(matched.rm_so);
                     *offset_pairs.add(index * 2 + 1) = i64::from(matched.rm_eo);

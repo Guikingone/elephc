@@ -23,6 +23,29 @@ pub(super) fn lower_in_array_mixed_container(
     needle_ty: &PhpType,
     mode: InArrayMode,
 ) -> Result<()> {
+    lower_mixed_container_search(ctx, needle, array, needle_ty, mode, false)
+}
+
+/// Lowers `array_search()` over an indexed or associative container held in boxed gradual storage.
+pub(super) fn lower_array_search_mixed_container(
+    ctx: &mut FunctionContext<'_>,
+    needle: ValueId,
+    array: ValueId,
+    needle_ty: &PhpType,
+    mode: InArrayMode,
+) -> Result<()> {
+    lower_mixed_container_search(ctx, needle, array, needle_ty, mode, true)
+}
+
+/// Validates, unboxes, and scans one gradual array container for membership or its matching key.
+fn lower_mixed_container_search(
+    ctx: &mut FunctionContext<'_>,
+    needle: ValueId,
+    array: ValueId,
+    needle_ty: &PhpType,
+    mode: InArrayMode,
+    return_key: bool,
+) -> Result<()> {
     let indexed_label = ctx.next_label("in_array_dynamic_indexed");
     let hash_label = ctx.next_label("in_array_dynamic_hash");
     let setup_label = ctx.next_label("in_array_dynamic_setup");
@@ -51,7 +74,8 @@ pub(super) fn lower_in_array_mixed_container(
         &wrong_tag_label,
         &|given| {
             format!(
-                "in_array(): Argument #2 ($haystack) must be of type array, {} given",
+                "{}(): Argument #2 ($haystack) must be of type array, {} given",
+                if return_key { "array_search" } else { "in_array" },
                 given
             )
         },
@@ -104,6 +128,7 @@ pub(super) fn lower_in_array_mixed_container(
                 "x3",
                 i64::from(matches!(mode, InArrayMode::Strict)),
             );
+            abi::emit_load_int_immediate(ctx.emitter, "x4", i64::from(return_key));
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 16);
@@ -114,6 +139,7 @@ pub(super) fn lower_in_array_mixed_container(
                 "rcx",
                 i64::from(matches!(mode, InArrayMode::Strict)),
             );
+            abi::emit_load_int_immediate(ctx.emitter, "r8", i64::from(return_key));
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_in_array_mixed_container");

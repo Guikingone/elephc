@@ -15,15 +15,8 @@ pub(in crate::codegen) fn class_method_body_exists(
     class_name: &str,
     method_key: &str,
 ) -> bool {
-    ctx.module.class_methods.iter().any(|function| {
-        !function.flags.is_static
-            && function
-                .name
-                .rsplit_once("::")
-                .is_some_and(|(class, method)| {
-                    class == class_name && php_symbol_key(method) == method_key
-                })
-    })
+    ctx.shared
+        .emitted_method_contains(class_name, method_key, false)
 }
 
 /// Allocates a runtime descriptor and stores the receiver in capture slot zero.

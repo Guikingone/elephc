@@ -164,7 +164,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             metadata.type_metadata = type_metadata.clone();
             metadata.is_deprecated = *is_deprecated;
             metadata.is_generator = *is_generator;
-            emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
+            emit_declaring_function_object(ctx, name, &metadata)?;
             emit_box_current_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionFunction".to_string()),
@@ -192,7 +192,12 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             metadata.modifiers = reflection_method_modifiers_from_flags(*flags);
             metadata.is_deprecated = *is_deprecated;
             metadata.is_generator = *is_generator;
-            emit_reflection_owner_object(ctx, "ReflectionMethod", &metadata)?;
+            emit_declaring_method_object(
+                ctx,
+                declaring_class_name.as_deref(),
+                name,
+                &metadata,
+            )?;
             emit_box_current_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionMethod".to_string()),
@@ -229,9 +234,7 @@ pub(super) fn emit_reflection_parameter_declaring_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(declaring_class_name) = parameter.declaring_class_name.as_deref() {
-        let declaring_metadata =
-            reflection_shallow_class_metadata_for_name(ctx, declaring_class_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &declaring_metadata)?;
+        emit_shallow_reflection_class_object(ctx, declaring_class_name)?;
         emit_box_current_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
@@ -275,8 +278,7 @@ pub(super) fn emit_reflection_parameter_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(class_name) = reflection_parameter_class_name(parameter) {
-        let class_metadata = reflection_shallow_class_metadata_for_name(ctx, class_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &class_metadata)?;
+        emit_shallow_reflection_class_object(ctx, class_name)?;
         emit_box_current_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
@@ -398,4 +400,3 @@ pub(super) fn emit_reflection_owner_default_value_property(
     abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
     Ok(())
 }
-

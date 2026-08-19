@@ -70,7 +70,10 @@ impl Checker {
                 // re-inference when nothing was recorded (e.g. an unchecked body).
                 let recorded = self
                     .flow_typed_returns
-                    .get(&(stmt as *const Stmt as usize))
+                    .get(&(
+                        self.current_loop_storage_scope.clone(),
+                        stmt as *const Stmt as usize,
+                    ))
                     .filter(|(span, _)| *span == stmt.span)
                     .map(|(_, ty)| ty.clone());
                 if let Some(ty) = recorded.or_else(|| self.infer_type(expr, env).ok()) {
@@ -324,7 +327,7 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
-        if matches!(declared_ret, PhpType::Void | PhpType::Never) {
+        if matches!(declared_ret, PhpType::Void | PhpType::Never | PhpType::Mixed) {
             return Ok(());
         }
 
@@ -379,7 +382,13 @@ impl Checker {
             ));
         }
 
-        if generic_object_requires_nominal_return_guard(expected, actual) {
+        if !self.type_accepts(expected, actual)
+            && (crate::types::param_binding::object_requires_runtime_nominal_guard(
+                expected, actual,
+            ) || crate::types::param_binding::gradual_object_requires_runtime_nominal_guard(
+                expected, actual,
+            ))
+        {
             return Ok(());
         }
 
@@ -389,6 +398,21 @@ impl Checker {
                     return Ok(());
                 }
             }
+        }
+
+        // A string name or indexed receiver/method pair can satisfy PHP's `callable` return
+        // contract. Lowering resolves the runtime value to a descriptor and raises at the
+        // boundary when no callable target exists, so these values must reach that validation.
+        if matches!(expected.codegen_repr(), PhpType::Callable)
+            && matches!(actual.codegen_repr(), PhpType::Str | PhpType::Array(_))
+        {
+            return Ok(());
+        }
+
+        if !strict_types
+            && crate::types::param_binding::scalar_param_cast(expected, actual).is_some()
+        {
+            return Ok(());
         }
 
         // Return lowering already normalizes a boxed gradual value into iterable storage.
@@ -560,34 +584,5 @@ impl Checker {
             (PhpType::Never, other) | (other, PhpType::Never) => other.clone(),
             _ => PhpType::Mixed,
         }
-    }
-}
-
-/// Returns whether a bare `object` value can be checked against a nominal return at runtime.
-fn generic_object_requires_nominal_return_guard(expected: &PhpType, actual: &PhpType) -> bool {
-    let PhpType::Object(actual_name) = actual.codegen_repr() else {
-        return false;
-    };
-    if !actual_name.trim_start_matches('\\').is_empty() {
-        return false;
-    }
-    match expected {
-        PhpType::Object(expected_name) => !expected_name.trim_start_matches('\\').is_empty(),
-        PhpType::Union(members) => {
-            let mut saw_named_object = false;
-            for member in members {
-                match member {
-                    PhpType::Void | PhpType::Never => {}
-                    PhpType::Object(expected_name)
-                        if !expected_name.trim_start_matches('\\').is_empty() =>
-                    {
-                        saw_named_object = true;
-                    }
-                    _ => return false,
-                }
-            }
-            saw_named_object
-        }
-        _ => false,
     }
 }

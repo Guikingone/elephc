@@ -70,6 +70,19 @@ fn test_cast_int_from_bool() {
     assert_eq!(out, "1");
 }
 
+/// Verifies a concrete object cast follows PHP's fallback result of integer `1`; the runtime also
+/// emits the corresponding conversion warning on stderr.
+#[test]
+fn test_cast_int_from_object_returns_one() {
+    let out = compile_and_run(
+        r#"<?php
+class IntegerCastObject {}
+echo (int) new IntegerCastObject();
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
 /// Compiles `<?php echo (float)42;` and asserts stdout is `"42"` — int widens to float without truncation.
 #[test]
 fn test_cast_float_from_int() {
@@ -206,6 +219,46 @@ dump_array_cast([1, 2]);
 "#,
     );
     assert_eq!(out, "0:|1:42,|1:value,|2:1,2,|");
+}
+
+/// Verifies object casts preserve declared visibility keys, values, and dynamic properties.
+#[test]
+fn test_array_cast_from_object_preserves_php_property_shape() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentCastShape {
+    private int $hidden = 1;
+    protected string $guarded = 'two';
+}
+
+class ChildCastShape extends ParentCastShape {
+    public bool $shown = true;
+    public int $missing;
+}
+
+$declared = (array) new ChildCastShape();
+$nul = chr(0);
+echo $declared[$nul . 'ParentCastShape' . $nul . 'hidden'], ':';
+echo $declared[$nul . '*' . $nul . 'guarded'], ':';
+echo $declared['shown'] ? 'yes' : 'no', ':', count($declared), '|';
+
+$source = ['name' => 'Ada', 'count' => 2];
+$dynamic = (array) ((object) $source);
+echo $dynamic['name'], ':', $dynamic['count'], '|';
+
+function exported_object_shape(object $value): array {
+    $data = [];
+    foreach ((array) $value as $key => $item) {
+        $data[$key] = $item;
+    }
+    return $data;
+}
+
+$typed = exported_object_shape((object) ['typed' => 'ok']);
+echo $typed['typed'];
+"#,
+    );
+    assert_eq!(out, "1:two:yes:3|Ada:2|ok");
 }
 
 /// Verifies that `(object)` creates an isolated stdClass view of associative-array entries.

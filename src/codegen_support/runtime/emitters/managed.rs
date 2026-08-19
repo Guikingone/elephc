@@ -263,7 +263,9 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_print_r_object(emitter);
     objects::emit_obj_prop_count(emitter);
     objects::emit_obj_prop_name(emitter);
+    objects::emit_obj_prop_cast_name(emitter);
     objects::emit_obj_prop_value(emitter);
+    objects::emit_object_to_array(emitter);
     objects::emit_json_encode_stdclass(emitter);
 
     // Buffer runtime functions

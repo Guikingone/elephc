@@ -212,8 +212,7 @@ echo $result[0] . " " . $result[1];
     assert_eq!(out, "John 30");
 }
 
-/// sscanf %f captures a float slice. Like %d, sscanf returns the matched
-/// substring (Array(Str)), so the assertion compares the captured text.
+/// Verifies `%f` produces a PHP float rather than preserving its source spelling.
 #[test]
 fn test_sscanf_float() {
     let out = compile_and_run(
@@ -225,7 +224,7 @@ echo $r[0];
     assert_eq!(out, "3.14");
 }
 
-/// %f accepts a leading sign and a scientific exponent.
+/// Verifies `%f` accepts a leading sign and exponent and returns the parsed numeric value.
 #[test]
 fn test_sscanf_float_negative_and_exponent() {
     let out = compile_and_run(
@@ -234,10 +233,10 @@ $r = sscanf("-2.5e3", "%f");
 echo $r[0];
 "#,
     );
-    assert_eq!(out, "-2.5e3");
+    assert_eq!(out, "-2500");
 }
 
-/// %f composes with %s and %d in one format, each capturing its slice.
+/// Verifies `%f` composes with `%s` and `%d` while preserving each PHP scalar type.
 #[test]
 fn test_sscanf_float_mixed_with_string_and_int() {
     let out = compile_and_run(
@@ -247,6 +246,47 @@ echo $r[0] . "|" . $r[1] . "|" . $r[2];
 "#,
     );
     assert_eq!(out, "alice|1.5|30");
+}
+
+/// Verifies scanner arrays contain PHP-typed values for every supported conversion.
+#[test]
+fn test_sscanf_returns_typed_mixed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$r = sscanf("12 3.5 pear", "%d %f %s");
+echo gettype($r[0]) . ":" . $r[0];
+echo "|" . gettype($r[1]) . ":" . $r[1];
+echo "|" . gettype($r[2]) . ":" . $r[2];
+"#,
+    );
+    assert_eq!(out, "integer:12|double:3.5|string:pear");
+}
+
+/// Verifies by-reference outputs are created, typed, written, and counted in source order.
+#[test]
+fn test_sscanf_writes_variadic_output_variables() {
+    let out = compile_and_run(
+        r#"<?php
+$count = sscanf("\033[12;34R", "\033[%d;%dR", $row, $column);
+echo $count . "|" . gettype($row) . ":" . $row;
+echo "|" . gettype($column) . ":" . $column;
+"#,
+    );
+    assert_eq!(out, "2|integer:12|integer:34");
+}
+
+/// Verifies missing conversions overwrite the corresponding output with PHP null.
+#[test]
+fn test_sscanf_missing_output_becomes_null() {
+    let out = compile_and_run(
+        r#"<?php
+$first = 99;
+$second = "old";
+$count = sscanf("12", "%d %d", $first, $second);
+echo $count . "|" . $first . "|" . gettype($second);
+"#,
+    );
+    assert_eq!(out, "1|12|NULL");
 }
 
 /// The string-search builtins must coerce a Mixed/Union haystack (e.g. a

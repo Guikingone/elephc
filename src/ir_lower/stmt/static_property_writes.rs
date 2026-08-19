@@ -45,7 +45,22 @@ pub(super) fn lower_static_property_assign(
     value: &Expr,
     span: Span,
 ) {
-    let value = lower_expr(ctx, value);
+    let mut value = lower_expr(ctx, value);
+    if matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Array(_))
+        && static_property_type(ctx, receiver, property)
+            .is_some_and(|property_ty| matches!(property_ty.codegen_repr(), PhpType::AssocArray { .. }))
+    {
+        let property_ty = static_property_type(ctx, receiver, property)
+            .expect("checked associative static property metadata must remain available");
+        value = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![value.value],
+            None,
+            property_ty,
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+    }
     if static_property_store_retains_independent_value(ctx, receiver, property, value) {
         store_static_property(ctx, receiver, property, value.value, span);
         if ctx.value_is_owning_temporary(value) {

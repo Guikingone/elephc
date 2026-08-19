@@ -238,17 +238,19 @@ fn lower_gradual_array_flip(
     inst: &Instruction,
     array: ValueId,
 ) -> Result<()> {
-    if !matches!(
-        inst.result_php_type.codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ) {
-        return Err(CodegenIrError::unsupported(format!(
-            "array_flip gradual result PHP type {:?}",
-            inst.result_php_type
-        )));
-    }
+    let result_ty = inst.result_php_type.codegen_repr();
+    let (dest_value_ty, box_result) = match &result_ty {
+        PhpType::Mixed | PhpType::Union(_) => (PhpType::Mixed, true),
+        PhpType::AssocArray { value, .. } => (value.codegen_repr(), false),
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_flip gradual result PHP type {:?}",
+                other
+            )))
+        }
+    };
     super::misc_dispatch::materialize_owned_mixed_hash_operand(ctx, array, "array_flip")?;
-    let dest_value_tag = runtime_value_tag("array_flip", &PhpType::Mixed)?;
+    let dest_value_tag = runtime_value_tag("array_flip", &dest_value_ty)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the owned normalized source hash across the flip
@@ -274,13 +276,15 @@ fn lower_gradual_array_flip(
             abi::emit_pop_reg(ctx.emitter, "rax");                              // restore the fresh flipped hash for result boxing
         }
     }
-    crate::codegen::emit_box_current_owned_value_as_mixed(
-        ctx.emitter,
-        &PhpType::AssocArray {
-            key: Box::new(PhpType::Mixed),
-            value: Box::new(PhpType::Mixed),
-        },
-    );
+    if box_result {
+        crate::codegen::emit_box_current_owned_value_as_mixed(
+            ctx.emitter,
+            &PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            },
+        );
+    }
     store_if_result(ctx, inst)
 }
 

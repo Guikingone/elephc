@@ -87,25 +87,57 @@ pub(super) fn throwable_payload_compatible_user_class(
     class_info: &ClassInfo,
 ) -> bool {
     super::super::is_throwable_like_class(ctx, class_name)
-        && !class_declares_own_instance_properties(class_name, class_info)
-        && !class_declares_own_constructor(class_name, class_info)
+        && !class_has_user_instance_properties(class_info)
+        && class_uses_builtin_throwable_constructor(class_info)
 }
 
-/// Returns true when `class_name` declares an instance property of its own.
-pub(super) fn class_declares_own_instance_properties(class_name: &str, class_info: &ClassInfo) -> bool {
+/// Returns true when any class in the visible hierarchy contributes general object storage.
+fn class_has_user_instance_properties(class_info: &ClassInfo) -> bool {
     class_info
         .property_declaring_classes
         .values()
-        .any(|declaring_class| declaring_class == class_name)
+        .any(|declaring_class| !is_builtin_throwable_payload_class(declaring_class))
 }
 
-/// Returns true when `class_name` declares its own `__construct` method.
-pub(super) fn class_declares_own_constructor(class_name: &str, class_info: &ClassInfo) -> bool {
+/// Returns true when the effective constructor is the compact builtin Throwable initializer.
+fn class_uses_builtin_throwable_constructor(class_info: &ClassInfo) -> bool {
     let constructor_key = php_symbol_key("__construct");
     class_info
-        .method_declaring_classes
+        .method_impl_classes
         .get(&constructor_key)
-        .is_some_and(|declaring_class| declaring_class == class_name)
+        .or_else(|| class_info.method_declaring_classes.get(&constructor_key))
+        .map_or(true, |impl_class| {
+            is_builtin_throwable_payload_class(impl_class)
+        })
+}
+
+/// Initializes the inherited builtin Throwable fields for a lexical parent constructor call.
+pub(in crate::codegen::lower_inst) fn try_lower_builtin_throwable_parent_constructor(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    impl_class: &str,
+    method_name: &str,
+    this_slot: LocalSlotId,
+) -> Result<bool> {
+    if method_name != "__construct" || !is_builtin_throwable_payload_class(impl_class) {
+        return Ok(false);
+    }
+    if inst.operands.len() > 3 {
+        return Err(CodegenIrError::unsupported(format!(
+            "{}::__construct with {} EIR operands",
+            impl_class,
+            inst.operands.len()
+        )));
+    }
+
+    ctx.load_local_to_result(this_slot)?;
+    preserve_throwable_for_init(ctx);
+    emit_throwable_message_fields(ctx, inst.operands.first().copied())?;
+    emit_throwable_code_field(ctx, inst.operands.get(1).copied())?;
+    emit_throwable_previous_field(ctx, inst.operands.get(2).copied())?;
+    restore_throwable_after_init(ctx);
+    super::super::store_call_result(ctx, inst, &PhpType::Void)?;
+    Ok(true)
 }
 
 /// Compact Throwable payload bytes: class_id + message(16) + code(16) + previous(16).
@@ -216,7 +248,13 @@ pub(super) fn emit_throwable_message_fields_aarch64(
     message: Option<ValueId>,
 ) -> Result<()> {
     if let Some(message) = message {
-        ctx.load_string_value_to_regs(message, "x1", "x2")?;
+        crate::codegen::lower_inst::builtins::strings::load_value_as_string_to_regs(
+            ctx,
+            message,
+            "Throwable message",
+            "x1",
+            "x2",
+        )?;
         abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     } else {
         emit_empty_string_to_regs(ctx, "x1", "x2");
@@ -233,7 +271,13 @@ pub(super) fn emit_throwable_message_fields_x86_64(
     message: Option<ValueId>,
 ) -> Result<()> {
     if let Some(message) = message {
-        ctx.load_string_value_to_regs(message, "rax", "rdx")?;
+        crate::codegen::lower_inst::builtins::strings::load_value_as_string_to_regs(
+            ctx,
+            message,
+            "Throwable message",
+            "rax",
+            "rdx",
+        )?;
         abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     } else {
         emit_empty_string_to_regs(ctx, "rax", "rdx");

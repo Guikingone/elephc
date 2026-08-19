@@ -144,6 +144,9 @@ impl Checker {
         constants.insert("PHP_EOL".to_string(), PhpType::Str);
         constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
         constants.insert("PHP_MAXPATHLEN".to_string(), PhpType::Int);
+        constants.insert("PHP_WINDOWS_VERSION_MAJOR".to_string(), PhpType::Int);
+        constants.insert("PHP_WINDOWS_VERSION_MINOR".to_string(), PhpType::Int);
+        constants.insert("PHP_WINDOWS_VERSION_BUILD".to_string(), PhpType::Int);
         constants.insert("LC_CTYPE".to_string(), PhpType::Int);
         constants.insert("LC_NUMERIC".to_string(), PhpType::Int);
         constants.insert("SIGUSR1".to_string(), PhpType::Int);
@@ -181,6 +184,8 @@ impl Checker {
             interfaces: HashMap::new(),
             classes: HashMap::new(),
             declared_classes: HashSet::new(),
+            declared_class_parents: HashMap::new(),
+            declared_class_interfaces: HashMap::new(),
             enums: HashMap::new(),
             declared_interfaces: HashSet::new(),
             declared_traits: HashSet::new(),
@@ -204,6 +209,7 @@ impl Checker {
             foreach_key_locals: HashSet::new(),
             eval_barrier_active: false,
             flow_typed_returns: HashMap::new(),
+            flow_typed_property_accesses: HashMap::new(),
             null_probe_scope_is_top_level: false,
             pending_null_probe_roots: Vec::new(),
             null_probe_depth: 0,

@@ -277,6 +277,21 @@ fn test_substr_replace_no_length() {
     assert_eq!(out, "hello!");
 }
 
+/// Verifies `substr_replace()` stringifies a nullable integer subject through the TaggedScalar
+/// representation before dispatching to the string runtime helper.
+#[test]
+fn test_substr_replace_tagged_scalar_subject() {
+    let out = compile_and_run(
+        r#"<?php
+function replace_subject(?int $subject): string {
+    return substr_replace($subject, "X", 0, 1);
+}
+echo replace_subject(123);
+"#,
+    );
+    assert_eq!(out, "X23");
+}
+
 /// Verifies `substr_count()` counts non-overlapping occurrences.
 /// `LC_ALL=C php` prints `2` for both `substr_count("hello world", "o")` and
 /// `substr_count("aaaa", "aa")` — matches never overlap.

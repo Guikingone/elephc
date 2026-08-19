@@ -525,6 +525,10 @@ pub(super) fn eval_reflection_default_expr_to_string(default: &EvalExpr) -> Opti
             op: EvalUnaryOp::Negate,
             expr,
         } => eval_reflection_default_expr_to_string(expr).map(|value| format!("-{value}")),
+        EvalExpr::Unary {
+            op: EvalUnaryOp::ErrorSuppress,
+            expr,
+        } => eval_reflection_default_expr_to_string(expr).map(|value| format!("@{value}")),
         EvalExpr::ConstFetch(name) => Some(name.clone()),
         EvalExpr::NamespacedConstFetch { name, .. } => Some(name.clone()),
         EvalExpr::ClassConstantFetch {

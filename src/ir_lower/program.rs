@@ -17,7 +17,7 @@ use crate::codegen::RuntimeFeatures;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{
     validate_function, validate_module, ExternDecl, ExternParamDecl, Function, Immediate, IrType,
-    LocalKind, Module, Op, TraitMethodInfo, ValidationError,
+    InstId, LocalKind, Module, Op, TraitMethodInfo, ValidationError, ValueDef, ValueId,
 };
 use crate::ir_lower::{builtin_datetime, function, LoweringError};
 use crate::names::php_symbol_key;
@@ -141,6 +141,9 @@ fn validate_lowered_module(module: &Module) -> Result<(), ValidationError> {
     {
         if let Err(error) = validate_function(function) {
             eprintln!("EIR validation failure in {}: {:?}", function.name, error);
+            if let Some(context) = validation_error_context(function, &error) {
+                eprintln!("  {context}");
+            }
             first_error.get_or_insert(error);
         }
     }
@@ -148,4 +151,38 @@ fn validate_lowered_module(module: &Module) -> Result<(), ValidationError> {
         Some(error) => Err(error),
         None => Ok(()),
     }
+}
+
+/// Formats the producer and consumer metadata relevant to one validation refusal.
+fn validation_error_context(function: &Function, error: &ValidationError) -> Option<String> {
+    match error {
+        ValidationError::ValueDefMismatch(value)
+        | ValidationError::VoidValueUsed(value)
+        | ValidationError::ResultTypeMismatch(value)
+        | ValidationError::PhpTypeMismatch(value)
+        | ValidationError::OwnershipTypeMismatch(value) => {
+            Some(validation_value_context(function, *value))
+        }
+        ValidationError::OperandTypeMismatch { inst, operand, .. } => Some(format!(
+            "consumer={:?}; {}",
+            function.instruction(*inst),
+            validation_value_context(function, *operand)
+        )),
+        _ => None,
+    }
+}
+
+/// Formats one SSA value together with the instruction that produced it when available.
+fn validation_value_context(function: &Function, value_id: ValueId) -> String {
+    let value = function.value(value_id);
+    let producer = value.and_then(|value| match value.def {
+        ValueDef::Instruction { inst, .. } => validation_instruction(function, inst),
+        ValueDef::BlockParam { .. } => None,
+    });
+    format!("value={value_id:?} metadata={value:?}; producer={producer:?}")
+}
+
+/// Returns an instruction by id for compact validation diagnostics.
+fn validation_instruction(function: &Function, inst: InstId) -> Option<&crate::ir::Instruction> {
+    function.instruction(inst)
 }

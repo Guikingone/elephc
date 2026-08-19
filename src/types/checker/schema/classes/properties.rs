@@ -44,8 +44,8 @@ pub(super) fn apply_properties(
 /// Validates a static property declaration against PHP inheritance rules and
 /// records it in `state`. Rejects by-reference static properties, final private
 /// combinations, and property type/redeclare conflicts. Computes the property
-/// type from the declared hint, the default value, or defaults to `PhpType::Void`
-/// (an untyped property with no default implicitly holds null).
+/// type from the declared hint, the default value, or defaults to `PhpType::Mixed`
+/// (an untyped property with no default implicitly holds null but remains freely writable).
 /// Updates `state.static_prop_types`, `state.static_property_declaring_classes`,
 /// `state.final_static_properties`, and attribute maps.
 fn apply_static_property(
@@ -109,7 +109,7 @@ fn apply_static_property(
         infer_untyped_property_default_type(default)
     } else {
         state.declared_static_properties.remove(&prop.name);
-        PhpType::Void
+        PhpType::Mixed
     };
 
     if let Some(slot) = state
@@ -263,7 +263,7 @@ fn apply_instance_property(
     } else if let Some(default) = &prop.default {
         infer_untyped_property_default_type(default)
     } else {
-        PhpType::Void
+        PhpType::Mixed
     };
 
     let slot_index = state.prop_types.len();
@@ -372,7 +372,7 @@ fn apply_instance_property_redeclaration(
     } else if let Some(default) = &prop.default {
         infer_untyped_property_default_type(default)
     } else {
-        PhpType::Void
+        PhpType::Mixed
     };
 
     let slot = find_instance_property_slot(state, &prop.name);
@@ -453,7 +453,7 @@ fn apply_private_parent_property_shadowing(
         infer_expr_type_syntactic(default)
     } else {
         state.declared_properties.remove(&prop.name);
-        PhpType::Void
+        PhpType::Mixed
     };
 
     let slot_index = state.prop_types.len();

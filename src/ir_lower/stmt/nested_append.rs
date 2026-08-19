@@ -207,31 +207,48 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
     // Load the container and probe the key. For a local this is a `LoadLocal`; for a property it is
     // an ordinary property read, which is pure and can be replayed.
     let container = load_container(ctx, group, span);
-    let isset_op = match container.ir_type {
-        IrType::Heap(IrHeapKind::Hash) => Op::HashIsset,
-        IrType::Heap(IrHeapKind::Array) => Op::ArrayIsset,
+    let container_is_hash = matches!(container.ir_type, IrType::Heap(IrHeapKind::Hash));
+    let container_is_array = matches!(container.ir_type, IrType::Heap(IrHeapKind::Array));
+    if !container_is_hash && !container_is_array {
         // Anything else (a `Mixed` property, an object) is out of scope: fall open to today's
-        // lowering, which is what the parser's desugar already produces.
-        _ => {
-            super::lower_stmt(ctx, group.read);
-            super::lower_stmt(ctx, group.push);
-            super::lower_stmt(ctx, group.write_back);
-            return;
-        }
-    };
+        // lowering, which is what the parser's desugar already produces. Keep key evaluation in
+        // that path so unsupported receivers do not evaluate it twice.
+        super::lower_stmt(ctx, group.read);
+        super::lower_stmt(ctx, group.push);
+        super::lower_stmt(ctx, group.write_back);
+        return;
+    }
     let key = lower_expr(ctx, group.index);
-    let present = ctx.emit_value(
-        isset_op,
-        vec![container.value, key.value],
-        None,
-        PhpType::Bool,
-        isset_op.default_effects(),
-        Some(span),
-    );
+    let key_is_dynamic = nested_append_key_is_dynamic(ctx, &key);
+    let present = if container_is_hash {
+        ctx.emit_value(
+            Op::HashIsset,
+            vec![container.value, key.value],
+            None,
+            PhpType::Bool,
+            Op::HashIsset.default_effects(),
+            Some(span),
+        )
+    } else if key_is_dynamic {
+        lower_dynamic_array_append_probe(ctx, container.value, key.value, span)
+    } else {
+        ctx.emit_value(
+            Op::ArrayIsset,
+            vec![container.value, key.value],
+            None,
+            PhpType::Bool,
+            Op::ArrayIsset.default_effects(),
+            Some(span),
+        )
+    };
     if matches!(group.base, BaseKind::Local(_)) {
         crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
     }
-    crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+    if ctx.value_is_owning_temporary(key) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+    } else {
+        super::release_persisted_string_operand(ctx, key, span);
+    }
 
     // Snapshot the definitely-initialized locals before the split and restore them at the head of
     // the arm, exactly as `lower_if_chain` does; the vivify arm initializes nothing new, so the
@@ -272,7 +289,15 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
     // base the new pointer would never reach the property and it would be left stale. A property
     // base therefore keeps the auto-vivification and stays quadratic.
     if let BaseKind::Local(name) = &group.base {
-        if matches!(ctx.local_type(name), PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        // `SlotDetach`'s indexed fast path accepts only a raw integer offset. A runtime Mixed key
+        // may normalize to a string and promote the array to hash storage; feeding the boxed cell
+        // pointer to that helper makes it grow until the fixed heap is exhausted. Keep the normal
+        // copy-on-write path for dynamic keys, which already dispatches through the mixed-key
+        // runtime helpers.
+        let can_detach_indexed_slot = !container_is_array || !key_is_dynamic;
+        if can_detach_indexed_slot
+            && matches!(ctx.local_type(name), PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
             // Re-load the container and key: they were emitted in a predecessor block, and the
             // vivification may have republished a grown or copy-on-write-split container pointer into
             // the local. A `LoadLocal` is pure, and the key is either replayable or already hoisted into
@@ -291,6 +316,62 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
 
     super::lower_stmt(ctx, group.push);
     super::lower_stmt(ctx, group.write_back);
+}
+
+/// Returns whether a nested append key needs PHP's runtime mixed-key normalization.
+fn nested_append_key_is_dynamic(
+    ctx: &LoweringContext<'_, '_>,
+    key: &LoweredValue,
+) -> bool {
+    if matches!(key.ir_type, IrType::Heap(IrHeapKind::Mixed)) {
+        return true;
+    }
+    matches!(
+        ctx.builder.value_php_type(key.value).codegen_repr(),
+        PhpType::Str | PhpType::Mixed | PhpType::Union(_)
+    )
+}
+
+/// Probes a packed array with a dynamic PHP key without forcing the key through integer storage.
+fn lower_dynamic_array_append_probe(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: crate::ir::ValueId,
+    key: crate::ir::ValueId,
+    span: Span,
+) -> LoweredValue {
+    let value = ctx.emit_value(
+        Op::ArrayGetMixedKeySilent,
+        vec![array, key],
+        None,
+        PhpType::Mixed,
+        Op::ArrayGetMixedKeySilent.default_effects(),
+        Some(span),
+    );
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![value.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    let zero = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(crate::ir::Immediate::I64(0)),
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(span),
+    );
+    ctx.emit_value(
+        Op::ICmp,
+        vec![is_null.value, zero.value],
+        Some(crate::ir::Immediate::CmpPredicate(crate::ir::CmpPredicate::Eq)),
+        PhpType::Bool,
+        Op::ICmp.default_effects(),
+        Some(span),
+    )
 }
 
 /// Loads the nested append's outer container as a value.

@@ -272,24 +272,41 @@ echo implode(',', array_keys($result['all']));
     assert_eq!(out, "a,z");
 }
 
-/// `krsort()` on a non-empty indexed array must be refused by name rather than silently
-/// returning the receiver untouched: indexed storage has no room for a descending key order.
+/// `krsort()` promotes a non-empty indexed receiver to integer-keyed hash storage so descending
+/// iteration order is representable without mutating an aliased copy.
 #[test]
-fn test_krsort_on_indexed_array_reports_named_backend_error() {
-    let error = compile_source_expect_backend_error(
+fn test_krsort_on_indexed_array_promotes_receiver_to_hash() {
+    let out = compile_and_run(
         r#"<?php
-$a = [1, 2, 3];
+$a = ['a', 'b', 'c'];
+$copy = $a;
 krsort($a);
+foreach ($a as $key => $value) {
+    echo $key, ':', $value, ';';
+}
+echo '|', implode('', $copy);
 "#,
     );
-    assert!(
-        error.contains("krsort for indexed array<Int>"),
-        "unexpected diagnostic: {error}"
+    assert_eq!(out, "2:c;1:b;0:a;|abc");
+}
+
+/// A by-reference sort writes a string-keyed child back through an `array` property.
+#[test]
+fn test_krsort_property_string_key_child_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+final class PropertySortBox {
+    public array $items = [];
+}
+$box = new PropertySortBox();
+$box->items["event"] = ["a", "b", "c"];
+krsort($box->items["event"]);
+foreach ($box->items["event"] as $key => $value) {
+    echo $key, ":", $value, ";";
+}
+"#,
     );
-    assert!(
-        error.contains("descending key order has no representation"),
-        "unexpected diagnostic: {error}"
-    );
+    assert_eq!(out, "2:c;1:b;0:a;");
 }
 
 /// `krsort()` on a statically empty indexed array stays accepted, because an empty receiver

@@ -24,6 +24,7 @@ const REG_STARTEND: c_int = 0x0080;
 const REG_UNGREEDY: c_int = 0x0200;
 const REG_UCP: c_int = 0x0400;
 const REG_UTF: c_int = 0x0040;
+const ELEPHC_PCRE2_CFLAG_ANCHORED: c_int = 0x2000;
 const REG_NOMATCH: c_int = 17;
 
 /// Supported PHP regex modifiers after delimiter stripping.
@@ -34,6 +35,7 @@ pub(in crate::interpreter) struct EvalPregModifiers {
     pub(in crate::interpreter) dot_matches_new_line: bool,
     pub(in crate::interpreter) swap_greed: bool,
     pub(in crate::interpreter) unicode: bool,
+    pub(in crate::interpreter) anchored: bool,
 }
 
 /// A compiled regex plus its registered opaque provider.
@@ -189,6 +191,9 @@ impl EvalPregModifiers {
         }
         if self.unicode {
             flags |= REG_UTF | REG_UCP;
+        }
+        if self.anchored {
+            flags |= ELEPHC_PCRE2_CFLAG_ANCHORED;
         }
         flags
     }

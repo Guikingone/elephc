@@ -194,11 +194,41 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
             span,
         ));
     }
-    body.push(Stmt::new(
-        StmtKind::Return(Some(Expr::new(ExprKind::Null, span))),
-        span,
-    ));
+    body.push(runtime_attribute_new_instance_fallback(span));
     body
+}
+
+/// Builds the metadata-driven fallback for ReflectionAttribute objects created by eval.
+///
+/// Eval-owned reflectors use factory id zero, but still retain the canonical attribute class name
+/// and its positional/named argument array. Dynamic construction with one spread reuses the normal
+/// call-argument planner and preserves both key forms without a framework-specific factory table.
+fn runtime_attribute_new_instance_fallback(span: crate::span::Span) -> Stmt {
+    let this = || Expr::new(ExprKind::This, span);
+    let class_name = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(this()),
+            property: "__name".to_string(),
+        },
+        span,
+    );
+    let args = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(this()),
+            property: "__args".to_string(),
+        },
+        span,
+    );
+    Stmt::new(
+        StmtKind::Return(Some(Expr::new(
+            ExprKind::NewDynamic {
+                name_expr: Box::new(class_name),
+                args: vec![Expr::new(ExprKind::Spread(Box::new(args)), span)],
+            },
+            span,
+        ))),
+        span,
+    )
 }
 
 /// Creates `this->__factory === factory_id` for `newInstance()` dispatch routing.
@@ -374,5 +404,37 @@ fn collect_from_attribute_lists(
         unique
             .entry((name, attr_args.clone()))
             .or_insert(resolvable);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies factory-zero attributes fall back to dynamic name construction with arg spread.
+    #[test]
+    fn new_instance_body_ends_with_runtime_metadata_fallback() {
+        let body = build_attribute_new_instance_body_with_extra(&HashMap::new(), &[]);
+        let Some(Stmt {
+            kind: StmtKind::Return(Some(Expr {
+                kind: ExprKind::NewDynamic { name_expr, args },
+                ..
+            })),
+            ..
+        }) = body.last()
+        else {
+            panic!("newInstance fallback must dynamically construct retained metadata");
+        };
+        assert!(matches!(
+            name_expr.kind,
+            ExprKind::PropertyAccess { ref property, .. } if property == "__name"
+        ));
+        assert!(matches!(
+            args.as_slice(),
+            [Expr {
+                kind: ExprKind::Spread(inner),
+                ..
+            }] if matches!(inner.kind, ExprKind::PropertyAccess { ref property, .. } if property == "__args")
+        ));
     }
 }

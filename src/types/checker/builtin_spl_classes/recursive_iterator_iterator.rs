@@ -75,6 +75,7 @@ fn recursive_iterator_iterator_properties() -> Vec<ClassProperty> {
         storage_property("depth", TypeExpr::Int),
         storage_property("slot", TypeExpr::Int),
         storage_property("currentValid", TypeExpr::Bool),
+        storage_property_default("maxDepth", TypeExpr::Int, int_expr(-1)),
     ]
 }
 
@@ -101,6 +102,22 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
             Vec::new(),
             Some(TypeExpr::Int),
             recursive_iterator_iterator_get_depth_body(),
+        ),
+        method_with_body(
+            "setMaxDepth",
+            vec![param("maxDepth", TypeExpr::Int)],
+            Some(TypeExpr::Void),
+            vec![property_assign_stmt(
+                this_expr(),
+                "maxDepth",
+                var_expr("maxDepth"),
+            )],
+        ),
+        method_with_body(
+            "getMaxDepth",
+            Vec::new(),
+            Some(TypeExpr::Int),
+            return_body(property_access(this_expr(), "maxDepth")),
         ),
         method_with_body(
             "getInnerIterator",

@@ -195,20 +195,24 @@ fn nested_call_reg_name(arch: Arch) -> &'static str {
     }
 }
 
-/// Returns true when the function contains a method call whose receiver is
-/// dispatched through the reserved nested-call register: a union receiver or a
-/// receiver whose codegen representation is `Mixed`. `lower_mixed_method_call`
-/// and `lower_nullable_receiver_method_call` hand-use `nested_call_reg` to hold
-/// the unboxed object payload across argument-lowering calls, but that register
-/// is callee-saved and outside the allocator's tracking — without a reserved
-/// save slot the function silently clobbers the caller's value (issue #511: a
-/// `--web` handler calling a method on a `PDOStatement|bool` receiver corrupted
-/// the hyper worker's `x19`, freeing a garbage pointer during response flush).
+/// Returns true when the function contains callable or method dispatch that
+/// hand-uses the reserved nested-call register. Descriptor invocation keeps the
+/// selected descriptor there, while union/Mixed method calls keep an unboxed
+/// receiver there across argument lowering. The register is callee-saved and
+/// outside allocator tracking — without a reserved save slot the function can
+/// silently clobber the caller's value and later release an invalid pointer.
 /// A plain single non-nullable object receiver uses direct dispatch and is
 /// excluded. Over-detection is harmless — an unused save/restore pair costs one
 /// store and one load — so the receiver test errs toward inclusion.
 fn function_uses_nested_call_reg(function: &Function) -> bool {
     function.instructions.iter().any(|inst| {
+        if crate::codegen::shared_mixed_string::instruction_uses_mixed_string_ladder(function, inst)
+        {
+            return true;
+        }
+        if inst.op == Op::CallableDescriptorInvoke {
+            return true;
+        }
         if !matches!(inst.op, Op::MethodCall | Op::NullsafeMethodCall) {
             return false;
         }
@@ -595,7 +599,8 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
                 .is_none_or(|name| !param_names.contains(name))
         })
         .filter(|local| {
-            ctx.local_slot_has_store(local.id) || function_has_eval_scope(ctx.function)
+            ctx.local_slot_needs_lifetime_tracking(local.id)
+                || function_has_eval_scope(ctx.function)
         })
         .filter_map(|local| {
             let ty = local.php_type.codegen_repr();
@@ -938,7 +943,7 @@ fn function_cleanup_locals(
         })
         .filter(|local| Some(local.id) != skip_return_slot)
         .filter(|local| {
-            ctx.local_slot_has_store(local.id)
+            ctx.local_slot_needs_lifetime_tracking(local.id)
                 || ctx.owns_parameter_slot(local.id)
                 || function_has_eval_scope(ctx.function)
         })
@@ -1125,6 +1130,7 @@ fn local_load_transfers_stored_owner(local_ty: &PhpType, result_ty: &PhpType) ->
         (local_ty, result_ty),
         (PhpType::Array(_), PhpType::Array(_))
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+            | (PhpType::Object(_), PhpType::Object(_))
     )
 }
 
@@ -1140,6 +1146,7 @@ fn return_preserves_result_owner(result_ty: &PhpType, return_ty: &PhpType) -> bo
         (result_ty, return_ty),
         (PhpType::Array(_), PhpType::Array(_))
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+            | (PhpType::Object(_), PhpType::Object(_))
     )
 }
 

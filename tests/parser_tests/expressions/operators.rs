@@ -340,4 +340,17 @@ fn test_expr_call_parses() {
     }
 }
 
+/// Verifies a literal callable array can be invoked without grouping parentheses.
+#[test]
+fn test_literal_callable_array_expr_call_parses() {
+    let stmts = parse_source("<?php echo [$subscriber, 'getSubscribedEvents']();");
+    match echoed_expr(&stmts) {
+        ExprKind::ExprCall { callee, args } => {
+            assert!(matches!(callee.kind, ExprKind::ArrayLiteral(_)));
+            assert!(args.is_empty());
+        }
+        other => panic!("expected ExprCall, got {:?}", other),
+    }
+}
+
 // --- Null coalescing precedence ---

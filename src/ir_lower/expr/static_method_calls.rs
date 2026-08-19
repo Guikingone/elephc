@@ -17,18 +17,54 @@ pub(super) fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    if matches!(receiver, StaticReceiver::Named(name) if name.trim_start_matches('\\') == "ReflectionReference")
+        && php_symbol_key(method) == "fromarrayelement"
+    {
+        let sig = static_method_implementation_signature(ctx, receiver, method).cloned();
+        let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+        release_owned_call_arg_temporaries(
+            ctx,
+            &operands,
+            None,
+            &ReturnArgAlias::None,
+            expr.span,
+        );
+        return lower_null(ctx, expr);
+    }
     // `Closure::bind($closure, $newThis [, $scope])` — static form of bindTo.
     if let StaticReceiver::Named(name) = receiver {
         if name.trim_start_matches('\\') == "Closure"
             && php_symbol_key(method) == "bind"
             && !args.is_empty()
         {
+            let saved_class = ctx.current_class.clone();
+            if let Some(scope) = closure_bind_scope_class(ctx, args) {
+                ctx.current_class = Some(scope);
+            }
             let closure = lower_expr(ctx, &args[0]);
+            ctx.current_class = saved_class;
             ctx.take_pending_static_callable_result();
             let new_this = match args.get(1) {
                 Some(arg) => lower_expr(ctx, arg),
                 None => lower_null(ctx, expr),
             };
+            if let Some(scope_arg) = args.get(2) {
+                let scope_value = lower_expr(ctx, scope_arg);
+                if ctx.value_is_owning_temporary(scope_value) {
+                    crate::ir_lower::ownership::release_if_owned(
+                        ctx,
+                        scope_value,
+                        Some(scope_arg.span),
+                    );
+                }
+            }
+            let inline_scope_only = matches!(args[0].kind, ExprKind::Closure { .. })
+                && args
+                    .get(1)
+                    .is_some_and(|new_this| matches!(new_this.kind, ExprKind::Null));
+            if inline_scope_only {
+                return closure;
+            }
             return emit_closure_bind(ctx, closure.value, new_this.value, expr);
         }
     }
@@ -118,6 +154,33 @@ pub(super) fn lower_static_method_call(
         ref_place_args::write_back_ref_place_args(ctx, plans);
     }
     call
+}
+
+/// Resolves a statically knowable `Closure::bind()` visibility scope for closure lowering.
+///
+/// The runtime descriptor only needs the rebound receiver, but `self`, `parent`, private members,
+/// and static properties inside the closure are lexical constructs that must be resolved while
+/// its EIR body is built. Dynamic scope expressions remain gradual and keep the enclosing scope.
+fn closure_bind_scope_class(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<String> {
+    let scope = args.get(2)?;
+    match &scope.kind {
+        ExprKind::StringLiteral(name) => Some(name.trim_start_matches('\\').to_string()),
+        ExprKind::ClassConstant { receiver } => match receiver {
+            StaticReceiver::Named(name) => {
+                Some(name.as_str().trim_start_matches('\\').to_string())
+            }
+            StaticReceiver::Self_ | StaticReceiver::Static => ctx.current_class.clone(),
+            StaticReceiver::Parent => ctx
+                .current_class
+                .as_ref()
+                .and_then(|class| ctx.classes.get(class))
+                .and_then(|class| class.parent.clone()),
+        },
+        _ => instance_callable_object_class(ctx, scope),
+    }
 }
 
 /// Returns preserved late-static return syntax for EIR static dispatch.
@@ -411,12 +474,41 @@ pub(super) fn lexical_instance_static_call_signature<'a>(
     receiver: &StaticReceiver,
     method: &str,
 ) -> Option<&'a FunctionSig> {
-    if !matches!(receiver, StaticReceiver::Self_ | StaticReceiver::Parent) {
+    if !matches!(receiver, StaticReceiver::Self_ | StaticReceiver::Parent)
+        && !named_receiver_is_current_or_ancestor(ctx, receiver)
+    {
         return None;
     }
     let class_name = static_receiver_class_name(ctx, receiver)?;
     let key = php_symbol_key(method);
     class_method_signature(ctx, &class_name, &key)
+}
+
+/// Returns whether a named static-syntax receiver denotes the current instance class or an ancestor.
+fn named_receiver_is_current_or_ancestor(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+) -> bool {
+    let StaticReceiver::Named(name) = receiver else {
+        return false;
+    };
+    let target = name.as_str().trim_start_matches('\\');
+    let Some(mut current) = ctx.current_class.as_deref() else {
+        return false;
+    };
+    loop {
+        if php_symbol_key(current) == php_symbol_key(target) {
+            return true;
+        }
+        let Some(parent) = ctx
+            .classes
+            .get(current)
+            .and_then(|class_info| class_info.parent.as_deref())
+        else {
+            return false;
+        };
+        current = parent;
+    }
 }
 
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.

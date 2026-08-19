@@ -11,7 +11,8 @@
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// __rt_preg_match: check if a PCRE regex matches a subject string.
-/// Input:  x1=pattern ptr, x2=pattern len, x3=subject ptr, x4=subject len
+/// Input:  x1=pattern ptr, x2=pattern len, x3=subject ptr, x4=subject len,
+///         x5=PHP flags, x6=starting byte offset
 /// Output: x0=1 if match found, 0 if not
 pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -31,7 +32,8 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     let pattern_cstr_off = flags_off + 8;
     let subject_cstr_off = pattern_cstr_off + 8;
     let regexec_result_off = subject_cstr_off + 8;
-    let stack_size = (regexec_result_off + 40 + 15) & !15;
+    let offset_off = regexec_result_off + 8;
+    let stack_size = (offset_off + 40 + 15) & !15;
     let save_off = stack_size - 16;
 
     emitter.blank();
@@ -48,6 +50,7 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x2, [sp, #{}]", pattern_len_off));        // save pattern len
     emitter.instruction(&format!("str x3, [sp, #{}]", subject_ptr_off));        // save subject ptr
     emitter.instruction(&format!("str x4, [sp, #{}]", subject_len_off));        // save subject len
+    emitter.instruction(&format!("str x6, [sp, #{}]", offset_off));             // save requested starting offset
 
     // -- strip delimiters from pattern --
     emitter.instruction("bl __rt_preg_strip");                                  // → x1=stripped, x2=len, x3=flags
@@ -74,12 +77,31 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_cstr2");                                       // → x0=subject C string
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_cstr_off));       // save subject C string
 
+    // -- normalize the PHP byte offset and seed REG_STARTEND bounds --
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", offset_off));             // load requested starting offset
+    emitter.instruction("cmp x9, #0");                                          // negative offsets are relative to the subject end
+    emitter.instruction("b.ge __rt_preg_match_offset_nonnegative");             // keep non-negative offsets unchanged
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_len_off));       // load subject byte length for negative normalization
+    emitter.instruction("add x9, x10, x9");                                     // convert negative offset to an absolute byte offset
+    emitter.label("__rt_preg_match_offset_nonnegative");
+    emitter.instruction("cmp x9, #0");                                          // reject offsets before the subject start
+    emitter.instruction("b.lt __rt_preg_match_cleanup_no");                     // invalid offset frees the compiled handle and reports no match
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_len_off));       // load subject byte length for upper-bound validation
+    emitter.instruction("cmp x9, x10");                                         // offset may point at the trailing byte boundary
+    emitter.instruction("b.gt __rt_preg_match_cleanup_no");                     // reject offsets beyond the subject after freeing the compiled handle
+    emitter.instruction(&format!("str x9, [sp, #{}]", match_pair_off));         // REG_STARTEND start bound
+    emitter.instruction(&format!("str x10, [sp, #{}]", match_pair_off + 8));    // REG_STARTEND end bound
+
     // -- execute regex through the opaque Elephc shim --
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass compiled opaque handle
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // pass null-terminated subject
     emitter.instruction("mov x2, #1");                                          // request only the full-match pair
     emitter.instruction(&format!("add x3, sp, #{}", match_pair_off));           // receive one fixed signed-64-bit offset pair
-    emitter.instruction("mov x4, #0");                                          // use default execution flags
+    emitter.instruction("mov x4, #128");                                        // REG_STARTEND preserves full-subject anchor semantics with offsets
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", match_pair_off));         // reload the normalized starting offset
+    emitter.instruction("cmp x9, #0");                                          // a non-zero start is not the beginning of the full subject
+    emitter.instruction("orr x10, x4, #4");                                     // REG_NOTBOL keeps ^ anchored to the full subject
+    emitter.instruction("csel x4, x10, x4, gt");                                // add REG_NOTBOL only for positive offsets
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
     emitter.instruction(&format!("str x0, [sp, #{}]", regexec_result_off));     // save regexec result
 
@@ -92,6 +114,11 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_preg_match_no");                         // non-zero = no match
     emitter.instruction("mov x0, #1");                                          // matched → return 1
     emitter.instruction("b __rt_preg_match_ret");                               // return
+
+    emitter.label("__rt_preg_match_cleanup_no");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled handle for invalid-offset cleanup
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources before reporting no match
+    emitter.instruction("b __rt_preg_match_no");                                // share the zero-result path
 
     emitter.label("__rt_preg_match_no");
     emitter.instruction("mov x0, #0");                                          // no match → return 0
@@ -120,7 +147,8 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     let matches_array_off = regexec_result_off + 8;
     let group_idx_off = matches_array_off + 8;
     let max_group_off = group_idx_off + 8;
-    let stack_size = (max_group_off + 96 + 15) & !15;
+    let offset_off = max_group_off + 8;
+    let stack_size = (offset_off + 96 + 15) & !15;
     let save_off = stack_size - 16;
 
     emitter.blank();
@@ -138,6 +166,7 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x2, [sp, #{}]", pattern_len_off));        // save pattern len
     emitter.instruction(&format!("str x3, [sp, #{}]", subject_ptr_off));        // save subject ptr
     emitter.instruction(&format!("str x4, [sp, #{}]", subject_len_off));        // save subject len
+    emitter.instruction(&format!("str x6, [sp, #{}]", offset_off));             // save requested starting offset
 
     // -- strip delimiters and compile PCRE regex --
     emitter.instruction("bl __rt_preg_strip");                                  // strip delimiters and expose regex flags
@@ -166,11 +195,30 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x2, [sp, #{}]", subject_len_off));        // reload subject len
     emitter.instruction("bl __rt_cstr2");                                       // materialize null-terminated subject copy
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_cstr_off));       // save subject C string
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", offset_off));             // load requested starting offset
+    emitter.instruction("cmp x9, #0");                                          // negative offsets are relative to the subject end
+    emitter.instruction("b.ge __rt_preg_match_capture_offset_nonnegative");     // keep non-negative offsets unchanged
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_len_off));       // load subject length for negative normalization
+    emitter.instruction("add x9, x10, x9");                                     // convert negative offset to absolute byte position
+    emitter.label("__rt_preg_match_capture_offset_nonnegative");
+    emitter.instruction("cmp x9, #0");                                          // reject positions before the subject
+    emitter.instruction("b.lt __rt_preg_match_capture_invalid_offset");         // release capture resources on invalid offsets
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_len_off));       // load subject length for upper-bound validation
+    emitter.instruction("cmp x9, x10");                                         // allow the trailing byte boundary only
+    emitter.instruction("b.gt __rt_preg_match_capture_invalid_offset");         // reject offsets beyond the subject
+    emitter.instruction(&format!("str x9, [sp, #{}]", offset_off));             // persist the normalized offset for execution flags and output offsets
+    emitter.instruction(&format!("ldr x11, [sp, #{}]", regmatches_ptr_off));    // load dynamic pair buffer
+    emitter.instruction("str x9, [x11]");                                       // seed REG_STARTEND start bound
+    emitter.instruction("str x10, [x11, #8]");                                  // seed REG_STARTEND end bound
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass compiled opaque handle
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // pass subject C string to regexec
     emitter.instruction(&format!("ldr x2, [sp, #{}]", nmatch_off));             // request one regmatch slot for every capture group
     emitter.instruction(&format!("ldr x3, [sp, #{}]", regmatches_ptr_off));     // pass dynamic fixed offset-pair buffer
-    emitter.instruction("mov x4, #0");                                          // use default execution flags
+    emitter.instruction("mov x4, #128");                                        // REG_STARTEND searches from the normalized byte offset
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", offset_off));             // reload the normalized starting offset
+    emitter.instruction("cmp x9, #0");                                          // a non-zero start is not the beginning of the full subject
+    emitter.instruction("orr x10, x4, #4");                                     // REG_NOTBOL keeps ^ anchored to the full subject
+    emitter.instruction("csel x4, x10, x4, gt");                                // add REG_NOTBOL only for positive offsets
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
     emitter.instruction(&format!("str x0, [sp, #{}]", regexec_result_off));     // save regexec status across cleanup
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
@@ -240,6 +288,11 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning an empty matches array
     emitter.instruction("b __rt_preg_match_capture_empty");                     // allocate and return the empty matches array
 
+    emitter.label("__rt_preg_match_capture_invalid_offset");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled handle for invalid-offset cleanup
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
+    emitter.instruction("b __rt_preg_match_capture_no_match");                  // free pair storage and return an empty matches array
+
     emitter.label("__rt_preg_match_capture_malloc_fail");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload opaque handle after capture-buffer allocation failed
     emitter.bl_c("elephc_pcre2_v1_free");                                       // free compiled regex resources before returning no match
@@ -272,7 +325,8 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     let pattern_cstr_off = flags_off + 8;
     let subject_cstr_off = pattern_cstr_off + 8;
     let regexec_result_off = subject_cstr_off + 8;
-    let stack_size = (regexec_result_off + 16 + 15) & !15;
+    let offset_off = regexec_result_off + 8;
+    let stack_size = (offset_off + 16 + 15) & !15;
 
     emitter.blank();
     emitter.comment("--- runtime: preg_match ---");
@@ -283,6 +337,7 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve aligned local storage for the opaque handle, pair, and spill fields
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); // preserve the elephc subject pointer across delimiter stripping and regex compilation helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length across delimiter stripping and regex compilation helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", offset_off));  // preserve the requested starting offset across helper calls
     emitter.instruction("mov rax, rdi");                                        // move the elephc pattern pointer into the preg-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move the elephc pattern length into the preg-strip helper input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and collect supported regex flags from the elephc pattern payload
@@ -301,11 +356,27 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // reload the elephc subject length before null-terminating it in the secondary scratch buffer
     emitter.instruction("call __rt_cstr2");                                     // materialize a null-terminated C version of the subject string for PCRE2 regex execution
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // preserve the subject C string pointer for the regexec() call and later cleanup path
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", offset_off));  // load requested starting offset
+    emitter.instruction("cmp r9, 0");                                           // negative offsets are relative to the subject end
+    emitter.instruction("jge __rt_preg_match_offset_nonnegative_linux_x86_64"); // keep non-negative offsets unchanged
+    emitter.instruction(&format!("add r9, QWORD PTR [rsp + {}]", subject_len_off)); // convert negative offset to an absolute byte position
+    emitter.label("__rt_preg_match_offset_nonnegative_linux_x86_64");
+    emitter.instruction("cmp r9, 0");                                           // reject positions before the subject start
+    emitter.instruction("jl __rt_preg_match_cleanup_no_linux_x86_64");          // release the compiled handle on invalid offsets
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", subject_len_off)); // load subject byte length for upper-bound validation
+    emitter.instruction("cmp r9, r10");                                         // allow the trailing byte boundary only
+    emitter.instruction("jg __rt_preg_match_cleanup_no_linux_x86_64");          // reject positions beyond the subject
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", match_pair_off)); // seed REG_STARTEND start bound
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", match_pair_off + 8)); // seed REG_STARTEND end bound
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass the null-terminated subject C string as the second regexec() argument
     emitter.instruction("mov edx, 1");                                          // request only the full-match pair
     emitter.instruction(&format!("lea rcx, [rsp + {}]", match_pair_off));       // receive one fixed signed-64-bit offset pair
-    emitter.instruction("xor r8d, r8d");                                        // use default execution flags
+    emitter.instruction("mov r8d, 128");                                        // REG_STARTEND preserves full-subject anchor semantics with offsets
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", match_pair_off)); // a non-zero start is not the beginning of the full subject
+    emitter.instruction("jle __rt_preg_match_exec_flags_ready_linux_x86_64");   // retain only REG_STARTEND at offset zero
+    emitter.instruction("or r8d, 4");                                           // REG_NOTBOL keeps ^ anchored to the full subject
+    emitter.label("__rt_preg_match_exec_flags_ready_linux_x86_64");
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
     emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // preserve the regexec() result code across the mandatory regfree() cleanup call
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
@@ -315,6 +386,11 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_preg_match_no_linux_x86_64");                 // return zero when PCRE2 regex execution reports no match
     emitter.instruction("mov eax, 1");                                          // return one when PCRE2 regex execution reports a successful match
     emitter.instruction("jmp __rt_preg_match_ret_linux_x86_64");                // share the common epilogue after materializing the successful match result
+
+    emitter.label("__rt_preg_match_cleanup_no_linux_x86_64");
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled handle for invalid-offset cleanup
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources before reporting no match
+    emitter.instruction("jmp __rt_preg_match_no_linux_x86_64");                 // share the zero-result path
 
     emitter.label("__rt_preg_match_no_linux_x86_64");
     emitter.instruction("xor eax, eax");                                        // return zero for compile failures and subjects that do not match the regex
@@ -339,7 +415,8 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     let matches_array_off = regexec_result_off + 8;
     let group_idx_off = matches_array_off + 8;
     let max_group_off = group_idx_off + 8;
-    let stack_size = (max_group_off + 32 + 15) & !15;
+    let offset_off = max_group_off + 8;
+    let stack_size = (offset_off + 32 + 15) & !15;
 
     emitter.blank();
     emitter.comment("--- runtime: preg_match_capture ---");
@@ -350,6 +427,7 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve local storage for the opaque handle, pair buffer, and matches state
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); // preserve the elephc subject pointer across pattern helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length across pattern helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", offset_off));  // preserve requested starting offset across pattern helper calls
     emitter.instruction("mov rax, rdi");                                        // move pattern pointer into preg-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move pattern length into preg-strip helper input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and collect supported regex flags
@@ -377,11 +455,29 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // reload subject length before C-string conversion
     emitter.instruction("call __rt_cstr2");                                     // materialize null-terminated subject for regexec
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // save subject C string across regexec and pushes
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", offset_off));  // load requested starting offset
+    emitter.instruction("cmp r9, 0");                                           // negative offsets are relative to the subject end
+    emitter.instruction("jge __rt_preg_match_capture_offset_nonnegative_linux_x86_64"); // keep non-negative offsets unchanged
+    emitter.instruction(&format!("add r9, QWORD PTR [rsp + {}]", subject_len_off)); // convert negative offset to an absolute byte position
+    emitter.label("__rt_preg_match_capture_offset_nonnegative_linux_x86_64");
+    emitter.instruction("cmp r9, 0");                                           // reject positions before the subject start
+    emitter.instruction("jl __rt_preg_match_capture_invalid_offset_linux_x86_64"); // release capture resources on invalid offsets
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", subject_len_off)); // load subject length for upper-bound validation
+    emitter.instruction("cmp r9, r10");                                         // allow the trailing byte boundary only
+    emitter.instruction("jg __rt_preg_match_capture_invalid_offset_linux_x86_64"); // reject offsets beyond the subject
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", offset_off));  // persist the normalized offset for execution flags and output offsets
+    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic pair buffer
+    emitter.instruction("mov QWORD PTR [r11], r9");                             // seed REG_STARTEND start bound
+    emitter.instruction("mov QWORD PTR [r11 + 8], r10");                        // seed REG_STARTEND end bound
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass subject C string to regexec
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every capture group
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic fixed offset-pair buffer
-    emitter.instruction("xor r8d, r8d");                                        // use default execution flags
+    emitter.instruction("mov r8d, 128");                                        // REG_STARTEND searches from the normalized byte offset
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", offset_off));   // a non-zero start is not the beginning of the full subject
+    emitter.instruction("jle __rt_preg_match_capture_exec_flags_ready_linux_x86_64"); // retain only REG_STARTEND at offset zero
+    emitter.instruction("or r8d, 4");                                           // REG_NOTBOL keeps ^ anchored to the full subject
+    emitter.label("__rt_preg_match_capture_exec_flags_ready_linux_x86_64");
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
     emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // save regexec status across regfree
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
@@ -453,6 +549,11 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for the no-match cleanup path
     emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning an empty matches array
     emitter.instruction("jmp __rt_preg_match_capture_empty_linux_x86_64");      // allocate and return the empty matches array
+
+    emitter.label("__rt_preg_match_capture_invalid_offset_linux_x86_64");
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled handle for invalid-offset cleanup
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
+    emitter.instruction("jmp __rt_preg_match_capture_no_match_linux_x86_64");   // free pair storage and return an empty matches array
 
     emitter.label("__rt_preg_match_capture_malloc_fail_linux_x86_64");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload opaque handle after capture-buffer allocation failed

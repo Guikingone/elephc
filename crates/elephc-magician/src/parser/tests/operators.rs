@@ -9,6 +9,79 @@
 
 use super::support::*;
 
+/// Verifies attributed arrow functions retain metadata and infer by-value captures.
+#[test]
+fn parse_fragment_accepts_attributed_arrow_closure() {
+    let program = parse_fragment(
+        br#"return #[\Closure(name: "service", class: "Demo\\Service")] fn ($value) => $container->load($value);"#,
+    )
+    .expect("attributed arrow function should parse");
+    let [EvalStmt::Return(Some(EvalExpr::Closure {
+        function,
+        captures,
+        is_static,
+    }))] = program.statements()
+    else {
+        panic!("expected attributed arrow closure return");
+    };
+    assert!(!is_static);
+    assert_eq!(function.attributes().len(), 1);
+    assert_eq!(function.attributes()[0].name(), "Closure");
+    assert_eq!(captures, &[EvalClosureCapture::new("container", false)]);
+}
+
+/// Verifies straight-line keyed yields lower to an iterator-returning eval closure.
+#[test]
+fn parse_fragment_lowers_straight_line_yields_to_array_iterator() {
+    let program = parse_fragment(
+        br#"return function () { yield 2 => "two"; yield 5 => "five"; };"#,
+    )
+    .expect("straight-line yields should parse");
+    let [EvalStmt::Return(Some(EvalExpr::Closure { function, .. }))] = program.statements() else {
+        panic!("expected generator closure return");
+    };
+    assert!(matches!(
+        function.body(),
+        [EvalStmt::Return(Some(EvalExpr::NewObject { class_name, args }))]
+            if class_name == "ArrayIterator" && args.len() == 1
+    ));
+}
+
+/// Verifies PHP's error-suppression prefix preserves the wrapped call expression.
+#[test]
+fn parse_fragment_accepts_error_suppression_source() {
+    let program = parse_fragment(br#"return @trigger_error("deprecated", 16384);"#)
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Unary {
+            op: EvalUnaryOp::ErrorSuppress,
+            expr: Box::new(EvalExpr::Call {
+                name: "trigger_error".to_string(),
+                args: vec![
+                    EvalCallArg::positional(EvalExpr::Const(EvalConst::String(
+                        "deprecated".to_string(),
+                    ))),
+                    EvalCallArg::positional(EvalExpr::Const(EvalConst::Int(16384))),
+                ],
+            }),
+        }))]
+    );
+}
+
+/// Verifies a conditionally declared typed variadic function accepts a suppressed call body.
+#[test]
+fn parse_fragment_accepts_conditional_typed_variadic_deprecation_function() {
+    parse_fragment(
+        br#"if (!function_exists('trigger_deprecation')) {
+function trigger_deprecation(string $package, string $version, string $message, mixed ...$args): void {
+    @trigger_error(($package || $version ? "Since $package $version: " : '').($args ? vsprintf($message, $args) : $message), \E_USER_DEPRECATED);
+}
+}"#,
+    )
+    .expect("conditional typed variadic function should parse");
+}
+
 /// Verifies comparison operators parse with lower precedence than arithmetic.
 #[test]
 fn parse_fragment_accepts_comparison_source() {

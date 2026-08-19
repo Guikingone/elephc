@@ -304,22 +304,41 @@ pub(super) fn materialize_called_class_id(
             }
         }
         CalledClassIdArg::ThisObject(slot) => {
-            let source_ty = ctx.load_local_to_result(*slot)?;
-            if !matches!(source_ty.codegen_repr(), PhpType::Object(_)) {
-                return Err(CodegenIrError::invalid_module(format!(
-                    "this local has PHP type {:?} for forwarded called-class id",
-                    source_ty
-                )));
-            }
-            abi::emit_load_from_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                abi::int_result_reg(ctx.emitter),
-                0,
-            );
+            materialize_this_object_called_class_id(ctx, *slot)?;
         }
     }
     Ok(())
+}
+
+/// Loads the runtime class id from `$this`, including boxed gradual local storage.
+pub(super) fn materialize_this_object_called_class_id(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    let source_ty = ctx.load_local_to_result(slot)?;
+    match source_ty.codegen_repr() {
+        PhpType::Object(_) => {
+            let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+            abi::emit_load_from_address(ctx.emitter, &result_reg, &result_reg, 0);
+            Ok(())
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("ldr x0, [x1]");                    // load the class id from the boxed object's payload
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rax, QWORD PTR [rdi]");        // load the class id from the boxed object's payload
+                }
+            }
+            Ok(())
+        }
+        other => Err(CodegenIrError::invalid_module(format!(
+            "this local has PHP type {:?} for forwarded called-class id",
+            other
+        ))),
+    }
 }
 
 /// Converts the loaded call operand to the ABI shape required by the callee parameter.
@@ -353,11 +372,36 @@ pub(super) fn materialize_direct_call_arg_for_param(
             Ok(PhpType::Mixed)
         }
         PhpType::Array(param_elem) if param_elem.codegen_repr() == PhpType::Mixed => {
+            if let PhpType::AssocArray { value, .. } = source_ty.codegen_repr() {
+                let source_value_ty = value.codegen_repr();
+                builtins::arrays::values::emit_loaded_assoc_array_values(ctx, &source_value_ty)?;
+                if source_value_ty != PhpType::Mixed {
+                    emit_loaded_indexed_array_to_mixed(ctx, &source_value_ty);
+                }
+                return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
+            }
             if let PhpType::Array(source_elem) = source_ty.codegen_repr() {
                 let source_elem = source_elem.codegen_repr();
                 if source_elem != PhpType::Mixed {
                     emit_loaded_indexed_array_to_mixed(ctx, &source_elem);
                 }
+                return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
+            }
+            if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("mov x0, x1");                  // pass the borrowed indexed-array payload to the normalizing clone helper
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("mov rax, rdi");                // pass the borrowed indexed-array payload to the normalizing clone helper
+                    }
+                }
+                let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+                callable_invoker_args::emit_clone_indexed_array_for_invoker_with_runtime_tag(
+                    &result_reg,
+                    ctx.emitter,
+                );
                 return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
             }
             Ok(PhpType::Array(param_elem))

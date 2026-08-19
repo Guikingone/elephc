@@ -56,7 +56,7 @@ pub(in crate::interpreter) fn eval_call_arg_values(
     let mut evaluated_args = Vec::with_capacity(args.len());
     let mut saw_named = false;
 
-    for arg in args {
+    for (index, arg) in args.iter().enumerate() {
         if arg.is_spread() {
             if saw_named {
                 return Err(EvalStatus::RuntimeFatal);
@@ -90,7 +90,10 @@ pub(in crate::interpreter) fn eval_call_arg_values(
         if saw_named {
             return Err(EvalStatus::RuntimeFatal);
         }
-        let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+        let (value, ref_target) =
+            eval_call_arg_value(arg.value(), context, caller_scope, values).map_err(|status| {
+                trace_call_arg_error(index, arg.value(), status, context)
+            })?;
         evaluated_args.push(EvaluatedCallArg {
             name: None,
             value,
@@ -99,6 +102,24 @@ pub(in crate::interpreter) fn eval_call_arg_values(
     }
 
     Ok(evaluated_args)
+}
+
+/// Emits the source argument that failed under opt-in runtime tracing.
+fn trace_call_arg_error(
+    index: usize,
+    expr: &EvalExpr,
+    status: EvalStatus,
+    context: &ElephcEvalContext,
+) -> EvalStatus {
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let call_site = context.call_site();
+        eprintln!(
+            "[elephc-eval-trace] phase=call_arg_error index={index} status={status:?} file={:?} line={} expr={expr:?}",
+            call_site.0,
+            call_site.2,
+        );
+    }
+    status
 }
 
 /// Evaluates one call arg and captures caller-side storage for by-reference parameters.

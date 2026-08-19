@@ -190,12 +190,35 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
             emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
             Ok(())
         }
+        (PhpType::Callable, PhpType::Object(_)) => {
+            let descriptor_reg = abi::int_result_reg(ctx.emitter).to_string();
+            callable_descriptor::emit_load_runtime_capture_to_result(
+                ctx.emitter,
+                &descriptor_reg,
+                0,
+                &result_ty,
+            );
+            Ok(())
+        }
         (PhpType::Mixed, PhpType::Void) => {
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 abi::int_result_reg(ctx.emitter),
                 0x7fff_ffff_ffff_fffe,
             );
+            Ok(())
+        }
+        (PhpType::TaggedScalar, PhpType::Int) => {
+            let null_label = ctx.next_label("narrowed_nullable_local_null");
+            let accepted_label = ctx.next_label("narrowed_nullable_local_accepted");
+            crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(
+                ctx.emitter,
+                &null_label,
+            );
+            abi::emit_jump(ctx.emitter, &accepted_label);
+            ctx.emitter.label(&null_label);
+            exceptions::emit_type_error(ctx, "Value must be of type int, null given");
+            ctx.emitter.label(&accepted_label);
             Ok(())
         }
         (_, PhpType::TaggedScalar) => {
@@ -225,6 +248,6 @@ pub(super) fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &Ph
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never
         ) | (PhpType::Array(_), PhpType::Array(_))
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+            | (PhpType::Object(_), PhpType::Object(_))
     )
 }
-

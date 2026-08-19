@@ -9,9 +9,8 @@
 //!   param plus a variadic `arrays`). The legacy CHECK arm required exactly 2 arguments,
 //!   so `min_args: 2, max_args: 2` reproduce that enforcement in `check_arity` only;
 //!   `function_sig` and the parity gate keep the variadic shape from the golden.
-//! - `check` reproduces the legacy rule: the first argument must be an indexed or
-//!   associative array, and the result preserves that first-operand type. A check hook
-//!   is required because the return type depends on the inferred first-argument type.
+//! - `check` accepts indexed and associative arrays. Indexed results use associative storage
+//!   because retaining a subset of integer keys can leave holes that indexed storage cannot represent.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::semantics::{
@@ -35,14 +34,18 @@ const fn array_intersect_key_semantics() -> BuiltinSemantics {
 
 /// Returns the normalized first operand type used by the key-set runtime.
 fn eir_result_type(input: &BuiltinSemanticInput<'_>) -> PhpType {
-    input.arg_types.first().cloned().unwrap_or(PhpType::Mixed)
+    input
+        .arg_types
+        .first()
+        .map(key_set_result_type)
+        .unwrap_or(PhpType::Mixed)
 }
 
 /// Validates the first argument is an array and returns its (preserved) type.
 ///
 /// Arity (exactly 2 args) is pre-validated by `check_arity`. The first argument is
 /// re-inferred here to drive the return type; the registry already inferred every
-/// argument once for side effects. The result preserves the first-operand array shape.
+/// argument once for side effects. Indexed inputs normalize to hole-preserving hash storage.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
     if !matches!(
@@ -54,5 +57,16 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             &format!("{}() first argument must be array", cx.name),
         ));
     }
-    Ok(ty1)
+    Ok(key_set_result_type(&ty1))
+}
+
+/// Returns the storage type capable of preserving every key from the first operand.
+fn key_set_result_type(ty: &PhpType) -> PhpType {
+    match ty.codegen_repr() {
+        PhpType::Array(value) => PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value,
+        },
+        other => other,
+    }
 }

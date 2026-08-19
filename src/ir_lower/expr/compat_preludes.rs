@@ -93,7 +93,9 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+    if crate::types::call_args::has_named_args(args)
+        || (builtin != "array_unshift" && args.iter().any(is_spread_arg))
+    {
         return None;
     }
     if builtin == "array_unique"
@@ -156,6 +158,10 @@ pub(super) fn lower_backend_gap_builtin_shape(
     }
     if builtin == "array_search"
         && (2..=3).contains(&args.len())
+        && !matches!(
+            materialized_expr_type_for_merge(ctx, &args[1]).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
         && (args.len() == 3
             || matches!(
                 materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
@@ -174,6 +180,78 @@ pub(super) fn lower_backend_gap_builtin_shape(
             args,
             expr,
         ));
+    }
+    if builtin == "preg_replace"
+        && args.len() == 3
+        && matches!(
+            materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        )
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(
+                crate::backend_gap_prelude::PREG_REPLACE_ARRAY_NAME,
+            ),
+            args,
+            expr,
+        ));
+    }
+    if builtin == "array_splice" && !args.iter().any(is_spread_arg) {
+        let replacement = args.iter().enumerate().find_map(|(index, arg)| match &arg.kind {
+            ExprKind::NamedArg { name, value } if php_symbol_key(name) == "replacement" => {
+                Some(value.as_ref())
+            }
+            ExprKind::NamedArg { .. } => None,
+            _ if index == 3 => Some(arg),
+            _ => None,
+        });
+        if replacement.is_some_and(|replacement| {
+            matches!(
+                materialized_expr_type_for_merge(ctx, replacement).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            )
+        }) {
+            return Some(lower_function_call(
+                ctx,
+                &crate::names::Name::unqualified(
+                    crate::backend_gap_prelude::ARRAY_SPLICE_MIXED_REPLACEMENT_NAME,
+                ),
+                args,
+                expr,
+            ));
+        }
+    }
+    if builtin == "array_unshift" {
+        let receiver = args.iter().enumerate().find_map(|(index, arg)| match &arg.kind {
+            ExprKind::NamedArg { name, value } if php_symbol_key(name) == "array" => {
+                Some(value.as_ref())
+            }
+            ExprKind::NamedArg { .. } => None,
+            _ if index == 0 => Some(arg),
+            _ => None,
+        });
+        if let (Some(receiver), Some(last)) = (receiver, args.last()) {
+            if let ExprKind::Spread(spread) = &last.kind {
+                if matches!(receiver.kind, ExprKind::Variable(_))
+                    && args[..args.len() - 1].iter().all(|arg| !is_spread_arg(arg))
+                {
+                    let leading = Expr::new(
+                        ExprKind::ArrayLiteral(args[1..args.len() - 1].to_vec()),
+                        expr.span,
+                    );
+                    let helper_args = vec![receiver.clone(), leading, spread.as_ref().clone()];
+                    return Some(lower_function_call(
+                        ctx,
+                        &crate::names::Name::unqualified(
+                            crate::backend_gap_prelude::ARRAY_UNSHIFT_TRAILING_SPREAD_NAME,
+                        ),
+                        &helper_args,
+                        expr,
+                    ));
+                }
+            }
+        }
     }
     if builtin == "array_slice" {
         let gradual_length = args.get(2).is_some_and(|length| {

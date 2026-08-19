@@ -25,13 +25,18 @@ builtin! {
 
 /// Validates the source and computes the precise array return type based on `preserve_keys`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let source_ty = checker_spl::check_iterator_source(
-        cx.checker,
-        &cx.args[0],
-        cx.span,
-        cx.env,
-        "iterator_to_array()",
-    )?;
+    let inferred_source_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    let source_ty = if inferred_source_ty == PhpType::Mixed {
+        inferred_source_ty
+    } else {
+        checker_spl::check_iterator_source(
+            cx.checker,
+            &cx.args[0],
+            cx.span,
+            cx.env,
+            "iterator_to_array()",
+        )?
+    };
     let preserve_keys = if let Some(arg) = cx.args.get(1) {
         checker_spl::check_iterator_to_array_preserve_keys(cx.checker, arg, cx.env)?
     } else {

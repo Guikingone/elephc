@@ -73,6 +73,61 @@ pub(super) fn resolve_class_like_constant_literal(
     }
 }
 
+/// Recursively resolves supported class-like constants used as keys or values inside a literal
+/// array default while leaving expressions that require runtime evaluation unchanged.
+pub(super) fn resolve_class_like_constants_in_literal(
+    module: &Module,
+    current_class: &str,
+    expr: &ExprKind,
+) -> ExprKind {
+    if let Some(resolved) = resolve_class_like_constant_literal(module, current_class, expr) {
+        return resolved;
+    }
+    match expr {
+        ExprKind::ArrayLiteral(items) => ExprKind::ArrayLiteral(
+            items
+                .iter()
+                .map(|item| {
+                    Expr::new(
+                        resolve_class_like_constants_in_literal(
+                            module,
+                            current_class,
+                            &item.kind,
+                        ),
+                        item.span,
+                    )
+                })
+                .collect(),
+        ),
+        ExprKind::ArrayLiteralAssoc(items) => ExprKind::ArrayLiteralAssoc(
+            items
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        Expr::new(
+                            resolve_class_like_constants_in_literal(
+                                module,
+                                current_class,
+                                &key.kind,
+                            ),
+                            key.span,
+                        ),
+                        Expr::new(
+                            resolve_class_like_constants_in_literal(
+                                module,
+                                current_class,
+                                &value.kind,
+                            ),
+                            value.span,
+                        ),
+                    )
+                })
+                .collect(),
+        ),
+        _ => expr.clone(),
+    }
+}
+
 /// Emits eval class-constant helpers when any lowered function owns an eval context.
 pub(super) fn emit_eval_class_constant_helpers(
     module: &Module,

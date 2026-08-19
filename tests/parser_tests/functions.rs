@@ -294,6 +294,24 @@ fn test_parse_arrow_function_implicit_capture() {
     }
 }
 
+/// Verifies arrow capture inference respects locals initialized earlier in expression order.
+#[test]
+fn test_parse_arrow_function_assignment_defines_local_before_read() {
+    let stmts = parse_source(
+        "<?php $fn = fn($name) => match ($name) { 'parent' => ($parent = 'base') ? $parent : 'none', default => 'other' };",
+    );
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        if let ExprKind::Closure { captures, .. } = &value.kind {
+            assert!(captures.is_empty());
+        } else {
+            panic!("expected Closure (arrow)");
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
 #[test]
 // Verifies that `<?php $fn = fn(int $x): int => $x + 1;` parses an arrow function with
 // typed param `int $x`, return type `int`, and `is_arrow` true.

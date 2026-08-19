@@ -62,6 +62,17 @@ pub enum PassOrigin {
     Licm,
 }
 
+/// PHP boundary whose nominal object contract is enforced by a runtime class check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NominalObjectBoundary {
+    /// A value crossing a declared parameter boundary.
+    Parameter,
+    /// A value crossing a declared property-storage boundary.
+    Property,
+    /// A value crossing a declared return boundary.
+    Return,
+}
+
 impl PassOrigin {
     /// Returns the lower-case spelling used by source maps and the EIR printer.
     pub fn name(self) -> &'static str {
@@ -112,6 +123,11 @@ pub enum Immediate {
     F64(f64),
     Bool(bool),
     Data(DataId),
+    /// Named object target plus the PHP boundary that requested its runtime guard.
+    NominalObject {
+        target: DataId,
+        boundary: NominalObjectBoundary,
+    },
     /// Data-pool reference carrying the strict-PHP profile of its physical call site.
     ProfiledData {
         /// Referenced string or name data.
@@ -254,6 +270,7 @@ pub enum Op {
     ConstClassName,
     ConstEnumCase,
     LoadCalledClassId,
+    ObjectClassId,
     DataAddr,
     LoadLocal,
     StoreLocal,
@@ -653,6 +670,7 @@ impl Op {
             ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedPow => E::ALLOC_HEAP | E::READS_HEAP,
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
+            ObjectClassId => E::READS_HEAP,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | FinallyEnter | FinallyExit => {
                 E::WRITES_LOCAL
@@ -907,6 +925,7 @@ impl Op {
             ConstClassName => "const_class_name",
             ConstEnumCase => "const_enum_case",
             LoadCalledClassId => "load_called_class_id",
+            ObjectClassId => "object_class_id",
             DataAddr => "data_addr",
             LoadLocal => "load_local",
             StoreLocal => "store_local",

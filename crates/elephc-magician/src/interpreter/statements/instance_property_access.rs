@@ -145,6 +145,9 @@ pub(in crate::interpreter) fn eval_property_get_result(
     {
         return eval_reference_target_value(&target, context, values);
     }
+    if let Some(value) = context.dynamic_property_value(identity, &storage_property_name) {
+        return values.retain(value);
+    }
     values.property_get(object, &storage_property_name)
 }
 
@@ -264,14 +267,22 @@ pub(in crate::interpreter) fn eval_property_set_result(
         }
     }
     if !declared_property_found {
-        if let Some((declaring_class, _, write_visibility, is_static)) =
-            eval_dynamic_class_native_property_metadata(
+        let native_property = eval_dynamic_class_native_property_metadata(
                 &object_class_name,
                 property_name,
                 context,
                 values,
-            )?
-        {
+            )
+            .map_err(|status| {
+                trace_instance_property_error(
+                    "native_metadata",
+                    &object_class_name,
+                    property_name,
+                    status,
+                    context,
+                )
+            })?;
+        if let Some((declaring_class, _, write_visibility, is_static)) = native_property {
             if !is_static {
                 if validate_eval_member_access(&declaring_class, write_visibility, context)
                     .is_err()
@@ -295,7 +306,21 @@ pub(in crate::interpreter) fn eval_property_set_result(
                     );
                 }
                 return eval_with_native_bridge_scope(&declaring_class, context, || {
-                    values.property_set(object, property_name, value)
+                    eval_native_property_store_with_array_shape_fallback(
+                        object,
+                        property_name,
+                        value,
+                        values,
+                    )
+                })
+                .map_err(|status| {
+                    trace_instance_property_error(
+                        "native_store",
+                        &object_class_name,
+                        property_name,
+                        status,
+                        context,
+                    )
                 });
             }
         }
@@ -333,11 +358,70 @@ pub(in crate::interpreter) fn eval_property_set_result(
             values,
         )?;
         context.mark_dynamic_property_initialized(identity, &storage_property_name);
-        return values.property_set(object, &storage_property_name, value);
+        if let Some(replaced) =
+            context.set_dynamic_property_value(identity, &storage_property_name, value)
+        {
+            values.release(replaced)?;
+        }
+        return Ok(());
     }
-    values.property_set(object, &storage_property_name, value)?;
+    if let Some(replaced) =
+        context.set_dynamic_property_value(identity, &storage_property_name, value)
+    {
+        values.release(replaced)?;
+    }
     context.mark_dynamic_property_initialized(identity, &storage_property_name);
     Ok(())
+}
+
+/// Retries one native property write with the alternate PHP array storage shape.
+fn eval_native_property_store_with_array_shape_fallback(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let first_status = match values.property_set(object, property_name, value) {
+        Ok(()) => return Ok(()),
+        Err(status) => status,
+    };
+    let source_tag = values.type_tag(value)?;
+    if !matches!(source_tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Err(first_status);
+    }
+    let len = values.array_len(value)?;
+    let mut converted = if source_tag == EVAL_TAG_ARRAY {
+        values.assoc_new(len)?
+    } else {
+        values.array_new(len)?
+    };
+    for position in 0..len {
+        let key = values.array_iter_key(value, position)?;
+        let element = values.array_get(value, key)?;
+        converted = values.array_set(converted, key, element)?;
+    }
+    let result = values.property_set(object, property_name, converted);
+    values.release(converted)?;
+    result
+}
+
+/// Emits the instance-property substage that failed under opt-in runtime tracing.
+fn trace_instance_property_error(
+    stage: &str,
+    class_name: &str,
+    property_name: &str,
+    status: EvalStatus,
+    context: &ElephcEvalContext,
+) -> EvalStatus {
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let call_site = context.call_site();
+        eprintln!(
+            "[elephc-eval-trace] phase=instance_property_error stage={stage} class={class_name:?} property={property_name:?} status={status:?} file={:?} line={}",
+            call_site.0,
+            call_site.2,
+        );
+    }
+    status
 }
 
 /// Binds one eval object property to a by-reference source parameter.
@@ -375,7 +459,11 @@ pub(super) fn eval_property_reference_bind_result(
     )?;
     let value = eval_reference_target_value(&target, context, values)?;
     context.bind_dynamic_property_alias(identity, &storage_property_name, target);
-    values.property_set(object, &storage_property_name, value)?;
+    if let Some(replaced) =
+        context.set_dynamic_property_value(identity, &storage_property_name, value)
+    {
+        values.release(replaced)?;
+    }
     context.mark_dynamic_property_initialized(identity, &storage_property_name);
     Ok(())
 }
@@ -609,8 +697,12 @@ pub(in crate::interpreter) fn eval_property_unset_result(
                 eval_instance_property_storage_name(&declaring_class, &property);
             context.remove_dynamic_property_alias(identity, &storage_property_name);
             context.mark_dynamic_property_uninitialized(identity, &storage_property_name);
-            let null = values.null()?;
-            return values.property_set(object, &storage_property_name, null);
+            if let Some(removed) =
+                context.remove_dynamic_property_value(identity, &storage_property_name)
+            {
+                values.release(removed)?;
+            }
+            return Ok(());
         }
         if eval_magic_property_unset(object, &object_class_name, property_name, context, values)? {
             return Ok(());

@@ -10,7 +10,7 @@
 //! - Method lists are ASCII-lowercased because PHP method names are case-insensitive.
 //! - Object method lists include inherited private methods; class-string lists hide them.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{hash_map::Entry, BTreeSet, HashMap, HashSet};
 
 use crate::ir::Module;
 use crate::names::php_symbol_key;
@@ -39,62 +39,130 @@ pub(crate) fn emit_member_exists_registry_data(module: &Module) -> String {
 
 /// Builds deterministic registry rows for every non-synthetic declared class.
 fn member_rows(module: &Module) -> Vec<MemberRow> {
-    let method_candidates = all_method_candidates(module);
-    let property_candidates = all_property_candidates(module);
+    let class_index = canonical_class_index(module);
     let mut rows = module
         .class_infos
         .iter()
         .filter(|(name, _)| !is_internal_synthetic_class_name(name))
-        .map(|(class_name, class_info)| MemberRow {
-            sort_key: php_symbol_key(class_name.trim_start_matches('\\')),
-            class_methods: method_candidates
+        .map(|(class_name, class_info)| {
+            let class_method_candidates = class_method_candidates(class_info);
+            let object_method_candidates = object_method_candidates(class_info, &class_index);
+            let property_candidates = property_candidates(class_info);
+            MemberRow {
+                sort_key: php_symbol_key(class_name.trim_start_matches('\\')),
+                class_methods: class_method_candidates
                 .iter()
                 .filter(|method| {
-                    method_exists_for_class(module, class_name, class_info, method, false)
+                    method_exists_for_class(
+                        &class_index,
+                        class_name,
+                        class_info,
+                        method,
+                        false,
+                    )
                 })
                 .cloned()
                 .collect(),
-            object_methods: method_candidates
+                object_methods: object_method_candidates
                 .iter()
                 .filter(|method| {
-                    method_exists_for_class(module, class_name, class_info, method, true)
+                    method_exists_for_class(
+                        &class_index,
+                        class_name,
+                        class_info,
+                        method,
+                        true,
+                    )
                 })
                 .cloned()
                 .collect(),
-            properties: property_candidates
+                properties: property_candidates
                 .iter()
                 .filter(|property| property_exists_for_class(class_name, class_info, property))
                 .cloned()
                 .collect(),
+            }
         })
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| left.sort_key.as_bytes().cmp(right.sort_key.as_bytes()));
     rows
 }
 
-/// Collects every method key that can appear in a class's flattened metadata.
-fn all_method_candidates(module: &Module) -> BTreeSet<String> {
+/// Builds deterministic case-insensitive lookup metadata for every declared class.
+fn canonical_class_index(module: &Module) -> HashMap<String, &ClassInfo> {
+    let mut classes = module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by(|(left, _), (right, _)| left.as_bytes().cmp(right.as_bytes()));
+    let mut index = HashMap::with_capacity(classes.len());
+    for (raw_name, class_info) in classes {
+        let key = php_symbol_key(raw_name.trim_start_matches('\\'));
+        match index.entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(class_info);
+            }
+            Entry::Occupied(entry) => {
+                debug_assert!(
+                    false,
+                    "duplicate canonical class metadata key: {}",
+                    entry.key()
+                );
+            }
+        }
+    }
+    index
+}
+
+/// Collects method keys that can appear in one class's flattened metadata.
+fn class_method_candidates(class_info: &ClassInfo) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    for class_info in module.class_infos.values() {
-        names.extend(class_info.methods.keys().map(|name| php_symbol_key(name)));
-        names.extend(class_info.static_methods.keys().map(|name| php_symbol_key(name)));
+    names.extend(class_info.methods.keys().map(|name| php_symbol_key(name)));
+    names.extend(
+        class_info
+            .static_methods
+            .keys()
+            .map(|name| php_symbol_key(name)),
+    );
+    names
+}
+
+/// Collects one class's method keys plus keys declared by every reachable ancestor.
+fn object_method_candidates(
+    class_info: &ClassInfo,
+    class_index: &HashMap<String, &ClassInfo>,
+) -> BTreeSet<String> {
+    let mut names = class_method_candidates(class_info);
+    let mut visited = HashSet::new();
+    let mut parent_name = class_info.parent.as_deref();
+    while let Some(candidate) = parent_name {
+        let key = php_symbol_key(candidate.trim_start_matches('\\'));
+        if !visited.insert(key.clone()) {
+            break;
+        }
+        let Some(parent_info) = class_index.get(&key).copied() else {
+            break;
+        };
+        names.extend(parent_info.methods.keys().map(|name| php_symbol_key(name)));
+        names.extend(
+            parent_info
+                .static_methods
+                .keys()
+                .map(|name| php_symbol_key(name)),
+        );
+        parent_name = parent_info.parent.as_deref();
     }
     names
 }
 
-/// Collects every case-sensitive instance/static property name in the module.
-fn all_property_candidates(module: &Module) -> BTreeSet<String> {
+/// Collects one class's case-sensitive instance and static property names.
+fn property_candidates(class_info: &ClassInfo) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    for class_info in module.class_infos.values() {
-        names.extend(class_info.property_visibilities.keys().cloned());
-        names.extend(class_info.static_property_visibilities.keys().cloned());
-    }
+    names.extend(class_info.property_visibilities.keys().cloned());
+    names.extend(class_info.static_property_visibilities.keys().cloned());
     names
 }
 
 /// Returns PHP's method-existence answer for one class, target form, and method key.
 fn method_exists_for_class(
-    module: &Module,
+    class_index: &HashMap<String, &ClassInfo>,
     class_name: &str,
     class_info: &ClassInfo,
     method_key: &str,
@@ -122,7 +190,7 @@ fn method_exists_for_class(
     {
         return true;
     }
-    target_is_object && parent_chain_declares_method(module, class_info, method_key)
+    target_is_object && parent_chain_declares_method(class_index, class_info, method_key)
 }
 
 /// Returns whether a method remains visible through a class-string target.
@@ -140,7 +208,7 @@ fn method_visible_from_class_string(
 
 /// Returns whether any ancestor declares a method, including private methods visible on objects.
 fn parent_chain_declares_method(
-    module: &Module,
+    class_index: &HashMap<String, &ClassInfo>,
     class_info: &ClassInfo,
     method_key: &str,
 ) -> bool {
@@ -151,7 +219,7 @@ fn parent_chain_declares_method(
         if !visited.insert(key.clone()) {
             return false;
         }
-        let Some(parent_info) = lookup_class_info(module, &key) else {
+        let Some(parent_info) = class_index.get(&key).copied() else {
             return false;
         };
         if parent_info.methods.contains_key(method_key)
@@ -162,15 +230,6 @@ fn parent_chain_declares_method(
         parent_name = parent_info.parent.as_deref();
     }
     false
-}
-
-/// Looks up class metadata using PHP's case-insensitive class-name rules.
-fn lookup_class_info<'a>(module: &'a Module, class_key: &str) -> Option<&'a ClassInfo> {
-    module
-        .class_infos
-        .iter()
-        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
-        .map(|(_, class_info)| class_info)
 }
 
 /// Returns PHP's property-existence answer for one flattened class schema.
@@ -285,3 +344,142 @@ fn is_internal_synthetic_class_name(name: &str) -> bool {
     php_symbol_key(name).starts_with("__elephc")
 }
 
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+
+    use crate::types::{ClassInfo, FunctionSig, PhpType};
+
+    use super::{
+        method_exists_for_class, object_method_candidates, parent_chain_declares_method,
+    };
+
+    /// Builds an inert function signature for method-membership tests.
+    fn empty_function_sig() -> FunctionSig {
+        FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type: PhpType::Mixed,
+            declared_return: false,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+        }
+    }
+
+    /// Builds minimal class metadata with the requested parent and instance methods.
+    fn class_info(parent: Option<&str>, method_names: &[&str]) -> ClassInfo {
+        let methods = method_names
+            .iter()
+            .map(|name| ((*name).to_string(), empty_function_sig()))
+            .collect();
+        ClassInfo {
+            class_id: 0,
+            declaration_span: crate::span::Span::dummy(),
+            parent: parent.map(str::to_string),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            allow_dynamic_properties: false,
+            constants: HashMap::new(),
+            constant_deprecations: HashMap::new(),
+            constant_types: HashMap::new(),
+            constant_visibilities: HashMap::new(),
+            final_constants: HashSet::new(),
+            attribute_names: Vec::new(),
+            attribute_args: Vec::new(),
+            method_attribute_names: HashMap::new(),
+            method_attribute_args: HashMap::new(),
+            property_attribute_names: HashMap::new(),
+            property_attribute_args: HashMap::new(),
+            constant_attribute_names: HashMap::new(),
+            constant_attribute_args: HashMap::new(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+            properties: Vec::new(),
+            property_offsets: HashMap::new(),
+            property_declaring_classes: HashMap::new(),
+            defaults: Vec::new(),
+            property_visibilities: HashMap::new(),
+            property_set_visibilities: HashMap::new(),
+            declared_properties: HashSet::new(),
+            property_declared_slots: Vec::new(),
+            final_properties: HashSet::new(),
+            readonly_properties: HashSet::new(),
+            reference_properties: HashSet::new(),
+            owned_reference_properties: HashSet::new(),
+            promoted_properties: HashSet::new(),
+            property_reference_slots: Vec::new(),
+            abstract_properties: HashSet::new(),
+            abstract_property_hooks: HashMap::new(),
+            static_properties: Vec::new(),
+            static_defaults: Vec::new(),
+            static_property_declaring_classes: HashMap::new(),
+            static_property_visibilities: HashMap::new(),
+            declared_static_properties: HashSet::new(),
+            final_static_properties: HashSet::new(),
+            method_decls: Vec::new(),
+            methods,
+            static_methods: HashMap::new(),
+            late_static_method_returns: HashMap::new(),
+            late_static_static_method_returns: HashMap::new(),
+            callable_method_return_sigs: HashMap::new(),
+            callable_array_method_return_sigs: HashMap::new(),
+            method_visibilities: HashMap::new(),
+            final_methods: HashSet::new(),
+            method_declaring_classes: HashMap::new(),
+            method_impl_classes: HashMap::new(),
+            vtable_methods: Vec::new(),
+            vtable_slots: HashMap::new(),
+            static_method_visibilities: HashMap::new(),
+            final_static_methods: HashSet::new(),
+            static_method_declaring_classes: HashMap::new(),
+            static_method_impl_classes: HashMap::new(),
+            static_vtable_methods: Vec::new(),
+            static_vtable_slots: HashMap::new(),
+            interfaces: Vec::new(),
+            constructor_param_to_prop: Vec::new(),
+        }
+    }
+
+    /// Pins reachable-before-missing, beyond-missing, and cyclic parent frontiers.
+    #[test]
+    fn parent_method_lookup_preserves_malformed_metadata_frontiers() {
+        let child = class_info(Some("Mid"), &[]);
+        let mid = class_info(Some("Missing"), &["before_missing"]);
+        let cycle_a = class_info(Some("CycleB"), &[]);
+        let cycle_b = class_info(Some("CycleA"), &[]);
+        let class_index = HashMap::from([
+            ("child".to_string(), &child),
+            ("mid".to_string(), &mid),
+            ("cyclea".to_string(), &cycle_a),
+            ("cycleb".to_string(), &cycle_b),
+        ]);
+
+        let candidates = object_method_candidates(&child, &class_index);
+        assert!(candidates.contains("before_missing"));
+        assert!(method_exists_for_class(
+            &class_index,
+            "Child",
+            &child,
+            "before_missing",
+            true,
+        ));
+        assert!(!method_exists_for_class(
+            &class_index,
+            "Child",
+            &child,
+            "beyond_missing",
+            true,
+        ));
+        assert!(!parent_chain_declares_method(
+            &class_index,
+            &cycle_a,
+            "absent",
+        ));
+    }
+}

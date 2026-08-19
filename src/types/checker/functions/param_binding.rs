@@ -22,7 +22,11 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, Visibility};
 use crate::span::Span;
 use crate::types::param_binding::{
-    classify_param_binding, param_accepts_weak_string_coercion,
+    classify_param_binding, gradual_object_requires_runtime_nominal_guard,
+    gradual_union_requires_runtime_param_guard,
+    nullable_int_requires_runtime_param_guard,
+    object_requires_runtime_nominal_guard,
+    param_accepts_weak_string_coercion,
     strict_param_binding_rejection, ParamBinding,
 };
 use crate::types::{FunctionSig, PhpType, TypeEnv};
@@ -66,6 +70,13 @@ impl Checker {
         }
         if by_ref {
             return self.require_compatible_arg_type(expected, actual, arg.span, context);
+        }
+        if object_requires_runtime_nominal_guard(expected, actual)
+            || gradual_object_requires_runtime_nominal_guard(expected, actual)
+            || nullable_int_requires_runtime_param_guard(expected, actual)
+            || gradual_union_requires_runtime_param_guard(expected, actual)
+        {
+            return Ok(());
         }
         if !self.strict_types && param_accepts_weak_string_coercion(expected) {
             if let PhpType::Object(class_name) = actual.codegen_repr() {

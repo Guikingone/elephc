@@ -59,7 +59,9 @@ pub(super) fn resolve_decl_stmt(
                         .collect(),
                     variadic: variadic.clone(),
                     variadic_by_ref: *variadic_by_ref,
-                    variadic_type: variadic_type.clone(),
+                    variadic_type: variadic_type
+                        .as_ref()
+                        .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
                     return_type: return_type
                         .as_ref()
                         .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
@@ -323,6 +325,10 @@ fn resolve_methods(
                     .iter()
                     .map(|groups| resolve_attribute_groups(groups, namespace, imports, symbols))
                     .collect(),
+                variadic_type: method
+                    .variadic_type
+                    .as_ref()
+                    .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
                 return_type: method
                     .return_type
                     .as_ref()

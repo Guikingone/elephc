@@ -128,6 +128,36 @@ echo $result["name"], "|", $result[0], "|", $result[1];
     assert_eq!(out, "alice|first|second");
 }
 
+/// Verifies `array_replace()` promotes two indexed Mixed-valued operands while retaining heap
+/// values and preserving numeric-key replacement semantics.
+#[test]
+fn test_array_replace_indexed_mixed_operands() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function gradual_replace_item(mixed $value): mixed { return $value; }
+$base = [gradual_replace_item("first"), gradual_replace_item(["keep" => 2])];
+$over = [gradual_replace_item("changed")];
+$result = array_replace($base, $over);
+echo $result[0], "|", $result[1]["keep"], "|", $base[0];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "changed|2|first");
+}
+
+/// Verifies `array_replace()` accepts indexed string arrays and preserves untouched heap values.
+#[test]
+fn test_array_replace_indexed_string_operands() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$result = array_replace(["first", "keep"], ["changed"]);
+echo $result[0], "|", $result[1];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "changed|keep");
+}
+
 /// Verifies key-set operations normalize gradual and indexed operands to associative storage.
 #[test]
 fn test_array_key_set_ops_with_gradual_and_indexed_operands() {
@@ -142,6 +172,26 @@ echo count($diff), "|", $diff[1], "|", $diff["name"], "|", count($intersect), "|
 "#,
     );
     assert_eq!(out, "2|one|alice|1|zero");
+}
+
+/// Verifies key-set operations convert indexed Mixed operands to hashes so removed integer keys
+/// retain their original positions instead of being renumbered.
+#[test]
+fn test_array_key_set_ops_with_indexed_mixed_operands() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function gradual_key_item(mixed $value): mixed { return $value; }
+$left = [gradual_key_item("zero"), gradual_key_item("one")];
+$mask = [gradual_key_item(true)];
+$diff = array_diff_key($left, $mask);
+$intersect = array_intersect_key($left, $mask);
+foreach ($diff as $key => $value) { echo $key, ":", $value; }
+echo "|";
+foreach ($intersect as $key => $value) { echo $key, ":", $value; }
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:one|0:zero");
 }
 
 /// Verifies array_replace() result count reflects merged distinct keys.

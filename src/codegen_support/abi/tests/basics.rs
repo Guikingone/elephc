@@ -32,6 +32,22 @@ fn test_emit_branch_helpers_use_long_range_aarch64_sequence() {
     );
 }
 
+/// Verifies named long-range calls use relocation-safe address materialization plus `blr`.
+#[test]
+fn test_emit_call_label_long_range_uses_indirect_aarch64_sequence() {
+    let mut emitter = test_emitter();
+    emit_call_label_long_range(&mut emitter, "_shared_helper");
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    adrp x9, _shared_helper@PAGE\n",
+            "    add x9, x9, _shared_helper@PAGEOFF\n",
+            "    blr x9\n",
+        )
+    );
+}
+
 /// Tests frame setup and teardown for a small frame (64 bytes).
 /// Verifies that the prologue allocates 64 bytes, saves FP/LR at sp+#48,
 /// sets up x29 as the frame pointer, and that restore/return undo this correctly

@@ -37,6 +37,12 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
     let mut ref_writebacks =
         plan_ref_arg_writebacks(ctx, operands, visible_param_types, visible_ref_params)?;
     emit_ref_arg_temp_cells(ctx, &mut ref_writebacks)?;
+    let cleanup_slots =
+        plan_call_arg_temp_cleanups(ctx, operands, visible_param_types, visible_ref_params, &[])?;
+    let cleanup_bytes = cleanup_slots.len() * 16;
+    if cleanup_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
+    }
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
@@ -52,13 +58,19 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
                 param_ty,
                 arg_temp_bytes,
                 &ref_writebacks,
-                0,
+                cleanup_bytes,
             )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
         } else {
             ctx.load_value_to_result(*value)?;
             let source_ty = ctx.raw_value_php_type(*value)?;
             let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+            if let Some(cleanup) = cleanup_slots
+                .iter()
+                .find(|cleanup| cleanup.param_index == index)
+            {
+                save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
+            }
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[index + 1]);
@@ -66,8 +78,8 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
     Ok(CallArgMaterialization {
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
-        cleanup_slots: Vec::new(),
-        cleanup_bytes: 0,
+        cleanup_slots,
+        cleanup_bytes,
         borrowed_stack_arg_bytes: 0,
     })
 }
@@ -81,7 +93,7 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     param_types: &[PhpType],
     ref_params: &[bool],
 ) -> Result<CallArgMaterialization> {
-    if operands.len() != param_types.len() {
+    if operands.len() > param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
             "method call materialization received {} operands for {} params",
             operands.len(),
@@ -100,6 +112,11 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
         return Err(CodegenIrError::unsupported(
             "receiver-register method call with scalar-to-mixed by-reference writebacks",
         ));
+    }
+    let cleanup_slots = plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?;
+    let cleanup_bytes = cleanup_slots.len() * 16;
+    if cleanup_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     }
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
@@ -122,22 +139,52 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
                 &param_types[param_index],
                 arg_temp_bytes,
                 &ref_writebacks,
-                0,
+                cleanup_bytes,
             )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
         } else {
             ctx.load_value_to_result(*value)?;
             let source_ty = ctx.raw_value_php_type(*value)?;
             let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+            if let Some(cleanup) = cleanup_slots
+                .iter()
+                .find(|cleanup| cleanup.param_index == param_index)
+            {
+                save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
+            }
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
     }
+    for param_index in operands.len()..param_types.len() {
+        if param_index == 0 || ref_params[param_index] {
+            return Err(CodegenIrError::unsupported(
+                "receiver-register method call with missing non-value parameter",
+            ));
+        }
+        let param_ty = param_types[param_index].codegen_repr();
+        match param_ty {
+            PhpType::Mixed => {
+                objects::emit_boxed_null(ctx);
+                abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
+            }
+            PhpType::TaggedScalar => {
+                crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
+                abi::emit_push_result_value(ctx.emitter, &PhpType::TaggedScalar);
+            }
+            _ => {
+                return Err(CodegenIrError::unsupported(format!(
+                    "receiver-register method call missing default for ABI type {:?}",
+                    param_ty
+                )));
+            }
+        }
+    }
     Ok(CallArgMaterialization {
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
-        cleanup_slots: Vec::new(),
-        cleanup_bytes: 0,
+        cleanup_slots,
+        cleanup_bytes,
         borrowed_stack_arg_bytes: 0,
     })
 }
@@ -426,11 +473,27 @@ pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instructio
                 format!("Value must be of type callable, {} given", given)
             });
         }
+        (PhpType::Array(_), Some(Immediate::I64(4))) => {
+            emit_mixed_tag_unbox_guard(ctx, 4, &|given| {
+                format!("Only arrays and Traversables can be unpacked, {} given", given)
+            });
+        }
         (PhpType::Iterable, _) => emit_mixed_iterable_unbox_guard(ctx),
         _ => abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox"),
     }
     move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
-    abi::emit_incref_if_refcounted(ctx.emitter, &result_ty);
+    if matches!(
+        &result_ty,
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+    ) {
+        let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+        callable_invoker_args::emit_clone_indexed_array_for_invoker_with_runtime_tag(
+            &result_reg,
+            ctx.emitter,
+        );
+    } else {
+        abi::emit_incref_if_refcounted(ctx.emitter, &result_ty);
+    }
     store_if_result(ctx, inst)
 }
 
@@ -639,6 +702,37 @@ pub(super) fn value_is_array_element_address(ctx: &FunctionContext<'_>, value: V
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     Ok(inst_ref.op == Op::ArrayElemAddr)
+}
+
+/// Resolves the PHP value type stored behind an indexed-array element address.
+pub(super) fn array_element_address_value_type(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<PhpType>> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op != Op::ArrayElemAddr {
+        return Ok(None);
+    }
+    let array = inst_ref
+        .operands
+        .first()
+        .copied()
+        .ok_or_else(|| CodegenIrError::invalid_module("array_elem_addr missing array operand"))?;
+    let PhpType::Array(element) = ctx.value_php_type(array)?.codegen_repr() else {
+        return Err(CodegenIrError::invalid_module(
+            "array_elem_addr source does not use indexed-array storage",
+        ));
+    };
+    Ok(Some(element.codegen_repr()))
 }
 
 /// Describes a local operand used as a by-reference call argument.

@@ -12,6 +12,11 @@
 //!   signature-dependent direct dispatch stays on explicit guarded paths.
 
 use crate::codegen::platform::Arch;
+use crate::codegen_support::callable_lookup::{
+    emit_instance_lookup_table, emit_invokable_lookup_table, emit_static_lookup_table,
+    emit_string_lookup_table, InstanceLookupCase, InvokableLookupCase, StaticLookupCase,
+    StringLookupTable, INLINE_LOOKUP_LIMIT,
+};
 use crate::codegen::{
     abi, callable_descriptor, callable_dispatch, callable_invoker_args,
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
@@ -52,6 +57,20 @@ const STRING_SELECTOR_BYTES: usize = 32;
 const MIXED_TAG_CALLABLE: i64 = 10;
 /// Runtime Mixed tag for a boxed indexed (list) array; payload-low holds the array pointer.
 const MIXED_TAG_INDEXED_ARRAY: i64 = 4;
+
+/// Returns the secondary result register carrying runtime descriptor ownership.
+fn runtime_descriptor_owned_flag_reg(ctx: &FunctionContext<'_>) -> &'static str {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdx",
+    }
+}
+
+/// Records whether the descriptor currently being resolved owns a runtime allocation.
+fn emit_runtime_descriptor_owned_flag(ctx: &mut FunctionContext<'_>, owned: bool) {
+    let flag_reg = runtime_descriptor_owned_flag_reg(ctx);
+    abi::emit_load_int_immediate(ctx.emitter, flag_reg, if owned { 1 } else { 0 });
+}
 
 /// Resolved user function candidate for a runtime string callable.
 struct RuntimeStringFunctionTarget {
@@ -191,6 +210,60 @@ fn lower_mixed_callable_descriptor_invoke(
     arg_mixed: ValueId,
     op_name: &str,
 ) -> Result<()> {
+    if let Some(label) = crate::codegen::shared_mixed_callable::shared_helper_label(
+        ctx,
+        inst,
+        callable,
+        arg_mixed,
+    ) {
+        return lower_shared_mixed_callable_descriptor_invoke(
+            ctx,
+            inst,
+            callable,
+            arg_mixed,
+            label,
+        );
+    }
+    lower_mixed_callable_descriptor_invoke_inline(ctx, inst, callable, arg_mixed, op_name)
+}
+
+/// Calls the module-wide open Mixed callable dispatcher and stores its Mixed result.
+fn lower_shared_mixed_callable_descriptor_invoke(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callable: ValueId,
+    arg_mixed: ValueId,
+    helper_label: &str,
+) -> Result<()> {
+    ctx.load_value_to_result(callable)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    ctx.load_value_to_result(arg_mixed)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let container_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, 16);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, container_arg, 0);
+    abi::emit_call_label(ctx.emitter, helper_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    store_descriptor_invoker_result(ctx, inst)
+}
+
+/// Emits the full open Mixed callable dispatcher at one inline or shared-helper site.
+pub(in crate::codegen) fn lower_mixed_callable_descriptor_invoke_inline(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callable: ValueId,
+    arg_mixed: ValueId,
+    op_name: &str,
+) -> Result<()> {
+    if ctx.runtime_callable_candidates(callable).is_none()
+        && !super::builtins::has_eval_context(ctx)
+    {
+        return lower_open_mixed_callable_descriptor_invoke_via_value(
+            ctx, inst, callable, arg_mixed, op_name,
+        );
+    }
+
     let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
     let invokable_targets = instance_targets
         .iter()
@@ -203,25 +276,27 @@ fn lower_mixed_callable_descriptor_invoke(
     let object_label = (!invokable_targets.is_empty())
         .then(|| ctx.next_label("mixed_callable_object"));
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
+    let owned_flag_reg = runtime_descriptor_owned_flag_reg(ctx);
     let string_label = ctx.next_label("mixed_callable_string_name");
     let callable_label = ctx.next_label("mixed_callable_closure");
     let fatal_label = ctx.next_label("mixed_callable_not_callable");
+    let invoke_label = ctx.next_label("mixed_callable_invoke_resolved");
     let done_label = ctx.next_label("mixed_callable_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(callable, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");              // unbox → x0=tag, x1=payload lo, x2=payload hi
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_STRING)); // is the boxed Mixed payload a string function name?
-            ctx.emitter.instruction(&format!("b.eq {}", string_label));         // dispatch a boxed string-name callable
+            emit_long_range_equal_branch(ctx, &string_label, "mixed_callable_not_string");
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); // is the boxed Mixed payload a callable descriptor?
-            ctx.emitter.instruction(&format!("b.eq {}", callable_label));       // dispatch a boxed closure/first-class callable descriptor
+            emit_long_range_equal_branch(ctx, &callable_label, "mixed_callable_not_descriptor");
             if let Some(array_label) = &array_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)); // is the boxed Mixed payload a two-element callable array?
-                ctx.emitter.instruction(&format!("b.eq {}", array_label));      // dispatch a boxed instance/static-method callable array
+                emit_long_range_equal_branch(ctx, array_label, "mixed_callable_not_array");
             }
             if let Some(object_label) = &object_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_OBJECT)); // is the boxed Mixed payload an invokable object?
-                ctx.emitter.instruction(&format!("b.eq {}", object_label));     // dispatch the object's public __invoke method
+                emit_long_range_equal_branch(ctx, object_label, "mixed_callable_not_object");
             }
             abi::emit_jump(ctx.emitter, &fatal_label);
             ctx.emitter.label(&callable_label);
@@ -247,54 +322,48 @@ fn lower_mixed_callable_descriptor_invoke(
             ctx.emitter.instruction(&format!("mov {}, rdi", descriptor_reg));   // keep the unboxed closure descriptor in the nested-call register
         }
     }
-    // Closure descriptor (tag 10): invoke the unboxed descriptor directly.
-    emit_descriptor_reg_invoker_call_with_mixed_arg(
-        ctx,
-        inst,
-        descriptor_reg,
-        arg_mixed,
-        op_name,
-        false,
-    )?;
-    abi::emit_jump(ctx.emitter, &done_label);
+    // Closure descriptor (tag 10): keep borrowing the descriptor owned by the boxed Mixed value.
+    emit_runtime_descriptor_owned_flag(ctx, false);
+    abi::emit_jump(ctx.emitter, &invoke_label);
 
     // String function name (tag 1): the unboxed pointer/length are still in the
     // payload registers. Move them into the string ABI result pair, spill them onto
     // the temporary stack, and reuse the concrete-string per-candidate dispatch.
     ctx.emitter.label(&string_label);
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction(&format!("mov {}, rdi", ptr_reg));              // move the unboxed string pointer into the string ABI result register
-    }
-    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);                    // spill the unboxed function name across dispatch emission
-    let candidate_names = ctx.runtime_callable_candidates(callable);
-    let cases = runtime_string_descriptor_cases(
+    emit_runtime_string_descriptor_value_from_unboxed(
         ctx,
-        None,
-        candidate_names.as_deref(),
+        callable,
+        op_name,
         super::instruction_strict_php_profile(inst),
     )?;
-    if cases.is_empty() {
-        emit_undefined_runtime_string_call_fatal(ctx);
-    } else {
-        emit_string_name_descriptor_cases_loop(ctx, inst, arg_mixed, &cases, op_name)?;
-    }
-    abi::emit_jump(ctx.emitter, &done_label);
+    abi::emit_reg_move(
+        ctx.emitter,
+        descriptor_reg,
+        abi::int_result_reg(ctx.emitter),
+    );
+    emit_runtime_descriptor_owned_flag(ctx, false);
+    abi::emit_jump(ctx.emitter, &invoke_label);
 
     // Boxed indexed array (tag 4): `[$obj, "method"]` or `["Class", "method"]`.
     if let Some(array_label) = &array_label {
         ctx.emitter.label(array_label);
         emit_mixed_callable_array_selector_slots(ctx, &CallableArraySource::BoxedArray(callable))?;
-        emit_mixed_callable_array_descriptor_dispatch(
+        let array_miss_label = ctx.next_label("mixed_callable_array_missing");
+        emit_mixed_callable_array_descriptor_lookup(
             ctx,
-            inst,
-            callable,
-            arg_mixed,
-            op_name,
             &instance_targets,
             &static_cases,
+            &array_miss_label,
         )?;
-        abi::emit_jump(ctx.emitter, &done_label);
+        abi::emit_reg_move(
+            ctx.emitter,
+            descriptor_reg,
+            abi::int_result_reg(ctx.emitter),
+        );
+        abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
+        abi::emit_jump(ctx.emitter, &invoke_label);
+        ctx.emitter.label(&array_miss_label);
+        emit_runtime_callable_array_no_match_abort(ctx);
     }
 
     // Boxed object (tag 6): dispatch its public `__invoke` implementation by
@@ -302,35 +371,80 @@ fn lower_mixed_callable_descriptor_invoke(
     if let Some(object_label) = &object_label {
         ctx.emitter.label(object_label);
         emit_push_mixed_unbox_payload(ctx);
-        let object_done_label = ctx.next_label("mixed_callable_object_done");
-        for target in &invokable_targets {
-            let next_label = ctx.next_label("mixed_callable_object_next");
-            emit_branch_if_saved_receiver_class_id_mismatch(
-                ctx,
-                target.class_id,
-                MIXED_VALUE_PAYLOAD_OFFSET,
-                &next_label,
-            );
-            emit_runtime_array_instance_descriptor_invoke(
-                ctx,
-                inst,
-                arg_mixed,
-                target,
-                MIXED_VALUE_PAYLOAD_OFFSET,
-            )?;
-            abi::emit_jump(ctx.emitter, &object_done_label);
-            ctx.emitter.label(&next_label);
-        }
-        emit_mixed_callable_not_callable_fatal(ctx, op_name);
-        ctx.emitter.label(&object_done_label);
+        emit_invokable_object_descriptor_lookup(
+            ctx,
+            &invokable_targets,
+            MIXED_VALUE_PAYLOAD_OFFSET,
+            &fatal_label,
+        )?;
+        abi::emit_reg_move(
+            ctx.emitter,
+            descriptor_reg,
+            abi::int_result_reg(ctx.emitter),
+        );
         abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
-        abi::emit_jump(ctx.emitter, &done_label);
+        abi::emit_jump(ctx.emitter, &invoke_label);
     }
+
+    ctx.emitter.label(&invoke_label);
+    emit_descriptor_reg_invoker_call_with_mixed_arg_and_runtime_ownership(
+        ctx,
+        inst,
+        descriptor_reg,
+        owned_flag_reg,
+        arg_mixed,
+        op_name,
+    )?;
+    abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&fatal_label);
     emit_mixed_callable_not_callable_fatal(ctx, op_name);
     ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Resolves one open Mixed callable to a descriptor before invoking its uniform entry point.
+fn lower_open_mixed_callable_descriptor_invoke_via_value(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callable: ValueId,
+    arg_mixed: ValueId,
+    op_name: &str,
+) -> Result<()> {
+    emit_runtime_mixed_callable_descriptor_value(
+        ctx,
+        callable,
+        op_name,
+        false,
+        super::instruction_strict_php_profile(inst),
+    )?;
+    let descriptor_reg = abi::nested_call_reg(ctx.emitter).to_string();
+    let owned_flag_reg = runtime_descriptor_owned_flag_reg(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    abi::emit_reg_move(ctx.emitter, &descriptor_reg, &result_reg);
+    emit_descriptor_reg_invoker_call_with_mixed_arg_and_runtime_ownership(
+        ctx,
+        inst,
+        &descriptor_reg,
+        owned_flag_reg,
+        arg_mixed,
+        op_name,
+    )
+}
+
+/// Branches to a potentially distant label after an equality-setting compare.
+fn emit_long_range_equal_branch(ctx: &mut FunctionContext<'_>, label: &str, stem: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let skip_label = ctx.next_label(stem);
+            ctx.emitter.instruction(&format!("b.ne {}", skip_label));           // keep the conditional branch adjacent to its compare
+            abi::emit_jump(ctx.emitter, label);
+            ctx.emitter.label(&skip_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("je {}", label));                  // x86-64 conditional branches already carry a wide displacement
+        }
+    }
 }
 
 /// Materializes a descriptor pointer for any callable shape boxed in `Mixed`.
@@ -343,6 +457,7 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
     callable: ValueId,
     op_name: &str,
     retain_existing_descriptor: bool,
+    strict_php: bool,
 ) -> Result<()> {
     let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
     let invokable_targets = instance_targets
@@ -365,32 +480,32 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
             ctx.load_value_to_reg(callable, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); // classify an existing callable descriptor
-            ctx.emitter.instruction(&format!("b.eq {}", descriptor_label));    // return the existing descriptor payload
+            emit_long_range_equal_branch(ctx, &descriptor_label, "mixed_callable_value_not_descriptor");
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_STRING)); // classify a runtime callable name
-            ctx.emitter.instruction(&format!("b.eq {}", string_label));        // resolve the callable name through the descriptor table
+            emit_long_range_equal_branch(ctx, &string_label, "mixed_callable_value_not_string");
             if let Some(array_label) = &array_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)); // classify a two-element callable array
-                ctx.emitter.instruction(&format!("b.eq {}", array_label));      // resolve an instance/static method descriptor
+                emit_long_range_equal_branch(ctx, array_label, "mixed_callable_value_not_array");
             }
             if let Some(object_label) = &object_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_OBJECT)); // classify an invokable object
-                ctx.emitter.instruction(&format!("b.eq {}", object_label));    // bind the public __invoke descriptor
+                emit_long_range_equal_branch(ctx, object_label, "mixed_callable_value_not_object");
             }
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(callable, "rax")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_CALLABLE)); // classify an existing callable descriptor
-            ctx.emitter.instruction(&format!("je {}", descriptor_label));      // return the existing descriptor payload
+            ctx.emitter.instruction(&format!("je {}", descriptor_label));       // return the existing descriptor payload
             ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_STRING)); // classify a runtime callable name
-            ctx.emitter.instruction(&format!("je {}", string_label));          // resolve the callable name through the descriptor table
+            ctx.emitter.instruction(&format!("je {}", string_label));           // resolve the callable name through the descriptor table
             if let Some(array_label) = &array_label {
                 ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_INDEXED_ARRAY)); // classify a two-element callable array
-                ctx.emitter.instruction(&format!("je {}", array_label));       // resolve an instance/static method descriptor
+                ctx.emitter.instruction(&format!("je {}", array_label));        // resolve an instance/static method descriptor
             }
             if let Some(object_label) = &object_label {
                 ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_OBJECT)); // classify an invokable object
-                ctx.emitter.instruction(&format!("je {}", object_label));      // bind the public __invoke descriptor
+                ctx.emitter.instruction(&format!("je {}", object_label));       // bind the public __invoke descriptor
             }
         }
     }
@@ -399,39 +514,32 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
     ctx.emitter.label(&descriptor_label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // return the unboxed descriptor payload
-        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),               // return the unboxed descriptor payload
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // return the unboxed descriptor payload
     }
     if retain_existing_descriptor {
         callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
     }
+    emit_runtime_descriptor_owned_flag(ctx, retain_existing_descriptor);
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&string_label);
-    emit_runtime_string_descriptor_value_from_unboxed(ctx, op_name)?;
+    emit_runtime_string_descriptor_value_from_unboxed(ctx, callable, op_name, strict_php)?;
+    emit_runtime_descriptor_owned_flag(ctx, false);
     abi::emit_jump(ctx.emitter, &done_label);
 
     if let Some(array_label) = &array_label {
         ctx.emitter.label(array_label);
         emit_mixed_callable_array_selector_slots(ctx, &CallableArraySource::BoxedArray(callable))?;
         let selected_label = ctx.next_label("mixed_callable_value_array_done");
-        for target in &instance_targets {
-            let next_label = ctx.next_label("mixed_callable_value_array_instance_next");
-            emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
-            emit_runtime_array_instance_descriptor_value(ctx, target)?;
-            abi::emit_jump(ctx.emitter, &selected_label);
-            ctx.emitter.label(&next_label);
-        }
-        for case in &static_cases {
-            let next_label = ctx.next_label("mixed_callable_value_array_static_next");
-            emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                &case.case.descriptor_label,
-            );
-            abi::emit_jump(ctx.emitter, &selected_label);
-            ctx.emitter.label(&next_label);
-        }
+        let array_miss_label = ctx.next_label("mixed_callable_value_array_missing");
+        emit_mixed_callable_array_descriptor_lookup(
+            ctx,
+            &instance_targets,
+            &static_cases,
+            &array_miss_label,
+        )?;
+        abi::emit_jump(ctx.emitter, &selected_label);
+        ctx.emitter.label(&array_miss_label);
         emit_runtime_callable_array_no_match_abort(ctx);
         ctx.emitter.label(&selected_label);
         abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
@@ -442,32 +550,15 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
         ctx.emitter.label(object_label);
         emit_push_mixed_unbox_payload(ctx);
         let selected_label = ctx.next_label("mixed_callable_value_object_done");
-        for target in &invokable_targets {
-            let next_label = ctx.next_label("mixed_callable_value_object_next");
-            emit_branch_if_saved_receiver_class_id_mismatch(
-                ctx,
-                target.class_id,
-                MIXED_VALUE_PAYLOAD_OFFSET,
-                &next_label,
-            );
-            let receiver_ty = PhpType::Object(target.class_name.clone());
-            let template = runtime_instance_method_descriptor_template(
-                ctx,
-                &target.class_name,
-                &target.method_name,
-                &target.method_key,
-                &target.impl_class,
-                &target.sig,
-            )?;
-            emit_runtime_descriptor_with_saved_receiver_capture(
-                ctx,
-                &template.descriptor_label,
-                &receiver_ty,
-                MIXED_VALUE_PAYLOAD_OFFSET,
-            );
-            abi::emit_jump(ctx.emitter, &selected_label);
-            ctx.emitter.label(&next_label);
-        }
+        let object_miss_label = ctx.next_label("mixed_callable_value_object_missing");
+        emit_invokable_object_descriptor_lookup(
+            ctx,
+            &invokable_targets,
+            MIXED_VALUE_PAYLOAD_OFFSET,
+            &object_miss_label,
+        )?;
+        abi::emit_jump(ctx.emitter, &selected_label);
+        ctx.emitter.label(&object_miss_label);
         emit_mixed_callable_not_callable_fatal(ctx, op_name);
         ctx.emitter.label(&selected_label);
         abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
@@ -553,6 +644,25 @@ fn emit_string_name_descriptor_cases_loop(
     let done_label = ctx.next_label(&format!("{}_runtime_string_done", op_name));
     let miss_label = ctx.next_label(&format!("{}_runtime_string_missing", op_name));
     let call_reg = abi::nested_call_reg(ctx.emitter);
+    if cases.len() > INLINE_LOOKUP_LIMIT {
+        emit_runtime_string_lookup_table(ctx, cases)?;
+        emit_branch_if_lookup_missed(ctx, &miss_label);
+        abi::emit_reg_move(ctx.emitter, call_reg, abi::int_result_reg(ctx.emitter));
+        emit_descriptor_reg_invoker_call_with_mixed_arg(
+            ctx,
+            inst,
+            call_reg,
+            arg_mixed,
+            "callable_descriptor_invoke",
+            false,
+        )?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&miss_label);
+        emit_undefined_runtime_string_call_fatal(ctx);
+        ctx.emitter.label(&done_label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        return Ok(());
+    }
     let selector = callable_dispatch::RuntimeCallableSelector::StringNameStack {
         ptr_offset: 0,
         len_offset: 8,
@@ -581,6 +691,203 @@ fn emit_string_name_descriptor_cases_loop(
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
+}
+
+/// Resolves the pushed runtime string name through a compact metadata table.
+fn emit_runtime_string_lookup_table(
+    ctx: &mut FunctionContext<'_>,
+    cases: &[callable_dispatch::RuntimeCallableCase],
+) -> Result<()> {
+    let table = emit_string_lookup_table(ctx.data, cases).map_err(CodegenIrError::invalid_module)?;
+    let (label, bound, helper) = match table {
+        StringLookupTable::Linear { label, count } => {
+            (label, count, "__rt_callable_lookup_string_linear")
+        }
+        StringLookupTable::Hashed { label, mask } => {
+            (label, mask, "__rt_callable_lookup_string_hash")
+        }
+    };
+    let ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let len_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let table_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let bound_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, ptr_arg, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, len_arg, 8);
+    abi::emit_symbol_address(ctx.emitter, table_arg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, bound_arg, bound as i64);
+    abi::emit_call_label(ctx.emitter, helper);
+    Ok(())
+}
+
+/// Resolves an instance callable-array selector through a compact composite table.
+fn emit_runtime_instance_lookup_table(
+    ctx: &mut FunctionContext<'_>,
+    targets: &[RuntimeArrayInstanceMethodTarget],
+    receiver_payload_offset: usize,
+    method_ptr_offset: usize,
+    method_len_offset: usize,
+    miss_label: &str,
+) -> Result<()> {
+    let mut cases = Vec::with_capacity(targets.len());
+    for target in targets {
+        let template = runtime_instance_method_descriptor_template(
+            ctx,
+            &target.class_name,
+            &target.method_name,
+            &target.method_key,
+            &target.impl_class,
+            &target.sig,
+        )?;
+        cases.push(InstanceLookupCase {
+            class_id: target.class_id,
+            method_name: target.method_name.clone(),
+            descriptor_label: template.descriptor_label,
+        });
+    }
+    let table = emit_instance_lookup_table(ctx.data, cases)
+        .map_err(CodegenIrError::invalid_module)?;
+    let kind_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let class_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let class_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let method_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    let method_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    let table_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, class_arg, receiver_payload_offset);
+    emit_branch_if_register_is_null(ctx, class_arg, miss_label);
+    abi::emit_load_from_address(ctx.emitter, class_arg, class_arg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, kind_arg, 1);
+    abi::emit_load_int_immediate(ctx.emitter, class_len_arg, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, method_arg, method_ptr_offset);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, method_len_arg, method_len_offset);
+    emit_composite_lookup_call(ctx, table_arg, table);
+    Ok(())
+}
+
+/// Resolves a static callable-array selector through a compact composite table.
+fn emit_runtime_static_lookup_table(
+    ctx: &mut FunctionContext<'_>,
+    cases: &[callable_dispatch::RuntimeStaticMethodCallableCase],
+    class_ptr_offset: usize,
+    class_len_offset: usize,
+    method_ptr_offset: usize,
+    method_len_offset: usize,
+) -> Result<()> {
+    let table_cases = cases
+        .iter()
+        .map(|case| StaticLookupCase {
+            class_name: case.class_name.clone(),
+            method_name: case.method_name.clone(),
+            descriptor_label: case.case.descriptor_label.clone(),
+        })
+        .collect();
+    let table = emit_static_lookup_table(ctx.data, table_cases)
+        .map_err(CodegenIrError::invalid_module)?;
+    let kind_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let class_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let class_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let method_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    let method_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    let table_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    abi::emit_load_int_immediate(ctx.emitter, kind_arg, 2);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, class_arg, class_ptr_offset);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, class_len_arg, class_len_offset);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, method_arg, method_ptr_offset);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, method_len_arg, method_len_offset);
+    emit_composite_lookup_call(ctx, table_arg, table);
+    Ok(())
+}
+
+/// Resolves an invokable receiver class through a compact composite table.
+fn emit_runtime_invokable_lookup_table(
+    ctx: &mut FunctionContext<'_>,
+    targets: &[RuntimeArrayInstanceMethodTarget],
+    receiver_payload_offset: usize,
+    miss_label: &str,
+) -> Result<()> {
+    let mut cases = Vec::with_capacity(targets.len());
+    for target in targets {
+        let template = runtime_instance_method_descriptor_template(
+            ctx,
+            &target.class_name,
+            &target.method_name,
+            &target.method_key,
+            &target.impl_class,
+            &target.sig,
+        )?;
+        cases.push(InvokableLookupCase {
+            class_id: target.class_id,
+            descriptor_label: template.descriptor_label,
+        });
+    }
+    let table = emit_invokable_lookup_table(ctx.data, cases)
+        .map_err(CodegenIrError::invalid_module)?;
+    let kind_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let class_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let class_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let method_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    let method_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    let table_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, class_arg, receiver_payload_offset);
+    emit_branch_if_register_is_null(ctx, class_arg, miss_label);
+    abi::emit_load_from_address(ctx.emitter, class_arg, class_arg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, kind_arg, 3);
+    abi::emit_load_int_immediate(ctx.emitter, class_len_arg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, method_arg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, method_len_arg, 0);
+    emit_composite_lookup_call(ctx, table_arg, table);
+    Ok(())
+}
+
+/// Materializes one composite table address and calls the selected resolver.
+fn emit_composite_lookup_call(
+    ctx: &mut FunctionContext<'_>,
+    table_arg: &str,
+    table: StringLookupTable,
+) {
+    let (label, helper) = match table {
+        StringLookupTable::Linear { label, .. } => {
+            (label, "__rt_callable_lookup_composite_linear")
+        }
+        StringLookupTable::Hashed { label, .. } => {
+            (label, "__rt_callable_lookup_composite_hash")
+        }
+    };
+    abi::emit_symbol_address(ctx.emitter, table_arg, &label);
+    abi::emit_call_label(ctx.emitter, helper);
+}
+
+/// Branches when a lookup input register contains a null object pointer.
+fn emit_branch_if_register_is_null(
+    ctx: &mut FunctionContext<'_>,
+    reg: &str,
+    miss_label: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx
+            .emitter
+            .instruction(&format!("cbz {}, {}", reg, miss_label)), // reject a null runtime receiver before reading its class id
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", reg, reg)); // check the runtime receiver pointer before reading its class id
+            ctx.emitter.instruction(&format!("je {}", miss_label));             // treat a null runtime receiver as a lookup miss
+        }
+    }
+}
+
+/// Branches to `miss_label` when a callable table resolver returned a null value.
+fn emit_branch_if_lookup_missed(ctx: &mut FunctionContext<'_>, miss_label: &str) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz {}, {}", result_reg, miss_label)); // a null descriptor means no canonical callable key matched
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", result_reg, result_reg)); // test the table resolver's descriptor result
+            ctx.emitter.instruction(&format!("je {}", miss_label));             // use the existing fatal path after a lookup miss
+        }
+    }
 }
 
 /// Builds runtime callable descriptor cases for string-name dynamic invocation.
@@ -615,8 +922,14 @@ pub(super) fn runtime_string_descriptor_cases(
             .into_iter()
             .map(|case| case.case),
     );
-    cases.sort_by(|left, right| left.label.cmp(&right.label));
-    cases.dedup_by(|left, right| left.label == right.label);
+    cases.sort_by(|left, right| {
+        left.php_name
+            .cmp(&right.php_name)
+            .then_with(|| left.descriptor_label.cmp(&right.descriptor_label))
+    });
+    cases.dedup_by(|left, right| {
+        left.php_name == right.php_name && left.descriptor_label == right.descriptor_label
+    });
     if cases.is_empty() && candidate_names.is_some() {
         let fallback = runtime_string_descriptor_cases(ctx, source_arg_ty, None, strict_php)?;
         ctx.shared.cache_runtime_string_descriptor_cases(
@@ -680,7 +993,6 @@ fn runtime_extern_descriptor_cases(
             Some(&invoker_label),
         );
         cases.push(callable_dispatch::RuntimeCallableCase {
-            label: entry_label,
             descriptor_label,
             php_name: Some(decl.name.clone()),
         });
@@ -754,7 +1066,6 @@ fn runtime_builtin_descriptor_cases(
             Some(&invoker_label),
         );
         cases.push(callable_dispatch::RuntimeCallableCase {
-            label: entry_label,
             descriptor_label,
             php_name: Some(name.to_string()),
         });
@@ -811,7 +1122,6 @@ fn runtime_user_function_descriptor_cases(
             Some(&invoker_label),
         );
         cases.push(callable_dispatch::RuntimeCallableCase {
-            label: function_symbol(&function.name),
             descriptor_label,
             php_name: Some(function.name.clone()),
         });
@@ -843,6 +1153,21 @@ pub(super) fn emit_runtime_string_descriptor_value(
 
     let done_label = ctx.next_label(&format!("{}_runtime_string_descriptor_done", op_name));
     let miss_label = ctx.next_label(&format!("{}_runtime_string_descriptor_missing", op_name));
+    if cases.len() > INLINE_LOOKUP_LIMIT {
+        emit_runtime_string_lookup_table(ctx, &cases)?;
+        emit_branch_if_lookup_missed(ctx, &miss_label);
+        abi::emit_reg_move(
+            ctx.emitter,
+            dest_reg,
+            abi::int_result_reg(ctx.emitter),
+        );
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&miss_label);
+        emit_undefined_runtime_string_call_fatal(ctx);
+        ctx.emitter.label(&done_label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        return Ok(());
+    }
     let selector = callable_dispatch::RuntimeCallableSelector::StringNameStack {
         ptr_offset: 0,
         len_offset: 8,
@@ -875,19 +1200,20 @@ pub(super) fn emit_runtime_string_descriptor_value(
 /// Selects a callable descriptor from a string payload just returned by `__rt_mixed_unbox`.
 fn emit_runtime_string_descriptor_value_from_unboxed(
     ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
     op_name: &str,
+    strict_php: bool,
 ) -> Result<()> {
+    let candidate_names = ctx.runtime_callable_candidates(callable);
     let cases = runtime_string_descriptor_cases(
         ctx,
         None,
-        None,
-        crate::strict_php::is_enabled(),
+        candidate_names.as_deref(),
+        strict_php,
     )?;
     if cases.is_empty() {
-        return Err(CodegenIrError::unsupported(format!(
-            "{} for runtime string with no descriptor targets",
-            op_name
-        )));
+        emit_undefined_runtime_string_call_fatal(ctx);
+        return Ok(());
     }
 
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
@@ -898,6 +1224,16 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
 
     let done_label = ctx.next_label(&format!("{}_mixed_string_descriptor_done", op_name));
     let miss_label = ctx.next_label(&format!("{}_mixed_string_descriptor_missing", op_name));
+    if cases.len() > INLINE_LOOKUP_LIMIT {
+        emit_runtime_string_lookup_table(ctx, &cases)?;
+        emit_branch_if_lookup_missed(ctx, &miss_label);
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&miss_label);
+        emit_undefined_runtime_string_call_fatal(ctx);
+        ctx.emitter.label(&done_label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        return Ok(());
+    }
     let selector = callable_dispatch::RuntimeCallableSelector::StringNameStack {
         ptr_offset: 0,
         len_offset: 8,
@@ -965,16 +1301,14 @@ pub(super) fn emit_invokable_object_descriptor_value(
                 op_name, normalized_class
             ))
         })?;
-    let sig = class_info
-        .methods
-        .get(method_key)
-        .ok_or_else(|| {
-            CodegenIrError::unsupported(format!(
-                "{} for non-invokable object '{}'",
-                op_name, normalized_class
-            ))
-        })?
-        .clone();
+    let Some(sig) = class_info.methods.get(method_key).cloned() else {
+        return emit_runtime_subclass_invokable_descriptor_value(
+            ctx,
+            receiver,
+            &normalized_class,
+            op_name,
+        );
+    };
     let impl_class = class_info
         .method_impl_classes
         .get(method_key)
@@ -1002,6 +1336,134 @@ pub(super) fn emit_invokable_object_descriptor_value(
         receiver,
         &receiver_ty,
     )
+}
+
+/// Selects an invokable concrete subclass for a receiver typed as a non-invokable base class.
+fn emit_runtime_subclass_invokable_descriptor_value(
+    ctx: &mut FunctionContext<'_>,
+    receiver: ValueId,
+    base_class: &str,
+    _op_name: &str,
+) -> Result<()> {
+    let method_key = "__invoke";
+    let mut targets = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter_map(|(class_name, class_info)| {
+            if !runtime_class_is_same_or_descendant(ctx, class_name, base_class) {
+                return None;
+            }
+            let sig = class_info.methods.get(method_key)?;
+            if !class_info
+                .method_visibilities
+                .get(method_key)
+                .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+            {
+                return None;
+            }
+            let impl_class = class_info
+                .method_impl_classes
+                .get(method_key)
+                .cloned()
+                .unwrap_or_else(|| class_name.clone());
+            class_method_body_exists(ctx, &impl_class, method_key).then(|| {
+                RuntimeArrayInstanceMethodTarget {
+                    class_name: class_name.clone(),
+                    class_id: class_info.class_id,
+                    method_key: method_key.to_string(),
+                    method_name: method_key.to_string(),
+                    impl_class,
+                    sig: sig.clone(),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    targets.sort_by_key(|target| target.class_id);
+    if targets.is_empty() {
+        emit_runtime_callable_array_no_match_abort(ctx);
+        return Ok(());
+    }
+
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let miss_label = ctx.next_label("subclass_invokable_no_match");
+    let done_label = ctx.next_label("subclass_invokable_done");
+    let match_labels = targets
+        .iter()
+        .map(|target| {
+            ctx.next_label(&format!(
+                "subclass_invokable_{}",
+                label_fragment(&target.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+    ctx.load_value_to_reg(receiver, receiver_reg)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("ldr x9, [{}]", receiver_reg)); // load the concrete class id for invokable-subclass selection
+            for (target, label) in targets.iter().zip(match_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "x10", target.class_id as i64);
+                ctx.emitter.instruction("cmp x9, x10");                         // compare against this invokable subclass id
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // select the matching invokable descriptor
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("mov r11, QWORD PTR [{}]", receiver_reg)); // load the concrete class id for invokable-subclass selection
+            for (target, label) in targets.iter().zip(match_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "r10", target.class_id as i64);
+                ctx.emitter.instruction("cmp r11, r10");                        // compare against this invokable subclass id
+                ctx.emitter.instruction(&format!("je {}", label));              // select the matching invokable descriptor
+            }
+        }
+    }
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (target, label) in targets.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let template = runtime_instance_method_descriptor_template(
+            ctx,
+            &target.class_name,
+            method_key,
+            method_key,
+            &target.impl_class,
+            &target.sig,
+        )?;
+        emit_runtime_descriptor_with_receiver_capture(
+            ctx,
+            &template.descriptor_label,
+            receiver,
+            &PhpType::Object(target.class_name.clone()),
+        )?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&miss_label);
+    emit_runtime_callable_array_no_match_abort(ctx);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Returns whether `candidate` is `base_class` or inherits from it.
+fn runtime_class_is_same_or_descendant(
+    ctx: &FunctionContext<'_>,
+    candidate: &str,
+    base_class: &str,
+) -> bool {
+    let base_key = php_symbol_key(base_class.trim_start_matches('\\'));
+    let mut current = Some(candidate.trim_start_matches('\\'));
+    while let Some(class_name) = current {
+        if php_symbol_key(class_name) == base_key {
+            return true;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(class_name)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
 }
 
 /// Returns one module-wide static descriptor template for a public instance method.
@@ -1158,27 +1620,28 @@ fn emit_mixed_callable_array_descriptor_dispatch(
 ) -> Result<()> {
     let done_label = ctx.next_label("callable_array_runtime_done");
     let miss_label = ctx.next_label(&format!("{}_callable_array_missing", op_name));
-    for target in instance_targets {
-        let next_label = ctx.next_label("callable_array_instance_next");
-        emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
-        emit_runtime_array_instance_descriptor_invoke(
-            ctx,
-            inst,
-            arg_mixed,
-            target,
-            MIXED_RECEIVER_PAYLOAD_OFFSET,
-        )?;
-        abi::emit_jump(ctx.emitter, &done_label);
-        ctx.emitter.label(&next_label);
-    }
-    for case in static_cases {
-        let next_label = ctx.next_label("callable_array_static_next");
-        emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
-        emit_static_descriptor_case_invoke(ctx, inst, arg_mixed, &case.case.descriptor_label)?;
-        abi::emit_jump(ctx.emitter, &done_label);
-        ctx.emitter.label(&next_label);
-    }
-    abi::emit_jump(ctx.emitter, &miss_label);
+    emit_mixed_callable_array_descriptor_lookup(
+        ctx,
+        instance_targets,
+        static_cases,
+        &miss_label,
+    )?;
+    let descriptor_reg = abi::nested_call_reg(ctx.emitter);
+    let owned_flag_reg = runtime_descriptor_owned_flag_reg(ctx);
+    abi::emit_reg_move(
+        ctx.emitter,
+        descriptor_reg,
+        abi::int_result_reg(ctx.emitter),
+    );
+    emit_descriptor_reg_invoker_call_with_mixed_arg_and_runtime_ownership(
+        ctx,
+        inst,
+        descriptor_reg,
+        owned_flag_reg,
+        arg_mixed,
+        op_name,
+    )?;
+    abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_label);
     if super::builtins::has_eval_context(ctx) {
@@ -1211,6 +1674,37 @@ fn lower_runtime_string_callable_array_descriptor_invoke(
     emit_string_callable_array_selector_slots(ctx, callable)?;
     let done_label = ctx.next_label("callable_array_runtime_done");
     let miss_label = ctx.next_label(&format!("{}_callable_array_missing", op_name));
+    if static_cases.len() > INLINE_LOOKUP_LIMIT {
+        emit_runtime_static_lookup_table(
+            ctx,
+            &static_cases,
+            STRING_CLASS_OFFSET,
+            STRING_CLASS_OFFSET + 8,
+            STRING_METHOD_OFFSET,
+            STRING_METHOD_OFFSET + 8,
+        )?;
+        emit_branch_if_lookup_missed(ctx, &miss_label);
+        let descriptor_reg = abi::nested_call_reg(ctx.emitter);
+        abi::emit_reg_move(
+            ctx.emitter,
+            descriptor_reg,
+            abi::int_result_reg(ctx.emitter),
+        );
+        emit_descriptor_reg_invoker_call_with_mixed_arg(
+            ctx,
+            inst,
+            descriptor_reg,
+            arg_mixed,
+            op_name,
+            false,
+        )?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&miss_label);
+        emit_runtime_callable_array_no_match_abort(ctx);
+        ctx.emitter.label(&done_label);
+        abi::emit_release_temporary_stack(ctx.emitter, STRING_SELECTOR_BYTES);
+        return Ok(());
+    }
     for case in &static_cases {
         let next_label = ctx.next_label("callable_array_static_next");
         emit_branch_if_string_static_case_mismatch(ctx, case, &next_label);
@@ -1241,11 +1735,42 @@ pub(super) fn emit_runtime_callable_array_descriptor_value(
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => {
             emit_string_callable_array_descriptor_value(ctx, callable, op_name)
         }
+        PhpType::Array(_) => {
+            normalize_typed_callable_array_to_mixed(ctx, callable)?;
+            emit_mixed_callable_array_descriptor_value(ctx, callable, op_name)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for callable-array PHP type {:?}",
             op_name, other
         ))),
     }
+}
+
+/// Copies a typed callable-array candidate into boxed Mixed slots so descriptor selection can
+/// inspect each selector's runtime tag rather than trusting a stale flow-inferred element type.
+fn normalize_typed_callable_array_to_mixed(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(callable, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // recover the source indexed-slot runtime value type
+            ctx.emitter.instruction("lsr x1, x1, #8");                          // shift the value-type byte into the low bits
+            ctx.emitter.instruction("and x1, x1, #0x7f");                       // discard heap-kind and persistent metadata
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(callable, "rax")?;
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the retained candidate to the conversion helper
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // recover the source indexed-slot runtime value type
+            ctx.emitter.instruction("shr rsi, 8");                              // shift the value-type byte into the low bits
+            ctx.emitter.instruction("and rsi, 0x7f");                           // discard heap-kind and persistent metadata
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+    ctx.store_result_value(callable)
 }
 
 /// Materializes an instance-method descriptor selected from a mixed callable-array value.
@@ -1275,14 +1800,8 @@ pub(super) fn emit_runtime_mixed_instance_callable_array_descriptor_value(
     emit_mixed_callable_array_selector_slots(ctx, &CallableArraySource::RawArray(callable))?;
     let done_label = ctx.next_label("callable_array_instance_descriptor_done");
     let miss_label = ctx.next_label(&format!("{}_callable_array_instance_missing", op_name));
-    for target in &targets {
-        let next_label = ctx.next_label("callable_array_instance_next");
-        emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
-        emit_runtime_array_instance_descriptor_value(ctx, target)?;
-        abi::emit_jump(ctx.emitter, &done_label);
-        ctx.emitter.label(&next_label);
-    }
-    abi::emit_jump(ctx.emitter, &miss_label);
+    emit_mixed_callable_array_descriptor_lookup(ctx, &targets, &[], &miss_label)?;
+    abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_label);
     emit_runtime_callable_array_no_match_abort(ctx);
@@ -1310,25 +1829,13 @@ fn emit_mixed_callable_array_descriptor_value(
     emit_mixed_callable_array_selector_slots(ctx, &CallableArraySource::RawArray(callable))?;
     let done_label = ctx.next_label("callable_array_descriptor_done");
     let miss_label = ctx.next_label(&format!("{}_callable_array_missing", op_name));
-    for target in &instance_targets {
-        let next_label = ctx.next_label("callable_array_instance_next");
-        emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
-        emit_runtime_array_instance_descriptor_value(ctx, target)?;
-        abi::emit_jump(ctx.emitter, &done_label);
-        ctx.emitter.label(&next_label);
-    }
-    for case in &static_cases {
-        let next_label = ctx.next_label("callable_array_static_next");
-        emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
-        abi::emit_symbol_address(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            &case.case.descriptor_label,
-        );
-        abi::emit_jump(ctx.emitter, &done_label);
-        ctx.emitter.label(&next_label);
-    }
-    abi::emit_jump(ctx.emitter, &miss_label);
+    emit_mixed_callable_array_descriptor_lookup(
+        ctx,
+        &instance_targets,
+        &static_cases,
+        &miss_label,
+    )?;
+    abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_label);
     emit_runtime_callable_array_no_match_abort(ctx);
@@ -1355,6 +1862,23 @@ fn emit_string_callable_array_descriptor_value(
     emit_string_callable_array_selector_slots(ctx, callable)?;
     let done_label = ctx.next_label("callable_array_descriptor_done");
     let miss_label = ctx.next_label(&format!("{}_callable_array_missing", op_name));
+    if static_cases.len() > INLINE_LOOKUP_LIMIT {
+        emit_runtime_static_lookup_table(
+            ctx,
+            &static_cases,
+            STRING_CLASS_OFFSET,
+            STRING_CLASS_OFFSET + 8,
+            STRING_METHOD_OFFSET,
+            STRING_METHOD_OFFSET + 8,
+        )?;
+        emit_branch_if_lookup_missed(ctx, &miss_label);
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&miss_label);
+        emit_runtime_callable_array_no_match_abort(ctx);
+        ctx.emitter.label(&done_label);
+        abi::emit_release_temporary_stack(ctx.emitter, STRING_SELECTOR_BYTES);
+        return Ok(());
+    }
     for case in &static_cases {
         let next_label = ctx.next_label("callable_array_static_next");
         emit_branch_if_string_static_case_mismatch(ctx, case, &next_label);
@@ -1502,7 +2026,6 @@ fn runtime_static_method_descriptor_cases(
             Some(&invoker_label),
         );
         let case = callable_dispatch::RuntimeCallableCase {
-            label: entry_label,
             descriptor_label,
             php_name: Some(php_name),
         };
@@ -1854,6 +2377,166 @@ fn emit_branch_if_runtime_array_instance_mismatch(
     );
 }
 
+/// Resolves a saved mixed callable-array selector to a descriptor and ownership flag.
+fn emit_mixed_callable_array_descriptor_lookup(
+    ctx: &mut FunctionContext<'_>,
+    instance_targets: &[RuntimeArrayInstanceMethodTarget],
+    static_cases: &[callable_dispatch::RuntimeStaticMethodCallableCase],
+    miss_label: &str,
+) -> Result<()> {
+    let instance_label = (!instance_targets.is_empty())
+        .then(|| ctx.next_label("callable_array_lookup_instance"));
+    let static_label = (!static_cases.is_empty())
+        .then(|| ctx.next_label("callable_array_lookup_static"));
+    let done_label = ctx.next_label("callable_array_lookup_done");
+    emit_branch_if_stack_tag_mismatch(
+        ctx,
+        MIXED_METHOD_TAG_OFFSET,
+        MIXED_TAG_STRING,
+        miss_label,
+    );
+    let tag_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x9",
+        Arch::X86_64 => "r10",
+    };
+    abi::emit_load_temporary_stack_slot(ctx.emitter, tag_reg, MIXED_RECEIVER_TAG_OFFSET);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            if let Some(label) = &instance_label {
+                ctx.emitter.instruction(&format!("cmp {}, #{}", tag_reg, MIXED_TAG_OBJECT)); // classify an object receiver for instance lookup
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // resolve an instance callable-array selector
+            }
+            if let Some(label) = &static_label {
+                ctx.emitter.instruction(&format!("cmp {}, #{}", tag_reg, MIXED_TAG_STRING)); // classify a string receiver for static lookup
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // resolve a static callable-array selector
+            }
+        }
+        Arch::X86_64 => {
+            if let Some(label) = &instance_label {
+                ctx.emitter.instruction(&format!("cmp {}, {}", tag_reg, MIXED_TAG_OBJECT)); // classify an object receiver for instance lookup
+                ctx.emitter.instruction(&format!("je {}", label));              // resolve an instance callable-array selector
+            }
+            if let Some(label) = &static_label {
+                ctx.emitter.instruction(&format!("cmp {}, {}", tag_reg, MIXED_TAG_STRING)); // classify a string receiver for static lookup
+                ctx.emitter.instruction(&format!("je {}", label));              // resolve a static callable-array selector
+            }
+        }
+    }
+    abi::emit_jump(ctx.emitter, miss_label);
+
+    if let Some(label) = &instance_label {
+        ctx.emitter.label(label);
+        if instance_targets.len() > INLINE_LOOKUP_LIMIT {
+            emit_runtime_instance_lookup_table(
+                ctx,
+                instance_targets,
+                MIXED_RECEIVER_PAYLOAD_OFFSET,
+                MIXED_METHOD_PAYLOAD_OFFSET,
+                MIXED_METHOD_PAYLOAD_OFFSET + 8,
+                miss_label,
+            )?;
+            emit_branch_if_lookup_missed(ctx, miss_label);
+            emit_selected_template_with_saved_receiver_capture(
+                ctx,
+                MIXED_RECEIVER_PAYLOAD_OFFSET,
+            );
+            emit_runtime_descriptor_owned_flag(ctx, true);
+            abi::emit_jump(ctx.emitter, &done_label);
+        } else {
+            for target in instance_targets {
+                let next_label = ctx.next_label("callable_array_instance_next");
+                emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
+                emit_runtime_array_instance_descriptor_value(ctx, target)?;
+                emit_runtime_descriptor_owned_flag(ctx, true);
+                abi::emit_jump(ctx.emitter, &done_label);
+                ctx.emitter.label(&next_label);
+            }
+            abi::emit_jump(ctx.emitter, miss_label);
+        }
+    }
+
+    if let Some(label) = &static_label {
+        ctx.emitter.label(label);
+        if static_cases.len() > INLINE_LOOKUP_LIMIT {
+            emit_runtime_static_lookup_table(
+                ctx,
+                static_cases,
+                MIXED_RECEIVER_PAYLOAD_OFFSET,
+                MIXED_RECEIVER_PAYLOAD_OFFSET + 8,
+                MIXED_METHOD_PAYLOAD_OFFSET,
+                MIXED_METHOD_PAYLOAD_OFFSET + 8,
+            )?;
+            emit_branch_if_lookup_missed(ctx, miss_label);
+            emit_runtime_descriptor_owned_flag(ctx, false);
+            abi::emit_jump(ctx.emitter, &done_label);
+        } else {
+            for case in static_cases {
+                let next_label = ctx.next_label("callable_array_static_next");
+                emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
+                abi::emit_symbol_address(
+                    ctx.emitter,
+                    abi::int_result_reg(ctx.emitter),
+                    &case.case.descriptor_label,
+                );
+                emit_runtime_descriptor_owned_flag(ctx, false);
+                abi::emit_jump(ctx.emitter, &done_label);
+                ctx.emitter.label(&next_label);
+            }
+            abi::emit_jump(ctx.emitter, miss_label);
+        }
+    }
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Resolves a saved invokable receiver to a fresh receiver-bound descriptor.
+fn emit_invokable_object_descriptor_lookup(
+    ctx: &mut FunctionContext<'_>,
+    targets: &[RuntimeArrayInstanceMethodTarget],
+    receiver_payload_offset: usize,
+    miss_label: &str,
+) -> Result<()> {
+    if targets.len() > INLINE_LOOKUP_LIMIT {
+        emit_runtime_invokable_lookup_table(ctx, targets, receiver_payload_offset, miss_label)?;
+        emit_branch_if_lookup_missed(ctx, miss_label);
+        emit_selected_template_with_saved_receiver_capture(ctx, receiver_payload_offset);
+        emit_runtime_descriptor_owned_flag(ctx, true);
+        return Ok(());
+    }
+    let done_label = ctx.next_label("invokable_object_lookup_done");
+    for target in targets {
+        let next_label = ctx.next_label("mixed_callable_object_next");
+        emit_branch_if_saved_receiver_class_id_mismatch(
+            ctx,
+            target.class_id,
+            receiver_payload_offset,
+            &next_label,
+        );
+        let receiver_ty = PhpType::Object(target.class_name.clone());
+        let template = runtime_instance_method_descriptor_template(
+            ctx,
+            &target.class_name,
+            &target.method_name,
+            &target.method_key,
+            &target.impl_class,
+            &target.sig,
+        )?;
+        emit_runtime_descriptor_with_saved_receiver_capture(
+            ctx,
+            &template.descriptor_label,
+            &receiver_ty,
+            receiver_payload_offset,
+        );
+        emit_runtime_descriptor_owned_flag(ctx, true);
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&next_label);
+    }
+    abi::emit_jump(ctx.emitter, miss_label);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 /// Branches unless saved mixed slots match a public static-method callable case.
 fn emit_branch_if_mixed_static_case_mismatch(
     ctx: &mut FunctionContext<'_>,
@@ -2060,40 +2743,8 @@ fn emit_runtime_array_instance_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &target.sig.return_type)?;
+    super::emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
-}
-
-/// Builds and invokes a receiver-captured descriptor for a matched instance method.
-fn emit_runtime_array_instance_descriptor_invoke(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    arg_mixed: ValueId,
-    target: &RuntimeArrayInstanceMethodTarget,
-    receiver_payload_offset: usize,
-) -> Result<()> {
-    let receiver_ty = PhpType::Object(target.class_name.clone());
-    let template = runtime_instance_method_descriptor_template(
-        ctx,
-        &target.class_name,
-        &target.method_name,
-        &target.method_key,
-        &target.impl_class,
-        &target.sig,
-    )?;
-    emit_runtime_descriptor_with_saved_receiver_capture(
-        ctx,
-        &template.descriptor_label,
-        &receiver_ty,
-        receiver_payload_offset,
-    );
-    emit_descriptor_reg_invoker_call_with_mixed_arg(
-        ctx,
-        inst,
-        abi::nested_call_reg(ctx.emitter),
-        arg_mixed,
-        "callable_descriptor_invoke",
-        true,
-    )
 }
 
 /// Builds a receiver-captured descriptor for a matched runtime instance method.
@@ -2170,6 +2821,47 @@ fn emit_runtime_descriptor_with_saved_receiver_capture(
     if descriptor_reg != result_reg {
         ctx.emitter
             .instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); // return the receiver-bound callable-array descriptor
+    }
+}
+
+/// Captures a saved object receiver into a runtime-selected descriptor template.
+fn emit_selected_template_with_saved_receiver_capture(
+    ctx: &mut FunctionContext<'_>,
+    receiver_payload_offset: usize,
+) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let descriptor_reg = abi::nested_call_reg(ctx.emitter);
+    let template_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let receiver_ty = PhpType::Object(String::new());
+    let total_bytes = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        result_reg,
+        receiver_payload_offset + 16,
+    );
+    abi::emit_incref_if_refcounted(ctx.emitter, &receiver_ty);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    ctx.emitter
+        .instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // preserve the receiver-bound descriptor allocation
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_pop_reg(ctx.emitter, template_reg);
+    callable_descriptor::emit_copy_descriptor_template_to_runtime(
+        ctx.emitter,
+        descriptor_reg,
+        template_reg,
+    );
+    callable_descriptor::emit_store_current_result_to_runtime_capture(
+        ctx.emitter,
+        descriptor_reg,
+        0,
+        &receiver_ty,
+    );
+    if descriptor_reg != result_reg {
+        ctx.emitter
+            .instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); // return the receiver-bound descriptor selected by the table
     }
 }
 
@@ -2318,6 +3010,28 @@ fn emit_descriptor_reg_invoker_call_with_mixed_arg(
         op_name,
         release_runtime_descriptor,
     )?;
+    store_descriptor_invoker_result(ctx, inst)
+}
+
+/// Invokes a resolved descriptor and conditionally releases its runtime-owned allocation.
+fn emit_descriptor_reg_invoker_call_with_mixed_arg_and_runtime_ownership(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    descriptor_reg: &str,
+    owned_flag_reg: &str,
+    arg_mixed: ValueId,
+    op_name: &str,
+) -> Result<()> {
+    abi::emit_push_reg(ctx.emitter, descriptor_reg);
+    abi::emit_push_reg(ctx.emitter, owned_flag_reg);
+    emit_descriptor_reg_invoker_mixed_result_with_arg_container(
+        ctx,
+        descriptor_reg,
+        arg_mixed,
+        op_name,
+        false,
+    )?;
+    release_saved_runtime_descriptor_if_owned_preserving_result(ctx);
     store_descriptor_invoker_result(ctx, inst)
 }
 
@@ -2734,6 +3448,31 @@ fn release_saved_runtime_descriptor_preserving_result(ctx: &mut FunctionContext<
     callable_descriptor::emit_release_current_descriptor(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_release_temporary_stack(ctx.emitter, 16);
+}
+
+/// Releases a saved descriptor only when its paired runtime ownership flag is set.
+fn release_saved_runtime_descriptor_if_owned_preserving_result(ctx: &mut FunctionContext<'_>) {
+    abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
+    let flag_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, flag_reg, 16);
+    let done_label = ctx.next_label("runtime_descriptor_release_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz {}, {}", flag_reg, done_label)); // skip release for borrowed and static descriptors
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", flag_reg, flag_reg)); // check whether descriptor resolution created a runtime owner
+            ctx.emitter
+                .instruction(&format!("jz {}", done_label)); // skip release for borrowed and static descriptors
+        }
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 32);
+    callable_descriptor::emit_release_current_descriptor(ctx.emitter);
+    ctx.emitter.label(&done_label);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
 }
 
 /// Stores the Mixed descriptor-invoker result using the EIR result type.

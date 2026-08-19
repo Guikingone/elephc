@@ -13,6 +13,7 @@ pub(crate) mod bcmath;
 pub(crate) mod callable_descriptor;
 pub(crate) mod callable_dispatch;
 pub(crate) mod callable_invoker_args;
+pub(crate) mod callable_lookup;
 pub(crate) mod cdylib;
 mod compilation_context;
 pub(crate) mod data_section;

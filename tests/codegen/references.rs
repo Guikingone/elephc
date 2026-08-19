@@ -18,6 +18,22 @@
 
 use crate::support::*;
 
+/// A local bound to a newly appended nested slot must share writes with that slot.
+#[test]
+fn test_reference_to_nested_array_append_slot_writes_through() {
+    let out = compile_and_run(
+        r#"<?php
+$items = ["event" => []];
+$prior = "keep";
+$slot = &$prior;
+$slot = &$items["event"][];
+$slot = "ready";
+echo $prior, "|", $items["event"][0];
+"#,
+    );
+    assert_eq!(out, "keep|ready");
+}
+
 /// `$x = &$obj->prop` aliases a scalar property: writing the local updates the property
 /// and writing the property updates the local (write-through in both directions).
 #[test]

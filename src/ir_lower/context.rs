@@ -192,11 +192,14 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub enums: &'m HashMap<String, EnumInfo>,
     pub interfaces: &'m HashMap<String, InterfaceInfo>,
     pub packed_classes: &'m HashMap<String, PackedClassInfo>,
-    /// Statically-decided access violations lowered to runtime `Error` throws,
-    /// keyed by the source span of the offending call/assignment.
-    pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
-    /// Authoritative checker result types for builtin calls in this source module.
-    pub builtin_call_types: &'m HashMap<Span, PhpType>,
+    /// Statically-decided access violations lowered to runtime `Error` throws, keyed by
+    /// function-like scope and the source span of the offending call/assignment.
+    pub throw_access_sites: &'m HashMap<(String, Span), ThrowAccessInfo>,
+    /// Authoritative checker result types for builtin calls, scoped so equal source coordinates
+    /// in separate loaded files cannot collide.
+    pub builtin_call_types: &'m HashMap<(String, Span), PhpType>,
+    /// Checker result types for property reads through flow-narrowed receivers.
+    pub flow_typed_property_accesses: &'m HashMap<(String, Span), PhpType>,
     /// Checker-computed fixed-point storage contracts for loop-carried array locals.
     pub loop_storage_types: &'m crate::types::LoopStorageTypes,
     /// Checker-recorded `(scope, local)` pairs for `string` locals used as a `++`/`--`
@@ -281,8 +284,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         enums: &'m HashMap<String, EnumInfo>,
         interfaces: &'m HashMap<String, InterfaceInfo>,
         packed_classes: &'m HashMap<String, PackedClassInfo>,
-        throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
-        builtin_call_types: &'m HashMap<Span, PhpType>,
+        throw_access_sites: &'m HashMap<(String, Span), ThrowAccessInfo>,
+        builtin_call_types: &'m HashMap<(String, Span), PhpType>,
+        flow_typed_property_accesses: &'m HashMap<(String, Span), PhpType>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
         by_ref_local_storage_types: &'m HashMap<(String, String), PhpType>,
@@ -318,6 +322,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             packed_classes,
             throw_access_sites,
             builtin_call_types,
+            flow_typed_property_accesses,
             loop_storage_types,
             string_incdec_locals,
             by_ref_local_storage_types,
@@ -718,6 +723,24 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type
     }
 
+    /// Returns stable storage for a function static across all assignments in its body.
+    ///
+    /// The checker environment supplied to lowering describes the type after the whole body,
+    /// whereas `php_type` describes only the declaration initializer. When those representations
+    /// differ, or when the initializer is null, a concrete slot cannot represent every value the
+    /// persistent variable may hold on later calls. A boxed Mixed slot preserves that evolution.
+    fn required_static_local_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
+        let initial_repr = php_type.codegen_repr();
+        let checked_repr = self.local_types.get(name).map(PhpType::codegen_repr);
+        if matches!(initial_repr, PhpType::Void | PhpType::Never)
+            || checked_repr.is_some_and(|checked| checked != initial_repr)
+        {
+            PhpType::Mixed
+        } else {
+            php_type
+        }
+    }
+
     /// Declares a local slot with the requested role if it does not already exist.
     pub(crate) fn declare_local_with_kind(
         &mut self,
@@ -728,10 +751,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if let Some(slot) = self.local_slots.get(name) {
             return *slot;
         }
-        let boxed_php_type = if kind == LocalKind::PhpLocal {
-            self.required_local_storage_type(name, php_type.clone())
-        } else {
-            php_type.clone()
+        let boxed_php_type = match kind {
+            LocalKind::PhpLocal => self.required_local_storage_type(name, php_type.clone()),
+            LocalKind::StaticLocal => {
+                self.required_static_local_storage_type(name, php_type.clone())
+            }
+            _ => php_type.clone(),
         };
         // An incoming `string` parameter arrives with a `Str` entry already seeded from the
         // signature environment, so the boxed contract has to REPLACE that fact rather than
@@ -1149,6 +1174,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Emits a load from a PHP local slot.
+    /// Loads a PHP local using its current semantic type and the slot's stable frame contract.
     pub(crate) fn load_local(&mut self, name: &str, span: Option<Span>) -> LoweredValue {
         if let Some(php_type) = self.extern_global_type(name) {
             return self.load_extern_global(name, php_type, span);
@@ -1165,6 +1191,25 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             self.local_type(name)
         };
+        if !uses_global && matches!(php_type.codegen_repr(), PhpType::Void) {
+            let value = self
+                .builder
+                .emit_with_effects(
+                    Op::ConstNull,
+                    Vec::new(),
+                    None,
+                    IrType::I64,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                    Op::ConstNull.default_effects(),
+                    span,
+                )
+                .expect("const_null produces a value");
+            return LoweredValue {
+                value,
+                ir_type: IrType::I64,
+            };
+        }
         let slot = self.declare_local(name, php_type.clone());
         let ir_type = value_ir_type(&php_type);
         let is_ref_bound = self.is_ref_bound_local(name) && !uses_global && kind == LocalKind::PhpLocal;
@@ -1415,12 +1460,38 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Emits a store to a PHP local slot, updates type facts, and returns the stored value.
+    /// Stores an ordinary PHP value and widens the frame slot for every runtime representation
+    /// the assignment can introduce.
     pub(crate) fn store_local(
         &mut self,
         name: &str,
         value: LoweredValue,
         php_type: PhpType,
         span: Option<Span>,
+    ) -> LoweredValue {
+        self.store_local_impl(name, value, php_type, span, false)
+    }
+
+    /// Stores the null written by `unset` without changing the slot contract used by earlier
+    /// instructions in the same function.
+    fn store_unset_local(
+        &mut self,
+        name: &str,
+        value: LoweredValue,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        self.store_local_impl(name, value, PhpType::Void, span, true)
+    }
+
+    /// Implements local stores while allowing `unset` to preserve an already allocated frame
+    /// representation; ordinary null assignments instead require discriminated Mixed storage.
+    fn store_local_impl(
+        &mut self,
+        name: &str,
+        value: LoweredValue,
+        php_type: PhpType,
+        span: Option<Span>,
+        preserve_storage_type: bool,
     ) -> LoweredValue {
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
@@ -1462,6 +1533,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             php_type
         };
+        let local_type_after_store = if !preserve_storage_type
+            && matches!(php_type.codegen_repr(), PhpType::Void)
+        {
+            // Preserve the runtime distinction between a concrete value and an ordinary null
+            // assignment at later joins. `unset` deliberately remains semantically Void.
+            PhpType::Mixed
+        } else {
+            php_type.clone()
+        };
         let slot = self.declare_local(name, php_type.clone());
         // Backend frame layout uses the final widened slot type for every load
         // and store, so cleanup loads must be typed after this store's widening.
@@ -1469,8 +1549,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // Int→Mixed mid-function (which would break earlier loads that expect I64).
         // The codegen narrows Mixed→Int at the store point instead.
         let is_ref_bound = self.is_ref_bound_local(name);
-        let widen_type = if is_ref_bound {
+        let widen_type = if is_ref_bound || preserve_storage_type {
             previous_type.clone()
+        } else if matches!(php_type.codegen_repr(), PhpType::Void) {
+            // A normal `$value = null` is observable on paths where the same slot holds a
+            // concrete value. Unlike `unset`, it therefore needs a runtime tag rather than the
+            // concrete representation's null-like payload sentinel.
+            PhpType::Mixed
         } else {
             php_type.clone()
         };
@@ -1503,6 +1588,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // regressed `test_http_response_path_leaves_no_live_heap_blocks` that way).
         // The paired release of the PREVIOUS occupant is emitted below.
         let static_local_store_needs_string_retain = previous_kind == LocalKind::StaticLocal
+            && matches!(previous_type.codegen_repr(), PhpType::Str)
             && matches!(
                 self.builder.value_php_type(value.value).codegen_repr(),
                 PhpType::Str
@@ -1577,7 +1663,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // the RELEASE of what it overwrites.
         if uses_global {
             self.store_global_name(name, slot, value, span);
-            self.set_local_type(name, php_type);
+            self.set_local_type(name, local_type_after_store);
             if release_source_after_store && !transfer_source_to_store {
                 crate::ir_lower::ownership::release_if_owned(self, source, span);
             }
@@ -1605,7 +1691,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.store_slot_with_op(slot, value, op, span);
         }
         if !is_ref_bound {
-            self.set_local_type(name, php_type);
+            self.set_local_type(name, local_type_after_store);
         }
         if release_source_after_store
             && !transfer_source_to_store
@@ -1882,7 +1968,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) -> LoweredValue {
         if !self.is_ref_bound_local(name) {
-            return self.store_local(name, null, PhpType::Void, span);
+            return self.store_unset_local(name, null, span);
         }
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);

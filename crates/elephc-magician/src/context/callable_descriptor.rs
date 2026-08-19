@@ -23,6 +23,9 @@ const BINDING_BY_REF_WORD: usize = 3;
 const BINDING_WORDS: usize = 4;
 const DESCRIPTOR_HEADER_WORDS: usize = 8;
 const CAPTURE_WORDS: usize = 2;
+const CALLBACK_ADAPTER_KIND: u64 = 3;
+const CALLBACK_ADAPTER_CONTEXT_CAPTURE_WORD: usize = DESCRIPTOR_HEADER_WORDS;
+const CALLBACK_ADAPTER_VALUE_CAPTURE_WORD: usize = DESCRIPTOR_HEADER_WORDS + CAPTURE_WORDS;
 
 const SIGNATURE_VISIBLE_PARAM_COUNT_WORD: usize = 0;
 const SIGNATURE_REQUIRED_PARAM_COUNT_WORD: usize = 1;
@@ -106,6 +109,17 @@ pub(crate) unsafe fn decode_callable_descriptor(
 unsafe fn decode_bound_this_capture(
     descriptor: *const u64,
 ) -> Option<Option<DecodedCallableCapture>> {
+    decode_named_callable_descriptor_capture(descriptor, "this")
+}
+
+/// Finds one non-reference descriptor capture by its exact binding name.
+pub(crate) unsafe fn decode_named_callable_descriptor_capture(
+    descriptor: *const u64,
+    expected_name: &str,
+) -> Option<Option<DecodedCallableCapture>> {
+    if (descriptor as usize) < 4096 {
+        return None;
+    }
     let environment = read_word(descriptor, DESCRIPTOR_ENVIRONMENT_WORD)? as *const u64;
     if environment.is_null() {
         return Some(None);
@@ -128,7 +142,7 @@ unsafe fn decode_bound_this_capture(
             read_word(bindings, binding_base)?,
             read_word(bindings, binding_base.checked_add(1)?)?,
         )?;
-        if name != "this"
+        if name != expected_name
             || read_word(
                 bindings,
                 binding_base.checked_add(BINDING_BY_REF_WORD)?,
@@ -147,6 +161,22 @@ unsafe fn decode_bound_this_capture(
         }));
     }
     Some(None)
+}
+
+/// Decodes the inline boxed callback captured by a generated eval callback adapter.
+pub(crate) unsafe fn decode_eval_callback_adapter_capture(
+    descriptor: *const u64,
+) -> Option<(u64, DecodedCallableCapture)> {
+    if (descriptor as usize) < 4096 || read_word(descriptor, 0)? != CALLBACK_ADAPTER_KIND {
+        return None;
+    }
+    Some((
+        read_word(descriptor, CALLBACK_ADAPTER_CONTEXT_CAPTURE_WORD)?,
+        DecodedCallableCapture {
+            type_tag: 7,
+            value_word: read_word(descriptor, CALLBACK_ADAPTER_VALUE_CAPTURE_WORD)?,
+        },
+    ))
 }
 
 /// Reads the exact required arity stored in the signature record.

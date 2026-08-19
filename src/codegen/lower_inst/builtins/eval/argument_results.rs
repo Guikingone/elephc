@@ -175,8 +175,11 @@ pub(super) fn emit_eval_result_as_type(ctx: &mut FunctionContext<'_>, result_ty:
             );
             Ok(())
         }
-        PhpType::Array(_)
-        | PhpType::AssocArray { .. }
+        PhpType::Array(element) if matches!(element.codegen_repr(), PhpType::Object(_)) => {
+            emit_eval_mixed_array_as_owned_object_array(ctx);
+            Ok(())
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. }
         | PhpType::Iterable
         | PhpType::Object(_)
         | PhpType::Buffer(_)
@@ -188,6 +191,94 @@ pub(super) fn emit_eval_result_as_type(ctx: &mut FunctionContext<'_>, result_ty:
             Ok(())
         }
     }
+}
+
+/// Clones an eval `array<mixed>` result and rewrites its boxed object slots to raw object pointers.
+fn emit_eval_mixed_array_as_owned_object_array(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => emit_eval_mixed_array_as_owned_object_array_aarch64(ctx),
+        Arch::X86_64 => emit_eval_mixed_array_as_owned_object_array_x86_64(ctx),
+    }
+}
+
+/// Emits the ARM64 eval Mixed-array to object-array conversion.
+fn emit_eval_mixed_array_as_owned_object_array_aarch64(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("mov x0, x1");                                      // pass the borrowed eval array payload to the clone helper
+    abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
+    ctx.emitter.instruction("sub sp, sp, #32");                                 // reserve array, index, old-cell, and scratch slots
+    ctx.emitter.instruction("str x0, [sp]");                                    // retain the owned cloned array across slot helper calls
+    ctx.emitter.instruction("str xzr, [sp, #8]");                               // start conversion at slot zero
+    let loop_label = ctx.next_label("eval_object_array_loop");
+    let done_label = ctx.next_label("eval_object_array_done");
+    ctx.emitter.label(&loop_label);
+    ctx.emitter.instruction("ldr x9, [sp]");                                    // reload the cloned indexed array
+    ctx.emitter.instruction("ldr x10, [x9]");                                   // load the logical element count
+    ctx.emitter.instruction("ldr x11, [sp, #8]");                               // load the current slot index
+    ctx.emitter.instruction("cmp x11, x10");                                    // has every Mixed slot been converted?
+    ctx.emitter.instruction(&format!("b.hs {}", done_label));                   // finish after the final live slot
+    ctx.emitter.instruction("add x12, x9, #24");                                // address the indexed-array payload
+    ctx.emitter.instruction("ldr x0, [x12, x11, lsl #3]");                      // load the boxed Mixed object cell
+    ctx.emitter.instruction("str x0, [sp, #16]");                               // preserve the old cell for balanced release
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("mov x0, x1");                                      // move the raw object payload into the retain ABI
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.instruction("ldr x9, [sp]");                                    // reload the cloned array after the retain call
+    ctx.emitter.instruction("ldr x11, [sp, #8]");                               // reload the current slot index
+    ctx.emitter.instruction("add x12, x9, #24");                                // recover the destination payload base
+    ctx.emitter.instruction("str x0, [x12, x11, lsl #3]");                      // replace the Mixed cell with the retained object pointer
+    ctx.emitter.instruction("ldr x0, [sp, #16]");                               // release the cloned array's old Mixed-cell owner
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    ctx.emitter.instruction("ldr x11, [sp, #8]");                               // advance to the next slot
+    ctx.emitter.instruction("add x11, x11, #1");
+    ctx.emitter.instruction("str x11, [sp, #8]");
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue converting live object slots
+    ctx.emitter.label(&done_label);
+    ctx.emitter.instruction("ldr x0, [sp]");                                    // return the normalized owned array
+    ctx.emitter.instruction("ldr x9, [x0, #-8]");                               // load packed array metadata
+    ctx.emitter.instruction("mov x10, #0x7f00");                                // mask the previous runtime value-type byte
+    ctx.emitter.instruction("bic x9, x9, x10");
+    ctx.emitter.instruction("orr x9, x9, #0x600");                              // stamp runtime object tag 6 into the value-type byte
+    ctx.emitter.instruction("str x9, [x0, #-8]");                               // publish the concrete object-slot representation
+    ctx.emitter.instruction("add sp, sp, #32");                                 // release conversion scratch storage
+}
+
+/// Emits the x86_64 eval Mixed-array to object-array conversion.
+fn emit_eval_mixed_array_as_owned_object_array_x86_64(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("mov rax, rdi");                                    // move the borrowed eval array into the standard result register
+    ctx.emitter.instruction("mov rdi, rax");                                    // pass the array payload to the clone helper
+    abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
+    ctx.emitter.instruction("sub rsp, 32");                                     // reserve array, index, old-cell, and scratch slots
+    ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // retain the owned cloned array across helper calls
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 0");                      // start conversion at slot zero
+    let loop_label = ctx.next_label("eval_object_array_loop");
+    let done_label = ctx.next_label("eval_object_array_done");
+    ctx.emitter.label(&loop_label);
+    ctx.emitter.instruction("mov r9, QWORD PTR [rsp]");                         // reload the cloned indexed array
+    ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                         // load the logical element count
+    ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 8]");                    // load the current slot index
+    ctx.emitter.instruction("cmp r11, r10");                                    // has every Mixed slot been converted?
+    ctx.emitter.instruction(&format!("jae {}", done_label));                    // finish after the final live slot
+    ctx.emitter.instruction("mov rax, QWORD PTR [r9 + r11*8 + 24]");            // load the boxed Mixed object cell
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");                   // preserve the old cell for balanced release
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("mov rax, rdi");                                    // move the raw object payload into the retain ABI
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.instruction("mov r9, QWORD PTR [rsp]");                         // reload the cloned array after the retain call
+    ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 8]");                    // reload the current slot index
+    ctx.emitter.instruction("mov QWORD PTR [r9 + r11*8 + 24], rax");            // replace the Mixed cell with the retained object pointer
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                   // release the cloned array's old Mixed-cell owner
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    ctx.emitter.instruction("inc QWORD PTR [rsp + 8]");                         // advance to the next slot
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue converting live object slots
+    ctx.emitter.label(&done_label);
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                        // return the normalized owned array
+    ctx.emitter.instruction("mov r9, QWORD PTR [rax - 8]");                     // load packed array metadata
+    ctx.emitter.instruction("and r9, -32513");                                  // clear the previous runtime value-type byte
+    ctx.emitter.instruction("or r9, 1536");                                     // stamp runtime object tag 6 into the value-type byte
+    ctx.emitter.instruction("mov QWORD PTR [rax - 8], r9");                     // publish the concrete object-slot representation
+    ctx.emitter.instruction("add rsp, 32");                                     // release conversion scratch storage
 }
 
 /// Reorders an eval Mixed result cell into inline tagged-scalar result registers.

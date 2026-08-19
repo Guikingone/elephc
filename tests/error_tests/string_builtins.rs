@@ -446,6 +446,15 @@ fn test_error_sscanf_wrong_args() {
     );
 }
 
+/// Verifies every by-reference scanner output is a writable caller variable.
+#[test]
+fn test_error_sscanf_output_must_be_variable() {
+    expect_error(
+        r#"<?php sscanf("12", "%d", "not writable");"#,
+        "sscanf() variadic parameter $vars must be passed a variable",
+    );
+}
+
 // --- v0.5: I/O function errors ---
 
 /// Verifies that `ptr_set()` rejects a string value, since ptr_set only accepts

@@ -581,7 +581,18 @@ fn recursive_directory_iterator_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Void),
             directory_construct_body(var_expr("directory"), var_expr("flags"), true, false),
         ),
-        method_with_body("hasChildren", Vec::new(), Some(TypeExpr::Bool), recursive_directory_has_children_body()),
+        method_with_body(
+            "hasChildren",
+            vec![param_default("allowLinks", TypeExpr::Bool, bool_expr(false))],
+            Some(TypeExpr::Bool),
+            recursive_directory_has_children_body(),
+        ),
+        method_with_body(
+            "getSubPath",
+            Vec::new(),
+            Some(TypeExpr::Str),
+            recursive_directory_get_sub_path_body(),
+        ),
         method_with_body(
             "getChildren",
             Vec::new(),
@@ -1597,13 +1608,35 @@ fn recursive_directory_has_children_body() -> Vec<Stmt> {
             function_call("is_dir", vec![file_path_arg_expr()]),
             BinOp::And,
             binary_expr(
-                flag_enabled_expr(filesystem_flags_expr(), FS_FOLLOW_SYMLINKS),
+                binary_expr(
+                    var_expr("allowLinks"),
+                    BinOp::Or,
+                    flag_enabled_expr(filesystem_flags_expr(), FS_FOLLOW_SYMLINKS),
+                ),
                 BinOp::Or,
                 not_expr(function_call("is_link", vec![file_path_arg_expr()])),
             ),
         ),
         BinOp::And,
         not_expr(directory_is_dot_expr()),
+    ))
+}
+
+/// Builds RecursiveDirectoryIterator getSubPath() from the current entry and root directory.
+fn recursive_directory_get_sub_path_body() -> Vec<Stmt> {
+    return_body(function_call(
+        "substr",
+        vec![
+            function_call("dirname", vec![file_path_arg_expr()]),
+            binary_expr(
+                function_call(
+                    "strlen",
+                    vec![property_access(this_expr(), "directory")],
+                ),
+                BinOp::Add,
+                int_expr(1),
+            ),
+        ],
     ))
 }
 

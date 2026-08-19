@@ -170,7 +170,7 @@ pub(super) fn substitutes_a_name_resolution_identical_body() {
 pub(super) fn bake_manifest_replaces_only_recorded_sites() {
         let program = parse("<?php $s = opcache_get_status(); $c = opcache_is_script_cached(__FILE__);");
         let (injected, sites) =
-            inject_if_used(program, PhpVersion::Php85, true, None, &[], &[], None, false);
+            inject_for_test(program, PhpVersion::Php85, true, None, &[], &[], None, false);
         assert!(!sites.is_empty());
 
         let manifest = sample_manifest();
@@ -181,6 +181,6 @@ pub(super) fn bake_manifest_replaces_only_recorded_sites() {
 
         // A user-declared `opcache_get_status` is never a bake site.
         let own = parse("<?php function opcache_get_status($x = true) { return false; } $s = opcache_get_status();");
-        let (_, own_sites) = inject_if_used(own, PhpVersion::Php85, true, None, &[], &[], None, false);
+        let (_, own_sites) = inject_for_test(own, PhpVersion::Php85, true, None, &[], &[], None, false);
         assert!(!own_sites.get_status);
     }

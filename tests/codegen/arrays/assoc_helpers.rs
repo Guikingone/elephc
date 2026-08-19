@@ -143,6 +143,87 @@ echo $keys[0] . "|" . $keys[1];
     assert_eq!(out, "1|02");
 }
 
+/// Verifies keys accumulated into an initially empty associative array retain their runtime key kind.
+#[test]
+fn test_assoc_array_keys_after_empty_union_accumulation() {
+    let out = compile_and_run(
+        r#"<?php
+function accumulatedKeys(array $groups): array {
+    $known = [];
+    foreach ($groups as $group) {
+        $known += $group;
+    }
+    return array_keys($known);
+}
+echo implode(',', accumulatedKeys([['dev' => true], ['test' => true]]));
+"#,
+    );
+    assert_eq!(out, "dev,test");
+}
+
+/// Verifies keys nested directly in a heterogeneous return array use a concrete Mixed layout
+/// even when the surrounding aggregate initially infers an uninhabited element type.
+#[test]
+fn test_assoc_array_keys_nested_result_normalizes_void_element_type() {
+    let out = compile_and_run(
+        r#"<?php
+final class EnvironmentMap {
+    private function allowed(): array {
+        return [];
+    }
+
+    public function parameters(): array {
+        if (!$known = array_flip($this->allowed())) {
+            $known += ['prod' => true];
+        }
+
+        return ['known' => array_keys($known)];
+    }
+}
+
+echo implode(',', (new EnvironmentMap())->parameters()['known']);
+"#,
+    );
+    assert_eq!(out, "prod");
+}
+
+/// Verifies a declared `array` property with associative runtime storage materializes mixed keys
+/// without forcing them into the integer-only result layout used by statically indexed arrays.
+#[test]
+fn test_array_keys_declared_array_property_preserves_runtime_key_types() {
+    let out = compile_and_run(
+        r#"<?php
+class KeyHolder {
+    private array $values;
+
+    public function __construct() {
+        $this->values = ['name' => 1, 7 => 2];
+    }
+
+    public function keys(): array {
+        return array_keys($this->values);
+    }
+
+    public function describe(): void {
+        foreach ($this->values as $key => $value) {
+            echo gettype($key), ':', $key, ';';
+        }
+    }
+}
+$holder = new KeyHolder();
+$holder->describe();
+$keys = $holder->keys();
+$direct = array_keys(['name' => 1, 7 => 2]);
+echo gettype($direct[0]), ':', $direct[0], '|', gettype($direct[1]), ':', $direct[1], ';';
+echo gettype($keys[0]), ':', $keys[0], '|', gettype($keys[1]), ':', $keys[1];
+"#,
+    );
+    assert_eq!(
+        out,
+        "string:name;integer:7;string:name|integer:7;string:name|integer:7"
+    );
+}
+
 /// Verifies array_search() returns the first-matching key in insertion order, not the last.
 /// Fixture: three-element assoc array where "same" maps to two keys; confirms only first is returned and array size is unchanged.
 #[test]
@@ -254,6 +335,30 @@ echo array_search(12, $m);
 "#,
     );
     assert_eq!(out, "name:score");
+}
+
+/// Verifies gradual haystacks return indexed or associative keys, preserve false misses, and
+/// honor the runtime strictness flag through the shared dynamic-container scan.
+#[test]
+fn test_array_search_gradual_container_keys_and_strictness() {
+    let out = compile_and_run(
+        r#"<?php
+function searchGradual(mixed $needle, mixed $haystack, bool $strict = false): mixed {
+    return array_search($needle, $haystack, $strict);
+}
+
+echo searchGradual('target', ['other', 'target']);
+echo ':';
+echo searchGradual('target', ['name' => 'target']);
+echo ':';
+echo gettype(searchGradual('missing', ['target']));
+echo ':';
+echo searchGradual(1, ['1']);
+echo ':';
+echo gettype(searchGradual(1, ['1'], true));
+"#,
+    );
+    assert_eq!(out, "1:name:boolean:0:boolean");
 }
 
 /// Verifies direct array access via string key on a mixed-type assoc array.

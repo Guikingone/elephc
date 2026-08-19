@@ -18,3 +18,12 @@ docs/superpowers/
 /bundle.tar
 /bundle.tar.gz
 /bundle.tar.bz2
+
+# Native artifacts generated beside the stock web entry point.
+/examples/symfony-app/public/index
+/examples/symfony-app/public/index.s
+/examples/symfony-app/public/index.o
+/examples/symfony-app/public/index.map
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/

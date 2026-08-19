@@ -81,10 +81,13 @@ pub struct CheckResult {
     pub required_libraries: Vec<String>,
     pub warnings: Vec<CompileWarning>,
     /// Statically-decided access violations lowered to runtime `Error` throws,
-    /// keyed by the source span of the offending call/assignment.
-    pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
-    /// Authoritative checker result types for builtin calls, keyed by call span.
-    pub builtin_call_types: HashMap<Span, PhpType>,
+    /// keyed by function-like scope and the source span of the offending call/assignment.
+    pub throw_access_sites: HashMap<(String, Span), ThrowAccessInfo>,
+    /// Authoritative checker result types for builtin calls, keyed by function-like scope and
+    /// call span so equal coordinates in different loaded files cannot overwrite one another.
+    pub builtin_call_types: HashMap<(String, Span), PhpType>,
+    /// Authoritative checker result types for property reads through flow-narrowed receivers.
+    pub flow_typed_property_accesses: HashMap<(String, Span), PhpType>,
     /// Fixed-point array-local storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: LoopStorageTypes,
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`

@@ -8,6 +8,8 @@
 //! Key details:
 //! - Each source value is read as an owned boxed `Mixed` cell, compared with the
 //!   canonical loose or strict helper, and released before the next iteration.
+//! - A fifth mode argument selects a boolean membership result or the boxed matching key,
+//!   allowing `in_array()` and `array_search()` to share one runtime scan.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -26,7 +28,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: in_array_mixed_container ---");
     emitter.label_global("__rt_in_array_mixed_container");
     // Frame slots: needle=0, source=8, kind=16, strict=24, cursor=32,
-    // current value=40, comparison=48, key=56/64, saved fp/lr=80/88.
+    // current value=40, comparison=48, key=56/64, return-key=72, saved fp/lr=80/88.
     emitter.instruction("sub sp, sp, #96");                                     // reserve membership state and an aligned nested-call frame
     emitter.instruction("stp x29, x30, [sp, #80]");                             // preserve frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // establish the runtime helper frame pointer
@@ -34,6 +36,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // preserve the borrowed raw container pointer
     emitter.instruction("str x2, [sp, #16]");                                   // preserve runtime container kind 4 or 5
     emitter.instruction("str x3, [sp, #24]");                                   // preserve loose-zero or strict-one mode
+    emitter.instruction("str x4, [sp, #72]");                                   // preserve boolean-zero or matching-key-one result mode
     emitter.instruction("cbz x1, __rt_in_array_mixed_container_false");         // a defensive null container has no values
     emitter.instruction("str xzr, [sp, #32]");                                  // initialize the indexed position or hash cursor
     emitter.instruction("cmp x2, #4");                                          // tag 4 selects indexed-array iteration
@@ -94,9 +97,41 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_in_array_mixed_container_indexed_loop");        // continue scanning indexed values
 
     emitter.label("__rt_in_array_mixed_container_true");
+    emitter.instruction("ldr x9, [sp, #72]");                                   // select boolean membership or boxed matching-key output
+    emitter.instruction("cbz x9, __rt_in_array_mixed_container_true_bool");     // ordinary in_array returns an unboxed boolean
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the runtime container kind for key boxing
+    emitter.instruction("cmp x9, #4");                                          // indexed arrays always return the current integer position
+    emitter.instruction("b.ne __rt_in_array_mixed_container_true_hash_key");    // associative arrays return their preserved integer or string key
+    emitter.instruction("ldr x1, [sp, #32]");                                   // load the matching indexed position as the Mixed payload
+    emitter.instruction("mov x2, xzr");                                         // integer Mixed payloads do not use a high word
+    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer key
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the indexed matching key
+    emitter.instruction("b __rt_in_array_mixed_container_return");              // return the boxed indexed key
+    emitter.label("__rt_in_array_mixed_container_true_hash_key");
+    emitter.instruction("ldr x1, [sp, #56]");                                   // load the associative matching key low word
+    emitter.instruction("ldr x2, [sp, #64]");                                   // load string length or the integer-key sentinel
+    emitter.instruction("cmn x2, #1");                                          // is this an integer key?
+    emitter.instruction("b.ne __rt_in_array_mixed_container_true_string_key");  // non-sentinel high word denotes a string key
+    emitter.instruction("mov x2, xzr");                                         // integer Mixed payloads do not use a high word
+    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer key
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the associative integer key
+    emitter.instruction("b __rt_in_array_mixed_container_return");              // return the boxed integer key
+    emitter.label("__rt_in_array_mixed_container_true_string_key");
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string key
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the associative string key
+    emitter.instruction("b __rt_in_array_mixed_container_return");              // return the boxed string key
+    emitter.label("__rt_in_array_mixed_container_true_bool");
     emitter.instruction("mov x0, #1");                                          // return true after finding an equal value
     emitter.instruction("b __rt_in_array_mixed_container_return");              // skip the no-match result
     emitter.label("__rt_in_array_mixed_container_false");
+    emitter.instruction("ldr x9, [sp, #72]");                                   // select raw false or boxed false for a miss
+    emitter.instruction("cbz x9, __rt_in_array_mixed_container_false_bool");    // ordinary in_array returns an unboxed boolean
+    emitter.instruction("mov x1, xzr");                                         // false Mixed payload is zero
+    emitter.instruction("mov x2, xzr");                                         // boolean Mixed payloads do not use a high word
+    emitter.instruction("mov x0, #3");                                          // runtime tag 3 = bool
+    emitter.instruction("bl __rt_mixed_from_value");                            // box array_search's false miss
+    emitter.instruction("b __rt_in_array_mixed_container_return");              // return the boxed miss
+    emitter.label("__rt_in_array_mixed_container_false_bool");
     emitter.instruction("mov x0, #0");                                          // return false when no value matches
     emitter.label("__rt_in_array_mixed_container_return");
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
@@ -110,7 +145,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: in_array_mixed_container ---");
     emitter.label_global("__rt_in_array_mixed_container");
     // Frame slots: needle=-8, source=-16, kind=-24, strict=-32, cursor=-40,
-    // current value=-48, comparison=-56, key=-64/-72.
+    // current value=-48, comparison=-56, key=-64/-72, return-key=-80.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable runtime helper frame
     emitter.instruction("sub rsp, 80");                                         // reserve aligned membership state for nested calls
@@ -118,6 +153,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the borrowed raw container pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve runtime container kind 4 or 5
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // preserve loose-zero or strict-one mode
+    emitter.instruction("mov QWORD PTR [rbp - 80], r8");                        // preserve boolean-zero or matching-key-one result mode
     emitter.instruction("test rsi, rsi");                                       // a defensive null container has no values
     emitter.instruction("jz __rt_in_array_mixed_container_false_x86");          // return false for a null payload
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize indexed position or hash cursor
@@ -175,9 +211,40 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_in_array_mixed_container_indexed_loop_x86");  // continue scanning indexed values
 
     emitter.label("__rt_in_array_mixed_container_true_x86");
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // select boolean membership or boxed matching-key output
+    emitter.instruction("je __rt_in_array_mixed_container_true_bool_x86");      // ordinary in_array returns an unboxed boolean
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 4");                         // indexed arrays always return the current integer position
+    emitter.instruction("jne __rt_in_array_mixed_container_true_hash_key_x86"); // associative arrays return their preserved integer or string key
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // load the matching indexed position as the Mixed payload
+    emitter.instruction("xor esi, esi");                                        // integer Mixed payloads do not use a high word
+    emitter.instruction("xor eax, eax");                                        // runtime tag 0 = integer key
+    emitter.instruction("call __rt_mixed_from_value");                          // box the indexed matching key
+    emitter.instruction("jmp __rt_in_array_mixed_container_return_x86");        // return the boxed indexed key
+    emitter.label("__rt_in_array_mixed_container_true_hash_key_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // load the associative matching key low word
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // load string length or the integer-key sentinel
+    emitter.instruction("cmp rsi, -1");                                         // is this an integer key?
+    emitter.instruction("jne __rt_in_array_mixed_container_true_string_key_x86"); // non-sentinel high word denotes a string key
+    emitter.instruction("xor esi, esi");                                        // integer Mixed payloads do not use a high word
+    emitter.instruction("xor eax, eax");                                        // runtime tag 0 = integer key
+    emitter.instruction("call __rt_mixed_from_value");                          // box the associative integer key
+    emitter.instruction("jmp __rt_in_array_mixed_container_return_x86");        // return the boxed integer key
+    emitter.label("__rt_in_array_mixed_container_true_string_key_x86");
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string key
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the associative string key
+    emitter.instruction("jmp __rt_in_array_mixed_container_return_x86");        // return the boxed string key
+    emitter.label("__rt_in_array_mixed_container_true_bool_x86");
     emitter.instruction("mov eax, 1");                                          // return true after finding an equal value
     emitter.instruction("jmp __rt_in_array_mixed_container_return_x86");        // skip the no-match result
     emitter.label("__rt_in_array_mixed_container_false_x86");
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // select raw false or boxed false for a miss
+    emitter.instruction("je __rt_in_array_mixed_container_false_bool_x86");     // ordinary in_array returns an unboxed boolean
+    emitter.instruction("xor edi, edi");                                        // false Mixed payload is zero
+    emitter.instruction("xor esi, esi");                                        // boolean Mixed payloads do not use a high word
+    emitter.instruction("mov eax, 3");                                          // runtime tag 3 = bool
+    emitter.instruction("call __rt_mixed_from_value");                          // box array_search's false miss
+    emitter.instruction("jmp __rt_in_array_mixed_container_return_x86");        // return the boxed miss
+    emitter.label("__rt_in_array_mixed_container_false_bool_x86");
     emitter.instruction("xor eax, eax");                                        // return false when no value matches
     emitter.label("__rt_in_array_mixed_container_return_x86");
     emitter.instruction("add rsp, 80");                                         // release the membership helper frame

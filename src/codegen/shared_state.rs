@@ -12,13 +12,22 @@
 //! - Owns the module-wide assembly label counter. It must not be per function: the readable part
 //!   of a label is a lossy fragment of the PHP function/block name, so only a module-unique
 //!   trailing id keeps two functions with similar names from emitting the same label.
+//! - Indexes emitted instance and static method bodies once from immutable EIR module metadata.
+
+use std::collections::HashSet;
 
 use crate::codegen::callable_dispatch::{RuntimeCallableCase, RuntimeStaticMethodCallableCase};
+use crate::ir::Module;
+use crate::names::php_symbol_key;
 use crate::types::{FunctionSig, PhpType};
 
+use super::shared_reflection::SharedReflectionState;
+
 /// Module-wide artifacts emitted once and reused by every function lowering context.
-#[derive(Default)]
 pub(crate) struct SharedCodegenState {
+    pub(super) reflection: SharedReflectionState,
+    emitted_instance_methods: HashSet<(String, String)>,
+    emitted_static_methods: HashSet<(String, String)>,
     runtime_string_descriptor_cases:
         Vec<(Option<PhpType>, Option<Vec<String>>, bool, Vec<RuntimeCallableCase>)>,
     runtime_static_method_descriptor_cases:
@@ -26,8 +35,13 @@ pub(crate) struct SharedCodegenState {
     runtime_static_method_descriptor_case_entries: Vec<RuntimeStaticMethodCallableCase>,
     runtime_instance_method_descriptors: Vec<RuntimeInstanceMethodDescriptorCacheEntry>,
     runtime_callable_invokers: Vec<RuntimeCallableInvokerCacheEntry>,
+    eval_registration_helper: Option<String>,
     runtime_builtin_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     runtime_extern_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
+    /// Memoized sharing decision for result and stdout Mixed string contexts.
+    mixed_string_sharing: [Option<bool>; 2],
+    /// Memoized sharing decision for open Mixed callable dispatch by strictness profile.
+    mixed_callable_sharing: [Option<bool>; 2],
     label_counter: usize,
 }
 
@@ -62,6 +76,87 @@ struct RuntimeCallWrapperCacheEntry {
 }
 
 impl SharedCodegenState {
+    /// Builds module-wide caches and immutable method-membership indexes before emission starts.
+    pub(super) fn for_module(module: &Module) -> Self {
+        let mut state = Self::empty();
+        state.reflection = SharedReflectionState::for_module(module);
+        for function in &module.class_methods {
+            let Some((class_name, method_name)) = function.name.rsplit_once("::") else {
+                continue;
+            };
+            let key = (class_name.to_string(), php_symbol_key(method_name));
+            if function.flags.is_static {
+                state.emitted_static_methods.insert(key);
+            } else {
+                state.emitted_instance_methods.insert(key);
+            }
+        }
+        state
+    }
+
+    /// Creates private empty storage used only while constructing a module-populated state.
+    fn empty() -> Self {
+        Self {
+            reflection: SharedReflectionState::empty(),
+            emitted_instance_methods: HashSet::new(),
+            emitted_static_methods: HashSet::new(),
+            runtime_string_descriptor_cases: Vec::new(),
+            runtime_static_method_descriptor_cases: Vec::new(),
+            runtime_static_method_descriptor_case_entries: Vec::new(),
+            runtime_instance_method_descriptors: Vec::new(),
+            runtime_callable_invokers: Vec::new(),
+            eval_registration_helper: None,
+            runtime_builtin_wrappers: Vec::new(),
+            runtime_extern_wrappers: Vec::new(),
+            mixed_string_sharing: [None; 2],
+            mixed_callable_sharing: [None; 2],
+            label_counter: 0,
+        }
+    }
+
+    /// Returns whether the immutable module inventory contains the requested method body.
+    pub(super) fn emitted_method_contains(
+        &self,
+        class_name: &str,
+        canonical_method_key: &str,
+        is_static: bool,
+    ) -> bool {
+        let methods = if is_static {
+            &self.emitted_static_methods
+        } else {
+            &self.emitted_instance_methods
+        };
+        methods.contains(&(
+            class_name.to_string(),
+            canonical_method_key.to_string(),
+        ))
+    }
+
+    /// Borrows the immutable instance-method inventory for contains-only interface validation.
+    pub(super) fn emitted_instance_method_keys(&self) -> &HashSet<(String, String)> {
+        &self.emitted_instance_methods
+    }
+
+    /// Returns the memoized Mixed callable sharing decision for one strictness profile.
+    pub(super) fn mixed_callable_sharing(&self, profile_index: usize) -> Option<bool> {
+        self.mixed_callable_sharing[profile_index]
+    }
+
+    /// Stores the Mixed callable sharing decision for one strictness profile.
+    pub(super) fn set_mixed_callable_sharing(&mut self, profile_index: usize, shares: bool) {
+        self.mixed_callable_sharing[profile_index] = Some(shares);
+    }
+
+    /// Returns the memoized Mixed string sharing decision for one context mode.
+    pub(super) fn mixed_string_sharing(&self, mode_index: usize) -> Option<bool> {
+        self.mixed_string_sharing[mode_index]
+    }
+
+    /// Stores the Mixed string sharing decision for one context mode.
+    pub(super) fn set_mixed_string_sharing(&mut self, mode_index: usize, shares: bool) {
+        self.mixed_string_sharing[mode_index] = Some(shares);
+    }
+
     /// Reserves the next module-unique assembly label id.
     ///
     /// Every generated local label ends in `_<id>` taken from this counter. Because the id is a
@@ -214,6 +309,17 @@ impl SharedCodegenState {
             });
     }
 
+    /// Returns the module-wide eval metadata registration helper label, if emitted.
+    pub(super) fn eval_registration_helper(&self) -> Option<String> {
+        self.eval_registration_helper.clone()
+    }
+
+    /// Publishes the module-wide eval metadata registration helper label.
+    pub(super) fn cache_eval_registration_helper(&mut self, label: String) {
+        debug_assert!(self.eval_registration_helper.is_none());
+        self.eval_registration_helper = Some(label);
+    }
+
     /// Returns a previously emitted synthetic builtin wrapper for the same signature.
     pub(super) fn runtime_builtin_wrapper(
         &self,
@@ -303,4 +409,74 @@ fn cache_runtime_call_wrapper(
         strict_php,
         label: label.to_string(),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::Target;
+    use crate::ir::{Function, IrType};
+
+    /// Creates a minimal EIR method body with the requested raw name and static flag.
+    fn method(name: &str, is_static: bool) -> Function {
+        let mut function = Function::new(name.to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_static = is_static;
+        function
+    }
+
+    /// Reproduces the pre-index linear membership predicate for differential assertions.
+    fn old_scan_contains(
+        module: &Module,
+        class_name: &str,
+        method_key: &str,
+        is_static: bool,
+    ) -> bool {
+        module.class_methods.iter().any(|function| {
+            function.flags.is_static == is_static
+                && function
+                    .name
+                    .rsplit_once("::")
+                    .is_some_and(|(candidate_class, candidate_method)| {
+                        candidate_class == class_name
+                            && php_symbol_key(candidate_method) == method_key
+                    })
+        })
+    }
+
+    /// Proves the immutable index preserves raw classes and method-only canonicalization.
+    #[test]
+    fn emitted_method_index_matches_previous_scan_semantics() {
+        let mut module = Module::new(Target::detect_host());
+        module.class_methods = vec![
+            method("Ns\\Thing::DoWork", false),
+            method("Ns\\Thing::StaticWork", true),
+            method("Ns\\Thing::Dual", false),
+            method("Ns\\Thing::Dual", true),
+            method("Outer::Inner::MiXeD", false),
+            method("\\Ns\\Thing::Leading", false),
+            method("missing_delimiter", false),
+        ];
+        let state = SharedCodegenState::for_module(&module);
+        let queries = [
+            ("Ns\\Thing", "dowork", false),
+            ("Ns\\Thing", "DOWORK", false),
+            ("Ns\\Thing", "staticwork", true),
+            ("Ns\\Thing", "staticwork", false),
+            ("Ns\\Thing", "dual", false),
+            ("Ns\\Thing", "dual", true),
+            ("Outer::Inner", "mixed", false),
+            ("Outer", "inner::mixed", false),
+            ("\\Ns\\Thing", "leading", false),
+            ("Ns\\Thing", "leading", false),
+            ("", "missing_delimiter", false),
+        ];
+
+        for (class_name, method_key, is_static) in queries {
+            assert_eq!(
+                state.emitted_method_contains(class_name, method_key, is_static),
+                old_scan_contains(&module, class_name, method_key, is_static),
+                "membership mismatch for {class_name}::{method_key}, static={is_static}"
+            );
+        }
+    }
 }

@@ -123,6 +123,7 @@ mod dynamic_property_read_resolution;
 mod runtime_property_writes;
 mod named_property_writes;
 mod instanceof_entry;
+mod object_class_id;
 mod allocation_clone;
 mod interface_layout;
 mod property_resolution;
@@ -142,6 +143,7 @@ use clone_and_spl::*;
 use iterator_iterator::*;
 #[allow(unused_imports)]
 use throwable_new::*;
+pub(in crate::codegen::lower_inst) use throwable_new::try_lower_builtin_throwable_parent_constructor as lower_builtin_throwable_parent_constructor_call;
 #[allow(unused_imports)]
 use fiber_dynamic_entry::*;
 #[allow(unused_imports)]
@@ -197,6 +199,7 @@ pub(super) use fiber_dynamic_entry::{
 };
 pub(super) use fixed_new::lower_object_new;
 pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
+pub(super) use object_class_id::lower_object_class_id;
 pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_prop_get, lower_prop_initialized,
 };

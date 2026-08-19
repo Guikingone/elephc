@@ -9,6 +9,24 @@
 
 use super::*;
 
+/// Verifies generic Mixed dispatch never references synthetic Fiber method symbols.
+#[test]
+fn test_mixed_constructor_dispatch_skips_runtime_only_fiber_declaration() {
+    let source = r#"<?php
+function invoke_constructor(mixed $object, mixed $argument): mixed {
+    return $object->__construct($argument);
+}
+"#;
+    let dir = make_cli_test_dir("elephc_mixed_constructor_runtime_only_fiber");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        !user_asm.contains("_method___Fiber____u__u_construct"),
+        "runtime-only declarations must not create unresolved generic method calls"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Verifies that `$f->start($a, $b)` forwards two `mixed` arguments to the fiber
 /// closure's parameters and formats them correctly.
 #[test]

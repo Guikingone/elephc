@@ -41,7 +41,7 @@ pub struct BuiltinDef {
     /// The variadic parameter always carries `Some(ArrayLiteral([]))`.
     pub defaults: Vec<Option<Expr>>,
     /// Per-parameter by-reference flag, in the same order as `params`.
-    /// The variadic parameter is never by-reference (`false`).
+    /// The variadic parameter uses the shared contract's passing mode.
     pub ref_params: Vec<bool>,
     /// Name of the variadic parameter, if any.
     pub variadic: Option<String>,
@@ -92,13 +92,13 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
 
         // Append the variadic parameter with an empty-array default, matching the
         // convention used by the legacy `variadic()` helper in `src/types/signatures.rs`.
-        if let Some(var_name) = spec.variadic {
-            params.push((var_name.to_string(), PhpType::Mixed));
+        if let Some(variadic) = spec.variadic {
+            params.push((variadic.name.to_string(), PhpType::Mixed));
             defaults.push(Some(Expr::new(
                 ExprKind::ArrayLiteral(Vec::new()),
                 Span::dummy(),
             )));
-            ref_params.push(false);
+            ref_params.push(variadic.is_by_reference());
         }
 
         let def = BuiltinDef {
@@ -106,7 +106,7 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
             params,
             defaults,
             ref_params,
-            variadic: spec.variadic.map(str::to_string),
+            variadic: spec.variadic.map(|variadic| variadic.name.to_string()),
             return_type: type_spec_to_php(&spec.returns),
             by_ref_return: spec.by_ref_return,
             spec,
@@ -747,6 +747,14 @@ mod tests {
         assert_eq!(sig.params.len(), 2);
         assert_eq!(sig.params[0].0, "target");
         assert_eq!(sig.params[1].0, "value");
+    }
+
+    /// Verifies registry signatures preserve by-reference passing for variadic outputs.
+    #[test]
+    fn variadic_ref_marker_sets_ref_params() {
+        let sig = function_sig("sscanf").expect("sscanf registered");
+        assert_eq!(sig.variadic.as_deref(), Some("vars"));
+        assert_eq!(sig.ref_params, vec![false, false, true]);
     }
 
     /// Verifies every registry runtime function has a complete central descriptor and logical ABI.

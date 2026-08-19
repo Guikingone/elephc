@@ -1158,6 +1158,7 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::Abs
+                | RuntimeFnId::GetClass
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::Trim
         )
@@ -1180,6 +1181,9 @@ impl RuntimeFnId {
                         | PhpType::Union(_)
                         | PhpType::Void
                 )
+            }),
+            RuntimeFnId::GetClass => source.is_none_or(|ty| {
+                matches!(ty, PhpType::Mixed | PhpType::Object(_) | PhpType::Union(_))
             }),
             RuntimeFnId::Gettype => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),

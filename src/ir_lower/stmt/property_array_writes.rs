@@ -158,6 +158,13 @@ pub(super) fn lower_property_array_push(
         return;
     }
 
+    if generic_receiver {
+        lower_generic_object_mixed_property_array_write(
+            ctx, &object, property, None, value, span,
+        );
+        return;
+    }
+
     let value = lower_expr(ctx, value);
     let data = ctx.intern_string(property);
     ctx.emit_void(
@@ -198,6 +205,7 @@ pub(super) fn lower_property_array_assign(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    let generic_receiver = is_generic_object_receiver(ctx, object.value);
     if let Some(property_ty) =
         generic_object_array_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
@@ -215,6 +223,40 @@ pub(super) fn lower_property_array_assign(
         let index = lower_expr(ctx, index);
         let value = lower_expr(ctx, value);
         let value = coerce_indexed_array_set_value(ctx, &property_ty, value, Some(span));
+        if index.ir_type == IrType::Str {
+            let assoc_ty = promoted_assoc_array_type(
+                property_ty.clone(),
+                ctx.builder.value_php_type(value.value),
+            );
+            let hash = ctx.emit_value(
+                Op::ArrayToHash,
+                vec![property_value.value],
+                None,
+                assoc_ty.clone(),
+                Op::ArrayToHash.default_effects(),
+                Some(span),
+            );
+            ctx.emit_void(
+                Op::HashSet,
+                vec![hash.value, index.value, value.value],
+                None,
+                Op::HashSet.default_effects(),
+                Some(span),
+            );
+            release_persisted_string_operand(ctx, index, span);
+            release_persisted_string_operand(ctx, value, span);
+            ctx.emit_void(
+                Op::PropSet,
+                vec![object.value, hash.value],
+                Some(Immediate::Data(data)),
+                Op::PropSet.default_effects(),
+                Some(span),
+            );
+            release_rewritten_property_value_after_retaining_store(
+                ctx, &assoc_ty, hash, span,
+            );
+            return;
+        }
         if property_ty.codegen_repr() == PhpType::Array(Box::new(PhpType::Mixed))
             && index_is_boxed_mixed_key(index.ir_type)
         {
@@ -367,6 +409,18 @@ pub(super) fn lower_property_array_assign(
         return;
     }
 
+    if generic_receiver {
+        lower_generic_object_mixed_property_array_write(
+            ctx,
+            &object,
+            property,
+            Some(index),
+            value,
+            span,
+        );
+        return;
+    }
+
     let index = lower_expr(ctx, index);
     let value = lower_expr(ctx, value);
     let data = ctx.intern_string(property);
@@ -376,6 +430,61 @@ pub(super) fn lower_property_array_assign(
         Some(Immediate::Data(data)),
         effects_lookup::runtime_effects(),
         Some(span),
+    );
+}
+
+/// Mutates one runtime-typed property through generic-object class-id dispatch and republishes it.
+fn lower_generic_object_mixed_property_array_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &LoweredValue,
+    property: &str,
+    index: Option<&Expr>,
+    value: &Expr,
+    span: Span,
+) {
+    let data = ctx.intern_string(property);
+    let property_ty = PhpType::Mixed;
+    let property_value = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        property_ty.clone(),
+        Op::PropGet.default_effects(),
+        Some(span),
+    );
+    let property_value =
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
+    let index = index.map(|index| lower_expr(ctx, index));
+    let value = lower_expr(ctx, value);
+    if let Some(index) = index {
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![property_value.value, index.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+    } else {
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![property_value.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+    }
+    ctx.emit_void(
+        Op::PropSet,
+        vec![object.value, property_value.value],
+        Some(Immediate::Data(data)),
+        Op::PropSet.default_effects(),
+        Some(span),
+    );
+    release_rewritten_property_value_after_retaining_store(
+        ctx,
+        &property_ty,
+        property_value,
+        span,
     );
 }
 

@@ -1408,15 +1408,8 @@ struct ObjectIteratorMethodTarget {
 
 /// Returns true when the EIR module contains the concrete instance-method body.
 fn class_method_body_exists(ctx: &FunctionContext<'_>, class_name: &str, method_key: &str) -> bool {
-    ctx.module.class_methods.iter().any(|function| {
-        !function.flags.is_static
-            && function
-                .name
-                .rsplit_once("::")
-                .is_some_and(|(candidate_class, candidate_method)| {
-                    candidate_class == class_name && php_symbol_key(candidate_method) == method_key
-                })
-    })
+    ctx.shared
+        .emitted_method_contains(class_name, method_key, false)
 }
 
 /// Lowers iterator cleanup; Phase 04 array iterator state is stack-resident.

@@ -25,6 +25,13 @@ pub(super) fn lower_while(
     ctx.builder.position_at_end(header);
     let cond = lower_expr(ctx, condition);
     let cond = ctx.truthy_consuming(cond, Some(condition.span));
+    // The condition runs before both the body and the ordinary loop exit. Keep its
+    // flow-sensitive facts separate from assignments made later in the body: otherwise a
+    // body-only type leaks past the false condition (for example `$key = (string) $key` in the
+    // condition followed by `$key = get_object()` in the body leaves an object-typed key after
+    // the loop even though every normal exit just executed the string cast).
+    let condition_exit_types = ctx.local_types_snapshot();
+    let condition_exit_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.terminate(Terminator::CondBr {
         cond: cond.value,
         then_target: body_block,
@@ -45,6 +52,8 @@ pub(super) fn lower_while(
     ctx.loop_stack.pop();
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
+    ctx.restore_local_types(condition_exit_types);
+    ctx.restore_initialized_slots(condition_exit_initialized);
     ctx.clear_static_callable_locals();
 }
 

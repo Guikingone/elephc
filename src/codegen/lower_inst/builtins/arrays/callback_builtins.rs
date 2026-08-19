@@ -382,6 +382,39 @@ pub(crate) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let needle_ty = ctx.value_php_type(needle)?;
     let array_ty = ctx.value_php_type(array)?;
     let strict = inst.operands.get(2).copied();
+    if matches!(array_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        if let Some(strict) = strict {
+            let strict_label = ctx.next_label("array_search_dynamic_strict");
+            let done_label = ctx.next_label("array_search_dynamic_done");
+            branch_if_bool_value_true(ctx, strict, &strict_label)?;
+            lower_array_search_mixed_container(
+                ctx,
+                needle,
+                array,
+                &needle_ty,
+                InArrayMode::Loose,
+            )?;
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&strict_label);
+            lower_array_search_mixed_container(
+                ctx,
+                needle,
+                array,
+                &needle_ty,
+                InArrayMode::Strict,
+            )?;
+            ctx.emitter.label(&done_label);
+        } else {
+            lower_array_search_mixed_container(
+                ctx,
+                needle,
+                array,
+                &needle_ty,
+                InArrayMode::Loose,
+            )?;
+        }
+        return store_if_result(ctx, inst);
+    }
     match strict {
         Some(strict) if array_search_strict_never_matches(&needle_ty, &array_ty) => {
             let strict_label = ctx.next_label("array_search_strict");

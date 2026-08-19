@@ -405,12 +405,23 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let method_key = php_symbol_key(method);
-        let sig = self
+        let resolved_method = self
             .interfaces
             .get(interface_name)
-            .and_then(|interface_info| interface_info.methods.get(&method_key))
-            .cloned();
-        let Some(sig) = sig else {
+            .and_then(|interface_info| {
+                interface_info
+                    .methods
+                    .get(&method_key)
+                    .map(|sig| (sig, false))
+                    .or_else(|| {
+                        interface_info
+                            .static_methods
+                            .get(&method_key)
+                            .map(|sig| (sig, true))
+                    })
+            })
+            .map(|(sig, is_static)| (sig.clone(), is_static));
+        let Some((sig, is_static)) = resolved_method else {
             return self.infer_lenient_subtype_method_call(
                 interface_name,
                 method,
@@ -435,7 +446,11 @@ impl Checker {
             &format!("Method {}::{}", interface_name, method),
             interface_name,
         )?;
-        let late_static_return = self.instance_method_late_static_return(interface_name, &method_key);
+        let late_static_return = if is_static {
+            self.static_method_late_static_return(interface_name, &method_key)
+        } else {
+            self.instance_method_late_static_return(interface_name, &method_key)
+        };
         match late_static_return {
             Some(return_type) => self.resolve_late_static_return_type_hint(
                 &return_type,
@@ -573,7 +588,7 @@ impl Checker {
                         // emits the throw sequence, and continue with the declared return
                         // type so later passes stay type-consistent.
                         self.throw_access_sites.insert(
-                            expr.span,
+                            (self.current_loop_storage_scope.clone(), expr.span),
                             crate::types::ThrowAccessInfo {
                                 span: expr.span,
                                 kind: crate::types::ThrowAccessKind::PrivateMethod {
@@ -629,6 +644,18 @@ impl Checker {
                         class_name,
                     )?;
                 }
+            } else if class_info.static_methods.contains_key(&method_key) {
+                let receiver = StaticReceiver::Named(crate::names::Name::from(
+                    class_name.to_string(),
+                ));
+                return self.infer_static_method_call_type_with_options(
+                    &receiver,
+                    method,
+                    args,
+                    expr,
+                    env,
+                    allow_by_ref_spread,
+                );
             } else if let Some(sig) = class_info.methods.get("__call") {
                 let magic_args = Self::magic_call_args(method, args, expr.span);
                 let declared_flags = Self::declared_method_param_flags(class_info, "__call", false);
@@ -989,6 +1016,11 @@ impl Checker {
             }
         };
         let class_name = resolved_class_name.as_str();
+        let named_lexical_instance_call = matches!(receiver, StaticReceiver::Named(_))
+            && !self.current_method_is_static
+            && self.current_class.as_ref().is_some_and(|current| {
+                current == class_name || self.is_subclass_of(current, class_name)
+            });
         // `Closure::bind($closure, $newThis [, $scope])` is the static form of
         // `$closure->bindTo(...)`: it returns a new closure with `$this` rebound.
         if class_name.trim_start_matches('\\') == "Closure" && php_symbol_key(method) == "bind" {
@@ -1038,7 +1070,8 @@ impl Checker {
                 )
             })
             .transpose()?;
-        let late_static_instance_return_type = if parent_call || self_call {
+        let late_static_instance_return_type =
+            if parent_call || self_call || named_lexical_instance_call {
             self.instance_method_late_static_return(class_name, &method_key)
                 .map(|return_type| {
                     self.resolve_late_static_return_type_hint(
@@ -1048,9 +1081,9 @@ impl Checker {
                     )
                 })
                 .transpose()?
-        } else {
-            None
-        };
+            } else {
+                None
+            };
         let normalized_args: Vec<Expr>;
         let mut magic_return_ty = None;
         let mut magic_original_args = None;
@@ -1124,7 +1157,7 @@ impl Checker {
                         class_name,
                     )?;
                 }
-            } else if parent_call || self_call {
+            } else if parent_call || self_call || named_lexical_instance_call {
                 if self.current_method_is_static {
                     return Err(CompileError::new(
                         expr.span,
@@ -1168,7 +1201,13 @@ impl Checker {
                     expr.span,
                     &format!(
                         "{} method {}::{}",
-                        if parent_call { "Parent" } else { "Self" },
+                        if parent_call {
+                            "Parent"
+                        } else if self_call {
+                            "Self"
+                        } else {
+                            "Ancestor"
+                        },
                         class_name,
                         method
                     ),
@@ -1182,7 +1221,13 @@ impl Checker {
                         env,
                         &format!(
                             "{} method {}::{}",
-                            if parent_call { "Parent" } else { "Self" },
+                            if parent_call {
+                                "Parent"
+                            } else if self_call {
+                                "Self"
+                            } else {
+                                "Ancestor"
+                            },
                             class_name,
                             method
                         ),
@@ -1196,7 +1241,13 @@ impl Checker {
                         env,
                         &format!(
                             "{} method {}::{}",
-                            if parent_call { "Parent" } else { "Self" },
+                            if parent_call {
+                                "Parent"
+                            } else if self_call {
+                                "Self"
+                            } else {
+                                "Ancestor"
+                            },
                             class_name,
                             method
                         ),

@@ -81,9 +81,12 @@ pub(crate) fn lower_string_replace(
         return store_if_result(ctx, inst);
     }
     match ctx.value_php_type(search)?.codegen_repr() {
-        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => {
+        PhpType::Array(elem)
+            if matches!(elem.codegen_repr(), PhpType::Str | PhpType::Mixed) =>
+        {
             let replace_is_array = string_replace_array_replacement(ctx, inst, name)?;
             let replace = expect_operand(inst, 1)?;
+            let converted_search = string_replace_search_needs_string_conversion(ctx, search)?;
             let converted_replacement =
                 string_replace_replacement_needs_string_conversion(ctx, replace)?;
             let array_label = format!("{}_array", runtime_label);
@@ -95,15 +98,21 @@ pub(crate) fn lower_string_replace(
                     lower_string_replace_array_x86_64(ctx, inst, name, replace_is_array)?
                 }
             }
+            let (search_reg, replacement_reg) = match ctx.emitter.target.arch {
+                Arch::AArch64 => ("x1", "x2"),
+                Arch::X86_64 => ("rdi", "rsi"),
+            };
+            if converted_search {
+                abi::emit_push_reg(ctx.emitter, search_reg);
+            }
             if converted_replacement {
-                let replacement_reg = match ctx.emitter.target.arch {
-                    Arch::AArch64 => "x2",
-                    Arch::X86_64 => "rsi",
-                };
                 abi::emit_push_reg(ctx.emitter, replacement_reg);
             }
             abi::emit_call_label(ctx.emitter, &array_label);
             if converted_replacement {
+                release_stacked_array_preserving_string_result(ctx);
+            }
+            if converted_search {
                 release_stacked_array_preserving_string_result(ctx);
             }
             store_if_result(ctx, inst)
@@ -202,6 +211,17 @@ fn string_replace_replacement_needs_string_conversion(
 ) -> Result<bool> {
     Ok(matches!(
         ctx.value_php_type(replacement)?.codegen_repr(),
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed
+    ))
+}
+
+/// Reports whether an indexed search array needs element-wise PHP string conversion.
+fn string_replace_search_needs_string_conversion(
+    ctx: &FunctionContext<'_>,
+    search: ValueId,
+) -> Result<bool> {
+    Ok(matches!(
+        ctx.value_php_type(search)?.codegen_repr(),
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed
     ))
 }
@@ -353,7 +373,13 @@ fn lower_string_replace_array_aarch64(
         load_string_arg_to_regs(ctx, inst, 1, name, "x2", "x3")?;
     }
     ctx.emitter.instruction("stp x2, x3, [sp, #-16]!");                         // preserve the replacement pointer + length/sentinel while materializing search
-    ctx.load_value_to_reg(search, "x1")?;
+    if string_replace_search_needs_string_conversion(ctx, search)? {
+        ctx.load_value_to_result(search)?;
+        emit_mixed_array_to_string_array(ctx)?;
+        ctx.emitter.instruction("mov x1, x0");                                  // pass the converted string-slot search array
+    } else {
+        ctx.load_value_to_reg(search, "x1")?;
+    }
     ctx.emitter.instruction("ldp x2, x3, [sp], #16");                           // restore the replacement pointer + length/sentinel
     ctx.emitter.instruction("ldp x4, x5, [sp], #16");                           // restore the subject pointer/length
     Ok(())
@@ -387,7 +413,13 @@ fn lower_string_replace_array_x86_64(
         load_string_arg_to_regs(ctx, inst, 1, name, "rsi", "rdx")?;
     }
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
-    ctx.load_value_to_reg(search, "rdi")?;
+    if string_replace_search_needs_string_conversion(ctx, search)? {
+        ctx.load_value_to_result(search)?;
+        emit_mixed_array_to_string_array(ctx)?;
+        ctx.emitter.instruction("mov rdi, rax");                               // pass the converted string-slot search array
+    } else {
+        ctx.load_value_to_reg(search, "rdi")?;
+    }
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
     abi::emit_pop_reg_pair(ctx.emitter, "rcx", "r8");
     Ok(())
@@ -606,9 +638,13 @@ fn lower_chunk_split_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 pub(crate) fn lower_strtr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count_between(inst, "strtr", 2, 3)?;
     let pairs = expect_operand(inst, 1)?;
-    let helper = match ctx.value_php_type(pairs)? {
-        PhpType::AssocArray { .. } => "__rt_strtr_hash",
-        PhpType::Array(_) => "__rt_strtr_array",
+    let (helper, mixed_values) = match ctx.value_php_type(pairs)? {
+        PhpType::AssocArray { value, .. } => {
+            ("__rt_strtr_hash", value.codegen_repr() == PhpType::Mixed)
+        }
+        PhpType::Array(value) => {
+            ("__rt_strtr_array", value.codegen_repr() == PhpType::Mixed)
+        }
         _ => return lower_strtr_pairwise(ctx, inst),
     };
     match ctx.emitter.target.arch {
@@ -617,6 +653,7 @@ pub(crate) fn lower_strtr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the subject while materializing the replacement pairs
             ctx.load_value_to_result(pairs)?;
             ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the subject into the primary runtime argument registers
+            abi::emit_load_int_immediate(ctx.emitter, "x3", i64::from(mixed_values));
         }
         Arch::X86_64 => {
             load_string_arg_to_regs(ctx, inst, 0, "strtr", "rax", "rdx")?;
@@ -624,6 +661,7 @@ pub(crate) fn lower_strtr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             ctx.load_value_to_result(pairs)?;
             ctx.emitter.instruction("mov rdi, rax");                            // pass the replacement pairs to the runtime helper
             abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", i64::from(mixed_values));
         }
     }
     abi::emit_call_label(ctx.emitter, helper);

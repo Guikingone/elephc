@@ -164,11 +164,11 @@ pub(super) fn plan_call_arg_temp_cleanups(
             continue;
         }
         let source_ty = ctx.raw_value_php_type(*value)?;
-        if direct_call_arg_creates_mixed_temp(&source_ty, param_ty) {
+        if let Some(cleanup_ty) = direct_call_arg_temp_cleanup_type(&source_ty, param_ty) {
             cleanups.push(CallArgTempCleanup {
                 param_index: index,
                 offset: cleanups.len() * 16,
-                ty: PhpType::Mixed,
+                ty: cleanup_ty,
             });
         }
     }
@@ -179,6 +179,27 @@ pub(super) fn plan_call_arg_temp_cleanups(
 pub(super) fn direct_call_arg_creates_mixed_temp(source_ty: &PhpType, param_ty: &PhpType) -> bool {
     matches!(param_ty.codegen_repr(), PhpType::Mixed)
         && !matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+}
+
+/// Returns the caller-owned temporary type created while adapting one direct-call argument.
+pub(super) fn direct_call_arg_temp_cleanup_type(
+    source_ty: &PhpType,
+    param_ty: &PhpType,
+) -> Option<PhpType> {
+    if direct_call_arg_creates_mixed_temp(source_ty, param_ty) {
+        return Some(PhpType::Mixed);
+    }
+    if matches!(
+        param_ty.codegen_repr(),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+    ) && matches!(
+        source_ty.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_) | PhpType::AssocArray { .. }
+    )
+    {
+        return Some(PhpType::Array(Box::new(PhpType::Mixed)));
+    }
+    None
 }
 
 /// Saves the current pointer result into the reserved call-argument cleanup area.
@@ -302,4 +323,3 @@ pub(super) fn emit_loaded_assoc_array_to_mixed(ctx: &mut FunctionContext<'_>) {
     }
     abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
 }
-

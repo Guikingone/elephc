@@ -366,6 +366,121 @@ pub(super) fn builtin_reflection_class_new_instance_without_constructor_method()
     }
 }
 
+/// Returns a public `ReflectionClass::newLazyGhost()` method backed by eager initialization.
+///
+/// The AOT object model does not defer property access, so it allocates without invoking the
+/// target constructor, calls the initializer once with that fresh object, and returns the
+/// initialized instance. This preserves initializer and constructor-bypass semantics while
+/// making the object immediately usable through the ordinary runtime object representation.
+pub(super) fn builtin_reflection_class_new_lazy_ghost_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let instance = variable_expr("instance", dummy_span);
+    ClassMethod {
+        name: "newLazyGhost".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            (
+                "initializer".to_string(),
+                Some(TypeExpr::Named(Name::unqualified("Closure"))),
+                None,
+                false,
+            ),
+            (
+                "options".to_string(),
+                Some(TypeExpr::Int),
+                int_lit(0),
+                false,
+            ),
+        ],
+        param_attributes: vec![Vec::new(), Vec::new()],
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(object_type()),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::Assign {
+                    name: "instance".to_string(),
+                    value: method_call_expr(
+                        Expr::new(ExprKind::This, dummy_span),
+                        "newInstanceWithoutConstructor",
+                        Vec::new(),
+                        dummy_span,
+                    ),
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::ExprStmt(Expr::new(
+                    ExprKind::ExprCall {
+                        callee: Box::new(variable_expr("initializer", dummy_span)),
+                        args: vec![instance.clone()],
+                    },
+                    dummy_span,
+                )),
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(Some(instance)), dummy_span),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass::newLazyProxy()` method backed by eager initialization.
+///
+/// The AOT object model has no deferred proxy boundary. Calling the supplied factory immediately
+/// preserves its object-producing contract and returns the ordinary object representation that
+/// subsequent property and method operations already understand.
+pub(super) fn builtin_reflection_class_new_lazy_proxy_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "newLazyProxy".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            (
+                "factory".to_string(),
+                Some(TypeExpr::Named(Name::unqualified("Closure"))),
+                None,
+                false,
+            ),
+            (
+                "options".to_string(),
+                Some(TypeExpr::Int),
+                int_lit(0),
+                false,
+            ),
+        ],
+        param_attributes: vec![Vec::new(), Vec::new()],
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(object_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::ExprCall {
+                    callee: Box::new(variable_expr("factory", dummy_span)),
+                    args: Vec::new(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Builds `ReflectionParameter::isDefaultValueConstant()` over retained default metadata.
 pub(super) fn builtin_reflection_parameter_is_default_value_constant_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();

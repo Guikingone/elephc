@@ -140,6 +140,24 @@ echo $o->x;
     assert_eq!(out, "7");
 }
 
+/// Verifies planned dynamic construction keeps the class-name value alive while constructor
+/// arguments mutate the associative array from which that class name was read.
+#[test]
+fn test_dynamic_instantiation_keeps_class_name_alive_across_argument_mutation() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeFactory {
+    public function __construct($options) { echo $options['project_dir']; }
+}
+$state = ['runtime' => 'RuntimeFactory', 'options' => []];
+echo 'before|';
+$runtime = new $state['runtime']($state['options'] += ['project_dir' => 'ctor']);
+echo '|after';
+"#,
+    );
+    assert_eq!(out, "before|ctor|after");
+}
+
 /// Verifies that dynamic instantiation uses SPL-specific runtime storage initialization.
 #[test]
 fn test_class_dynamic_instantiation_uses_spl_storage() {
@@ -172,6 +190,23 @@ echo gettype($o) . ":" . $o->x;
 "#,
     );
     assert_eq!(out, "object:12");
+}
+
+/// Verifies dynamic allocation resolves a global constant used by an instance-property default.
+#[test]
+fn test_dynamic_instantiation_resolves_global_constant_property_default() {
+    let out = compile_and_run(
+        r#"<?php
+const DYNAMIC_DEFAULT_VALUE = 3;
+class DynamicDefaultValue {
+    public int $value = DYNAMIC_DEFAULT_VALUE;
+}
+$class = "DynamicDefaultValue";
+$object = new $class();
+echo $object->value;
+"#,
+    );
+    assert_eq!(out, "3");
 }
 
 /// Verifies `new ClassName();` is valid as a standalone expression statement and preserves

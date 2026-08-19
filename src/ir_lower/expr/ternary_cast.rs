@@ -40,14 +40,30 @@ pub(super) fn lower_ternary(
 
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    store_expr_into_temp(ctx, &temp_name, result_type.clone(), then_expr, expr.span);
+    store_ternary_branch(
+        ctx,
+        condition,
+        true,
+        &temp_name,
+        result_type.clone(),
+        then_expr,
+        expr.span,
+    );
     let then_reachable = !ctx.builder.insertion_block_is_terminated();
     let then_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    store_expr_into_temp(ctx, &temp_name, result_type, else_expr, expr.span);
+    store_ternary_branch(
+        ctx,
+        condition,
+        false,
+        &temp_name,
+        result_type,
+        else_expr,
+        expr.span,
+    );
     let else_reachable = !ctx.builder.insertion_block_is_terminated();
     let else_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
@@ -61,6 +77,34 @@ pub(super) fn lower_ternary(
         else_reachable,
     ));
     take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Stores one ternary arm while keeping its condition-derived nominal fact branch-local.
+#[allow(clippy::too_many_arguments)]
+fn store_ternary_branch(
+    ctx: &mut LoweringContext<'_, '_>,
+    condition: &Expr,
+    branch_matches: bool,
+    temp_name: &str,
+    result_type: PhpType,
+    branch_expr: &Expr,
+    span: Span,
+) {
+    let narrowing = crate::ir_lower::expr::instanceof_branch_local_type(
+        ctx,
+        condition,
+        branch_matches,
+    );
+    let previous = narrowing
+        .as_ref()
+        .map(|(name, _)| (name.clone(), ctx.local_type(name)));
+    if let Some((name, ty)) = narrowing {
+        ctx.set_local_logical_type(&name, ty);
+    }
+    store_expr_into_temp(ctx, temp_name, result_type, branch_expr, span);
+    if let Some((name, ty)) = previous {
+        ctx.set_local_logical_type(&name, ty);
+    }
 }
 
 /// Lowers a cast expression.

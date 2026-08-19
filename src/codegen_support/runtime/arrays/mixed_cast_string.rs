@@ -1,12 +1,13 @@
 //! Purpose:
-//! Emits the `__rt_mixed_cast_string`, `__rt_mixed_unbox` runtime helper assembly for mixed cast string.
+//! Emits boxed and inline-value runtime helpers for PHP string coercion.
 //! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
 //!
 //! Key details:
-//! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
+//! - `__rt_mixed_cast_string` unboxes a cell while `__rt_value_cast_string` accepts the runtime
+//!   tag and two payload words directly; both share one coercion dispatch and ownership contract.
 //! - OWNERSHIP OF THE RESULT IS PER-TAG, and every caller already depends on the split:
 //!   tag 1 (string) is the ONLY arm that allocates — `__rt_str_persist` hands back a fresh
 //!   `__rt_heap_alloc` block the caller owns. Tags 0 (int), 2 (float), 3-true (bool) and 9
@@ -45,6 +46,14 @@ pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish the helper stack frame
     emitter.instruction("bl __rt_mixed_unbox");                                 // x0=tag, x1=value_lo, x2=value_hi for the boxed payload
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the wrapper frame before tail-calling the shared helper atom
+    emitter.instruction("add sp, sp, #32");                                     // release the wrapper frame so the shared helper owns its own frame
+    emitter.instruction("b __rt_value_cast_string");                            // tail-call through a global symbol so dead stripping retains the helper atom
+
+    emitter.label_global("__rt_value_cast_string");
+    emitter.instruction("sub sp, sp, #32");                                     // allocate the same helper frame for an inline tag/payload triple
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the inline-value helper stack frame
     emitter.instruction("cmp x0, #0");                                          // does the mixed payload hold an int?
     emitter.instruction("b.eq __rt_mixed_cast_string_from_int");                // ints cast through itoa
     emitter.instruction("cmp x0, #1");                                          // does the mixed payload already hold a string?
@@ -107,6 +116,12 @@ fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while mixed string casting uses nested helpers
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the helper
     emitter.instruction("call __rt_mixed_unbox");                               // rax=tag, rdi=value_lo, rdx=value_hi for the boxed payload
+    emitter.instruction("pop rbp");                                             // restore the wrapper frame before tail-calling the shared helper atom
+    emitter.instruction("jmp __rt_value_cast_string");                          // tail-call through a global symbol so section GC retains the helper
+
+    emitter.label_global("__rt_value_cast_string");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer for inline tag/payload coercion
+    emitter.instruction("mov rbp, rsp");                                        // establish the inline-value helper frame
     emitter.instruction("cmp rax, 0");                                          // does the mixed payload hold an int?
     emitter.instruction("je __rt_mixed_cast_string_from_int");                  // ints cast through itoa
     emitter.instruction("cmp rax, 1");                                          // does the mixed payload already hold a string?
@@ -186,7 +201,13 @@ mod tests {
         assert!(asm.contains("__rt_mixed_cast_string_from_resource:\n"), "{asm}");
         assert!(asm.contains("bl __rt_resource_to_string"), "{asm}");
         assert_eq!(asm.matches("bl __rt_resource_to_string").count(), 1, "{asm}");
-        assert_eq!(asm.matches("sub sp, sp, #32").count(), 1, "{asm}");
+        assert!(asm.contains("__rt_value_cast_string:\n"), "{asm}");
+        assert!(
+            asm.contains("add sp, sp, #32\n    b __rt_value_cast_string\n"),
+            "the boxed wrapper must leave its atom through the global helper symbol:\n{asm}"
+        );
+        assert!(!asm.contains("__rt_value_cast_string_dispatch"), "{asm}");
+        assert_eq!(asm.matches("sub sp, sp, #32").count(), 2, "{asm}");
     }
 
     /// Pins the x86_64 tag-9 arm, the half a comparable fix silently lost before: the
@@ -204,8 +225,14 @@ mod tests {
         assert!(asm.contains("mov rax, rdi"), "{asm}");
         assert!(asm.contains("call __rt_resource_to_string"), "{asm}");
         assert_eq!(asm.matches("call __rt_resource_to_string").count(), 1, "{asm}");
-        assert_eq!(asm.matches("push rbp").count(), 1, "{asm}");
-        assert_eq!(asm.matches("pop rbp").count(), 1, "{asm}");
+        assert!(asm.contains("__rt_value_cast_string:\n"), "{asm}");
+        assert!(
+            asm.contains("pop rbp\n    jmp __rt_value_cast_string\n"),
+            "the boxed wrapper must leave its section through the global helper symbol:\n{asm}"
+        );
+        assert!(!asm.contains("__rt_value_cast_string_dispatch"), "{asm}");
+        assert_eq!(asm.matches("push rbp").count(), 2, "{asm}");
+        assert_eq!(asm.matches("pop rbp").count(), 2, "{asm}");
     }
 
     /// Pins the OWNERSHIP contract of the resource arm on both targets: it must return

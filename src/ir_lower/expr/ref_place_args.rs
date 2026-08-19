@@ -37,9 +37,8 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 
 use super::{
-    call_signature, is_spread_arg, lower_expr, lower_function_call,
-    lower_non_local_assignment_write, normalize_value_php_type, source_prefers_extension_builtin,
-    static_property_result_type,
+    call_signature, lower_expr, lower_function_call, lower_non_local_assignment_write,
+    normalize_value_php_type, source_prefers_extension_builtin, static_property_result_type,
 };
 
 /// One by-reference argument rewritten into a hidden temporary.
@@ -87,17 +86,12 @@ pub(super) fn prepare_ref_place_args(
     if !sig.ref_params.iter().any(|is_ref| *is_ref) {
         return None;
     }
-    if args.iter().any(is_spread_arg) {
-        // A spread cannot be split into per-parameter places here; PHP also rejects spreading
-        // into a by-reference parameter, and the checker already reports that.
-        return None;
-    }
     let rewrite_indices: Vec<usize> = args
         .iter()
         .enumerate()
         .filter(|(index, arg)| {
             ref_param_binding(sig, *index, arg).is_some_and(|(param_index, place)| {
-                is_array_place(ctx, place)
+                is_rewritable_non_local_ref_place(ctx, place)
                     || declared_local_ref_needs_adapter(ctx, sig, param_index, place)
             })
         })
@@ -274,19 +268,22 @@ fn declared_local_ref_needs_adapter(
         && !matches!(expected, PhpType::Mixed | PhpType::Union(_))
 }
 
-/// Returns whether a by-reference argument is a non-local place holding array storage.
+/// Returns whether a by-reference argument is a non-local mutable container place.
 ///
 /// Plain locals are excluded because the existing lowering already writes the separated array
-/// back to their frame slot. Scalar places are excluded so builtins that re-type their
-/// by-reference argument keep their current lowering and diagnostics.
-fn is_array_place(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
+/// back to their frame slot. Gradual property and element values are included because their
+/// runtime array shape is intentionally hidden behind `Mixed` until the mutator validates it.
+fn is_rewritable_non_local_ref_place(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
     if !is_candidate_place_shape(arg) {
         return false;
     }
     static_place_type(ctx, arg).is_some_and(|php_type| {
         matches!(
             php_type.codegen_repr(),
-            PhpType::Array(_) | PhpType::AssocArray { .. }
+            PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Mixed
+                | PhpType::Union(_)
         )
     })
 }

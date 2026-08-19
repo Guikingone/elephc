@@ -206,7 +206,10 @@ impl Checker {
                 ),
             ));
         };
-        if !class_info
+        let builtin_throwable_virtual_property = class_name == "Exception"
+            && matches!(property_name, "file" | "line" | "trace");
+        if !builtin_throwable_virtual_property
+            && !class_info
             .properties
             .iter()
             .any(|(name, _)| name == property_name)

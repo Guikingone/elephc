@@ -138,6 +138,47 @@ fn is_stable_place_receiver(expr: &Expr) -> bool {
     }
 }
 
+/// Returns one flag per regular parameter indicating that the shared planner
+/// filled the slot from its declaration default rather than a caller expression.
+fn planned_omitted_default_slots(
+    sig: &FunctionSig,
+    args: &[Expr],
+    span: crate::span::Span,
+    callee_desc: &str,
+    env: &TypeEnv,
+) -> Result<Vec<bool>, CompileError> {
+    let assoc_spreads = assoc_spread_sources(args, env);
+    let allow_unknown_named_variadic = !crate::func_args::sig_collects_surplus_args(sig);
+    let plan = call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+        sig,
+        args,
+        span,
+        call_args::regular_param_count(sig),
+        false,
+        allow_unknown_named_variadic,
+        &assoc_spreads,
+    )
+    .map_err(|error| call_arg_plan_error(sig, callee_desc, error))?;
+    Ok(plan
+        .regular_args
+        .iter()
+        .map(|arg| matches!(arg, call_args::PlannedRegularArg::Default(_)))
+        .collect())
+}
+
+/// Returns whether a normalized slot still carries the exact declaration
+/// default inserted by an earlier planner pass.
+fn is_injected_declared_default(
+    sig: &FunctionSig,
+    param_idx: usize,
+    arg: &Expr,
+) -> bool {
+    sig.defaults
+        .get(param_idx)
+        .and_then(|default| default.as_ref())
+        .is_some_and(|default| default.span == arg.span && default == arg)
+}
+
 impl Checker {
     /// Enforces PHP's syntactic "no argument unpacking after named arguments"
     /// rule on a call surface whose callee is not resolvable at compile time
@@ -374,7 +415,7 @@ impl Checker {
         callee_desc: &str,
         owner_class: &str,
     ) -> Result<PhpType, CompileError> {
-        let coercive = self.class_is_user_declared(owner_class);
+        let coercive = self.class_supports_coercive_param_binding(owner_class);
         self.check_known_callable_call_with_options(
             sig,
             args,
@@ -397,7 +438,7 @@ impl Checker {
         callee_desc: &str,
         owner_class: &str,
     ) -> Result<PhpType, CompileError> {
-        let coercive = self.class_is_user_declared(owner_class);
+        let coercive = self.class_supports_coercive_param_binding(owner_class);
         self.check_known_callable_call_with_options(
             sig,
             args,
@@ -418,6 +459,15 @@ impl Checker {
         self.classes
             .get(class_name)
             .is_some_and(|info| info.declaration_span != crate::span::Span::dummy())
+    }
+
+    /// Returns whether ordinary EIR argument lowering can apply PHP scalar parameter coercions.
+    fn class_supports_coercive_param_binding(&self, class_name: &str) -> bool {
+        self.class_is_user_declared(class_name)
+            || matches!(
+                class_name.trim_start_matches('\\'),
+                "DateTime" | "DateTimeImmutable"
+            )
     }
 
     /// Validates a known callable call while allowing spread arguments for by-reference
@@ -455,6 +505,8 @@ impl Checker {
         allow_by_ref_spread: bool,
         coercive_param_binding: bool,
     ) -> Result<PhpType, CompileError> {
+        let omitted_default_slots =
+            planned_omitted_default_slots(sig, args, span, callee_desc, caller_env)?;
         let normalized_args = self.normalize_named_call_args(sig, args, span, callee_desc, caller_env)?;
         let args = normalized_args.as_slice();
         let effective_arg_count = args
@@ -524,7 +576,13 @@ impl Checker {
                 continue;
             }
             if param_idx < regular_param_count {
+                let omitted_default = omitted_default_slots
+                    .get(param_idx)
+                    .copied()
+                    .unwrap_or(false)
+                    || is_injected_declared_default(sig, param_idx, arg);
                 if sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                    && !omitted_default
                     && !self.is_by_ref_argument_lvalue(arg, caller_env)?
                 {
                     let param_name = sig
@@ -543,6 +601,7 @@ impl Checker {
                 if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
                     if sig.declared_params.get(param_idx).copied().unwrap_or(false)
                         && sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                        && !omitted_default
                     {
                         self.require_boxed_by_ref_storage(
                             expected_ty,
@@ -577,17 +636,45 @@ impl Checker {
                             sig.ref_params.get(param_idx).copied().unwrap_or(false),
                         )?;
                     } else {
-                        self.require_compatible_arg_type(
+                        let declared_value_param = sig
+                            .declared_params
+                            .get(param_idx)
+                            .copied()
+                            .unwrap_or(false)
+                            && !sig.ref_params.get(param_idx).copied().unwrap_or(false);
+                        let has_runtime_guard = crate::types::param_binding::object_requires_runtime_nominal_guard(
                             expected_ty,
                             &actual_ty,
-                            arg.span,
-                            &format!("{} parameter ${}", callee_desc, param_name),
-                        )?;
+                        ) || crate::types::param_binding::nullable_int_requires_runtime_param_guard(
+                            expected_ty,
+                            &actual_ty,
+                        );
+                        if !declared_value_param || !has_runtime_guard
+                        {
+                            self.require_compatible_arg_type(
+                                expected_ty,
+                                &actual_ty,
+                                arg.span,
+                                &format!("{} parameter ${}", callee_desc, param_name),
+                            )?;
+                        }
                     }
                 }
-            } else if let (Some(vname), Some(expected_ty)) =
-                (sig.variadic.as_ref(), variadic_elem_ty.as_ref())
-            {
+            } else if let Some(vname) = sig.variadic.as_ref() {
+                let variadic_by_ref = sig.ref_params.last().copied().unwrap_or(false);
+                if variadic_by_ref && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    return Err(CompileError::new(
+                        arg.span,
+                        &format!(
+                            "{} variadic parameter ${} must be passed a variable",
+                            callee_desc, vname
+                        ),
+                    ));
+                }
+                let Some(expected_ty) = variadic_elem_ty.as_ref() else {
+                    param_idx += 1;
+                    continue;
+                };
                 // The variadic occupies the last `declared_params` slot, so gating on it keeps
                 // the strict rejection off builtin variadics, whose registry-derived parameter
                 // types the checker does not otherwise consume.
@@ -600,7 +687,7 @@ impl Checker {
                         caller_env,
                         &format!("{} variadic parameter ${}", callee_desc, vname),
                         None,
-                        sig.ref_params.last().copied().unwrap_or(false),
+                        variadic_by_ref,
                     )?;
                 } else {
                     if declared_variadic {
