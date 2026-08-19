@@ -55,7 +55,7 @@ use std::collections::HashMap;
 
 /// The hidden first parameter every static method carries: the class the call NAMED,
 /// which is what `static` resolves to and what `self` deliberately does not.
-const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
+pub(super) const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
 
 /// Registers the object refcount runtime (`__rt_decref_object`) on `wm`.
 ///

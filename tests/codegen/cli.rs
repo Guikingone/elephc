@@ -9423,8 +9423,10 @@ echo $a->all(4,5,6), ",", Adder::stat(1,2), "\n";
 /// php-src 8.5.6's own output for `VARIADIC_SOURCE`.
 const VARIADIC_EXPECTED: &str = "6,0,7;a:,a:b,a:b|c;10,12;15,2\n";
 
-/// Static properties: defaults of every slottable type, reads, writes, a string reassigned
-/// and concatenated, and the shared storage an inherited static has.
+/// Static properties: defaults of every slottable type, reads, writes, a string reassigned and
+/// concatenated, the shared storage an inherited static has — and the three forms that used to be
+/// refused: `self::`, `static::`, and an ARRAY-typed slot whose default has to be built rather
+/// than stamped, since static data can carry bytes but not a heap block.
 #[test]
 fn test_cli_wasm_static_properties_match_php() {
     if Command::new("node").arg("--version").output().is_err() {
@@ -9493,6 +9495,29 @@ class Base {
     public static bool $on = false;
 }
 class Child extends Base {}
+class Scoped {
+    public static int $shared = 100;
+    public static array $log = [];
+    public static array $seeded = [3, 5];
+
+    // `self::` is a COMPILE-TIME scope: it names the class this method is written in.
+    public static function note(int $value): int {
+        self::$log[] = $value;
+        return count(self::$log);
+    }
+}
+class Late extends Scoped {
+    public static int $shared = 7;
+    public static array $log = [];
+
+    // `static::` is not: it names the CALLED class, so `Late::bump()` must reach Late's own
+    // slots and leave Scoped's alone.
+    public static function bump(): int {
+        static::$shared = static::$shared + 1;
+        static::$log[] = static::$shared;
+        return count(static::$log);
+    }
+}
 class Counter {
     public static int $n = 0;
     public static function tick(): int { Counter::$n = Counter::$n + 1; return Counter::$n; }
@@ -9512,11 +9537,17 @@ Counter::reset();
 echo Counter::$n, ";";
 Base::$ratio = Base::$ratio * 2;
 Base::$on = true;
-echo Base::$ratio, ",", Base::$on ? "y" : "n", "\n";
+echo Base::$ratio, ",", Base::$on ? "y" : "n", ";";
+echo count(Scoped::$log), ",", count(Scoped::$seeded), ",", Scoped::$seeded[1], ";";
+echo Scoped::note(11), ",", Scoped::note(22), ",", count(Scoped::$log), ";";
+echo Late::bump(), ",", Late::bump(), ",", Late::$shared, ",", Scoped::$shared, ";";
+Scoped::$seeded[1] = Scoped::$seeded[1] + 4;
+echo Scoped::$seeded[1], "\n";
 "##;
 
 /// php-src 8.5.6's own output for `STATIC_PROPERTY_SOURCE`.
-const STATIC_PROPERTY_EXPECTED: &str = "100,base,1.5,n;106,106;changed,changed;changed!;3;0;3,y\n";
+const STATIC_PROPERTY_EXPECTED: &str =
+    "100,base,1.5,n;106,106;changed,changed;changed!;3;0;3,y;0,2,5;1,2,2;1,2,9,100;9\n";
 
 /// The word-counter — `$c[$k] = $c[$k] + 1` — and a hash carrying one value of every tag.
 ///

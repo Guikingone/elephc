@@ -163,21 +163,136 @@ pub(super) fn slot_key(declaring_class: &str, property: &str) -> String {
 
 /// Resolves a `Class::$prop` label — the form the EIR interns for these ops — to its slot.
 ///
-/// `static::` is deliberately unresolved: late static binding picks the slot from the
-/// CALLED class at runtime, which this placement cannot express.
+/// `self::` and `parent::` are COMPILE-TIME scopes: they name the class the method is written
+/// in, and its parent, so `scope` — the enclosing function's own class — resolves them here.
+///
+/// `static::` is the one that cannot be: late static binding picks the slot from the CALLED
+/// class at run time, which one compile-time address cannot follow. `late_static_slots` is what
+/// serves that form, with a ladder over the classes the call could have named.
 pub(super) fn resolve_label<'a>(
     module: &Module,
     slots: &'a StaticSlots,
     label: &str,
+    scope: Option<&str>,
 ) -> Option<&'a StaticSlot> {
     let (receiver, property) = label.split_once("::")?;
     let receiver = receiver.trim_start_matches('\\');
-    if receiver == "static" || receiver == "self" || receiver == "parent" {
-        return None;
-    }
     let property = property.trim_start_matches('$');
-    let owner = declaring_class(&module.class_infos, receiver, property);
+    let receiver = match receiver {
+        "static" => return None,
+        "self" => scope?.to_string(),
+        "parent" => module
+            .class_infos
+            .get(scope?)
+            .and_then(|info| info.parent.clone())?,
+        named => named.to_string(),
+    };
+    let owner = declaring_class(&module.class_infos, &receiver, property);
     slots.get(&slot_key(&owner, property))
+}
+
+/// The class a function is written IN, which is what `self::` and `static::` resolve against.
+///
+/// The EIR names a method `Class::method`, so the scope is the part before the separator; a free
+/// function has none, and a `self::` inside one is a program the checker already rejected.
+pub(super) fn enclosing_class(function_name: &str) -> Option<&str> {
+    function_name.rsplit_once("::").map(|(class, _)| class)
+}
+
+/// Every slot a `static::$prop` could name, paired with the class id that selects it.
+///
+/// Late static binding resolves against the CALLED class, which every static call on this target
+/// already forwards as hidden parameter 0 — so the answer is a ladder over the classes that could
+/// have been called, exactly as `new static()` is. Sorted by class id so the emitted ladder is
+/// stable across builds.
+pub(super) fn late_static_slots<'a>(
+    module: &Module,
+    slots: &'a StaticSlots,
+    property: &str,
+    scope: &str,
+) -> Vec<(u64, &'a StaticSlot)> {
+    let mut arms: Vec<(u64, &StaticSlot)> = Vec::new();
+    for (class_name, info) in &module.class_infos {
+        if !class_is_scope_or_descendant(module, class_name, scope) {
+            continue;
+        }
+        let owner = declaring_class(&module.class_infos, class_name, property);
+        if let Some(slot) = slots.get(&slot_key(&owner, property)) {
+            arms.push((info.class_id, slot));
+        }
+    }
+    arms.sort_by_key(|(class_id, _)| *class_id);
+    arms.dedup_by_key(|(class_id, _)| *class_id);
+    arms
+}
+
+/// Whether `class_name` IS `scope` or inherits from it.
+fn class_is_scope_or_descendant(module: &Module, class_name: &str, scope: &str) -> bool {
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        if name == scope {
+            return true;
+        }
+        current = module
+            .class_infos
+            .get(&name)
+            .and_then(|info| info.parent.clone());
+    }
+    false
+}
+
+/// The container-typed static properties whose default has to be BUILT rather than stamped.
+///
+/// Static data can express bytes, and a scalar or a string literal is bytes — an array is not.
+/// Its slot therefore starts as a null pointer and `main`'s prologue puts a real container there,
+/// which is the earliest point any PHP code can observe it. The literal comes back whole, so a
+/// non-empty default like `public static $values = [3, 5];` carries its elements along.
+pub(super) fn container_static_defaults(
+    module: &Module,
+    slots: &StaticSlots,
+) -> Vec<(u32, PhpType, Option<LiteralDefaultValue>)> {
+    let mut initializers: Vec<(u32, PhpType, Option<LiteralDefaultValue>)> = Vec::new();
+    let mut seen: Vec<u32> = Vec::new();
+    let mut class_names: Vec<&String> = module.class_infos.keys().collect();
+    class_names.sort();
+    for class_name in class_names {
+        let Some(info) = module.class_infos.get(class_name) else {
+            continue;
+        };
+        for (index, (property, php_type)) in info.static_properties.iter().enumerate() {
+            if !matches!(
+                php_type.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. }
+            ) {
+                continue;
+            }
+            let owner = declaring_class(&module.class_infos, class_name, property);
+            let Some(slot) = slots.get(&slot_key(&owner, property)) else {
+                continue;
+            };
+            if seen.contains(&slot.address) {
+                continue;
+            }
+            seen.push(slot.address);
+            let literal = info
+                .static_defaults
+                .get(index)
+                .cloned()
+                .flatten()
+                .and_then(|default| {
+                    literal_default_value(
+                        &format!("static property ${property}"),
+                        php_type,
+                        &default.kind,
+                        "StaticInit",
+                    )
+                    .ok()
+                });
+            initializers.push((slot.address, php_type.codegen_repr(), literal));
+        }
+    }
+    initializers.sort_by_key(|(address, _, _)| *address);
+    initializers
 }
 
 /// Renders one static property's initial 16 bytes: `value_lo` then `value_hi`.
@@ -465,8 +580,8 @@ mod tests {
         let slots = plan_static_slots_for_audit(&module).expect("placement");
         assert_eq!(slots.len(), 1, "the inherited static must not be placed twice");
 
-        let from_parent = resolve_label(&module, &slots, "Parent::$n").expect("parent resolves");
-        let from_child = resolve_label(&module, &slots, "Child::$n").expect("child resolves");
+        let from_parent = resolve_label(&module, &slots, "Parent::$n", None).expect("parent resolves");
+        let from_child = resolve_label(&module, &slots, "Child::$n", None).expect("child resolves");
         assert_eq!(
             from_parent.address, from_child.address,
             "Child::$n and Parent::$n must be the same storage"
@@ -516,18 +631,37 @@ mod tests {
         );
     }
 
-    /// `static::`, `self::` and `parent::` pick their slot from the CALLED class at runtime,
-    /// which a compile-time address cannot follow — so they resolve to nothing and the audit
-    /// refuses them rather than binding the wrong storage.
+    /// `self::` and `parent::` are COMPILE-TIME scopes and resolve from the enclosing class;
+    /// `static::` is the one that cannot, because it picks its slot from the CALLED class at run
+    /// time, which a compile-time address cannot follow.
     #[test]
-    fn late_bound_receivers_do_not_resolve() {
+    fn self_and_parent_resolve_from_the_enclosing_class() {
         let module = inheriting_module();
         let slots = plan_static_slots_for_audit(&module).expect("placement");
-        for label in ["static::$n", "self::$n", "parent::$n"] {
-            assert!(
-                resolve_label(&module, &slots, label).is_none(),
-                "{label} must not bind a compile-time slot"
+        let shared = resolve_label(&module, &slots, "Parent::$n", None)
+            .expect("the declaring class resolves")
+            .address;
+        for (label, scope) in [("self::$n", "Child"), ("parent::$n", "Child")] {
+            let resolved = resolve_label(&module, &slots, label, Some(scope))
+                .unwrap_or_else(|| panic!("{label} in {scope} must resolve"));
+            assert_eq!(
+                resolved.address, shared,
+                "{label} must bind the one slot the hierarchy shares"
             );
         }
+        assert!(
+            resolve_label(&module, &slots, "static::$n", Some("Child")).is_none(),
+            "static:: must not bind a compile-time slot"
+        );
+    }
+
+    /// The late-bound ladder names one arm per class the call could have been made on, so the
+    /// slot is picked at run time from the id its caller forwarded.
+    #[test]
+    fn late_static_slots_cover_the_scope_and_its_descendants() {
+        let module = inheriting_module();
+        let slots = plan_static_slots_for_audit(&module).expect("placement");
+        let arms = late_static_slots(&module, &slots, "n", "Parent");
+        assert_eq!(arms.len(), 2, "Parent and Child each select a slot");
     }
 }

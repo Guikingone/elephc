@@ -214,12 +214,143 @@ pub fn lower_function(
     );
 
     if is_main {
+        emit_container_static_defaults(&mut ctx)?;
         emit_main_argc_argv_init(&mut ctx)?;
     }
 
     emit_dispatch_loop(&mut ctx)?;
 
     Ok(ctx.fb)
+}
+
+/// Builds the container-typed static properties' defaults, before any PHP code runs.
+///
+/// A scalar or string default is BYTES, and the slot carries them from static data with nothing
+/// to run. An array is not bytes: it needs a heap block, so its slot starts as a null pointer and
+/// this fills it in `main`'s prologue — the earliest point at which any PHP code could observe
+/// it, which is what makes the two indistinguishable from the outside.
+///
+/// The elements of a non-empty default (`public static $values = [3, 5];`) go in here too, in
+/// source order, through the same append the compiled `$a[] = ...` uses.
+fn emit_container_static_defaults(ctx: &mut FnCtx) -> Result<()> {
+    for (address, php_type, literal) in
+        super::statics::container_static_defaults(ctx.module, ctx.static_slots)
+    {
+        let container = ctx.fresh_temp(ValType::I32);
+        match (&php_type, &literal) {
+            // An indexed default, empty or not. The element list decides the slot width the
+            // array is allocated at, the same choice `array_new` makes at a literal.
+            (PhpType::Array(element_type), _) => {
+                let element_type = element_type.codegen_repr();
+                let elements: &[crate::codegen::LiteralArrayElement] = match &literal {
+                    Some(crate::codegen::LiteralDefaultValue::Array { elements, .. }) => elements,
+                    _ => &[],
+                };
+                let boxed = element_type == PhpType::Mixed;
+                let stride = if boxed || element_type == PhpType::Str { 16 } else { 8 };
+                ctx.fb.ins(
+                    &format!(
+                        "(local.set {container} (call $__rt_array_new (i64.const {}) (i64.const {stride})))",
+                        elements.len()
+                    ),
+                    "the static array default's storage",
+                );
+                for element in elements {
+                    emit_static_default_element(ctx, &container, element, boxed)?;
+                }
+            }
+            // An associative default. Only the empty one is rendered here: a keyed literal has
+            // its own key normalization, and starting it wrong is worse than refusing it.
+            (PhpType::AssocArray { value, .. }, _) => {
+                let value_tag = crate::codegen::runtime_value_tag(&value.codegen_repr());
+                ctx.fb.ins(
+                    &format!(
+                        "(local.set {container} (call $__rt_hash_new (i64.const 4) (i64.const {value_tag})))"
+                    ),
+                    "the static hash default's storage",
+                );
+                if matches!(
+                    literal,
+                    Some(crate::codegen::LiteralDefaultValue::AssocArray { .. })
+                ) {
+                    return Err(WasmError::Unsupported(
+                        "a non-empty associative static default on wasm32-wasi".to_string(),
+                    ));
+                }
+            }
+            _ => continue,
+        }
+        ctx.fb.ins(
+            &format!(
+                "(i64.store (i32.const {address}) (i64.extend_i32_u (local.get {container})))"
+            ),
+            "publish the built default into its slot",
+        );
+    }
+    Ok(())
+}
+
+/// Appends one literal element to a static array default under construction.
+///
+/// A `mixed`-element array holds CELLS, so the element is boxed and pushed by
+/// `__rt_array_push_mixed` — which records the pointer without retaining it, and the fresh cell's
+/// own reference is exactly the one the array should end up holding.
+fn emit_static_default_element(
+    ctx: &mut FnCtx,
+    container: &str,
+    element: &crate::codegen::LiteralArrayElement,
+    boxed: bool,
+) -> Result<()> {
+    use crate::codegen::LiteralArrayElement as Element;
+    if boxed {
+        let (tag, lo) = match element {
+            Element::Int(value) => (0, format!("(i64.const {value})")),
+            Element::Bool(value) => (3, format!("(i64.const {})", i64::from(*value))),
+            Element::Float(value) => (2, format!("(i64.const {})", value.to_bits() as i64)),
+            Element::Null => (8, "(i64.const 0)".to_string()),
+            Element::Str(_) => {
+                return Err(WasmError::Unsupported(
+                    "a string element in a static array default on wasm32-wasi".to_string(),
+                ))
+            }
+        };
+        ctx.fb.ins(
+            &format!(
+                "(local.set {container} (call $__rt_array_push_mixed (local.get {container}) (call $__rt_mixed_from_value (i64.const {tag}) {lo} (i64.const 0))))"
+            ),
+            "one boxed element of the static array default",
+        );
+        return Ok(());
+    }
+    match element {
+        Element::Int(value) => ctx.fb.ins(
+            &format!(
+                "(local.set {container} (call $__rt_array_push_int (local.get {container}) (i64.const {value})))"
+            ),
+            "one element of the static array default",
+        ),
+        Element::Bool(value) => ctx.fb.ins(
+            &format!(
+                "(local.set {container} (call $__rt_array_push_int (local.get {container}) (i64.const {})))",
+                i64::from(*value)
+            ),
+            "one element of the static array default",
+        ),
+        Element::Float(value) => ctx.fb.ins(
+            &format!(
+                "(local.set {container} (call $__rt_array_push_int (local.get {container}) (i64.const {})))",
+                value.to_bits() as i64
+            ),
+            "one element of the static array default (float bits)",
+        ),
+        _ => {
+            return Err(WasmError::Unsupported(
+                "a string or null element in a concrete static array default on wasm32-wasi"
+                    .to_string(),
+            ))
+        }
+    }
+    Ok(())
 }
 
 /// Initializes source `$argc` and `$argv` locals in a `main` function prologue.

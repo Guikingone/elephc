@@ -26,7 +26,7 @@ mod fibers;
 mod frame;
 mod function_variants;
 mod literal_defaults;
-pub(crate) use literal_defaults::{literal_default_value, LiteralDefaultValue};
+pub(crate) use literal_defaults::{literal_default_value, LiteralArrayElement, LiteralDefaultValue};
 mod local_analysis;
 pub(crate) mod lower_inst;
 mod lower_term;

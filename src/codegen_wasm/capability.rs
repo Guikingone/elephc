@@ -2823,12 +2823,62 @@ fn static_property_shape_issue(
         Some(slots) => slots,
         None => return Some("static property placement is unavailable".to_string()),
     };
-    let Some(slot) = super::statics::resolve_label(module, &slots, label) else {
-        return Some(format!("static property {label} has no lowered slot"));
+    let scope = super::statics::enclosing_class(&function.name);
+    // `static::$p` names one slot per class the call could have been made on, and picks between
+    // them at run time from the called-class id — so what the audit checks is that they exist and
+    // that they agree on a width, not that there is exactly one.
+    let php_type = match super::statics::resolve_label(module, &slots, label, scope) {
+        Some(slot) => slot.php_type.clone(),
+        None => {
+            let Some((_, property)) = label.split_once("::") else {
+                return Some(format!("malformed static property label {label}"));
+            };
+            let Some(scope) = scope else {
+                return Some(format!("static property {label} has no lowered slot"));
+            };
+            let arms = super::statics::late_static_slots(
+                module,
+                &slots,
+                property.trim_start_matches('$'),
+                scope,
+            );
+            let Some((_, first)) = arms.first() else {
+                return Some(format!("static property {label} has no lowered slot"));
+            };
+            if arms
+                .iter()
+                .any(|(_, slot)| slot.php_type.codegen_repr() != first.php_type.codegen_repr())
+            {
+                return Some(format!(
+                    "static property {label} has a different declared type per class, \
+                     which a late-bound access cannot read at one width"
+                ));
+            }
+            if !function
+                .locals
+                .iter()
+                .any(|local| local.name.as_deref() == Some("__elephc_called_class_id"))
+            {
+                return Some(format!(
+                    "static property {label} outside a function carrying the called-class id"
+                ));
+            }
+            first.php_type.clone()
+        }
     };
+    let slot = StaticSlotShape { php_type };
     if !matches!(
         slot.php_type.codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float | PhpType::Str
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Float
+            | PhpType::Str
+            // A container slot holds one pointer, which is the same 16-byte slot read at a
+            // different width — and the startup initializer is what puts a non-empty default
+            // there, since static data can express bytes but not a heap block.
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
     ) {
         return Some(format!(
             "static property {label} typed {:?} has no WASM slot shape",
@@ -4230,6 +4280,14 @@ fn by_ref_return_result_only_binds_a_reference(function: &Function, result: Valu
         bound = true;
     }
     bound
+}
+
+/// The only thing the static-property audit needs from a slot: the width it is read at.
+///
+/// A late-bound access names several slots and picks between them at run time, so there is no one
+/// address to carry — and the audit never wanted one.
+struct StaticSlotShape {
+    php_type: PhpType,
 }
 
 /// Validates the destination a call's result value is bound to.
