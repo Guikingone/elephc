@@ -270,6 +270,29 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_class_relations_and_countable_count_match_php",
             ][..],
         ),
+        // Pure computation over bytes already in memory, and php's parser is STRICTER than a
+        // tolerant reader — the strictness is the contract, not an implementation detail.
+        RuntimeFnId::Long2ip
+        | RuntimeFnId::Ip2long
+        | RuntimeFnId::InetNtop
+        | RuntimeFnId::InetPton => (
+            "codegen_wasm::inet",
+            "codegen_wasm::builtins::lower_direct_builtin",
+            &[
+                "codegen_wasm::builtins::tests::ipv4_conversions_answer_phps_strict_parser",
+                "codegen::cli::test_cli_wasm_ipv4_conversions_and_scalar_var_dump_match_php",
+            ][..],
+        ),
+        // SCALARS only: an array or object keeps refusing, because a half-implemented walk
+        // would print something that looks right.
+        RuntimeFnId::VarDump => (
+            "codegen_wasm::inet",
+            "codegen_wasm::builtins::lower_direct_builtin",
+            &[
+                "codegen_wasm::builtins::tests::var_dump_admits_only_provably_scalar_values",
+                "codegen::cli::test_cli_wasm_ipv4_conversions_and_scalar_var_dump_match_php",
+            ][..],
+        ),
         RuntimeFnId::Readline => (
             "codegen_wasm::runtime",
             "codegen_wasm::builtins::lower_direct_builtin",

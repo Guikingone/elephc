@@ -59,6 +59,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_STR_BASE64_DECODE);
     wm.add_raw_func(RT_BASE64_DECODE);
     super::urls::emit_url_runtime(wm);
+    super::inet::emit_inet_runtime(wm);
     wm.add_raw_func(RT_STR_CASE_EDGE);
     wm.add_raw_func(RT_STR_UCWORDS);
     wm.add_raw_func(RT_STR_CMP);
@@ -4368,6 +4369,11 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::PrintR
             | RuntimeFnId::Fwrite
             | RuntimeFnId::Fread
+            | RuntimeFnId::Long2ip
+            | RuntimeFnId::Ip2long
+            | RuntimeFnId::InetNtop
+            | RuntimeFnId::InetPton
+            | RuntimeFnId::VarDump
             | RuntimeFnId::Fgetc
             | RuntimeFnId::Readfile
             | RuntimeFnId::Flock
@@ -4469,6 +4475,18 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::ArrayIsList {
         return array_is_list_shape_issue(function, call);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::Long2ip
+            | RuntimeFnId::Ip2long
+            | RuntimeFnId::InetNtop
+            | RuntimeFnId::InetPton
+    ) {
+        return inet_shape_issue(module, function, call, target);
+    }
+    if target == RuntimeFnId::VarDump {
+        return var_dump_shape_issue(module, function, call);
     }
     if matches!(
         target,
@@ -4756,6 +4774,29 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::ArrayIsList {
         return lower_array_is_list(ctx, inst);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::Long2ip
+            | RuntimeFnId::Ip2long
+            | RuntimeFnId::InetNtop
+            | RuntimeFnId::InetPton
+    ) {
+        let helper = match target {
+            RuntimeFnId::Long2ip => "call $__rt_long2ip",
+            RuntimeFnId::Ip2long => "call $__rt_ip2long",
+            RuntimeFnId::InetNtop => "call $__rt_inet_ntop",
+            _ => "call $__rt_inet_pton",
+        };
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        ctx.fb.ins(helper, "IPv4 conversion");
+        return store_result(ctx, inst);
+    }
+    if target == RuntimeFnId::VarDump {
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        ctx.fb
+            .ins("call $__rt_var_dump", "php's typed dump of a scalar");
+        return store_result(ctx, inst);
     }
     if matches!(
         target,
@@ -5204,6 +5245,126 @@ fn lower_array_keys(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         ctx.fb.ins(helper, "keys of a list are its positions");
     }
     store_result(ctx, inst)
+}
+
+/// Validates one IPv4 conversion against the exact storage its helper reads and answers.
+///
+/// `long2ip` takes an int and answers a bare string; the other three take a string and answer a
+/// BOXED `int|false` / `string|false`, because php's failure value is a different type from the
+/// success value.
+fn inet_shape_issue(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    // The helpers write through the string runtime, which the command runtime owns.
+    if !module.functions.iter().any(|candidate| candidate.flags.is_main) {
+        return Some("the IPv4 conversions are part of the command runtime".to_string());
+    }
+    let [operand] = call.operands.as_slice() else {
+        return Some(format!(
+            "{target:?} expects one operand, got {}",
+            call.operands.len()
+        ));
+    };
+    let Some(value) = function.value(*operand) else {
+        return Some("operand is missing from the value table".to_string());
+    };
+    let want_int = target == RuntimeFnId::Long2ip;
+    let operand_ok = if want_int {
+        value.ir_type == IrType::I64 && value.php_type.codegen_repr() == PhpType::Int
+    } else {
+        value.ir_type == IrType::Str
+    };
+    if !operand_ok {
+        return Some(format!(
+            "{target:?} operand {:?}/{:?} is not the {} it reads",
+            value.ir_type,
+            value.php_type.codegen_repr(),
+            if want_int { "int" } else { "string" }
+        ));
+    }
+    if call.result.is_none() {
+        return Some(format!("{target:?} must materialize its result"));
+    }
+    let result_ok = if want_int {
+        call.result_type == IrType::Str
+    } else {
+        call.result_type == IrType::Heap(IrHeapKind::Mixed)
+    };
+    if !result_ok {
+        return Some(format!(
+            "{target:?} result {:?} is not the {} it answers",
+            call.result_type,
+            if want_int { "string" } else { "boxed union" }
+        ));
+    }
+    None
+}
+
+/// Validates `var_dump`, which this target serves for SCALARS only.
+///
+/// A float is refused too: php uses serialize_precision for `var_dump`, which is not the
+/// precision `echo` uses, so the existing formatter would print a different number.
+///
+/// php renders an array or an object with a recursive, indented walk that this backend has no
+/// property-walking machinery for. Printing something that merely looks close would be worse
+/// than refusing, so only a boxed value whose tag is provably scalar is admitted — and the tag
+/// is only provable when the EIR type says so.
+fn var_dump_shape_issue(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+) -> Option<String> {
+    if !module.functions.iter().any(|candidate| candidate.flags.is_main) {
+        return Some("var_dump writes through the command runtime".to_string());
+    }
+    let [operand] = call.operands.as_slice() else {
+        return Some(format!(
+            "var_dump of {} values is not supported on wasm32-wasi (one at a time)",
+            call.operands.len()
+        ));
+    };
+    let Some(value) = function.value(*operand) else {
+        return Some("operand is missing from the value table".to_string());
+    };
+    if value.ir_type != IrType::Heap(IrHeapKind::Mixed) {
+        return Some(format!(
+            "var_dump operand {:?}/{:?} is not a boxed value",
+            value.ir_type,
+            value.php_type.codegen_repr()
+        ));
+    }
+    // The UNNORMALIZED type, because `codegen_repr` collapses every union to `Mixed`: the two
+    // shapes this serves — `int|false` and `string|false` — would be indistinguishable from a
+    // genuine `mixed` after that collapse, and a genuine `mixed` must keep refusing.
+    if !php_type_is_dumpable_scalar(&value.php_type) {
+        return Some(format!(
+            "var_dump of {:?} on wasm32-wasi (only int/bool/string/null render here)",
+            value.php_type
+        ));
+    }
+    None
+}
+
+/// Whether every value this type can hold is one `__rt_var_dump` renders.
+///
+/// A union is dumpable only when EVERY arm is: `int|false` is, `int|array` is not.
+fn php_type_is_dumpable_scalar(php: &PhpType) -> bool {
+    match php {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::False
+        | PhpType::Str
+        | PhpType::Void => true,
+        PhpType::Union(arms) => !arms.is_empty() && arms.iter().all(php_type_is_dumpable_scalar),
+        // A named alias of a scalar still dumps as that scalar.
+        other if *other != other.codegen_repr() => {
+            php_type_is_dumpable_scalar(&other.codegen_repr())
+        }
+        _ => false,
+    }
 }
 
 /// Whether a runtime-call operand is a hash rather than an indexed array.
@@ -8967,6 +9128,73 @@ mod tests {
         }
         // Nothing to lay out when nothing calls one.
         assert!(class_relation_answer_strings(&module).is_empty());
+    }
+
+    /// The four IPv4 conversions are admitted with exactly the storage their helpers read.
+    ///
+    /// `long2ip` is the odd one: it takes an int and answers a BARE string, while the other
+    /// three answer a boxed union because php's failure value has a different type from the
+    /// success value. Getting that backwards would reinterpret a pointer as a length.
+    #[test]
+    fn ipv4_conversions_answer_phps_strict_parser() {
+        for target in [
+            RuntimeFnId::Long2ip,
+            RuntimeFnId::Ip2long,
+            RuntimeFnId::InetNtop,
+            RuntimeFnId::InetPton,
+        ] {
+            assert!(
+                is_direct_builtin(target),
+                "{target:?} must be audited as a direct builtin"
+            );
+            assert!(
+                super::super::capability::runtime_function_is_supported(target),
+                "{target:?} must be admitted"
+            );
+        }
+    }
+
+    /// `var_dump` admits a value only when EVERY type it can hold renders.
+    ///
+    /// `int|false` does — both arms are scalars — while a bare `mixed` does not, and neither
+    /// does a union with an array arm. The distinction has to be made on the UNNORMALIZED type:
+    /// `codegen_repr` collapses every union to `Mixed`, which would make `int|false`
+    /// indistinguishable from the `mixed` that must keep refusing.
+    #[test]
+    fn var_dump_admits_only_provably_scalar_values() {
+        assert!(
+            is_direct_builtin(RuntimeFnId::VarDump),
+            "var_dump must be audited as a direct builtin"
+        );
+        assert!(
+            super::super::capability::runtime_function_is_supported(RuntimeFnId::VarDump),
+            "var_dump must be admitted"
+        );
+        assert!(php_type_is_dumpable_scalar(&PhpType::Int));
+        assert!(php_type_is_dumpable_scalar(&PhpType::Str));
+        assert!(php_type_is_dumpable_scalar(&PhpType::Bool));
+        assert!(php_type_is_dumpable_scalar(&PhpType::Union(vec![
+            PhpType::Int,
+            PhpType::False
+        ])));
+        assert!(php_type_is_dumpable_scalar(&PhpType::Union(vec![
+            PhpType::Str,
+            PhpType::False
+        ])));
+
+        // A float is refused on purpose: php dumps it with serialize_precision, not the
+        // precision `echo` uses, so the existing formatter would print a different number.
+        assert!(!php_type_is_dumpable_scalar(&PhpType::Float));
+        assert!(!php_type_is_dumpable_scalar(&PhpType::Mixed));
+        assert!(!php_type_is_dumpable_scalar(&PhpType::Array(Box::new(
+            PhpType::Int
+        ))));
+        assert!(!php_type_is_dumpable_scalar(&PhpType::Union(vec![
+            PhpType::Int,
+            PhpType::Array(Box::new(PhpType::Int)),
+        ])));
+        // An empty union claims nothing, so it proves nothing.
+        assert!(!php_type_is_dumpable_scalar(&PhpType::Union(Vec::new())));
     }
 
     fn the_exists_family_answers_from_the_modules_own_declarations() {

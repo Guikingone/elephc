@@ -7911,6 +7911,13 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Fopen
         | RuntimeFnId::Fwrite
         | RuntimeFnId::Fread
+        // Pure computation over bytes already in memory: no WASI call is involved.
+        | RuntimeFnId::Long2ip
+        | RuntimeFnId::Ip2long
+        | RuntimeFnId::InetNtop
+        | RuntimeFnId::InetPton
+        // Scalars only; the shape check refuses every other tag.
+        | RuntimeFnId::VarDump
         | RuntimeFnId::Fgetc
         | RuntimeFnId::Readfile
         | RuntimeFnId::Flock
@@ -8226,7 +8233,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Tempnam
         | RuntimeFnId::Touch
         | RuntimeFnId::Umask
-        | RuntimeFnId::VarDump
         | RuntimeFnId::Vfprintf
         | RuntimeFnId::Acos
         | RuntimeFnId::Asin
@@ -8308,10 +8314,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::HashInit
         | RuntimeFnId::HashUpdate
         | RuntimeFnId::Htmlentities
-        | RuntimeFnId::InetNtop
-        | RuntimeFnId::InetPton
-        | RuntimeFnId::Ip2long
-        | RuntimeFnId::Long2ip
         | RuntimeFnId::MbEregMatch
         | RuntimeFnId::MbStrlen
         | RuntimeFnId::NumberFormat

@@ -18966,3 +18966,89 @@ unlink("greet.txt");
 unlink("locked.txt");
 echo "done\n";
 "##;
+
+/// The four IPv4 conversions and a scalar `var_dump` match php byte for byte.
+///
+/// `inet_pton("8.8.8.8")` is the one that matters most: its four bytes are all 0x08, which
+/// print as nothing visible. Only a byte comparison catches a length or content mistake there.
+#[test]
+fn test_cli_wasm_ipv4_conversions_and_scalar_var_dump_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_ipv4");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, IPV4_PHP).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the IPv4 conversions to WASM");
+    assert!(
+        output.status.success(),
+        "IPv4 compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true, preopens: { ".": "." } });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the IPv4 conversions under Node");
+    assert!(
+        run.status.success(),
+        "IPv4 conversions trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes, including the four unprintable 0x08 of inet_pton.
+    let mut expected: Vec<u8> = Vec::new();
+    expected.extend_from_slice(b"loopback:  127.0.0.1\n");
+    expected.extend_from_slice(b"private:   192.168.1.1\n");
+    expected.extend_from_slice(b"broadcast: 255.255.255.255\n");
+    expected.extend_from_slice(b"int(3232235777)\n");
+    expected.extend_from_slice(b"bool(false)\n");
+    expected.extend_from_slice(b"packed -> 10.0.0.1\n");
+    expected.extend_from_slice(b"string(4) \"");
+    expected.extend_from_slice(&[8u8, 8, 8, 8]);
+    expected.extend_from_slice(b"\"\n");
+    assert_eq!(run.stdout, expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// One call of each conversion, plus the parse php rejects.
+const IPV4_PHP: &str = r##"<?php
+echo "loopback:  " . long2ip(2130706433) . "\n";
+echo "private:   " . long2ip(3232235777) . "\n";
+echo "broadcast: " . long2ip(4294967295) . "\n";
+
+var_dump(ip2long("192.168.1.1"));
+var_dump(ip2long("not an address"));
+
+$packed = chr(10) . chr(0) . chr(0) . chr(1);
+echo "packed -> " . inet_ntop($packed) . "\n";
+
+var_dump(inet_pton("8.8.8.8"));
+"##;

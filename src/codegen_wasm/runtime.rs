@@ -89,6 +89,18 @@ const ERR_UNDEFINED_METHOD_SEPARATOR: &[u8] = b"::";
 const ERR_UNDEFINED_METHOD_SUFFIX: &[u8] = b"()\n";
 /// A call to a public function name whose body would have arrived from an include that never
 /// ran. The name is composed at RUNTIME because which variant is live is runtime state.
+/// `var_dump`'s fixed fragments. php writes the TYPE and, for a string, its BYTE LENGTH, so
+/// only the punctuation is fixed; the numbers are rendered at runtime.
+const DUMP_INT_PREFIX: &[u8] = b"int(";
+const DUMP_FLOAT_PREFIX: &[u8] = b"float(";
+const DUMP_STRING_PREFIX: &[u8] = b"string(";
+const DUMP_STRING_MIDDLE: &[u8] = b") \"";
+const DUMP_STRING_SUFFIX: &[u8] = b"\"\n";
+const DUMP_CLOSE: &[u8] = b")\n";
+const DUMP_TRUE: &[u8] = b"bool(true)\n";
+const DUMP_FALSE: &[u8] = b"bool(false)\n";
+const DUMP_NULL: &[u8] = b"NULL\n";
+
 /// The message of a `throw_error_value` that no frame can catch. The text after the prefix is
 /// composed at RUNTIME (it names the receiver's method, or the class php-src would report), so
 /// it arrives as a pointer/length pair rather than a baked literal.
@@ -316,6 +328,15 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_UNDEFINED_FUNCTION_SUFFIX.len() as u32
     + ERR_ERROR_VALUE_PREFIX.len() as u32
     + ERR_ERROR_VALUE_SUFFIX.len() as u32
+    + DUMP_INT_PREFIX.len() as u32
+    + DUMP_FLOAT_PREFIX.len() as u32
+    + DUMP_STRING_PREFIX.len() as u32
+    + DUMP_STRING_MIDDLE.len() as u32
+    + DUMP_STRING_SUFFIX.len() as u32
+    + DUMP_CLOSE.len() as u32
+    + DUMP_TRUE.len() as u32
+    + DUMP_FALSE.len() as u32
+    + DUMP_NULL.len() as u32
     + ERR_TOO_FEW_ARGS_PREFIX.len() as u32
     + ERR_TOO_FEW_ARGS_PASSED.len() as u32
     + ERR_TOO_FEW_ARGS_EXACTLY.len() as u32
@@ -1054,6 +1075,16 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         // Appended LAST for the same reason as every group above it.
         ERR_ERROR_VALUE_PREFIX,
         ERR_ERROR_VALUE_SUFFIX,
+        // Appended LAST for the same reason as every group above it.
+        DUMP_INT_PREFIX,
+        DUMP_FLOAT_PREFIX,
+        DUMP_STRING_PREFIX,
+        DUMP_STRING_MIDDLE,
+        DUMP_STRING_SUFFIX,
+        DUMP_CLOSE,
+        DUMP_TRUE,
+        DUMP_FALSE,
+        DUMP_NULL,
     ];
     let warning_messages = [
         WARN_UNDEFINED_ARRAY_KEY_PREFIX,
@@ -1199,6 +1230,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     wm.add_raw_func(&wat);
     emit_method_call_failure_runtime(wm, &method_offsets);
     emit_error_value_failure_runtime(wm, &method_offsets[21..23]);
+    super::inet::emit_var_dump_runtime(wm, &method_offsets[23..32]);
     emit_undefined_array_key_warning_runtime(wm, &warning_offsets[..17]);
     emit_return_coercion_runtime(wm, &warning_offsets[17..34], &method_offsets[2..11]);
     emit_property_on_null_warning_runtime(wm, &warning_offsets[34..36]);
@@ -1620,7 +1652,7 @@ fn emit_uninit_string_offset_warning_runtime(wm: &mut WatModule, offsets: &[(u32
 /// The helper composes the PHP-visible method name with the runtime Mixed tag,
 /// writes the diagnostic to stderr, and terminates with PHP's fatal status 255.
 fn emit_method_call_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
-    debug_assert_eq!(offsets.len(), 23);
+    debug_assert_eq!(offsets.len(), 32);
     let (prefix_ptr, prefix_len) = offsets[0];
     let (suffix_ptr, suffix_len) = offsets[1];
     let type_offsets = &offsets[2..11];
