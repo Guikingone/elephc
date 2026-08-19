@@ -849,6 +849,8 @@ pub(super) fn shape_predicates() -> Vec<ShapePredicate> {
         "callable_wrapper_issue",
         "callable_wrapper_signature_issue",
         "callable_descriptor_invoke_shape_issue",
+        "array_callable_argument_container_issue",
+        "throw_error_value_shape_issue",
         "closure_result_shape_issue",
         "iterator_alias_mutation_issue",
     ]

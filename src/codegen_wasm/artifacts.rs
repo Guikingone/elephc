@@ -165,9 +165,120 @@ pub fn assemble_and_validate(wat: &str) -> Result<Vec<u8>, WasmPublishError> {
         .validate_all(&bytes)
         .map_err(|error| {
             dump_rejected_wat(wat);
+            report_failing_function(&bytes, error.offset());
             WasmPublishError::Validate(error)
         })?;
     Ok(bytes)
+}
+
+/// Names the function whose body contains `offset`, on stderr, when `$ELEPHC_WAT_DUMP` is set.
+///
+/// The validator reports a BINARY offset, which the dumped `.wat` text cannot be searched for:
+/// finding the instruction meant counting code-section bodies by hand. Walking the name section
+/// turns the offset into the symbol a `grep` of the dump lands on directly.
+fn report_failing_function(bytes: &[u8], offset: usize) {
+    use wasmparser::{KnownCustom, Parser, Payload};
+
+    if std::env::var_os("ELEPHC_WAT_DUMP").is_none() {
+        return;
+    }
+    // Body ranges first, then the name map, because the two live in different sections and the
+    // code section is the one the offset falls in.
+    let mut bodies: Vec<(u32, std::ops::Range<usize>)> = Vec::new();
+    let mut index = 0u32;
+    let mut names: Vec<(u32, String)> = Vec::new();
+    let mut imported = 0u32;
+    for payload in Parser::new(0).parse_all(bytes).flatten() {
+        match payload {
+            Payload::ImportSection(reader) => {
+                // `Imports` is a GROUP in the compact encoding, so the flat per-import view is
+                // the one to count.
+                imported = reader
+                    .into_imports()
+                    .flatten()
+                    .filter(|import| matches!(import.ty, wasmparser::TypeRef::Func(_)))
+                    .count() as u32;
+            }
+            Payload::CodeSectionEntry(body) => {
+                bodies.push((index, body.range()));
+                index += 1;
+            }
+            Payload::CustomSection(section) => {
+                if let KnownCustom::Name(reader) = section.as_known() {
+                    for subsection in reader.into_iter().flatten() {
+                        if let wasmparser::Name::Function(map) = subsection {
+                            for naming in map.into_iter().flatten() {
+                                names.push((naming.index, naming.name.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some((body_index, range)) = bodies
+        .iter()
+        .find(|(_, range)| range.contains(&offset))
+        .cloned()
+    else {
+        eprintln!("elephc: validation offset {offset:#x} is outside every function body");
+        return;
+    };
+    // Code-section bodies are indexed after the imported functions.
+    let function_index = body_index + imported;
+    let name = names
+        .iter()
+        .find(|(candidate, _)| *candidate == function_index)
+        .map(|(_, name)| name.as_str())
+        .unwrap_or("<unnamed>");
+    eprintln!(
+        "elephc: validation failed inside ${name} (function #{function_index}, body {:#x}..{:#x})",
+        range.start, range.end
+    );
+    report_operator_context(bytes, &range, offset);
+}
+
+/// Prints the decoded operators leading up to `offset`, so the reported byte lands on an
+/// instruction rather than an address.
+///
+/// The `.wat` dump is the readable artifact, but a byte offset cannot be searched in it; the
+/// operator trail is what identifies WHICH of several identical-looking sequences is the bad
+/// one, and the count of preceding operators locates it in the text.
+fn report_operator_context(bytes: &[u8], range: &std::ops::Range<usize>, offset: usize) {
+    use wasmparser::{Parser, Payload};
+
+    const TRAIL: usize = 8;
+    for payload in Parser::new(0).parse_all(bytes).flatten() {
+        let Payload::CodeSectionEntry(body) = payload else {
+            continue;
+        };
+        if body.range() != *range {
+            continue;
+        }
+        let Ok(mut reader) = body.get_operators_reader() else {
+            return;
+        };
+        let mut trail: Vec<(usize, String)> = Vec::new();
+        let mut index = 0usize;
+        while !reader.eof() {
+            let position = reader.original_position();
+            let Ok(operator) = reader.read() else { break };
+            trail.push((index, format!("{operator:?}")));
+            if trail.len() > TRAIL {
+                trail.remove(0);
+            }
+            index += 1;
+            if position >= offset {
+                break;
+            }
+        }
+        eprintln!("elephc: last {} operators up to the failure:", trail.len());
+        for (position, operator) in trail {
+            eprintln!("  #{position}  {operator}");
+        }
+        return;
+    }
 }
 
 /// Writes the rejected text to `$ELEPHC_WAT_DUMP` so a stack-shape bug can be READ.

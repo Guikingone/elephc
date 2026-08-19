@@ -18652,3 +18652,99 @@ echo $n, "\n";
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A `[$object, "method"]` and a `["Class", "method"]` callable both dispatch under Node.
+///
+/// The two spellings reach codegen as DIFFERENT EIR types — `array<mixed>` of boxed cells and
+/// `array<string>` of inline `(ptr, len)` pairs — so they take separate ladders that must each
+/// read their own element layout. Reading the wrong one still produces a module that assembles
+/// and validates, which is why the assertion is php's byte-exact output rather than a WAT shape.
+#[test]
+fn test_cli_wasm_array_callables_dispatch_like_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_array_callable");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, ARRAY_CALLABLE_PHP).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the array callables to WASM");
+    assert!(
+        output.status.success(),
+        "array-callable compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true, preopens: { ".": "." } });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the array callables under Node");
+    assert!(
+        run.status.success(),
+        "array callables trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same file.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Hello, world\nLOUD!\ncommands: greet, shout\n",
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Two instance dispatches through one name variable, then a static one through a class-name
+/// variable. Two instance arms exercise the ladder rather than a single always-taken arm.
+const ARRAY_CALLABLE_PHP: &str = r##"<?php
+class Commands
+{
+    public function greet(string $who): string
+    {
+        return "Hello, " . $who;
+    }
+
+    public function shout(string $text): string
+    {
+        return strtoupper($text) . "!";
+    }
+
+    public static function help(): string
+    {
+        return "commands: greet, shout";
+    }
+}
+
+$handler = new Commands();
+foreach (["greet", "shout"] as $command) {
+    echo $handler->$command($command === "greet" ? "world" : "loud"), "\n";
+}
+
+$class = "Commands";
+echo $class::help(), "\n";
+"##;

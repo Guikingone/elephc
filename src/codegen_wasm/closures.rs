@@ -960,14 +960,21 @@ pub(super) fn lower_callable_descriptor_invoke(ctx: &mut FnCtx, inst: &Instructi
     let callable = operand(inst, 0)?;
     let args = operand(inst, 1)?;
 
-    // Only an I64 Callable descriptor (closure or FCC-Function) dispatches through the
-    // unified ladder. A string/array/object callable would not be an i64 descriptor and
-    // needs its own runtime selection (P7d2c/P7d2d).
+    // An ARRAY callable — PHP's `[$object, "method"]` / `["Class", "method"]` — carries no
+    // descriptor at all, so it dispatches through its own class-id/name ladder instead of the
+    // descriptor one, which would `i32.wrap_i64` an array pointer into nonsense.
     let callable_php = ctx.value_php_type(callable)?.codegen_repr();
+    if let Some(form) = super::callable_arrays::array_form(&callable_php) {
+        return lower_array_callable_invoke(ctx, inst, callable, args, form);
+    }
+    // Only an I64 Callable descriptor (closure or FCC-Function) dispatches through the
+    // unified ladder. A string/object callable would not be an i64 descriptor and
+    // needs its own runtime selection (P7d2c/P7d2d).
     if !matches!(callable_php, PhpType::Callable) {
         return Err(WasmError::Unsupported(format!(
             "callable_descriptor_invoke of a {:?} callable on wasm32-wasi (only Callable \
-             descriptors supported; string/array/object callables deferred: P7d2c/P7d2d)",
+             descriptors and array callables supported; string/object callables deferred: \
+             P7d2c/P7d2d)",
             callable_php
         )));
     }
@@ -1013,6 +1020,53 @@ pub(super) fn lower_callable_descriptor_invoke(ctx: &mut FnCtx, inst: &Instructi
         ctx.fb.ins(
             &format!("local.get {}", rcell),
             "void descriptor-invoke result cell (wrapper boxed null)",
+        );
+        ctx.fb.ins("call $__rt_decref_any", "release the void-result cell");
+    }
+    Ok(())
+}
+
+/// Lowers `callable_descriptor_invoke` whose callable operand is a PHP array callable.
+///
+/// Both operands are already the shapes the ladder reads — the callable array as built by
+/// `Op::ArrayPush`, and the positional `array<mixed>` argument buffer — so each is loaded as a
+/// single i32 pointer and handed to the form's ladder. Neither array is released here: the EIR
+/// releases what it built.
+fn lower_array_callable_invoke(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    callable: ValueId,
+    args: ValueId,
+    form: super::callable_arrays::ArrayCallableForm,
+) -> Result<()> {
+    let arrp = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(callable)?;
+    ctx.fb
+        .ins(&format!("local.set {}", arrp), "save callable array pointer");
+
+    let argsp = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(args)?;
+    ctx.fb
+        .ins(&format!("local.set {}", argsp), "save arg array pointer");
+
+    let rcell = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(
+        &format!(
+            "(local.set {} (call ${} (local.get {}) (local.get {})))",
+            rcell,
+            super::callable_arrays::ladder_symbol(form),
+            arrp,
+            argsp
+        ),
+        "dispatch through the array-callable ladder and capture the result cell",
+    );
+
+    if let Some(result) = inst.result {
+        unbox_result_cell(ctx, &rcell, result)?;
+    } else {
+        ctx.fb.ins(
+            &format!("local.get {}", rcell),
+            "void array-callable result cell (wrapper boxed null)",
         );
         ctx.fb.ins("call $__rt_decref_any", "release the void-result cell");
     }
@@ -1533,7 +1587,7 @@ const RT_ARRAY_WALK_CALLABLE: &str = r#"(func $__rt_array_walk_callable (param $
 /// A by-ref or variadic param is rejected with a clean diagnostic: the FCC arg buffer
 /// carries Mixed cells, not ref-cell pointers, and the variadic split has no wrapper
 /// support yet, so those FCC shapes are deferred rather than miscompiled.
-fn build_fcc_wrapper(
+pub(super) fn build_fcc_wrapper(
     wrapper_symbol: &str,
     f: &Function,
     hidden_class_id: Option<i64>,
@@ -1596,7 +1650,7 @@ fn build_fcc_wrapper(
 /// aligned at column 60, matching the hand-authored runtime/test WAT in this file. Lines
 /// that reach past column 58 get a single separating space before `;;`. Used by the
 /// closure wrapper / dispatch builders so the generated WAT stays readable.
-fn wat_ins(code: &str, comment: &str) -> String {
+pub(super) fn wat_ins(code: &str, comment: &str) -> String {
     let prefix = format!("  {}", code);
     let pad = if prefix.len() >= 58 { 1 } else { 58 - prefix.len() };
     format!("{}{};; {}\n", prefix, " ".repeat(pad), comment)
@@ -1608,7 +1662,7 @@ fn wat_ins(code: &str, comment: &str) -> String {
 /// A freshly allocated empty `array<mixed>` has length zero, 16-byte stride, and
 /// the allocator's initial value type 1 until the first Mixed push stamps type 7.
 /// That one empty state is valid; every non-empty wrapper input must be type 7.
-fn append_arg_array_guard(wat: &mut String, required_count: i64) {
+pub(super) fn append_arg_array_guard(wat: &mut String, required_count: i64) {
     wat.push_str("  ;; validate the complete argument-array header before reading a slot\n");
     wat.push_str(
         "  (if (i32.lt_u (local.get $args) (i32.add (global.get $__heap_base) (i32.const 16)))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-before-heap\n",
@@ -1942,7 +1996,7 @@ fn unbox_capture_wat(slot_off: usize, ir: &IrType, php: &PhpType) -> Result<Stri
 /// as an i32 cell pointer) to the body parameter's `IrType` / `PhpType`, pushing exactly
 /// the param's `WasmRepr::val_types` for the body call. Containers and callables are
 /// incref'd so the body's Owned parameter owns a fresh ref.
-fn unbox_arg_wat(ir: &IrType, php: &PhpType) -> Result<String> {
+pub(super) fn unbox_arg_wat(ir: &IrType, php: &PhpType) -> Result<String> {
     let mut s = String::new();
     match ir {
         IrType::I64 => {
@@ -2015,7 +2069,7 @@ fn unbox_arg_wat(ir: &IrType, php: &PhpType) -> Result<String> {
 /// `(result i32)` return value. A `Heap(Mixed)` result is forwarded directly (the body's
 /// cell is already a Mixed cell; ownership transfers, no re-box, no release). A void body
 /// boxes a null cell so the wrapper always returns a well-defined cell.
-fn box_result_wat(ir: &IrType, php: &PhpType) -> Result<String> {
+pub(super) fn box_result_wat(ir: &IrType, php: &PhpType) -> Result<String> {
     let mut s = String::new();
     match ir {
         IrType::I64 => {

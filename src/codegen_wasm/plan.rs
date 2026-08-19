@@ -585,6 +585,12 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // lowered (wrappers call `fn___eir_closure_<owner>_<n>`) but before `wm.render()`.
     closures::emit_closure_dispatch(&mut wm, module, &fcc_entries)?;
 
+    // The `[$object, "method"]` / `["Class", "method"]` ladders and their per-method wrappers.
+    // Runs after class methods are lowered (a wrapper calls the method body by symbol) and
+    // after `emit_closure_dispatch`, which defines the shared `__rt_fail_callable_dispatch`
+    // boundary every rejected arm falls into.
+    super::callable_arrays::emit_callable_array_dispatch(&mut wm, module)?;
+
     let wat = wm.render_checked().map_err(WasmError::InvalidModule)?;
     Ok(LoweredWasmPlan { wat })
 }

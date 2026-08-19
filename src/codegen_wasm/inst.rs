@@ -980,8 +980,29 @@ fn lower_try_pop_handler(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 ///
 /// The payload is the exception object's pointer, so a frame that catches can inspect
 /// the object to pick its matching clause. `throw` does not return, so nothing follows.
+///
+/// `ThrowErrorValue` is the exception: its operand is the error MESSAGE, not an object. Native
+/// builds an `Error` around it, which is not reproducible here — a program that never names
+/// `Error` carries no `ClassInfo` for it, so there is no class id or property layout to write.
+/// The uncatchable case is instead lowered to PHP's observable for an uncaught `Error`; the
+/// capability audit refuses the catchable one rather than let it escape a handler.
 fn lower_throw(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    ctx.emit_load_value(operand(inst, 0)?)?;
+    let value = operand(inst, 0)?;
+    if inst.op == Op::ThrowErrorValue && throw_error_value_is_message(ctx, value)? {
+        ctx.emit_load_value(value)?;
+        // The Str repr arrives as (ptr i32, len i64); the helper takes the length as i32.
+        ctx.fb.ins("i32.wrap_i64", "message length i64 -> i32");
+        ctx.fb.ins(
+            "call $__rt_fail_error_value",
+            "report the uncaught Error and exit 255",
+        );
+        ctx.fb.ins(
+            "unreachable",
+            "elephc-trap:post-noreturn:throw-error-value-fatal",
+        );
+        return Ok(());
+    }
+    ctx.emit_load_value(value)?;
     ctx.fb.ins(
         &format!(
             "i32.const {}",
@@ -1001,6 +1022,17 @@ fn lower_throw(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         "raise the PHP exception",
     );
     Ok(())
+}
+
+/// Whether a `ThrowErrorValue` operand is the message string rather than an exception object.
+///
+/// Both spellings exist in EIR: the dynamic-method-on-null path raises a composed message, while
+/// a re-raise carries the object it caught.
+pub(super) fn throw_error_value_is_message(ctx: &FnCtx, value: crate::ir::ValueId) -> Result<bool> {
+    Ok(ctx
+        .function
+        .value(value)
+        .is_some_and(|value| value.ir_type == IrType::Str))
 }
 
 /// Lowers `CatchCurrent`: reads the exception the landing pad published.

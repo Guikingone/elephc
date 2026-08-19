@@ -513,6 +513,7 @@ fn check_instruction_shape(
         Op::PropSet => property_set_shape_issue(module, function, inst),
         Op::Warn => array_offset_on_null_warning_shape_issue(module, inst),
         Op::ThrowError => method_call_on_null_error_shape_issue(module, inst),
+        Op::ThrowErrorValue => throw_error_value_shape_issue(module, function, inst),
         Op::StaticMethodCall => static_method_call_shape_issue(module, function, inst),
         Op::ClosureCall => closure_call_shape_issue(module, function, inst),
         Op::CallableDescriptorInvoke => {
@@ -535,8 +536,14 @@ fn check_instruction_shape(
     }
 }
 
-/// Returns whether a reachable EIR `Unreachable` immediately follows the one
-/// admitted static PHP fatal boundary.
+/// Returns whether a reachable EIR `Unreachable` immediately follows an
+/// admitted PHP fatal boundary.
+///
+/// Two proofs are accepted. `ThrowError` is the static fatal, and it is only a
+/// proof for the one message shape the backend renders. A raised exception —
+/// `ThrowException` or `ThrowErrorValue` — proves it structurally instead:
+/// `inst::lower_throw` ends the block with a WASM `throw`, which transfers
+/// control unconditionally, so nothing after it can execute.
 fn unreachable_has_noreturn_proof(
     module: &Module,
     function: &Function,
@@ -549,8 +556,59 @@ fn unreachable_has_noreturn_proof(
     else {
         return false;
     };
-    instruction.op == Op::ThrowError
-        && method_call_on_null_error_shape_issue(module, instruction).is_none()
+    match instruction.op {
+        Op::ThrowError => method_call_on_null_error_shape_issue(module, instruction).is_none(),
+        Op::ThrowException | Op::ThrowErrorValue => !instruction.operands.is_empty(),
+        _ => false,
+    }
+}
+
+/// Validates `ThrowErrorValue`, whose operand is an error MESSAGE rather than an object.
+///
+/// Native builds an `Error` around the message; wasm cannot, because a program that never names
+/// `Error` carries no `ClassInfo` for it — no class id, no property layout. What the wasm lowering
+/// reproduces instead is the observable of an UNCAUGHT one (PHP's stderr line and exit 255), so
+/// the form is only supported where nothing could have caught it.
+///
+/// The handler test is per-FUNCTION, not per-block: an EIR handler pushed in an enclosing block
+/// is live across the throw site, and a cheaper block-local test would call a catchable throw
+/// uncatchable. A function with any `TryPushHandler` is refused whole.
+fn throw_error_value_shape_issue(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+) -> Option<String> {
+    let Some(&message) = inst.operands.first() else {
+        return Some("throw_error_value expects a message operand".to_string());
+    };
+    let Some(value) = function.value(message) else {
+        return Some("throw_error_value message is missing from the value table".to_string());
+    };
+    // An object operand is a re-raise of something already built, which the tag carries directly.
+    if value.ir_type != IrType::Str {
+        return None;
+    }
+    if !module
+        .functions
+        .iter()
+        .any(|candidate| candidate.flags.is_main)
+    {
+        return Some(
+            "throw_error_value of a message requires the public WASI command runtime".to_string(),
+        );
+    }
+    if function
+        .instructions
+        .iter()
+        .any(|candidate| candidate.op == Op::TryPushHandler)
+    {
+        return Some(
+            "throw_error_value of a message inside a function with a catch handler on \
+             wasm32-wasi (the Error object it would bind is not built on this target)"
+                .to_string(),
+        );
+    }
+    None
 }
 
 /// Validates the only static `ThrowError` form supported by the public command
@@ -7325,6 +7383,17 @@ fn callable_descriptor_invoke_shape_issue(
             inst.operands.len()
         ));
     };
+    // A PHP ARRAY callable (`[$object, "method"]` / `["Class", "method"]`) is not a descriptor:
+    // it dispatches through the class-id/name ladder in `callable_arrays`, which validates its
+    // own operand shapes. What must be proven HERE is that the ladder can be built at all —
+    // that this module has candidate targets and that every one of them can be given a wrapper.
+    if let Some(form) = super::callable_arrays::invoke_form(owner, inst) {
+        if let Some(issue) = super::callable_arrays::unsupported_target_issue(module, form) {
+            return Some(issue);
+        }
+        return array_callable_argument_container_issue(owner, *arguments)
+            .or_else(|| closure_result_shape_issue(owner, inst));
+    }
     if !value_is_callable_descriptor(owner, *callable) {
         return Some("callable operand must be Callable/I64".to_string());
     }
@@ -7372,6 +7441,30 @@ fn callable_descriptor_invoke_shape_issue(
         return Some(issue);
     }
     None
+}
+
+/// Requires an array callable's positional buffer to be the indexed `array<mixed>` the
+/// per-method wrappers read, exactly as the descriptor path requires of its own buffer.
+fn array_callable_argument_container_issue(
+    owner: &Function,
+    arguments: ValueId,
+) -> Option<String> {
+    let Some(value) = owner.value(arguments) else {
+        return Some("argument container is missing from the value table".to_string());
+    };
+    let is_mixed_array = value.ir_type == IrType::Heap(IrHeapKind::Array)
+        && matches!(
+            value.php_type.codegen_repr(),
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+        );
+    if is_mixed_array {
+        return None;
+    }
+    Some(format!(
+        "array-callable argument container must be array<mixed>/Heap(Array), got {:?}/{:?}",
+        value.ir_type,
+        value.php_type.codegen_repr()
+    ))
 }
 
 /// Requires each wrapper-consumed argument to match its parameter exactly.

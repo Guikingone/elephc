@@ -89,6 +89,11 @@ const ERR_UNDEFINED_METHOD_SEPARATOR: &[u8] = b"::";
 const ERR_UNDEFINED_METHOD_SUFFIX: &[u8] = b"()\n";
 /// A call to a public function name whose body would have arrived from an include that never
 /// ran. The name is composed at RUNTIME because which variant is live is runtime state.
+/// The message of a `throw_error_value` that no frame can catch. The text after the prefix is
+/// composed at RUNTIME (it names the receiver's method, or the class php-src would report), so
+/// it arrives as a pointer/length pair rather than a baked literal.
+const ERR_ERROR_VALUE_PREFIX: &[u8] = b"PHP Fatal error: Uncaught Error: ";
+const ERR_ERROR_VALUE_SUFFIX: &[u8] = b"\n";
 const ERR_UNDEFINED_FUNCTION_PREFIX: &[u8] =
     b"PHP Fatal error: Uncaught Error: Call to undefined function ";
 const ERR_UNDEFINED_FUNCTION_SUFFIX: &[u8] = b"()\n";
@@ -309,6 +314,8 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_UNDEFINED_METHOD_SUFFIX.len() as u32
     + ERR_UNDEFINED_FUNCTION_PREFIX.len() as u32
     + ERR_UNDEFINED_FUNCTION_SUFFIX.len() as u32
+    + ERR_ERROR_VALUE_PREFIX.len() as u32
+    + ERR_ERROR_VALUE_SUFFIX.len() as u32
     + ERR_TOO_FEW_ARGS_PREFIX.len() as u32
     + ERR_TOO_FEW_ARGS_PASSED.len() as u32
     + ERR_TOO_FEW_ARGS_EXACTLY.len() as u32
@@ -1044,6 +1051,9 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         // Appended LAST so every index the emitters above already use keeps its message.
         ERR_UNDEFINED_FUNCTION_PREFIX,
         ERR_UNDEFINED_FUNCTION_SUFFIX,
+        // Appended LAST for the same reason as every group above it.
+        ERR_ERROR_VALUE_PREFIX,
+        ERR_ERROR_VALUE_SUFFIX,
     ];
     let warning_messages = [
         WARN_UNDEFINED_ARRAY_KEY_PREFIX,
@@ -1188,6 +1198,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     );
     wm.add_raw_func(&wat);
     emit_method_call_failure_runtime(wm, &method_offsets);
+    emit_error_value_failure_runtime(wm, &method_offsets[21..23]);
     emit_undefined_array_key_warning_runtime(wm, &warning_offsets[..17]);
     emit_return_coercion_runtime(wm, &warning_offsets[17..34], &method_offsets[2..11]);
     emit_property_on_null_warning_runtime(wm, &warning_offsets[34..36]);
@@ -1609,7 +1620,7 @@ fn emit_uninit_string_offset_warning_runtime(wm: &mut WatModule, offsets: &[(u32
 /// The helper composes the PHP-visible method name with the runtime Mixed tag,
 /// writes the diagnostic to stderr, and terminates with PHP's fatal status 255.
 fn emit_method_call_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
-    debug_assert_eq!(offsets.len(), 21);
+    debug_assert_eq!(offsets.len(), 23);
     let (prefix_ptr, prefix_len) = offsets[0];
     let (suffix_ptr, suffix_len) = offsets[1];
     let type_offsets = &offsets[2..11];
@@ -2097,6 +2108,25 @@ fn emit_undefined_function_failure_runtime(wm: &mut WatModule, offsets: &[(u32, 
   (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))
   (call $wasi_proc_exit (i32.const 255))
   unreachable ;; elephc-trap:post-noreturn:undefined-function-fatal-exit
+)"#
+    ));
+}
+
+/// Emits the fatal an uncatchable `throw_error_value` raises, naming its runtime message.
+///
+/// KNOWN DIVERGENCE, shared with `ERR_UNCAUGHT_EXCEPTION`: reference PHP appends the file, line
+/// and stack trace. The message text and the EXIT STATUS — 255 — are PHP's.
+fn emit_error_value_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    debug_assert_eq!(offsets.len(), 2);
+    let (prefix_ptr, prefix_len) = offsets[0];
+    let (suffix_ptr, suffix_len) = offsets[1];
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_fail_error_value (param $message_ptr i32) (param $message_len i32)
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $message_ptr) (local.get $message_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))
+  (call $wasi_proc_exit (i32.const 255))
+  unreachable ;; elephc-trap:post-noreturn:error-value-fatal-exit
 )"#
     ));
 }

@@ -533,6 +533,18 @@ fn target_has_registered_noreturn_proof(
                     Some("$wasi_proc_exit"),
                 )
         }
+        // A `throw_error_value` no frame can catch writes the prefix, the runtime-composed
+        // message and the newline, then exits — the same proof shape as the undefined-function
+        // fatal above, and for the same reason: the message is runtime state.
+        "$__rt_fail_error_value" => {
+            proc_exit
+                && has_site(
+                    "$__rt_fail_error_value",
+                    TrapClass::PostNoreturn,
+                    "error-value-fatal-exit",
+                    Some("$wasi_proc_exit"),
+                )
+        }
         // The `ArgumentCountError` a dynamic dispatch raises composes its message from the
         // class-name table and two rendered counts, then exits — the same proof shape as the
         // undefined-method fatal it sits beside in the ladder.
@@ -617,6 +629,7 @@ fn has_noreturn_predecessor(
         "$__rt_fail_method_call_non_object",
         "$__rt_fail_undefined_method",
         "$__rt_fail_undefined_function",
+        "$__rt_fail_error_value",
         "$__rt_fail_too_few_arguments",
         "$__rt_fail_operand_types",
         "$__rt_fail_object_to_string",

@@ -23,6 +23,7 @@ mod artifacts;
 mod arrays;
 pub(crate) mod builtins;
 pub mod inventory;
+mod callable_arrays;
 mod calls;
 mod classes;
 mod capability;
