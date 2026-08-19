@@ -70,6 +70,7 @@ jobs:
       - name: Build combined optional PDO driver profile
         run: |
           cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          scripts/check_pdo_dblib_symbols.sh target/debug/libelephc_pdo.a
           cargo clean -p elephc-pdo
 
       - name: Build bridge/native support crates
@@ -140,6 +141,7 @@ jobs:
       - name: Build combined optional PDO driver profile
         run: |
           cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          scripts/check_pdo_dblib_symbols.sh target/debug/libelephc_pdo.a
           cargo clean -p elephc-pdo
 
       - name: Build bridge/native support crates
@@ -205,6 +207,7 @@ jobs:
       - name: Build combined optional PDO driver profile
         run: |
           cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          scripts/check_pdo_dblib_symbols.sh target/debug/libelephc_pdo.a
           cargo clean -p elephc-pdo
 
       - name: Build bridge/native support crates

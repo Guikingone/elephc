@@ -605,7 +605,7 @@ points callers to the namespaced constants, matching php-src's stubs.
 - **DSN.** `host`, `dbname`, `charset`, `appname`, `user`, and `password` follow
   PDO_DBLIB. `port` is accepted as an elephc convenience extension for local and CI
   instances that do not use a `freetds.conf` server alias; the bridge passes it to
-  `dbopen()` with FreeTDS's documented `servername:port` override syntax.
+  `tdsdbopen()` with FreeTDS's documented `servername:port` override syntax.
 - **Prepared statements.** DB-Library has no native prepare API. Placeholders are
   scanned and safely rendered as T-SQL literals; mixed named/positional styles and
   missing binds fail with HY093. `ATTR_EMULATE_PREPARES` is consequently fixed at
@@ -617,8 +617,9 @@ points callers to the namespaced constants, matching php-src's stubs.
 - **Native diagnostics.** FreeTDS client callbacks and SQL Server/Sybase messages
   populate the same SQLSTATE/native-code/message triples as the other bridge drivers.
 - **Targets.** The Rust backend is target-neutral; each supported target must provide
-  a target-compatible `libsybdb`. macOS linking deliberately resolves FreeTDS before
-  `libSystem`, whose unrelated Berkeley DB API exports the same `dbopen` symbol.
+  a target-compatible `libsybdb`. The bridge calls FreeTDS's collision-free
+  `tdsdbopen` entry point directly, so it does not depend on the optional `dbopen`
+  compatibility export or collide with macOS `libSystem`'s Berkeley DB API.
 
 ## PDO_FIREBIRD notes
 
