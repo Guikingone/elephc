@@ -255,6 +255,11 @@ const RT_F64_DIGITS: &str = r#"(func $__rt_f64_digits (param $bits i64) (param $
   (local.set $sign)                                                ;; pop sign
   (if (i32.ne (local.get $class) (i32.const 0))                    ;; non-finite or zero: no digits
     (then (return (local.get $sign) (local.get $class) (local.get $dbuf) (i32.const 0) (i32.const 0)))) ;; early return: sign, class, buf, 0, 0 (non-finite or zero)
+  ;; Only limbs 0 and 1 are seeded below, and the multiply that follows carries into the rest —
+  ;; so the rest has to BE zero. It used to be, because nothing but this path ever wrote here;
+  ;; `__rt_str_to_f64` shares the region, so a parse before a render left garbage in the high
+  ;; limbs, and only values large enough to reach them came out wrong.
+  (call $__rt_bignum_zero (local.get $big) (local.get $nlimbs))     ;; the multiply carries into every limb
   (i64.store32 (local.get $big) (local.get $mant))                 ;; big[0] = mantissa low 32 bits
   (i64.store32 (i32.add (local.get $big) (i32.const 4)) (i64.shr_u (local.get $mant) (i64.const 32)))  ;; big[1] = mantissa high bits
   (local.set $p (i32.const 0))                                     ;; default p = 0 (exp2 >= 0 case)
@@ -378,7 +383,7 @@ const RT_U32_TO_DEC: &str = r#"(func $__rt_u32_to_dec (param $value i32) (param 
 /// the exponent has no leading zero (`E-7`, not `E-07`). Writes `[-]d0.dddE±X` into `$out`
 /// where `$x` is the leading digit's decimal exponent and `$sign` selects the leading '-';
 /// the exponent magnitude is written via `__rt_u32_to_dec`. Returns the byte length.
-const RT_FTOA_SCIENTIFIC: &str = r#"(func $__rt_ftoa_scientific (param $digptr i32) (param $nsig i32) (param $x i32) (param $sign i32) (param $out i32) (result i32)
+const RT_FTOA_SCIENTIFIC: &str = r#"(func $__rt_ftoa_scientific (param $digptr i32) (param $nsig i32) (param $x i32) (param $sign i32) (param $out i32) (param $echar i32) (result i32)
   (local $w i32) (local $i i32) (local $ax i32)
   (local.set $w (i32.const 0))                                    ;; write cursor (bytes written) = 0
   (if (local.get $sign)                                           ;; negative -> leading '-'
@@ -402,7 +407,7 @@ const RT_FTOA_SCIENTIFIC: &str = r#"(func $__rt_ftoa_scientific (param $digptr i
     (else
       (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 48))  ;; no more digits -> '0'
       (local.set $w (i32.add (local.get $w) (i32.const 1)))))     ;; advance
-  (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 69))  ;; 'E'
+  (i32.store8 (i32.add (local.get $out) (local.get $w)) (local.get $echar))  ;; 'E' for php's own text, 'e' for JSON
   (local.set $w (i32.add (local.get $w) (i32.const 1)))           ;; advance
   (if (i32.lt_s (local.get $x) (i32.const 0))                     ;; negative exponent
     (then
@@ -498,7 +503,7 @@ const RT_FTOA_FIXED: &str = r#"(func $__rt_ftoa_fixed (param $digptr i32) (param
 /// `__rt_ftoa_fixed` otherwise. Writes into `$out` and returns the pointer and byte
 /// length. `$big`/`$nlimbs` and `$dbuf`/`$dmax` are scratch handed straight to
 /// `__rt_f64_digits`.
-const RT_FTOA: &str = r#"(func $__rt_ftoa (param $bits i64) (param $big i32) (param $nlimbs i32) (param $dbuf i32) (param $dmax i32) (param $out i32) (result i32 i32)
+const RT_FTOA: &str = r#"(func $__rt_ftoa_at (param $bits i64) (param $big i32) (param $nlimbs i32) (param $dbuf i32) (param $dmax i32) (param $out i32) (param $sig i32) (param $scilimit i32) (param $echar i32) (result i32 i32)
   (local $sign i32) (local $class i32) (local $digptr i32) (local $ndigits i32) (local $p i32)
   (local $x i32) (local $nsig i32) (local $w i32)
   (call $__rt_f64_digits (local.get $bits) (local.get $big) (local.get $nlimbs) (local.get $dbuf) (local.get $dmax))  ;; -> sign, class, digptr, ndigits, p
@@ -530,20 +535,61 @@ const RT_FTOA: &str = r#"(func $__rt_ftoa (param $bits i64) (param $big i32) (pa
       (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 48))  ;; '0'
       (return (local.get $out) (i32.add (local.get $w) (i32.const 1)))))  ;; "0" or "-0"
   (local.set $x (i32.sub (i32.sub (local.get $ndigits) (i32.const 1)) (local.get $p)))  ;; X = ndigits-1-p
-  (if (call $__rt_round_digits (local.get $digptr) (local.get $ndigits) (i32.const 14))  ;; round to 14 sig digits
+  (if (call $__rt_round_digits (local.get $digptr) (local.get $ndigits) (local.get $sig))  ;; round to the requested significant digits
     (then (local.set $x (i32.add (local.get $x) (i32.const 1)))))  ;; carry overflow shifts the exponent
-  (local.set $nsig (local.get $ndigits))                         ;; nsig = min(ndigits, 14)
-  (if (i32.gt_s (local.get $ndigits) (i32.const 14))             ;; clamp to 14 significant digits
-    (then (local.set $nsig (i32.const 14))))                     ;; cap nsig at 14
+  (local.set $nsig (local.get $ndigits))                         ;; nsig = min(ndigits, sig)
+  (if (i32.gt_s (local.get $ndigits) (local.get $sig))           ;; clamp to the requested count
+    (then (local.set $nsig (local.get $sig))))                   ;; cap nsig
   (block $st                                                     ;; trailing-zero strip exit
     (loop $sl                                                    ;; drop trailing '0' digits, keep at least one
       (br_if $st (i32.le_s (local.get $nsig) (i32.const 1)))     ;; keep at least one digit
       (br_if $st (i32.ne (i32.load8_u (i32.add (local.get $digptr) (i32.sub (local.get $nsig) (i32.const 1)))) (i32.const 48)))  ;; last digit not '0'
       (local.set $nsig (i32.sub (local.get $nsig) (i32.const 1)))  ;; drop it
       (br $sl)))                                                 ;; continue
-  (if (i32.or (i32.lt_s (local.get $x) (i32.const -4)) (i32.ge_s (local.get $x) (i32.const 14)))  ;; scientific range
-    (then (return (local.get $out) (call $__rt_ftoa_scientific (local.get $digptr) (local.get $nsig) (local.get $x) (local.get $sign) (local.get $out)))))  ;; scientific notation
+  (if (i32.or (i32.lt_s (local.get $x) (i32.const -4)) (i32.ge_s (local.get $x) (local.get $scilimit)))  ;; scientific range
+    (then (return (local.get $out) (call $__rt_ftoa_scientific (local.get $digptr) (local.get $nsig) (local.get $x) (local.get $sign) (local.get $out) (local.get $echar)))))  ;; scientific notation
   (return (local.get $out) (call $__rt_ftoa_fixed (local.get $digptr) (local.get $nsig) (local.get $x) (local.get $sign) (local.get $out))))  ;; fixed notation
+
+;; `__rt_ftoa`: php's `precision` ini, which is 14 — the width `echo` and string interpolation
+;; use. `serialize_precision` is a different question, and `__rt_ftoa_shortest` answers it.
+(func $__rt_ftoa (param $bits i64) (param $big i32) (param $nlimbs i32) (param $dbuf i32) (param $dmax i32) (param $out i32) (result i32 i32)
+  (call $__rt_ftoa_at (local.get $bits) (local.get $big) (local.get $nlimbs) (local.get $dbuf) (local.get $dmax) (local.get $out) (i32.const 14) (i32.const 14) (i32.const 69)))
+
+;; `__rt_ftoa_shortest`: php's `serialize_precision = -1`, which `var_dump`, `var_export`,
+;; `json_encode` and `serialize` all use — the FEWEST significant digits that still read back as
+;; the same double.
+;;
+;; php-src reaches that with a Ryu-style shortest-digit algorithm. This reaches the same answer
+;; from the two pieces already here: format at 1, 2, ... 17 significant digits and parse each
+;; candidate back, stopping at the first that reproduces the bits exactly. 17 always does (it is
+;; the round-trip width of a double), so the loop is bounded and its last iteration is the
+;; fallback. The rendering rule differs from `echo`'s in one place beyond the digit count: the
+;; switch to scientific happens at 1e17 rather than 1e15, which is why `1e16` prints in full and
+;; `1e17` does not.
+;;
+;; The candidate is formatted into the ftoa scratch at +0x2000 rather than into `$out`: parsing it
+;; back runs `__rt_str_to_f64` over the WHOLE strtod region — the four bignums at +0/+1024/+2048/
+;; +3072 and the digit buffer at +4096 — which is where this function's own `$big`, `$dbuf` and
+;; `$out` live. Each iteration re-derives its digits, so clobbering the first two costs nothing,
+;; and `$out` is written only once the winning width is known. Anything else that has to survive
+;; a float render belongs above +0x2000 too, which is why json's literal words moved there.
+(func $__rt_ftoa_shortest (param $bits i64) (param $big i32) (param $nlimbs i32) (param $dbuf i32) (param $dmax i32) (param $out i32) (param $echar i32) (result i32 i32)
+  (local $sig i32) (local $ptr i32) (local $len i32) (local $probe i32) (local $parsed i32)
+  (local.set $probe (i32.add (global.get $__float_scratch) (i32.const 8192)))
+  (local.set $parsed (i32.add (global.get $__float_scratch) (i32.const 12160)))
+  (local.set $sig (i32.const 1))
+  (block $found (loop $widen
+    (br_if $found (i32.gt_s (local.get $sig) (i32.const 17)))
+    (call $__rt_ftoa_at (local.get $bits) (local.get $big) (local.get $nlimbs) (local.get $dbuf) (local.get $dmax) (local.get $probe) (local.get $sig) (i32.const 17) (local.get $echar))
+    (local.set $len)
+    (local.set $ptr)
+    (call $__rt_str_to_f64 (local.get $ptr) (local.get $len) (local.get $parsed) (global.get $__float_scratch))
+    (br_if $found (i64.eq (i64.load (local.get $parsed)) (local.get $bits)))
+    (local.set $sig (i32.add (local.get $sig) (i32.const 1)))
+    (br $widen)))
+  (if (i32.gt_s (local.get $sig) (i32.const 17))
+    (then (local.set $sig (i32.const 17))))
+  (call $__rt_ftoa_at (local.get $bits) (local.get $big) (local.get $nlimbs) (local.get $dbuf) (local.get $dmax) (local.get $out) (local.get $sig) (i32.const 17) (local.get $echar)))
 "#;
 
 /// `__rt_parse_decimal` tokenizes a decimal numeric string into the pieces the
@@ -1830,7 +1876,7 @@ mod tests {
         format!(
             r#"(func $t (export "t") (result i64)
   (local $len i32) (local $i i32) (local $h i64)
-{stores}  (local.set $len (call $__rt_ftoa_scientific (i32.const 256) (i32.const {nsig}) (i32.const {x}) (i32.const {sign}) (i32.const 512)))
+{stores}  (local.set $len (call $__rt_ftoa_scientific (i32.const 256) (i32.const {nsig}) (i32.const {x}) (i32.const {sign}) (i32.const 512) (i32.const 69)))
   (local.set $h (i64.const 0))
   (local.set $i (i32.const 0))
   (block $e

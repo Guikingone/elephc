@@ -19267,6 +19267,16 @@ process.exitCode = wasi.start(instance);
             "[1,2,3]\n",
             "[]\n",
             "{\"5\":\"sparse\"}\n",
+            "30.5\n",
+            "0.30000000000000004\n",
+            "0.3333333333333333\n",
+            "1000000000000000\n",
+            "10000000000000000\n",
+            "1.0e+17\n",
+            "1.0e-5\n",
+            "1.7976931348623157e+308\n",
+            "{\"name\":\"Alice\",\"age\":30,\"active\":true,\"note\":null,\"ratio\":2.5}\n",
+            "{\"1\":\"one\",\"2\":\"two\",\"01\":\"leading\"}\n",
         ),
     );
 
@@ -19324,6 +19334,26 @@ echo json_encode("\u{1f600}"), "\n";
 echo json_encode([1, 2, 3]), "\n";
 echo json_encode([]), "\n";
 echo json_encode([5 => "sparse"]), "\n";
+
+// Floats go through serialize_precision = -1 — the fewest digits that read back as the same
+// double — with a lower-case exponent, and the switch to scientific happens two decades later
+// than `echo`'s does.
+echo json_encode(30.5), "\n";
+echo json_encode(0.1 + 0.2), "\n";
+echo json_encode(1.0 / 3.0), "\n";
+echo json_encode(1.0e15), "\n";
+echo json_encode(1.0e16), "\n";
+echo json_encode(1.0e17), "\n";
+echo json_encode(1.0e-5), "\n";
+echo json_encode(1.7976931348623157e308), "\n";
+
+// A heterogeneous hash is `mixed`-valued, and every runtime tag it can carry has an answer.
+$profile = ["name" => "Alice", "age" => 30, "active" => true, "note" => null, "ratio" => 2.5];
+echo json_encode($profile), "\n";
+
+// A key php normalizes to an integer still comes out as a JSON object key.
+$codes = [1 => "one", "2" => "two", "01" => "leading"];
+echo json_encode($codes), "\n";
 "##;
 
 /// The array rebuilds and mutators match php, including a by-reference `array_unshift`.

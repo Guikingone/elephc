@@ -9772,13 +9772,9 @@ mod tests {
                 key: Box::new(PhpType::Str),
                 value: Box::new(PhpType::Int),
             },
-        ] {
-            assert!(
-                super::super::json::type_is_encodable(&module, &encodable),
-                "{encodable:?} has a JSON form"
-            );
-        }
-        for refused in [
+            // A FLOAT is encodable now that `__rt_ftoa_shortest` writes php's
+            // serialize_precision = -1 form, and a bare `mixed` is encodable because every
+            // runtime tag has an answer — including the resource that abandons the encode.
             PhpType::Float,
             PhpType::Mixed,
             PhpType::Array(Box::new(PhpType::Float)),
@@ -9786,8 +9782,23 @@ mod tests {
                 key: Box::new(PhpType::Str),
                 value: Box::new(PhpType::Mixed),
             },
+            // A hash key is written as a string whichever kind it is, so a `mixed` key needs no
+            // proof of its own.
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Str),
+            },
+        ] {
+            assert!(
+                super::super::json::type_is_encodable(&module, &encodable),
+                "{encodable:?} has a JSON form"
+            );
+        }
+        for refused in [
             // No class is declared in an empty module, so an object names nothing to walk.
             PhpType::Object("Money".to_string()),
+            // A container OF objects inherits that: the element still has to be walkable.
+            PhpType::Array(Box::new(PhpType::Object("Money".to_string()))),
         ] {
             assert!(
                 !super::super::json::type_is_encodable(&module, &refused),

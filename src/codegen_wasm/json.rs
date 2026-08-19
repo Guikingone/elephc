@@ -92,15 +92,26 @@ pub(super) fn type_is_encodable(module: &Module, php: &PhpType) -> bool {
 /// The recursive half of `type_is_encodable`.
 fn type_is_encodable_inner(module: &Module, php: &PhpType, seen: &mut HashSet<String>) -> bool {
     match php.codegen_repr() {
-        PhpType::Int | PhpType::Str | PhpType::Bool | PhpType::False | PhpType::Void => true,
+        // A float is encodable now that the shortest-round-trip printer exists: php writes it
+        // with serialize_precision = -1, which `__rt_ftoa_shortest` reproduces.
+        PhpType::Int
+        | PhpType::Str
+        | PhpType::Bool
+        | PhpType::False
+        | PhpType::Float
+        | PhpType::Void => true,
         PhpType::Array(element) => type_is_encodable_inner(module, &element, seen),
+        // A hash key is written as a STRING whichever kind it is — a JSON object has no other —
+        // so a `mixed` key needs no proof beyond the two tags a php array key can carry.
         PhpType::AssocArray { key, value } => {
-            matches!(key.codegen_repr(), PhpType::Int | PhpType::Str)
+            matches!(key.codegen_repr(), PhpType::Int | PhpType::Str | PhpType::Mixed)
                 && type_is_encodable_inner(module, &value, seen)
         }
+        // A bare `mixed` is encodable now that every runtime tag has an answer: the scalars and
+        // containers walk as themselves, a closure writes `{}`, and a RESOURCE — the one thing
+        // JSON cannot express — abandons the encode and answers `false`, which is what php does.
+        PhpType::Mixed => true,
         PhpType::Object(class_name) => class_is_encodable(module, &class_name, seen),
-        // A bare `mixed` promises nothing: its runtime tag could be a float or a resource, and
-        // the encoder would have to answer for a value the audit never saw.
         _ => false,
     }
 }
@@ -337,7 +348,7 @@ pub(super) fn module_uses_json_encode(module: &Module) -> bool {
 /// for the same reason every other dynamic dispatch here is one: this backend has no `funcref`
 /// table to index.
 pub(super) fn emit_json_runtime(wm: &mut WatModule, serialize_targets: &[(u64, String)]) {
-    for (name, init) in [("__json_buf", 0), ("__json_len", 0), ("__json_cap", 0)] {
+    for (name, init) in [("__json_buf", 0), ("__json_len", 0), ("__json_cap", 0), ("__json_failed", 0)] {
         wm.add_global(Global {
             name: name.to_string(),
             ty: ValType::I32,
@@ -388,8 +399,8 @@ const RT_JSON_PUT: &str = r#"(func $__rt_json_put (param $ptr i32) (param $len i
 
 /// `__rt_json_put_byte`: one literal byte, written through the float scratch.
 const RT_JSON_PUT_BYTE: &str = r#"(func $__rt_json_put_byte (param $byte i32)
-  (i32.store8 (i32.add (global.get $__float_scratch) (i32.const 3900)) (local.get $byte))
-  (call $__rt_json_put (i32.add (global.get $__float_scratch) (i32.const 3900)) (i32.const 1)))
+  (i32.store8 (i32.add (global.get $__float_scratch) (i32.const 8300)) (local.get $byte))
+  (call $__rt_json_put (i32.add (global.get $__float_scratch) (i32.const 8300)) (i32.const 1)))
 "#;
 
 /// `__rt_json_put_hex4`: `\uXXXX` for one code unit, lower-case hex as php writes it.
@@ -587,8 +598,20 @@ const RT_JSON_VALUE: &str = r#"(func $__rt_json_value (param $cell i32)
   (if (i64.eq (local.get $tag) (i64.const 3))                      ;; bool
     (then
       (if (i64.eqz (local.get $lo))
-        (then (call $__rt_json_put (i32.add (global.get $__float_scratch) (i32.const 3910)) (i32.const 5)))
-        (else (call $__rt_json_put (i32.add (global.get $__float_scratch) (i32.const 3920)) (i32.const 4))))
+        (then (call $__rt_json_put (i32.add (global.get $__float_scratch) (i32.const 8310)) (i32.const 5)))
+        (else (call $__rt_json_put (i32.add (global.get $__float_scratch) (i32.const 8320)) (i32.const 4))))
+      (return)))
+  (if (i64.eq (local.get $tag) (i64.const 2))                      ;; float
+    (then
+      ;; php writes a JSON float with serialize_precision = -1 — the fewest digits that read back
+      ;; as the same double — and with a LOWER-CASE exponent, where its own text uses `E`.
+      (call $__rt_ftoa_shortest (local.get $lo)
+        (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80)
+        (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 792)
+        (i32.add (global.get $__float_scratch) (i32.const 4096)) (i32.const 101))
+      (local.set $tlen)
+      (local.set $tptr)
+      (call $__rt_json_put (local.get $tptr) (local.get $tlen))
       (return)))
   (if (i64.eq (local.get $tag) (i64.const 6))                      ;; object
     (then
@@ -633,8 +656,21 @@ const RT_JSON_VALUE: &str = r#"(func $__rt_json_value (param $cell i32)
         (br $entry)))
       (call $__rt_json_put_byte (select (i32.const 125) (i32.const 93) (local.get $kind)))
       (return)))
-  ;; null, and anything the audit refused: php writes null.
-  (call $__rt_json_put (i32.add (global.get $__float_scratch) (i32.const 3930)) (i32.const 4)))
+  ;; A RESOURCE has no JSON form at all: php abandons the whole encode and answers `false` with
+  ;; "Type is not supported", which is why this sets a flag rather than writing a placeholder.
+  ;; A CLOSURE does have one — php walks its (empty) public properties and writes `{}`. Both
+  ;; measured on 8.5.6.
+  (if (i64.eq (local.get $tag) (i64.const 9))
+    (then
+      (global.set $__json_failed (i32.const 1))
+      (return)))
+  (if (i64.eq (local.get $tag) (i64.const 10))
+    (then
+      (call $__rt_json_put_byte (i32.const 123))                    ;; '{'
+      (call $__rt_json_put_byte (i32.const 125))                    ;; '}'
+      (return)))
+  ;; null is what is left.
+  (call $__rt_json_put (i32.add (global.get $__float_scratch) (i32.const 8330)) (i32.const 4)))
 "#;
 
 /// `__rt_json_encode`: the builtin, boxed as php's `string|false`.
@@ -644,21 +680,24 @@ const RT_JSON_VALUE: &str = r#"(func $__rt_json_value (param $cell i32)
 /// moving the whole region's offsets.
 const RT_JSON_ENCODE: &str = r#"(func $__rt_json_encode (param $cell i32) (result i32)
   (local $ptr i32) (local $len i64) (local $out i32)
-  (i32.store8 offset=3910 (global.get $__float_scratch) (i32.const 102))   ;; 'f'
-  (i32.store8 offset=3911 (global.get $__float_scratch) (i32.const 97))    ;; 'a'
-  (i32.store8 offset=3912 (global.get $__float_scratch) (i32.const 108))   ;; 'l'
-  (i32.store8 offset=3913 (global.get $__float_scratch) (i32.const 115))   ;; 's'
-  (i32.store8 offset=3914 (global.get $__float_scratch) (i32.const 101))   ;; 'e'
-  (i32.store8 offset=3920 (global.get $__float_scratch) (i32.const 116))   ;; 't'
-  (i32.store8 offset=3921 (global.get $__float_scratch) (i32.const 114))   ;; 'r'
-  (i32.store8 offset=3922 (global.get $__float_scratch) (i32.const 117))   ;; 'u'
-  (i32.store8 offset=3923 (global.get $__float_scratch) (i32.const 101))   ;; 'e'
-  (i32.store8 offset=3930 (global.get $__float_scratch) (i32.const 110))   ;; 'n'
-  (i32.store8 offset=3931 (global.get $__float_scratch) (i32.const 117))   ;; 'u'
-  (i32.store8 offset=3932 (global.get $__float_scratch) (i32.const 108))   ;; 'l'
-  (i32.store8 offset=3933 (global.get $__float_scratch) (i32.const 108))   ;; 'l'
+  (i32.store8 offset=8310 (global.get $__float_scratch) (i32.const 102))   ;; 'f'
+  (i32.store8 offset=8311 (global.get $__float_scratch) (i32.const 97))    ;; 'a'
+  (i32.store8 offset=8312 (global.get $__float_scratch) (i32.const 108))   ;; 'l'
+  (i32.store8 offset=8313 (global.get $__float_scratch) (i32.const 115))   ;; 's'
+  (i32.store8 offset=8314 (global.get $__float_scratch) (i32.const 101))   ;; 'e'
+  (i32.store8 offset=8320 (global.get $__float_scratch) (i32.const 116))   ;; 't'
+  (i32.store8 offset=8321 (global.get $__float_scratch) (i32.const 114))   ;; 'r'
+  (i32.store8 offset=8322 (global.get $__float_scratch) (i32.const 117))   ;; 'u'
+  (i32.store8 offset=8323 (global.get $__float_scratch) (i32.const 101))   ;; 'e'
+  (i32.store8 offset=8330 (global.get $__float_scratch) (i32.const 110))   ;; 'n'
+  (i32.store8 offset=8331 (global.get $__float_scratch) (i32.const 117))   ;; 'u'
+  (i32.store8 offset=8332 (global.get $__float_scratch) (i32.const 108))   ;; 'l'
+  (i32.store8 offset=8333 (global.get $__float_scratch) (i32.const 108))   ;; 'l'
   (global.set $__json_len (i32.const 0))
+  (global.set $__json_failed (i32.const 0))
   (call $__rt_json_value (local.get $cell))
+  (if (global.get $__json_failed)
+    (then (return (call $__rt_mixed_from_value (i64.const 3) (i64.const 0) (i64.const 0)))))  ;; php's `false`
   (call $__rt_str_persist (global.get $__json_buf) (i64.extend_i32_u (global.get $__json_len)))
   (local.set $len)
   (local.set $ptr)
