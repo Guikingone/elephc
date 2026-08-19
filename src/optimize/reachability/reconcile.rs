@@ -200,6 +200,23 @@ fn prune_class_methods(
         })
         .cloned()
         .collect();
+    // A private override can remain as an inherited vtable slot marker even though
+    // descendants do not inherit its method metadata. Preserve graph-selected
+    // markers independently so compacting a descendant cannot shift later slots.
+    let reachable_instance_slots: HashSet<&str> = reachability
+        .methods
+        .iter()
+        .filter_map(|(class, method, is_static)| {
+            (class == class_key && !*is_static).then_some(method.as_str())
+        })
+        .collect();
+    let reachable_static_slots: HashSet<&str> = reachability
+        .methods
+        .iter()
+        .filter_map(|(class, method, is_static)| {
+            (class == class_key && *is_static).then_some(method.as_str())
+        })
+        .collect();
     let keep_any: HashSet<String> = keep_instance.union(&keep_static).cloned().collect();
 
     info.method_decls.retain(|method| {
@@ -231,10 +248,13 @@ fn prune_class_methods(
     info.method_attribute_args
         .retain(|key, _| keep_any.contains(key));
 
-    info.vtable_methods.retain(|key| keep_instance.contains(key));
+    info.vtable_methods.retain(|key| {
+        keep_instance.contains(key) || reachable_instance_slots.contains(key.as_str())
+    });
     info.vtable_slots = compact_slots(&info.vtable_methods);
-    info.static_vtable_methods
-        .retain(|key| keep_static.contains(key));
+    info.static_vtable_methods.retain(|key| {
+        keep_static.contains(key) || reachable_static_slots.contains(key.as_str())
+    });
     info.static_vtable_slots = compact_slots(&info.static_vtable_methods);
 }
 

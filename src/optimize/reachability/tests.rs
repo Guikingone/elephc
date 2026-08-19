@@ -649,6 +649,32 @@ fn prune_keeps_inherited_magic_methods() {
     assert!(!has_method(&program, "ParentType", "unused"));
 }
 
+/// Verifies a private override remains as a descendant vtable hole after its metadata stops inheriting.
+#[test]
+fn prune_keeps_private_override_vtable_hole_on_descendant() {
+    let (_, check) = prune(
+        "<?php class SlotBase { public function __construct() {} public function later(): string { return 'later'; } } class SlotParent extends SlotBase { private function __construct() { parent::__construct(); } public static function build(): self { return new self(); } } class SlotChild extends SlotParent {} function through_base(SlotBase $value): string { return $value->later(); } class_exists('SlotChild'); echo through_base(SlotParent::build());",
+    );
+    let parent = check
+        .classes
+        .get("SlotParent")
+        .expect("private override metadata must survive");
+    let child = check
+        .classes
+        .get("SlotChild")
+        .expect("descendant metadata must survive");
+
+    assert!(!child.methods.contains_key("__construct"));
+    assert_eq!(
+        parent.vtable_slots.get("__construct"),
+        child.vtable_slots.get("__construct")
+    );
+    assert_eq!(
+        parent.vtable_slots.get("later"),
+        child.vtable_slots.get("later")
+    );
+}
+
 /// Verifies `parent::method()` retains a non-static parent implementation.
 #[test]
 fn prune_keeps_parent_scoped_instance_method() {
