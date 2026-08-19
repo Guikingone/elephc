@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_push(array $array, ...$values): void
+function array_push(array $array, ...$values): int
 ```
 
 ## What the type checker enforces

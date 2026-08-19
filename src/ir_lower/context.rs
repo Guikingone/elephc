@@ -232,6 +232,17 @@ pub(crate) struct LoweringContext<'m, 'f> {
     array_conversions: HashMap<String, PhpType>,
     /// Whether the current statement lowering is a disposable discovery pass.
     speculating: bool,
+    /// The span of the expression whose value its STATEMENT discards, while it is being lowered.
+    ///
+    /// A SPAN rather than a flag, because "this statement throws its value away" says nothing
+    /// about the sub-expressions inside it: `var_dump(array_push($a, 9) === 2);` discards
+    /// `var_dump`'s result, and the push's value is very much read. Only the node whose own span
+    /// matches may skip producing a value.
+    ///
+    /// Only a builtin whose answer costs something to produce consults this — `array_push` has to
+    /// re-read the array's length to answer php's new count, and `array_push($a, $v);` in
+    /// statement position would otherwise pay for a value nothing reads.
+    discarded_result_span: Option<Span>,
     pub return_type: IrType,
     pub return_php_type: PhpType,
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
@@ -261,6 +272,23 @@ pub(crate) struct LoweringContext<'m, 'f> {
 }
 
 impl<'m, 'f> LoweringContext<'m, 'f> {
+    /// Runs `body` with `span` marked as the expression whose value its statement discards.
+    pub(crate) fn lowering_discarded_result<T>(
+        &mut self,
+        span: Span,
+        body: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let previous = std::mem::replace(&mut self.discarded_result_span, Some(span));
+        let produced = body(self);
+        self.discarded_result_span = previous;
+        produced
+    }
+
+    /// Whether the expression at `span` is the one its statement throws away.
+    pub(crate) fn expression_result_is_discarded(&self, span: Span) -> bool {
+        self.discarded_result_span == Some(span)
+    }
+
     /// Creates a lowering context over one function builder and shared module data.
     pub(crate) fn new(
         builder: Builder<'f>,
@@ -333,6 +361,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             foreach_int_key_locals: HashSet::new(),
             array_conversions: HashMap::new(),
             speculating: false,
+            discarded_result_span: None,
             return_type,
             return_php_type,
             by_ref_return: false,

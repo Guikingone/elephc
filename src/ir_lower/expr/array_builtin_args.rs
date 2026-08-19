@@ -57,7 +57,21 @@ pub(super) fn lower_static_array_push(
         expr.span,
     );
     crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, expr.span);
-    Some(lower_null(ctx, expr))
+    // php answers the array's NEW element count, which is its length after the append. Producing
+    // it costs a reload and a length read, so a statement-position `array_push($a, $v);` — the
+    // common form, whose value nothing reads — answers null instead and pays for neither.
+    if ctx.expression_result_is_discarded(expr.span) {
+        return Some(lower_null(ctx, expr));
+    }
+    let grown = ctx.load_local(array_name, Some(expr.span));
+    Some(ctx.emit_value(
+        Op::ArrayLen,
+        vec![grown.value],
+        None,
+        PhpType::Int,
+        Op::ArrayLen.default_effects(),
+        Some(expr.span),
+    ))
 }
 
 /// Lowers builtin call operands, applying builtin-specific preservation where source order matters.

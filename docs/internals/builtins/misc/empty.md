@@ -24,8 +24,7 @@ _Compiler-resident construct; this name is intentionally outside the builtin reg
 
 ## EIR and runtime boundary
 
-- **Concrete helpers referenced directly by this lowering**:
-  - `__rt_mixed_is_empty`
+_Compiler-resident lowering; no registry-backed typed runtime target applies._
 
 ## Signature summary
 

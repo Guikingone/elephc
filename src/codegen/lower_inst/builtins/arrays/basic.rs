@@ -59,6 +59,10 @@ pub(crate) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruct
 }
 
 /// Lowers `array_push()` by appending one value and publishing the mutated array.
+///
+/// php answers the array's NEW element count, which the append leaves in the header — so the
+/// result is read back from there rather than recomputed. The count is read AFTER the append
+/// because the append may have relocated the array.
 pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_push", 2)?;
     let array = expect_operand(inst, 0)?;
@@ -70,11 +74,17 @@ pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     } else {
         super::super::super::arrays::lower_array_push(ctx, inst)?;
     }
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
+    if inst.result.is_some() {
+        let result = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_reg(array, result)?;
+        abi::emit_load_from_address(ctx.emitter, result, result, 0);
+        if matches!(
+            inst.result_php_type.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        ) {
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+        }
+    }
     store_if_result(ctx, inst)
 }
 

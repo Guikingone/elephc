@@ -19,7 +19,7 @@ builtin! {
     name: "array_walk_recursive",
     area: Array,
     params: [ref array: Mixed, callback: Mixed],
-    returns: Void,
+    returns: Bool,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayWalkRecursive,
@@ -32,7 +32,7 @@ builtin! {
 ///
 /// Infers the array and checks the callback contextually against its element type, adding the
 /// array's key type as a second parameter when the callback declares `function ($value, $key)`.
-/// Arity (exactly 2) is pre-validated by the registry. Returns `Ok(PhpType::Void)`.
+/// Arity (exactly 2) is pre-validated by the registry. Returns `Ok(PhpType::Bool)`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let callback_arg_types = crate::types::checker::builtins::array_walk_callback_arg_types(
@@ -47,5 +47,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.env,
         &format!("{}() callback", cx.name),
     )?;
-    Ok(PhpType::Void)
+    Ok(PhpType::Bool)
 }

@@ -8,7 +8,7 @@ sidebar:
 ## array_walk()
 
 ```php
-function array_walk(array $array, callable $callback): void
+function array_walk(array $array, callable $callback): bool
 ```
 
 Applies a user function to every member of an array.
@@ -17,7 +17,7 @@ Applies a user function to every member of an array.
 - `$array` (`array`), passed by reference
 - `$callback` (`callable`)
 
-**Returns**: `void`
+**Returns**: `bool`
 
 ## Availability
 

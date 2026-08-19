@@ -360,12 +360,7 @@ pub(crate) fn lower_array_multisort(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_multisort");
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
-    store_if_result(ctx, inst)
+    store_true_builtin_result(ctx, inst)
 }
 
 /// Lowers `array_search()` for indexed arrays with integer-like payloads.

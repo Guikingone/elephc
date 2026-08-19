@@ -561,12 +561,7 @@ fn lower_hash_link_sort(
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     abi::emit_call_label(ctx.emitter, helper);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
-    store_if_result(ctx, inst)
+    type_validation::store_true_builtin_result(ctx, inst)
 }
 
 /// Resolves the `array_slice`/`array_splice` length-present flag into the integer result register.

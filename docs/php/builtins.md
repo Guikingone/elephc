@@ -38,7 +38,7 @@ sidebar:
 | [`array_pad()`](./builtins/array/array_pad.md) | `(array $array, int $length, mixed $value): array` | `array` | ✓ | ✓ |
 | [`array_pop()`](./builtins/array/array_pop.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`array_product()`](./builtins/array/array_product.md) | `(array $array): int` | `int` | ✓ | ✓ |
-| [`array_push()`](./builtins/array/array_push.md) | `(array $array, ...$values): void` | `void` | ✓ | ✓ |
+| [`array_push()`](./builtins/array/array_push.md) | `(array $array, ...$values): int` | `int` | ✓ | ✓ |
 | [`array_rand()`](./builtins/array/array_rand.md) | `(array $array): int` | `int` | ✓ | ✓ |
 | [`array_reduce()`](./builtins/array/array_reduce.md) | `(array $array, callable $callback, mixed $initial = null): int` | `int` | ✓ | ✓ |
 | [`array_replace()`](./builtins/array/array_replace.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | — |
@@ -54,8 +54,8 @@ sidebar:
 | [`array_unique()`](./builtins/array/array_unique.md) | `(array $array): array` | `array` | ✓ | ✓ |
 | [`array_unshift()`](./builtins/array/array_unshift.md) | `(array $array, ...$values): int` | `int` | ✓ | ✓ |
 | [`array_values()`](./builtins/array/array_values.md) | `(array $array): array` | `array` | ✓ | ✓ |
-| [`array_walk()`](./builtins/array/array_walk.md) | `(array $array, callable $callback): void` | `void` | ✓ | ✓ |
-| [`array_walk_recursive()`](./builtins/array/array_walk_recursive.md) | `(array $array, callable $callback): void` | `void` | ✓ | — |
+| [`array_walk()`](./builtins/array/array_walk.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | ✓ |
+| [`array_walk_recursive()`](./builtins/array/array_walk_recursive.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | — |
 | [`arsort()`](./builtins/array/arsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`asort()`](./builtins/array/asort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`call_user_func()`](./builtins/array/call_user_func.md) | `(callable $callback, ...$args): mixed` | `mixed` | ✓ | ✓ |
@@ -237,7 +237,7 @@ sidebar:
 | [`stream_filter_remove()`](./builtins/io/stream_filter_remove.md) | `(resource $stream_filter): bool` | `bool` | ✓ | ✓ |
 | [`stream_get_contents()`](./builtins/io/stream_get_contents.md) | `(resource $stream, int $length = null, int $offset = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_get_filters()`](./builtins/io/stream_get_filters.md) | `(): array` | `array` | ✓ | ✓ |
-| [`stream_get_line()`](./builtins/io/stream_get_line.md) | `(resource $stream, int $length, string $ending = ''): string` | `string` | ✓ | ✓ |
+| [`stream_get_line()`](./builtins/io/stream_get_line.md) | `(resource $stream, int $length, string $ending = ''): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_get_meta_data()`](./builtins/io/stream_get_meta_data.md) | `(resource $stream): array` | `array` | ✓ | ✓ |
 | [`stream_get_transports()`](./builtins/io/stream_get_transports.md) | `(): array` | `array` | ✓ | ✓ |
 | [`stream_get_wrappers()`](./builtins/io/stream_get_wrappers.md) | `(): array` | `array` | ✓ | ✓ |

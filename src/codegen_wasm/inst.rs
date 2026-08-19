@@ -3572,7 +3572,7 @@ fn lower_array_reduce(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 /// WASM can express here. The 3-arg `$extra` form is rejected by the checker and never
 /// reaches this lowering.
 ///
-/// RESULT: `array_walk` lowers to `Void` in EIR (native `store_void_builtin_result`), so
+/// RESULT: `array_walk` answers php's `true`, which the call site may or may not read, so
 /// `inst.result` is normally `None` and the runtime returns nothing — the stack is
 /// balanced after the call with no value to store or drop. DEFENSIVE (mirror `lower_user_sort`
 /// bool handling): should a call site attach a result slot, the PHP `true`
@@ -3645,10 +3645,9 @@ fn lower_array_walk(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         "visit each int element value-only left-to-right (read-only), no result",
     );
 
-    // array_walk lowers to Void in EIR (store_void_builtin_result), so inst.result is
-    // normally None and there is nothing to store. DEFENSIVE (mirror lower_user_sort's bool
-    // handling): materialize PHP `true` only when a result slot is attached AND it is a
-    // simple i64; any other result repr is rejected rather than miscompiled.
+    // php answers `true`, and a statement-position call reads nothing — so the value is
+    // materialized only when a result slot is attached AND it is a simple i64; any other
+    // result repr is rejected rather than miscompiled.
     if let Some(result) = inst.result {
         match ctx.value_repr(result)?.clone() {
             WasmRepr::I64(_) => {

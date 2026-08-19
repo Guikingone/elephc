@@ -138,12 +138,7 @@ pub(super) fn lower_indexed_array_sort(
         int_helper
     };
     abi::emit_call_label(ctx.emitter, helper);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
-    store_if_result(ctx, inst)
+    store_true_builtin_result(ctx, inst)
 }
 
 /// Calls the mutating shuffle helper for indexed arrays whose payload slots are pointer-sized.
@@ -163,12 +158,7 @@ pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_shuffle");
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
-    store_if_result(ctx, inst)
+    store_true_builtin_result(ctx, inst)
 }
 
 /// Calls the user-sort helper with a static comparator and optional late-static environment.
@@ -221,12 +211,7 @@ pub(super) fn lower_user_sort_static_callback(
                     Ok(())
                 },
             )?;
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
-            );
-            store_if_result(ctx, inst)?;
+            store_true_builtin_result(ctx, inst)?;
             return Ok(());
         }
         PhpType::Str => {
@@ -249,12 +234,7 @@ pub(super) fn lower_user_sort_static_callback(
                     Ok(())
                 },
             )?;
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
-            );
-            store_if_result(ctx, inst)?;
+            store_true_builtin_result(ctx, inst)?;
             return Ok(());
         }
         _ => {}
@@ -292,12 +272,7 @@ pub(super) fn lower_user_sort_with_static_callback_binding(
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
-    store_if_result(ctx, inst)
+    store_true_builtin_result(ctx, inst)
 }
 
 /// Returns a callback label whose runtime ABI produces an integer comparison result.
@@ -419,12 +394,9 @@ pub(super) fn lower_array_key_sort(
             if order == KeySortOrder::Ascending
                 || matches!(elem.codegen_repr(), PhpType::Never | PhpType::Void) =>
         {
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
-            );
-            store_if_result(ctx, inst)
+            // An indexed array already holds its keys as slot positions 0..n-1, so ascending
+            // key order is a no-op — but php still answers `true`.
+            store_true_builtin_result(ctx, inst)
         }
         PhpType::Array(elem) => Err(CodegenIrError::unsupported(format!(
             "{} for indexed array<{:?}>: an indexed array stores its keys as slot \

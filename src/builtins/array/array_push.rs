@@ -24,7 +24,7 @@ builtin! {
     variadic: "values",
     min_args: 2,
     max_args: 2,
-    returns: Void,
+    returns: Int,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayPush,
@@ -37,12 +37,12 @@ builtin! {
 ///
 /// Arity (exactly 2 args) is pre-validated by `check_arity`. Both arguments are inferred
 /// to produce any side effects; the first must be an indexed array or the call is rejected.
-/// Returns `Void` — matching the legacy checker behavior.
+/// Returns `Int`: php answers the array's new element count.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let _val_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
     if let PhpType::Array(_) = arr_ty {
-        Ok(PhpType::Void)
+        Ok(PhpType::Int)
     } else {
         Err(CompileError::new(cx.span, "array_push() first argument must be array"))
     }

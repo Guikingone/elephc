@@ -4613,7 +4613,7 @@ pub(super) fn direct_builtin_shape_issue(
         return scalar_sort_shape_issue(module, function, call);
     }
     if hash_sort_mode(target).is_some() {
-        return hash_sort_shape_issue(function, call);
+        return hash_sort_shape_issue(function, call, target);
     }
     if target == RuntimeFnId::ArrayKeyExists {
         return array_key_exists_shape_issue(function, call);
@@ -7070,6 +7070,10 @@ fn lower_scalar_sort(ctx: &mut FnCtx, inst: &Instruction, descending: bool) -> R
     // `sort($a)` rebinds `$a`: the runtime may have cloned, so the pointer goes back.
     ctx.emit_store_value(array)?;
     super::inst::write_back_container_slot(ctx, array)?;
+    if inst.result.is_some() {
+        ctx.fb.ins("i64.const 1", "php's array sorts answer true");
+        store_result(ctx, inst)?;
+    }
     Ok(())
 }
 
@@ -7081,7 +7085,11 @@ fn lower_scalar_sort(ctx: &mut FnCtx, inst: &Instruction, descending: bool) -> R
 ///
 /// The FLAG argument (`SORT_NUMERIC` and friends) changes the comparison, so only the default
 /// form is admitted rather than accepting a flag and ignoring it.
-fn hash_sort_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+fn hash_sort_shape_issue(
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
     let [hash] = call.operands.as_slice() else {
         return Some(format!(
             "an associative sort takes one array, got {} operands (a sort flag changes the \
@@ -7092,6 +7100,19 @@ fn hash_sort_shape_issue(function: &Function, call: &Instruction) -> Option<Stri
     let Some(value) = function.value(*hash) else {
         return Some("the sorted array is missing from the value table".to_string());
     };
+    // An INDEXED array holds its keys as slot positions 0..n-1, so `ksort` on one is already
+    // sorted — php runs it and answers `true`. Descending key order has no representation there
+    // (the positions ARE the keys), and the value sorts need a slot permuter this target does
+    // not have, so those three stay refused.
+    if value.ir_type == IrType::Heap(IrHeapKind::Array) {
+        if target == RuntimeFnId::Ksort {
+            return None;
+        }
+        return Some(format!(
+            "{:?} on an indexed array: its keys ARE its slot positions",
+            target
+        ));
+    }
     if value.ir_type != IrType::Heap(IrHeapKind::Hash) {
         return Some(format!(
             "an associative sort takes an associative array, got {:?}",
@@ -7123,6 +7144,17 @@ fn hash_sort_mode(target: RuntimeFnId) -> Option<i32> {
 /// the copy moves with it.
 fn lower_hash_sort(ctx: &mut FnCtx, inst: &Instruction, mode: i32) -> Result<()> {
     let hash = operand(inst, 0)?;
+    // `ksort` on an indexed array is a no-op — the slot positions are already the ascending
+    // keys — but php still runs it and answers `true`.
+    if ctx.function.value(hash).map(|value| value.ir_type)
+        == Some(IrType::Heap(IrHeapKind::Array))
+    {
+        if inst.result.is_some() {
+            ctx.fb.ins("i64.const 1", "php's array sorts answer true");
+            store_result(ctx, inst)?;
+        }
+        return Ok(());
+    }
     ctx.emit_load_value(hash)?;
     ctx.fb.ins(
         "call $__rt_hash_ensure_unique",
@@ -8593,7 +8625,11 @@ mod tests {
                     "{target:?} orders a hash of {value:?}"
                 );
             }
-            // An INDEXED receiver has no chain to reorder: `sort`/`rsort` are its functions.
+            // An INDEXED receiver holds its keys as slot positions 0..n-1. `ksort` on one is
+            // therefore already sorted, and php runs it and answers `true` — measured — so it is
+            // admitted as the no-op it is. The other three have no meaning there: descending key
+            // order cannot be expressed by positions, and the value sorts would need a slot
+            // permuter this target does not have.
             let probe = shaped_call(
                 target,
                 &[(
@@ -8604,11 +8640,15 @@ mod tests {
                 PhpType::Void,
             );
             let call = probe.instructions.last().expect("the probe emitted a call");
-            assert!(
-                direct_builtin_shape_issue(&command_probe_module(), &probe, call, target)
-                    .is_some_and(|issue| issue.contains("associative array")),
-                "{target:?} must refuse an indexed receiver"
-            );
+            let indexed = direct_builtin_shape_issue(&command_probe_module(), &probe, call, target);
+            if target == RuntimeFnId::Ksort {
+                assert_eq!(indexed, None, "ksort on an indexed array is php's no-op");
+            } else {
+                assert!(
+                    indexed.is_some_and(|issue| issue.contains("slot positions")),
+                    "{target:?} must refuse an indexed receiver"
+                );
+            }
             // A sort flag changes the comparison, so the two-operand form is refused rather
             // than accepted and ignored.
             let probe = shaped_call(
