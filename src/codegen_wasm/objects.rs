@@ -1742,6 +1742,13 @@ pub(super) fn lower_prop_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
         .cloned()
         .ok_or_else(|| WasmError::Unsupported(format!("invalid string data id {:?}", prop_data)))?;
 
+    // A NULLABLE object receiver arrives as a boxed cell, so the read has to open it and take
+    // php's warning branch when it holds null. `lower_nullsafe_prop_get` already does exactly
+    // that opening; the two differ only in whether the null arm warns, which it decides from
+    // the opcode.
+    if matches!(value_php_type(ctx, object)?, PhpType::Union(_)) {
+        return lower_nullsafe_prop_get(ctx, inst);
+    }
     let (class_name, ci) = receiver_class_info(ctx, object)?;
     // Undeclared property on an ADP / stdClass class -> read through the dyn-prop hash tail.
     if let Some(dyn_off) = dynamic_property_hash_offset_for_class(&ci, &class_name, &property) {
@@ -2540,7 +2547,8 @@ pub(super) fn lower_nullsafe_prop_get(ctx: &mut FnCtx, inst: &Instruction) -> Re
     }
 
     // Nullable: unbox the Mixed-cell receiver. tag 8 -> null -> box null; tag 6 -> object ->
-    // read the property and box into the Mixed result.
+    // read the property and box into the Mixed result. A plain `->` additionally WARNS on the
+    // null arm, which is what php does there — it does not fatal.
     let hi = ctx.fresh_temp(ValType::I64);
     let lo = ctx.fresh_temp(ValType::I64);
     let tag = ctx.fresh_temp(ValType::I64);
@@ -2553,7 +2561,14 @@ pub(super) fn lower_nullsafe_prop_get(ctx: &mut FnCtx, inst: &Instruction) -> Re
     ctx.fb.ins("i64.const 8", "null tag");
     ctx.fb.ins("i64.eq", "is receiver null?");
     ctx.fb.ins("if (result i32)", "null -> box null, else read property");
-    // null arm: box a fresh null Mixed cell.
+    // null arm: php warns for `->` and stays silent for `?->`, then both answer null.
+    if inst.op == Op::PropGet {
+        let (name_ptr, name_len) = ctx.str_literal(prop_data)?;
+        ctx.fb.ins(
+            &format!("(call $__rt_warn_property_on_null (i32.const {name_ptr}) (i32.const {name_len}))"),
+            "php names the property it could not read",
+        );
+    }
     ctx.fb.ins("i64.const 8", "mixed tag (null)");
     ctx.fb.ins("i64.const 0", "null lo");
     ctx.fb.ins("i64.const 0", "null hi");
@@ -2566,6 +2581,33 @@ pub(super) fn lower_nullsafe_prop_get(ctx: &mut FnCtx, inst: &Instruction) -> Re
     ctx.fb.ins(&format!("local.set {}", obj), "save object pointer");
     emit_prop_get_into_mixed(ctx, &obj, &ci, &class_name, prop_data, &property)?;
     ctx.fb.ins("end", "end nullsafe property get");
+    // A NULLABLE read of a declared scalar answers `int|null`, which this target stores as a
+    // tagged pair rather than as a cell — so the cell both arms produced is opened here and the
+    // pair pushed in its place. The cell carries no reference the pair inherits, so it is freed.
+    if let Some(result) = inst.result {
+        if matches!(ctx.value_repr(result)?, WasmRepr::Tagged { .. }) {
+            let cell = ctx.fresh_temp(ValType::I32);
+            ctx.fb.ins(&format!("local.set {cell}"), "the boxed read");
+            ctx.fb.ins(
+                &format!("(call $__rt_mixed_unbox (local.get {cell}))"),
+                "open it into (tag, lo, hi)",
+            );
+            ctx.fb.ins("drop", "hi is unused for a scalar|null");
+            let lo = ctx.fresh_temp(ValType::I64);
+            let tag = ctx.fresh_temp(ValType::I64);
+            ctx.fb.ins(&format!("local.set {lo}"), "payload");
+            ctx.fb.ins(&format!("local.set {tag}"), "tag");
+            ctx.fb.ins(
+                &format!("(call $__rt_decref_any (local.get {cell}))"),
+                "the pair carries no reference",
+            );
+            ctx.fb.ins(&format!("local.get {lo}"), "tagged payload");
+            ctx.fb.ins(
+                &format!("(i32.wrap_i64 (local.get {tag}))"),
+                "tagged tag (0 int, 8 null)",
+            );
+        }
+    }
     store_result(ctx, inst)?;
     Ok(())
 }

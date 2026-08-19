@@ -4893,7 +4893,15 @@ fn property_get_shape_issue(
     let receiver_php = receiver.php_type.clone();
     let class_name = match receiver_php {
         PhpType::Object(class_name) => class_name,
-        PhpType::Union(variants) if inst.op == Op::NullsafePropGet => {
+        // A NULLABLE object receiver is opened the same way for `->` as for `?->`: the union
+        // carries exactly one class, and the null arm is the only thing that differs — `?->`
+        // answers null silently, `->` warns first.
+        PhpType::Union(variants)
+            if matches!(inst.op, Op::NullsafePropGet | Op::PropGet)
+                && variants.iter().all(|variant| {
+                    matches!(variant, PhpType::Object(_) | PhpType::Void)
+                }) =>
+        {
             let object_classes = variants
                 .into_iter()
                 .filter_map(|variant| match variant {
@@ -4903,7 +4911,7 @@ fn property_get_shape_issue(
                 .collect::<Vec<_>>();
             let [class_name] = object_classes.as_slice() else {
                 return Some(
-                    "nullsafe property receiver union must contain exactly one concrete object class"
+                    "a nullable property receiver union must name exactly one concrete class"
                         .to_string(),
                 );
             };
@@ -5018,6 +5026,12 @@ fn property_get_shape_issue(
         );
     }
     if inst.op == Op::NullsafePropGet {
+        return None;
+    }
+    // A NULLABLE receiver makes the read itself nullable: `?Node` reading a declared `int`
+    // answers `int|null`, which this target stores as a tagged pair rather than as the slot's
+    // own width. The slot is still read at its declared type; only the RESULT widens.
+    if matches!(receiver.php_type, PhpType::Union(_)) {
         return None;
     }
     let result_php = inst.result_php_type.codegen_repr();
@@ -6379,6 +6393,21 @@ fn method_body_argument_shape_issue(
     None
 }
 
+/// Whether the call site's result is a SUBCLASS of what the body declared.
+///
+/// This is the `static` return type: the body says `Builder` because that is where the method
+/// lives, and the call site says `QueryBuilder` because that is what its receiver is. Only that
+/// direction is admitted — a body declaring the subclass and a site expecting the base would be
+/// a widening the pointer does not justify.
+fn result_narrows_declared_class(result: &PhpType, declared: &PhpType) -> bool {
+    let (PhpType::Object(result_class), PhpType::Object(declared_class)) =
+        (result.codegen_repr(), declared.codegen_repr())
+    else {
+        return false;
+    };
+    result_class != declared_class
+}
+
 /// Validates the direct object-call result against the concrete method body.
 fn direct_method_result_shape_issue(
     inst: &Instruction,
@@ -6409,7 +6438,13 @@ fn direct_method_result_shape_issue(
         return_type => {
             inst.result.is_some()
                 && inst.result_type == return_type
-                && inst.result_php_type.codegen_repr() == declared_php
+                && (inst.result_php_type.codegen_repr() == declared_php
+                    // A `static` return type is the RECEIVER's class, which the call site knows
+                    // more precisely than the body that declared it: `Builder::andWhere(): static`
+                    // returns `$this`, so a `QueryBuilder` receiver makes the call answer a
+                    // `QueryBuilder`. The pointer is the same one either way, so the narrowing
+                    // relabels rather than converts — and it is only sound in that direction.
+                    || result_narrows_declared_class(&inst.result_php_type, &declared_php))
         }
     };
     if !has_exact_result {
