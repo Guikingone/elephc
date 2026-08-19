@@ -293,6 +293,21 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_ipv4_conversions_and_scalar_var_dump_match_php",
             ][..],
         ),
+        // The array rebuilds and the two mutators. Generic where they only MOVE elements —
+        // a clone already settled the representation and the refcounts — and raw-i64-only
+        // where an element has to be WRITTEN.
+        RuntimeFnId::ArrayPad
+        | RuntimeFnId::ArrayUnique
+        | RuntimeFnId::ArrayColumn
+        | RuntimeFnId::ArraySplice
+        | RuntimeFnId::ArrayUnshift => (
+            "codegen_wasm::arrays_ext",
+            "codegen_wasm::builtins::lower_direct_builtin",
+            &[
+                "codegen_wasm::builtins::tests::array_rebuilds_admit_only_the_storage_they_write",
+                "codegen::cli::test_cli_wasm_array_rebuilds_match_php",
+            ][..],
+        ),
         // Every value the audit proved encodable. An object answers through `jsonSerialize` when
         // it implements `JsonSerializable`, and through its public properties otherwise.
         RuntimeFnId::JsonEncode => (

@@ -19294,3 +19294,123 @@ echo json_encode([1, 2, 3]), "\n";
 echo json_encode([]), "\n";
 echo json_encode([5 => "sparse"]), "\n";
 "##;
+
+/// The array rebuilds and mutators match php, including a by-reference `array_unshift`.
+///
+/// `array_splice` is exercised over three element representations, because the operation copies
+/// whole SLOTS and a stride mistake shows up only where the slot is wider than an int. The
+/// by-reference case is the other half: the prepend relocates the array, and the caller's
+/// variable has to see the moved one.
+#[test]
+fn test_cli_wasm_array_rebuilds_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_array_rebuild");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, ARRAY_REBUILD_PHP).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the array rebuilds to WASM");
+    assert!(
+        output.status.success(),
+        "array-rebuild compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true, preopens: { ".": "." } });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the array rebuilds under Node");
+    assert!(
+        run.status.success(),
+        "array rebuilds trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same file.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "pad: 1 2 9 9 9 \n",
+            "pad left: 9 9 9 1 2 \n",
+            "unique: 1 2 3 4 \n",
+            "column: Ada Linus \n",
+            "reverse: c b a \n",
+            "splice ints: 10 21 22 23 40 50 (removed 2)\n",
+            "splice words: alpha, BETA, delta (removed beta, gamma)\n",
+            "unshifted: 1,2,100,200\n",
+        ),
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// One call of each, with `array_splice` over both an int and a string list.
+const ARRAY_REBUILD_PHP: &str = r##"<?php
+echo "pad: ";
+foreach (array_pad([1, 2], 5, 9) as $v) { echo $v, " "; }
+echo "\n";
+
+echo "pad left: ";
+foreach (array_pad([1, 2], -5, 9) as $v) { echo $v, " "; }
+echo "\n";
+
+echo "unique: ";
+foreach (array_unique([1, 2, 2, 3, 3, 4]) as $v) { echo $v, " "; }
+echo "\n";
+
+// Heterogeneous rows, which is the shape `array_column` answers `array<mixed>` for —
+// a homogeneous one narrows to `array<string>`, which this target refuses because it
+// would have to build string slots rather than cells.
+$rows = [["name" => "Ada", "score" => 10], ["name" => "Linus", "score" => 12]];
+echo "column: ";
+foreach (array_column($rows, "name") as $v) { echo $v, " "; }
+echo "\n";
+
+echo "reverse: ";
+foreach (array_reverse(["a", "b", "c"]) as $v) { echo $v, " "; }
+echo "\n";
+
+$queue = [10, 20, 30, 40, 50];
+$removed = array_splice($queue, 1, 2, [21, 22, 23]);
+echo "splice ints: ";
+foreach ($queue as $v) { echo $v, " "; }
+echo "(removed " . count($removed) . ")\n";
+
+$words = ["alpha", "beta", "gamma", "delta"];
+$cut = array_splice($words, 1, 2, ["BETA"]);
+echo "splice words: " . implode(", ", $words) . " (removed " . implode(", ", $cut) . ")\n";
+
+function prepend_all(array &$target): void
+{
+    array_unshift($target, 1, 2);
+}
+$counts = [100, 200];
+prepend_all($counts);
+echo "unshifted: " . implode(",", $counts) . "\n";
+"##;

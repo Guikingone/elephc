@@ -7911,6 +7911,13 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Fopen
         | RuntimeFnId::Fwrite
         | RuntimeFnId::Fread
+        // The two that REPLACE the caller's array, writing the relocated pointer back.
+        | RuntimeFnId::ArraySplice
+        | RuntimeFnId::ArrayUnshift
+        // Array rebuilds: generic where they only MOVE elements, raw-i64-only where they write.
+        | RuntimeFnId::ArrayPad
+        | RuntimeFnId::ArrayUnique
+        | RuntimeFnId::ArrayColumn
         // Values the audit proved encodable; a float or a bare `mixed` keeps refusing.
         | RuntimeFnId::JsonEncode
         // The output-buffer stack: every stdout write funnels through one interception point.
@@ -8047,7 +8054,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayAll
         | RuntimeFnId::ArrayAny
         | RuntimeFnId::ArrayChunk
-        | RuntimeFnId::ArrayColumn
         | RuntimeFnId::ArrayCombine
         | RuntimeFnId::ArrayDiff
         | RuntimeFnId::ArrayDiffAssoc
@@ -8062,18 +8068,14 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayKeyLast
         | RuntimeFnId::ArrayMergeRecursive
         | RuntimeFnId::ArrayMultisort
-        | RuntimeFnId::ArrayPad
         | RuntimeFnId::ArrayPop
         | RuntimeFnId::ArrayPush
         | RuntimeFnId::ArrayRand
         | RuntimeFnId::ArrayReplace
         | RuntimeFnId::ArrayReplaceRecursive
         | RuntimeFnId::ArrayShift
-        | RuntimeFnId::ArraySplice
         | RuntimeFnId::ArrayUdiff
         | RuntimeFnId::ArrayUintersect
-        | RuntimeFnId::ArrayUnique
-        | RuntimeFnId::ArrayUnshift
         | RuntimeFnId::ArrayWalkRecursive
         | RuntimeFnId::Arsort
         | RuntimeFnId::Asort

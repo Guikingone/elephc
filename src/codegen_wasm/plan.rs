@@ -390,7 +390,10 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
                     // The operator and the right operand's type word are backend constants no
                     // PHP literal need mention, so they are laid out here like every other
                     // diagnostic fragment composed at runtime.
-                    for value in ["%", "int"] {
+                    // EVERY symbol the lowering can pick, not just the fallback: it chooses
+                    // from the CONSUMER's opcode, so a program whose cast feeds a shift asks
+                    // for a spelling this list has to already carry.
+                    for value in ["%", "<<", ">>", "&", "|", "^", "int"] {
                         if !layout_values.iter().any(|already| already == value) {
                             layout_values.push(value.to_string());
                         }

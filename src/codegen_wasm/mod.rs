@@ -21,6 +21,7 @@
 
 mod artifacts;
 mod arrays;
+mod arrays_ext;
 pub(crate) mod builtins;
 pub mod inventory;
 mod callable_arrays;

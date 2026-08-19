@@ -60,6 +60,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_BASE64_DECODE);
     super::urls::emit_url_runtime(wm);
     super::inet::emit_inet_runtime(wm);
+    super::arrays_ext::emit_array_ext_runtime(wm, has_main);
     wm.add_raw_func(RT_STR_CASE_EDGE);
     wm.add_raw_func(RT_STR_UCWORDS);
     wm.add_raw_func(RT_STR_CMP);
@@ -4369,6 +4370,11 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::PrintR
             | RuntimeFnId::Fwrite
             | RuntimeFnId::Fread
+            | RuntimeFnId::ArraySplice
+            | RuntimeFnId::ArrayUnshift
+            | RuntimeFnId::ArrayPad
+            | RuntimeFnId::ArrayUnique
+            | RuntimeFnId::ArrayColumn
             | RuntimeFnId::JsonEncode
             | RuntimeFnId::ObStart
             | RuntimeFnId::ObGetClean
@@ -4496,6 +4502,15 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::JsonEncode {
         return json_encode_shape_issue(module, function, call);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::ArrayPad | RuntimeFnId::ArrayUnique | RuntimeFnId::ArrayColumn
+    ) {
+        return array_rebuild_shape_issue(function, call, target);
+    }
+    if matches!(target, RuntimeFnId::ArraySplice | RuntimeFnId::ArrayUnshift) {
+        return array_mutator_shape_issue(function, call, target);
     }
     if matches!(
         target,
@@ -4820,6 +4835,15 @@ pub(super) fn lower_direct_builtin(
             | RuntimeFnId::ObGetStatus
     ) {
         return lower_output_buffer(ctx, inst, target);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::ArrayPad | RuntimeFnId::ArrayUnique | RuntimeFnId::ArrayColumn
+    ) {
+        return lower_array_rebuild(ctx, inst, target);
+    }
+    if matches!(target, RuntimeFnId::ArraySplice | RuntimeFnId::ArrayUnshift) {
+        return lower_array_mutator(ctx, inst, target);
     }
     if target == RuntimeFnId::JsonEncode {
         // Boxed like `var_dump`'s operand, and for the same reason: the encoder dispatches on a
@@ -5274,6 +5298,12 @@ fn indexed_array_result_shape_issue(
                 || (indexed_source
                     && target == RuntimeFnId::ArrayValues
                     && source_element.as_ref() == Some(&*element))
+                // `array_reverse` only MOVES elements, so its result carries the source's own
+                // element type whatever that is — the generic reverse swaps whole slots on a
+                // clone and never reads one.
+                || (indexed_source
+                    && target == RuntimeFnId::ArrayReverse
+                    && source_element.as_ref() == Some(&*element))
     );
     if call.result.is_none()
         || call.result_type != IrType::Heap(IrHeapKind::Array)
@@ -5574,6 +5604,283 @@ fn json_encode_shape_issue(
     None
 }
 
+/// Validates `array_splice` and `array_unshift`, which REPLACE the caller's array.
+///
+/// Both answer a relocated pointer that has to reach the caller's storage, which is what
+/// `write_back_container_slot` does for a local slot and for a by-reference cell alike. What
+/// this proves is the part that mechanism cannot: that the operands have the representation the
+/// helpers read.
+fn array_mutator_shape_issue(
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    let Some(source) = call.operands.first().and_then(|id| function.value(*id)) else {
+        return Some(format!("{target:?} source is missing from the value table"));
+    };
+    if source.ir_type != IrType::Heap(IrHeapKind::Array) {
+        return Some(format!(
+            "{target:?} source {:?}/{:?} is not an indexed array",
+            source.ir_type,
+            source.php_type.codegen_repr()
+        ));
+    }
+    let PhpType::Array(source_element) = source.php_type.codegen_repr() else {
+        return Some(format!(
+            "{target:?} source {:?} is not an indexed array",
+            source.php_type.codegen_repr()
+        ));
+    };
+    if target == RuntimeFnId::ArrayUnshift {
+        // The prepended values are WRITTEN, so they need the raw i64 representation for the
+        // same reason `array_pad`'s fill does.
+        if !matches!(*source_element, PhpType::Int | PhpType::Never) {
+            return Some(format!(
+                "array_unshift into array<{:?}> on wasm32-wasi (a prepended element has to be a \
+                 raw i64 slot)",
+                source_element
+            ));
+        }
+        for (index, value) in call.operands.iter().enumerate().skip(1) {
+            let Some(value) = function.value(*value) else {
+                return Some(format!("array_unshift value #{index} is missing"));
+            };
+            if value.ir_type != IrType::I64 || value.php_type.codegen_repr() != PhpType::Int {
+                return Some(format!(
+                    "array_unshift value #{index} is {:?}/{:?}, not an int",
+                    value.ir_type,
+                    value.php_type.codegen_repr()
+                ));
+            }
+        }
+        return None;
+    }
+    if call.operands.len() < 2 || call.operands.len() > 4 {
+        return Some(format!(
+            "array_splice takes an offset and optionally a length and a replacement, got {} \
+             operands",
+            call.operands.len()
+        ));
+    }
+    for index in 1..call.operands.len().min(3) {
+        let Some(value) = function.value(call.operands[index]) else {
+            return Some(format!("array_splice operand #{index} is missing"));
+        };
+        if value.ir_type != IrType::I64 {
+            return Some(format!(
+                "array_splice operand #{index} is {:?}, not an int",
+                value.ir_type
+            ));
+        }
+    }
+    // The replacement's elements are copied slot-for-slot into the result, so the two arrays
+    // must agree on their element representation — a wider replacement would be read at the
+    // source's stride and answer garbage rather than php's heterogeneous array.
+    if let Some(replacement) = call.operands.get(3).and_then(|id| function.value(*id)) {
+        let matching = replacement.ir_type == IrType::Heap(IrHeapKind::Array)
+            && matches!(
+                replacement.php_type.codegen_repr(),
+                PhpType::Array(element) if element.codegen_repr() == source_element.codegen_repr()
+            );
+        if !matching {
+            return Some(format!(
+                "array_splice replacement {:?}/{:?} does not share the source's element \
+                 representation",
+                replacement.ir_type,
+                replacement.php_type.codegen_repr()
+            ));
+        }
+    }
+    None
+}
+
+/// Lowers `array_splice` and `array_unshift`, writing the relocated array back.
+fn lower_array_mutator(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    target: RuntimeFnId,
+) -> Result<()> {
+    let source = operand(inst, 0)?;
+    if target == RuntimeFnId::ArrayUnshift {
+        // The values arrive as separate operands; the helper takes them as one array so the
+        // prepend is a single copy rather than one relocation per value.
+        let values = ctx.fresh_temp(super::wat::ValType::I32);
+        ctx.fb.ins(
+            &format!(
+                "(local.set {values} (call $__rt_array_new (i64.const {}) (i64.const 8)))",
+                inst.operands.len().saturating_sub(1)
+            ),
+            "the values to prepend, in order",
+        );
+        for index in 1..inst.operands.len() {
+            ctx.fb.ins(&format!("local.get {values}"), "the value list");
+            ctx.emit_load_value(operand(inst, index)?)?;
+            ctx.fb.ins("call $__rt_array_push_int", "one prepended value");
+            ctx.fb.ins(&format!("local.set {values}"), "it may have relocated");
+        }
+        ctx.emit_load_value(source)?;
+        ctx.fb.ins(&format!("local.get {values}"), "the value list");
+        ctx.fb.ins("call $__rt_array_unshift_int", "prepend, answering the new count");
+        let count = ctx.fresh_temp(super::wat::ValType::I64);
+        ctx.fb.ins(&format!("local.set {count}"), "php answers the new element count");
+        ctx.emit_store_value(source)?;
+        super::inst::write_back_container_slot(ctx, source)?;
+        ctx.fb.ins(
+            &format!("(call $__rt_decref_any (local.get {values}))"),
+            "the value list was copied out of",
+        );
+        if inst.result.is_some() {
+            ctx.fb.ins(&format!("local.get {count}"), "the new count");
+            return store_result(ctx, inst);
+        }
+        return Ok(());
+    }
+    ctx.emit_load_value(source)?;
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    if inst.operands.len() >= 3 {
+        ctx.emit_load_value(operand(inst, 2)?)?;
+        ctx.fb.ins("i32.const 1", "a length was given");
+    } else {
+        ctx.fb.ins("i64.const 0", "no length");
+        ctx.fb.ins("i32.const 0", "which means everything from the offset");
+    }
+    if inst.operands.len() >= 4 {
+        ctx.emit_load_value(operand(inst, 3)?)?;
+    } else {
+        ctx.fb.ins("i32.const 0", "no replacement");
+    }
+    ctx.fb.ins(
+        "call $__rt_array_splice_any",
+        "the window is removed and the replacement takes its place",
+    );
+    let removed = ctx.fresh_temp(super::wat::ValType::I32);
+    ctx.fb.ins(&format!("local.set {removed}"), "what php answers");
+    ctx.emit_store_value(source)?;
+    super::inst::write_back_container_slot(ctx, source)?;
+    if inst.result.is_some() {
+        ctx.fb.ins(&format!("local.get {removed}"), "the removed window");
+        return store_result(ctx, inst);
+    }
+    ctx.fb.ins(
+        &format!("(call $__rt_decref_any (local.get {removed}))"),
+        "nothing reads what was removed",
+    );
+    Ok(())
+}
+
+/// Validates `array_pad`, `array_unique` and `array_column`.
+///
+/// The first two WRITE elements, so they are served only for the raw i64 representation: a
+/// value's width and its refcount obligation both follow the array's `value_type`, and there is
+/// no representation-agnostic way to place one. `array_column` writes cells by construction, so
+/// it takes any row storage its lookup can read.
+fn array_rebuild_shape_issue(
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    let Some(source) = call.operands.first().and_then(|id| function.value(*id)) else {
+        return Some(format!("{target:?} source is missing from the value table"));
+    };
+    if source.ir_type != IrType::Heap(IrHeapKind::Array) {
+        return Some(format!(
+            "{target:?} source {:?} is not an indexed array",
+            source.ir_type
+        ));
+    }
+    if call.result.is_none() || call.result_type != IrType::Heap(IrHeapKind::Array) {
+        return Some(format!("{target:?} must answer an indexed array"));
+    }
+    match target {
+        RuntimeFnId::ArrayColumn => {
+            // php's third argument re-keys the result, which this form does not build.
+            if call.operands.len() != 2 {
+                return Some(format!(
+                    "array_column with {} operands on wasm32-wasi (the index-key form re-keys \
+                     the result, which is a different array)",
+                    call.operands.len()
+                ));
+            }
+            let Some(key) = function.value(call.operands[1]) else {
+                return Some("array_column key is missing from the value table".to_string());
+            };
+            if key.ir_type != IrType::Str {
+                return Some(format!("array_column key {:?} is not a string", key.ir_type));
+            }
+            match call.result_php_type.codegen_repr() {
+                PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => None,
+                other => Some(format!("array_column answers array<mixed>, got {other:?}")),
+            }
+        }
+        _ => {
+            let int_list = matches!(
+                source.php_type.codegen_repr(),
+                PhpType::Array(element) if matches!(*element, PhpType::Int | PhpType::Never)
+            );
+            if !int_list {
+                return Some(format!(
+                    "{target:?} of {:?} on wasm32-wasi (an element it must WRITE has to be a raw \
+                     i64 slot)",
+                    source.php_type.codegen_repr()
+                ));
+            }
+            if call.result_php_type.codegen_repr() != source.php_type.codegen_repr() {
+                return Some(format!(
+                    "{target:?} answers its source's element type, got {:?}",
+                    call.result_php_type.codegen_repr()
+                ));
+            }
+            if target == RuntimeFnId::ArrayPad && call.operands.len() != 3 {
+                return Some(format!(
+                    "array_pad takes a size and a value, got {} operands",
+                    call.operands.len()
+                ));
+            }
+            if target == RuntimeFnId::ArrayUnique && call.operands.len() != 1 {
+                return Some(format!(
+                    "array_unique with {} operands on wasm32-wasi (the sort-flags form compares \
+                     differently)",
+                    call.operands.len()
+                ));
+            }
+            None
+        }
+    }
+}
+
+/// Lowers `array_pad`, `array_unique` and `array_column`.
+fn lower_array_rebuild(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    target: RuntimeFnId,
+) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    match target {
+        RuntimeFnId::ArrayPad => {
+            ctx.emit_load_value(operand(inst, 1)?)?;
+            ctx.emit_load_value(operand(inst, 2)?)?;
+            ctx.fb.ins(
+                "call $__rt_array_pad_int",
+                "a negative size pads on the left, and the size is a target not an amount",
+            );
+        }
+        RuntimeFnId::ArrayUnique => {
+            ctx.fb.ins(
+                "call $__rt_array_unique_int",
+                "the FIRST occurrence of each value survives",
+            );
+        }
+        _ => {
+            ctx.emit_load_value(operand(inst, 1)?)?;
+            ctx.fb.ins(
+                "call $__rt_array_column",
+                "the named value of every row, boxed",
+            );
+        }
+    }
+    store_result(ctx, inst)
+}
+
 /// Whether a runtime-call operand is a hash rather than an indexed array.
 fn hash_operand(ctx: &FnCtx, value: crate::ir::ValueId) -> bool {
     matches!(
@@ -5611,7 +5918,11 @@ fn lower_array_values(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
-/// Validates `array_sum($list)` / `array_product($list)`, which fold an `array<int>` to an int.
+/// Validates `array_sum($list)` / `array_product($list)`, which fold a list to an int.
+///
+/// `array_sum` also takes a HETEROGENEOUS list: its elements are cells rather than raw slots, so
+/// it reads them through the generic walk and casts each the way php casts it. `array_product`
+/// keeps its narrower admission because no lowering serves that source.
 fn array_fold_shape_issue(
     function: &Function,
     call: &Instruction,
@@ -5626,7 +5937,13 @@ fn array_fold_shape_issue(
     let Some(value) = function.value(*operand) else {
         return Some("array operand is missing from the value table".to_string());
     };
-    if !indexed_int_array(value) {
+    let mixed_list = target == RuntimeFnId::ArraySum
+        && value.ir_type == IrType::Heap(IrHeapKind::Array)
+        && matches!(
+            value.php_type.codegen_repr(),
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+        );
+    if !mixed_list && !indexed_int_array(value) {
         return Some(format!(
             "expected a statically typed array<int>, got {:?}/{:?}",
             value.ir_type,
@@ -5649,8 +5966,10 @@ fn array_fold_shape_issue(
 /// Lowers `array_reverse($list)` to a reversed copy.
 fn lower_array_reverse(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.emit_load_value(operand(inst, 0)?)?;
+    // The generic reverse works on a CLONE, whose element representation and refcounts the
+    // clone already established, so it serves every element type by swapping whole slots.
     ctx.fb.ins(
-        "call $__rt_array_reverse_int",
+        "call $__rt_array_reverse_any",
         "reversing a list re-indexes it from zero",
     );
     store_result(ctx, inst)
@@ -5664,9 +5983,20 @@ fn lower_array_reverse(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 /// leaving no slot a float could be returned in, and both backends therefore wrap. Closing it
 /// means widening the declared result to `int|float`, which is an EIR-level change.
 fn lower_array_fold(ctx: &mut FnCtx, inst: &Instruction, target: RuntimeFnId) -> Result<()> {
-    ctx.emit_load_value(operand(inst, 0)?)?;
+    let source = operand(inst, 0)?;
+    // A heterogeneous source has no raw i64 slots to scan: its elements are cells, so each is
+    // read through the generic walk and cast with php's own integer conversion.
+    let heterogeneous = matches!(
+        ctx.value_php_type(source)?.codegen_repr(),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+    );
+    ctx.emit_load_value(source)?;
     let (helper, comment) = if target == RuntimeFnId::ArraySum {
-        ("call $__rt_array_sum_int", "PHP sums an empty array to 0")
+        if heterogeneous {
+            ("call $__rt_array_sum_mixed", "each element cast the way PHP casts it")
+        } else {
+            ("call $__rt_array_sum_int", "PHP sums an empty array to 0")
+        }
     } else {
         ("call $__rt_array_product_int", "PHP's empty product is 1")
     };
@@ -9361,6 +9691,59 @@ mod tests {
         }
     }
 
+    /// The array rebuilds admit exactly the storage each one can serve.
+    ///
+    /// The line is not arbitrary: an operation that only MOVES elements works on a clone, whose
+    /// representation and refcounts are already right, so it takes any element type. One that
+    /// WRITES an element has to know the slot's width and its refcount obligation, and both
+    /// follow the array's `value_type` — so those take raw i64 slots and refuse the rest.
+    #[test]
+    fn array_rebuilds_admit_only_the_storage_they_write() {
+        for target in [
+            RuntimeFnId::ArrayPad,
+            RuntimeFnId::ArrayUnique,
+            RuntimeFnId::ArrayColumn,
+            RuntimeFnId::ArraySplice,
+            RuntimeFnId::ArrayUnshift,
+        ] {
+            assert!(
+                is_direct_builtin(target),
+                "{target:?} must be audited as a direct builtin"
+            );
+            assert!(
+                super::super::capability::runtime_function_is_supported(target),
+                "{target:?} must be admitted"
+            );
+        }
+
+        // `array_pad` writes its fill, so a string list has no slot it can place one in.
+        let pad_strings = call_with(
+            RuntimeFnId::ArrayPad,
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Str)),
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Str)),
+        );
+        assert!(
+            verdict(&pad_strings, RuntimeFnId::ArrayPad).is_some(),
+            "array_pad writes an element, so it needs a raw i64 slot"
+        );
+
+        // `array_splice` only moves them, so a string list is served.
+        let splice_strings = call_with(
+            RuntimeFnId::ArraySplice,
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Str)),
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Str)),
+        );
+        // Two operands short of a call: the shape check wants an offset too.
+        assert!(
+            verdict(&splice_strings, RuntimeFnId::ArraySplice).is_some(),
+            "array_splice needs its offset"
+        );
+    }
+
     /// `json_encode` admits a value only when everything it can contain has a JSON form here.
     ///
     /// A bare `mixed` is refused: its runtime tag could be a float or a resource, and the
@@ -9688,8 +10071,9 @@ mod tests {
             assert_eq!(verdict(&ok, target), None, "{target:?} over array<int>");
         }
 
-        // `array_reverse` walks raw i64 slots at the integer stride, so a wider element is a
-        // misread rather than a projection.
+        // `array_reverse` reads no element at all: it swaps whole SLOTS on a clone, at the
+        // array's own stride, so a wider element type is served rather than misread. What it
+        // still may not do is CHANGE the element type, because the swap produces the source's.
         let reversed_strings = call_with(
             RuntimeFnId::ArrayReverse,
             IrType::Heap(IrHeapKind::Array),
@@ -9697,9 +10081,21 @@ mod tests {
             IrType::Heap(IrHeapKind::Array),
             PhpType::Array(Box::new(PhpType::Str)),
         );
+        assert_eq!(
+            verdict(&reversed_strings, RuntimeFnId::ArrayReverse),
+            None,
+            "array_reverse swaps slots at the array's own stride"
+        );
+        let reversed_retyped = call_with(
+            RuntimeFnId::ArrayReverse,
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Str)),
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Object("Cart".to_string()))),
+        );
         assert!(
-            verdict(&reversed_strings, RuntimeFnId::ArrayReverse).is_some(),
-            "array_reverse must not read string slots at the integer stride"
+            verdict(&reversed_retyped, RuntimeFnId::ArrayReverse).is_some(),
+            "array_reverse answers its source's element type, not another"
         );
 
         // `array_values` is the OPPOSITE case, and grouping it with the walk above was stricter
