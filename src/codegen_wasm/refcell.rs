@@ -542,6 +542,161 @@ pub(super) fn lower_release_local_ref_cell(ctx: &mut FnCtx, inst: &Instruction) 
     ctx.emit_ref_cell_release(&ptr_local, &payload)
 }
 
+/// Lowers `Op::LoadPropRefCell`: `&$object->property` — the ADDRESS of the property's slot.
+///
+/// A declared property slot and a ref cell already have the same 16-byte shape — the value at
+/// @0 and the string length or tagged tag at @8 — so aliasing one is taking its address, with
+/// nothing to allocate or copy. The EIR types the result as the POINTEE (`Heap(Array)` for an
+/// array property, `I64` for an int one) because that is what every read through the alias
+/// answers; the value this produces is the address, and `bind_ref_cell_ptr` is what turns it
+/// into a slot binding.
+///
+/// The alias BORROWS: the object owns the slot, and the frame that aliased it must not release
+/// what it never allocated.
+pub(super) fn lower_load_prop_ref_cell(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let object = operand(inst, 0)?;
+    let result = inst
+        .result
+        .ok_or_else(|| WasmError::Unsupported("load_prop_ref_cell without result".to_string()))?;
+    let prop_data = super::inst::data_immediate(inst)?;
+    let property = ctx
+        .module
+        .data
+        .strings
+        .get(prop_data.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| WasmError::Unsupported(format!("invalid property data {prop_data:?}")))?;
+    // A receiver whose class only run time knows — `$this` inside a bound closure — resolves
+    // its slot through the shared class-id ladder instead of a compile-time offset.
+    let address = if matches!(
+        ctx.value_php_type(object)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        let (address, _) = super::objects::emit_mixed_receiver_slot_address(
+            ctx,
+            object,
+            prop_data,
+            &property,
+            "__rt_fail_modify_on_null",
+        )?;
+        address
+    } else {
+        let (_, class_info) = super::objects::receiver_class_info(ctx, object)?;
+        let (_, offset, _) = super::objects::resolve_property_slot(&class_info, &property)?;
+        let address = ctx.fresh_temp(ValType::I32);
+        let object_ref = super::objects::object_ptr_ref(ctx, object)?;
+        ctx.fb
+            .ins(&format!("local.get {}", object_ref), "the object holding the slot");
+        ctx.fb
+            .ins(&format!("i32.const {offset}"), "declared property slot offset");
+        ctx.fb.ins("i32.add", "slot address = object + offset");
+        ctx.fb
+            .ins(&format!("local.set {}", address), "the aliased slot address");
+        address
+    };
+    emit_address_as(ctx, &address, result)?;
+    super::inst::store_result(ctx, inst)
+}
+
+/// Lowers `Op::LoadArrayElemRefCell`: `&$array[$index]` — the address of one element's storage.
+///
+/// The same aliasing rule as a property slot, over the indexed payload instead: elements start
+/// at +24 and each is `stride` bytes wide, which the array header records at +16 so a promoted
+/// or specialized array is read at its real width rather than an assumed one.
+pub(super) fn lower_load_array_elem_ref_cell(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let array = operand(inst, 0)?;
+    let index = operand(inst, 1)?;
+    let result = inst
+        .result
+        .ok_or_else(|| WasmError::Unsupported("load_array_elem_ref_cell without result".to_string()))?;
+    let base = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(array)?;
+    ctx.fb
+        .ins(&format!("local.set {}", base), "the aliased array");
+    let address = ctx.fresh_temp(ValType::I32);
+    ctx.fb
+        .ins(&format!("local.get {}", base), "array base pointer");
+    ctx.fb.ins("i32.const 24", "skip the indexed-array header");
+    ctx.fb.ins("i32.add", "address of element 0");
+    ctx.emit_load_value(index)?;
+    ctx.fb.ins(
+        &format!("(i64.load offset=16 (local.get {}))", base),
+        "the array's recorded element stride",
+    );
+    ctx.fb.ins("i64.mul", "index * stride");
+    ctx.fb.ins("i32.wrap_i64", "byte offset -> i32");
+    ctx.fb.ins("i32.add", "element address = base + 24 + index*stride");
+    ctx.fb
+        .ins(&format!("local.set {}", address), "the aliased element address");
+    emit_address_as(ctx, &address, result)?;
+    super::inst::store_result(ctx, inst)
+}
+
+/// Pushes an alias address in the representation the EIR gave its result.
+///
+/// The result carries the POINTEE's type, which is what every read through the alias answers —
+/// but the value being produced here is an ADDRESS, so each representation carries it in its
+/// first word and leaves the rest zero. A pointer-shaped pointee takes it as an i32, a scalar one
+/// widened to i64, and a STRING — two words, `(ptr, len)` — takes it in `ptr` with a zero length,
+/// because the length that matters lives at the aliased slot's `+8` and is read from there.
+/// `bind_ref_cell_ptr` is the only consumer, and it reads back exactly the word each case wrote.
+fn emit_address_as(ctx: &mut FnCtx, address: &str, result: crate::ir::ValueId) -> Result<()> {
+    match ctx.value_repr(result)?.clone() {
+        WasmRepr::Ptr(_) => {
+            ctx.fb
+                .ins(&format!("local.get {}", address), "the alias address");
+        }
+        WasmRepr::I64(_) => {
+            ctx.fb
+                .ins(&format!("local.get {}", address), "the alias address");
+            ctx.fb.ins("i64.extend_i32_u", "carry it in the scalar slot");
+        }
+        WasmRepr::Str { .. } => {
+            ctx.fb
+                .ins(&format!("local.get {}", address), "the alias address");
+            ctx.fb
+                .ins("i64.const 0", "the length lives at the aliased slot, not here");
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "reference alias into a {other:?} result on wasm32-wasi"
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// Lowers `Op::BindRefCellPtr`: binds a local slot to an alias address already computed.
+///
+/// The address may have travelled — out of `load_prop_ref_cell` right here, or back from a
+/// by-reference function return — so this takes it as a VALUE rather than recomputing it. The
+/// binding borrows: whatever owns the storage still owns it.
+pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let address = operand(inst, 0)?;
+    let slot = slot_immediate(inst)?;
+    let pointer = ctx.fresh_temp(ValType::I32);
+    ctx.register_ref_cell_ptr(slot.as_raw(), pointer.clone(), false);
+    match ctx.value_repr(address)?.clone() {
+        WasmRepr::Ptr(_) => ctx.emit_load_value(address)?,
+        WasmRepr::I64(_) => {
+            ctx.emit_load_value(address)?;
+            ctx.fb.ins("i32.wrap_i64", "the address travelled in a scalar slot");
+        }
+        WasmRepr::Str { ptr, .. } => {
+            ctx.fb
+                .ins(&format!("local.get {}", ptr), "the address travelled in the string pointer");
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "reference binding from a {other:?} value on wasm32-wasi"
+            )))
+        }
+    }
+    ctx.fb
+        .ins(&format!("local.set {}", pointer), "bind the slot to the aliased address");
+    Ok(())
+}
+
 /// Lowers `Op::IterCurrentValueRef`: bind the foreach value slot to the current
 /// array element's in-place address.
 ///

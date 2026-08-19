@@ -1010,7 +1010,7 @@ fn value_php_type(ctx: &FnCtx, v: ValueId) -> Result<PhpType> {
 /// non-object receivers with a clean `Unsupported` error. The name is returned alongside the
 /// info so callers can run dynamic-property probes that depend on the canonical class name
 /// (`stdClass` detection).
-fn receiver_class_info(ctx: &FnCtx, object: ValueId) -> Result<(String, ClassInfo)> {
+pub(super) fn receiver_class_info(ctx: &FnCtx, object: ValueId) -> Result<(String, ClassInfo)> {
     let php_type = value_php_type(ctx, object)?;
     let class_name = match php_type {
         PhpType::Object(name) => name,
@@ -1405,6 +1405,105 @@ fn class_descends_from(ctx: &FnCtx, class_name: &str, ancestor: &str) -> bool {
             .and_then(|ci| ci.parent.clone());
     }
     false
+}
+
+/// Resolves the ADDRESS of a declared property slot on a receiver whose class only run time
+/// knows, and returns the local holding it.
+///
+/// This backend has no `funcref` table, so every dynamic dispatch here is an if-ladder over the
+/// runtime `class_id`, and this is that ladder with a slot address as its answer. Two classes may
+/// declare the same property at different offsets, which is exactly why the ladder produces an
+/// ADDRESS rather than a constant offset the caller could fold.
+///
+/// They must agree on the declared TYPE, though: the caller reads or writes the slot at one
+/// width, and a ladder whose arms disagreed would need a per-arm access rather than a per-arm
+/// offset. That case is refused rather than picking one.
+///
+/// A receiver that is not an object raises php's own `Error`, worded by `on_null_helper` — the
+/// verb differs between assigning to a property and aliasing one, and php distinguishes them.
+pub(super) fn emit_mixed_receiver_slot_address(
+    ctx: &mut FnCtx,
+    object: ValueId,
+    prop_data: crate::ir::DataId,
+    property: &str,
+    on_null_helper: &str,
+) -> Result<(String, PhpType)> {
+    let mut arms: Vec<(u64, String, usize, PhpType)> = Vec::new();
+    let mut classes: Vec<_> = ctx.module.class_infos.iter().collect();
+    classes.sort_by(|left, right| {
+        left.1
+            .class_id
+            .cmp(&right.1.class_id)
+            .then_with(|| left.0.cmp(right.0))
+    });
+    for (class_name, class_info) in classes {
+        if let Ok((_, offset, declared)) = resolve_property_slot(class_info, property) {
+            arms.push((
+                class_info.class_id,
+                class_name.clone(),
+                offset,
+                declared.codegen_repr(),
+            ));
+        }
+    }
+    let Some((_, _, _, declared)) = arms.first().cloned() else {
+        return Err(WasmError::Unsupported(format!(
+            "property ${property} through a runtime receiver is declared by no compiled class"
+        )));
+    };
+    if let Some((_, class_name, _, other)) = arms
+        .iter()
+        .find(|(_, _, _, candidate)| *candidate != declared)
+    {
+        return Err(WasmError::Unsupported(format!(
+            "property ${property} is {declared:?} on one class and {other:?} on {class_name}, \
+             which a runtime receiver cannot read at one width"
+        )));
+    }
+
+    let tag = ctx.fresh_temp(ValType::I64);
+    let lo = ctx.fresh_temp(ValType::I64);
+    let object_ptr = ctx.fresh_temp(ValType::I32);
+    let address = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(object)?;
+    ctx.fb
+        .ins("call $__rt_mixed_unbox", "open the receiver -> (tag, lo, hi)");
+    ctx.fb.ins("drop", "hi is unused for an object receiver");
+    ctx.fb
+        .ins(&format!("local.set {}", lo), "object pointer when the tag says object");
+    ctx.fb
+        .ins(&format!("local.set {}", tag), "receiver runtime tag");
+    let (name_ptr, name_len) = ctx.str_literal(prop_data)?;
+    ctx.fb.ins(
+        &format!(
+            "(if (i64.ne (local.get {tag}) (i64.const 6)) (then (call ${on_null_helper} (i32.const {name_ptr}) (i32.const {name_len})) unreachable))"
+        ),
+        "elephc-trap:post-noreturn:property-on-non-object php names the property it could not reach",
+    );
+    ctx.fb.ins(
+        &format!("(local.set {object_ptr} (i32.wrap_i64 (local.get {lo})))"),
+        "the receiver object",
+    );
+    ctx.fb.ins(
+        &format!("(local.set {address} (i32.const 0))"),
+        "no arm has matched yet",
+    );
+    for (class_id, class_name, offset, _) in &arms {
+        ctx.fb.ins(
+            &format!(
+                "(if (i64.eq (i64.load (local.get {object_ptr})) (i64.const {})) (then (local.set {address} (i32.add (local.get {object_ptr}) (i32.const {offset})))))",
+                *class_id as i64
+            ),
+            &format!("{class_name} keeps ${property} at +{offset}"),
+        );
+    }
+    ctx.fb.ins(
+        &format!(
+            "(if (i32.eqz (local.get {address})) (then (call ${on_null_helper} (i32.const {name_ptr}) (i32.const {name_len})) unreachable))"
+        ),
+        "elephc-trap:post-noreturn:property-on-non-object an object of a class that does not declare it",
+    );
+    Ok((address, declared))
 }
 
 /// Allocates one instance of `class_name` and returns the local holding its pointer.

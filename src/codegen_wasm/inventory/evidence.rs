@@ -52,6 +52,9 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::StoreRefCell => &["assignment through a PHP reference"],
         Op::PromoteLocalRefCell => &["first by-reference use of a local"],
         Op::AliasLocalRefCell => &["reference assignment (`$a =& $b`)"],
+        Op::LoadPropRefCell => &["reference to a property (`$r = &$o->p`)"],
+        Op::LoadArrayElemRefCell => &["reference to an array element (`$r = &$a[0]`)"],
+        Op::BindRefCellPtr => &["binding a reference to an aliased address"],
         Op::ReleaseLocalRefCell => &["scope exit for a referenced local"],
         Op::LoadGlobal => &["superglobal/global variable read"],
         Op::StoreGlobal => &["top-level `const` and `global $x` assignment"],
@@ -199,6 +202,9 @@ fn op_tests(op: Op) -> &'static [&'static str] {
         ],
         Op::StoreRefCell | Op::AliasLocalRefCell => {
             &["codegen_wasm::tests::ref_cell_alias_string_store_e2e"]
+        }
+        Op::LoadPropRefCell | Op::LoadArrayElemRefCell | Op::BindRefCellPtr => {
+            &["codegen_wasm::tests::property_reference_writes_through_to_the_object"]
         }
         Op::LoadGlobal => &["codegen_wasm::tests::argc_reports_argument_count"],
         Op::StoreGlobal => &["codegen_wasm::statics::tests::global_slots_are_placed_by_name"],
@@ -450,6 +456,9 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::StoreRefCell => "codegen_wasm::refcell::lower_store_ref_cell",
         Op::PromoteLocalRefCell => "codegen_wasm::refcell::lower_promote_local_ref_cell",
         Op::AliasLocalRefCell => "codegen_wasm::refcell::lower_alias_local_ref_cell",
+        Op::LoadPropRefCell => "codegen_wasm::refcell::lower_load_prop_ref_cell",
+        Op::LoadArrayElemRefCell => "codegen_wasm::refcell::lower_load_array_elem_ref_cell",
+        Op::BindRefCellPtr => "codegen_wasm::refcell::lower_bind_ref_cell_ptr",
         Op::ReleaseLocalRefCell => "codegen_wasm::refcell::lower_release_local_ref_cell",
         Op::IterCurrentValueRef => "codegen_wasm::refcell::lower_iter_current_value_ref",
         Op::ArrayToMixed => "codegen_wasm::inst::lower_array_to_mixed",
@@ -478,6 +487,9 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         | Op::StoreRefCell
         | Op::PromoteLocalRefCell
         | Op::AliasLocalRefCell
+        | Op::LoadPropRefCell
+        | Op::LoadArrayElemRefCell
+        | Op::BindRefCellPtr
         | Op::ReleaseLocalRefCell => "transfer_refcell",
         Op::LoadGlobal => "transfer_global_load",
         Op::StoreGlobal => "transfer_global_load",

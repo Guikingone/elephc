@@ -632,11 +632,28 @@ fn stamp_capture_slot(
 ) -> Result<()> {
     let off = CAPTURE_SLOT_OFFSET + i as i32 * CAPTURE_SLOT_BYTES;
     let operand_php = ctx.value_php_type(operand)?;
-    if operand_php != cap_p.php_type {
+    // An UNBOUND `$this` — the shape `Closure::bind(fn () => ..., $obj)` creates before the bind
+    // supplies a receiver — captures a literal null into a `mixed` slot. PHP words that state
+    // the same way (`$this` is null on an unbound closure), so the null is boxed into the slot
+    // rather than refused for not already being a Mixed cell.
+    let unbound_receiver = operand_php == PhpType::Void
+        && cap_p.php_type.codegen_repr() == PhpType::Mixed
+        && cap_p.name == "this";
+    if operand_php != cap_p.php_type && !unbound_receiver {
         return Err(WasmError::Unsupported(format!(
             "closure capture {}: operand type {:?} != param type {:?}",
             cap_p.name, operand_php, cap_p.php_type
         )));
+    }
+    if unbound_receiver {
+        ctx.fb.ins(
+            &format!(
+                "(i64.store (i32.add (local.get {}) (i32.const {})) (i64.extend_i32_u (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0))))",
+                desc, off
+            ),
+            "an unbound closure's $this is a boxed null",
+        );
+        return Ok(());
     }
     let ownership = ctx
         .function

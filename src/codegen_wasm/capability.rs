@@ -4191,6 +4191,16 @@ fn direct_call_shape_issue(
         let Some(value) = owner.value(result) else {
             return Some("call result is missing from the value table".to_string());
         };
+        // A BY-REFERENCE return hands back an ADDRESS, and the call site labels that address
+        // with what it points AT — `function &all()` returning the address of an `array`
+        // property answers `Heap(Array)` here while the body answers the raw `I64`. Both are
+        // the same machine address, so the relabel is admitted exactly where it can only be an
+        // address: the result must feed a reference binding and nothing else.
+        if target.function.flags.by_ref_return
+            && by_ref_return_result_only_binds_a_reference(owner, result)
+        {
+            return None;
+        }
         if let Some(issue) = call_result_shape_issue(
             target.function.return_type,
             target.function.return_php_type.codegen_repr(),
@@ -4200,6 +4210,26 @@ fn direct_call_shape_issue(
         }
     }
     None
+}
+
+/// Whether a by-reference call's result is used only to bind a reference.
+///
+/// That is what makes it safe to read the result's type as the POINTEE rather than as the
+/// returned value: `bind_ref_cell_ptr` treats it as an address, and every read afterwards goes
+/// through `load_ref_cell`, which reads the pointee at the slot's own width. A result used any
+/// other way would be the address itself masquerading as the value.
+fn by_ref_return_result_only_binds_a_reference(function: &Function, result: ValueId) -> bool {
+    let mut bound = false;
+    for candidate in &function.instructions {
+        if !candidate.operands.contains(&result) {
+            continue;
+        }
+        if candidate.op != Op::BindRefCellPtr {
+            return false;
+        }
+        bound = true;
+    }
+    bound
 }
 
 /// Validates the destination a call's result value is bound to.
@@ -8811,6 +8841,9 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::PromoteLocalRefCell
         | Op::AliasLocalRefCell
         | Op::ReleaseLocalRefCell
+        | Op::LoadPropRefCell
+        | Op::LoadArrayElemRefCell
+        | Op::BindRefCellPtr
         | Op::LoadGlobal
         | Op::StoreGlobal
         // The `@` operator: a suppression depth the `__rt_warn_*` helpers consult.
@@ -8984,9 +9017,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::DynamicObjectNewMixed
         | Op::DynamicObjectNewWithoutConstructorMixed
         | Op::PropInitialized
-        | Op::LoadPropRefCell
-        | Op::LoadArrayElemRefCell
-        | Op::BindRefCellPtr
         | Op::DynamicPropGet
         | Op::DynamicPropSet
         | Op::MethodLookup

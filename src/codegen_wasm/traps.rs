@@ -544,6 +544,17 @@ fn target_has_registered_noreturn_proof(
                     Some("$wasi_proc_exit"),
                 )
         }
+        // The alias through a non-object composes php's other wording — "modify" rather than
+        // "assign" — and exits the same way.
+        "$__rt_fail_modify_on_null" => {
+            proc_exit
+                && has_site(
+                    "$__rt_fail_modify_on_null",
+                    TrapClass::PostNoreturn,
+                    "modify-on-null-fatal-exit",
+                    Some("$wasi_proc_exit"),
+                )
+        }
         // A `throw_error_value` no frame can catch writes the prefix, the runtime-composed
         // message and the newline, then exits — the same proof shape as the undefined-function
         // fatal above, and for the same reason: the message is runtime state.
@@ -642,6 +653,7 @@ fn has_noreturn_predecessor(
         "$__rt_fail_undefined_function",
         "$__rt_fail_error_value",
         "$__rt_fail_assign_on_null",
+        "$__rt_fail_modify_on_null",
         "$__rt_fail_too_few_arguments",
         "$__rt_fail_operand_types",
         "$__rt_fail_object_to_string",

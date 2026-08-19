@@ -96,6 +96,10 @@ const ERR_UNDEFINED_METHOD_SUFFIX: &[u8] = b"()\n";
 /// because one lowering serves every property.
 const ERR_ASSIGN_ON_NULL_PREFIX: &[u8] = b"PHP Fatal error: Uncaught Error: Attempt to assign property \"";
 const ERR_ASSIGN_ON_NULL_SUFFIX: &[u8] = b"\" on null\n";
+/// php's `Error` for a property ALIASED through a non-object — `$r = &$null->prop;`. Measured
+/// on 8.5.6: the verb is "modify" where a plain write says "assign", and nothing else differs.
+const ERR_MODIFY_ON_NULL_PREFIX: &[u8] =
+    b"PHP Fatal error: Uncaught Error: Attempt to modify property \"";
 const DUMP_INT_PREFIX: &[u8] = b"int(";
 const DUMP_FLOAT_PREFIX: &[u8] = b"float(";
 const DUMP_STRING_PREFIX: &[u8] = b"string(";
@@ -350,6 +354,7 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_ERROR_VALUE_SUFFIX.len() as u32
     + ERR_ASSIGN_ON_NULL_PREFIX.len() as u32
     + ERR_ASSIGN_ON_NULL_SUFFIX.len() as u32
+    + ERR_MODIFY_ON_NULL_PREFIX.len() as u32
     + DUMP_INT_PREFIX.len() as u32
     + DUMP_FLOAT_PREFIX.len() as u32
     + DUMP_STRING_PREFIX.len() as u32
@@ -1108,6 +1113,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         // Appended LAST for the same reason as every group above it.
         ERR_ASSIGN_ON_NULL_PREFIX,
         ERR_ASSIGN_ON_NULL_SUFFIX,
+        ERR_MODIFY_ON_NULL_PREFIX,
         DUMP_INT_PREFIX,
         DUMP_FLOAT_PREFIX,
         DUMP_STRING_PREFIX,
@@ -1269,8 +1275,8 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     wm.add_raw_func(&wat);
     emit_method_call_failure_runtime(wm, &method_offsets);
     emit_error_value_failure_runtime(wm, &method_offsets[21..23]);
-    emit_assign_on_null_runtime(wm, &method_offsets[23..25]);
-    super::inet::emit_var_dump_runtime(wm, &method_offsets[25..41]);
+    emit_assign_on_null_runtime(wm, &method_offsets[23..26]);
+    super::inet::emit_var_dump_runtime(wm, &method_offsets[26..42]);
     emit_undefined_array_key_warning_runtime(wm, &warning_offsets[..17]);
     emit_return_coercion_runtime(wm, &warning_offsets[17..34], &method_offsets[2..11]);
     emit_property_on_null_warning_runtime(wm, &warning_offsets[34..36]);
@@ -1692,7 +1698,7 @@ fn emit_uninit_string_offset_warning_runtime(wm: &mut WatModule, offsets: &[(u32
 /// The helper composes the PHP-visible method name with the runtime Mixed tag,
 /// writes the diagnostic to stderr, and terminates with PHP's fatal status 255.
 fn emit_method_call_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
-    debug_assert_eq!(offsets.len(), 41);
+    debug_assert_eq!(offsets.len(), 42);
     let (prefix_ptr, prefix_len) = offsets[0];
     let (suffix_ptr, suffix_len) = offsets[1];
     let type_offsets = &offsets[2..11];
@@ -2209,9 +2215,10 @@ fn emit_error_value_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) 
 /// and this reports the uncaught form and exits. The capability audit refuses the write inside a
 /// function that could catch it, so the two only ever disagree where php would also have exited.
 fn emit_assign_on_null_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
-    debug_assert_eq!(offsets.len(), 2);
+    debug_assert_eq!(offsets.len(), 3);
     let (prefix_ptr, prefix_len) = offsets[0];
     let (suffix_ptr, suffix_len) = offsets[1];
+    let (modify_ptr, modify_len) = offsets[2];
     wm.add_raw_func(&format!(
         r#"(func $__rt_fail_assign_on_null (param $name_ptr i32) (param $name_len i32)
   (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len})))
@@ -2219,6 +2226,15 @@ fn emit_assign_on_null_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
   (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))
   (call $wasi_proc_exit (i32.const 255))
   unreachable ;; elephc-trap:post-noreturn:assign-on-null-fatal-exit
+)"#
+    ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_fail_modify_on_null (param $name_ptr i32) (param $name_len i32)
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {modify_ptr}) (i32.const {modify_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $name_ptr) (local.get $name_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))
+  (call $wasi_proc_exit (i32.const 255))
+  unreachable ;; elephc-trap:post-noreturn:modify-on-null-fatal-exit
 )"#
     ));
 }

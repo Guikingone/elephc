@@ -169,6 +169,9 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
             super::closures::lower_callable_descriptor_invoke(ctx, &inst)
         }
         Op::LoadRefCell => super::refcell::lower_load_ref_cell(ctx, &inst),
+        Op::LoadPropRefCell => super::refcell::lower_load_prop_ref_cell(ctx, &inst),
+        Op::LoadArrayElemRefCell => super::refcell::lower_load_array_elem_ref_cell(ctx, &inst),
+        Op::BindRefCellPtr => super::refcell::lower_bind_ref_cell_ptr(ctx, &inst),
         Op::StoreRefCell => super::refcell::lower_store_ref_cell(ctx, &inst),
         Op::PromoteLocalRefCell => super::refcell::lower_promote_local_ref_cell(ctx, &inst),
         Op::AliasLocalRefCell => super::refcell::lower_alias_local_ref_cell(ctx, &inst),
@@ -436,6 +439,16 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         )));
     }
 
+    // A BY-REFERENCE return hands back an address the call site labels with the pointee type,
+    // so the widths can differ: the body answers an i64 address and the site holds an i32
+    // pointer. The call itself is unchanged; only the narrowing after it is.
+    let by_ref_return_narrows = target.function.flags.by_ref_return
+        && target.function.return_type == IrType::I64
+        && inst
+            .result
+            .and_then(|result| ctx.value_repr(result).ok())
+            .is_some_and(|repr| matches!(repr, WasmRepr::Ptr(_)));
+
     // Pre-call pass: push each argument in the callee parameter's representation.
     // By-ref params materialize a cell pointer (a temp cell for a fresh local, the shared
     // pointer for an already-ref-bound local); all other args go through the typed
@@ -472,8 +485,17 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.fb
         .ins(&format!("call ${}", symbol), &format!("call {}", name));
 
-    if let Some(_r) = inst.result {
-        transfer::emit_store_call_result(ctx, &inst, callee_return_type, callee_return_php)?;
+    if let Some(result) = inst.result {
+        if by_ref_return_narrows {
+            // Not a conversion: the callee's i64 and the site's i32 are the same address, and
+            // the transfer layer would refuse the pair for exactly the reason it should — a
+            // value of one type does not become a value of the other.
+            ctx.fb
+                .ins("i32.wrap_i64", "a by-reference return hands back an address");
+            ctx.emit_store_value(result)?;
+        } else {
+            transfer::emit_store_call_result(ctx, &inst, callee_return_type, callee_return_php)?;
+        }
     } else {
         let return_arity = WasmRepr::val_types(callee_return_type).len();
         for _ in 0..return_arity {
