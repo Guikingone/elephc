@@ -19283,6 +19283,110 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// The four associative sorts, php's key ordering, and the two searches over a hash.
+///
+/// Three things here are the ones a plausible-looking implementation gets wrong. Key order is
+/// `zend_compare`, NOT "integers first": `"01"` compares numerically against the integer keys
+/// while the integers compare as strings against `"a"` and `"B"`. The sorts are STABLE, so
+/// `arsort` is not `asort` reversed — equal values keep their entry order in both. And they are
+/// copy-on-write, so a copy taken before the sort keeps the original order.
+#[test]
+fn test_cli_wasm_hash_sorts_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_hash_sorts");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, HASH_SORT_PHP).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the hash-sort probe");
+    assert!(
+        output.status.success(),
+        "hash-sort compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the hash-sort probe");
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), HASH_SORT_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The associative-sort probe.
+const HASH_SORT_PHP: &str = r##"<?php
+$scores = ["bruno" => 7, "ada" => 9, "carl" => 7, "dina" => 4];
+$asEntered = $scores;
+
+$a = $scores; ksort($a);  echo "ksort:", implode(",", array_keys($a)), ";";
+$b = $scores; krsort($b); echo "krsort:", implode(",", array_keys($b)), ";";
+$c = $scores; asort($c);  echo "asort:", implode(",", array_keys($c)), ";";
+$d = $scores; arsort($d); echo "arsort:", implode(",", array_keys($d)), ";";
+
+// The copy taken before the sort keeps the original order: php separates on write.
+ksort($scores);
+echo "sorted:", implode(",", array_keys($scores)), ";";
+echo "copy:", implode(",", array_keys($asEntered)), ";";
+
+// Key order is `zend_compare`, not "integers first".
+$mixed = ["01" => 1, "9" => 2, "10" => 3, "a" => 4, "B" => 5, "" => 6];
+ksort($mixed);
+echo "keys:", implode("|", array_keys($mixed)), ";";
+
+// Values keep their keys, and equal values keep their entry order.
+$pairs = ["x" => 2, "y" => 1, "z" => 2];
+asort($pairs);
+$out = "";
+foreach ($pairs as $k => $v) { $out = $out . $k . $v; }
+echo "asort_pairs:", $out, ";";
+
+// in_array / array_search over a hash walk the VALUES; the search answers the KEY.
+$user = ["name" => "Alice", "role" => "admin", "age" => 30];
+echo in_array("Alice", $user) ? "y" : "n";
+echo in_array("nope", $user) ? "y" : "n";
+echo in_array("30", $user) ? "y" : "n";
+echo in_array("30", $user, true) ? "y" : "n";
+echo ";", array_search("Alice", $user), ";";
+var_dump(array_search("nope", $user));
+"##;
+
+/// php-src 8.5.6's own output for `HASH_SORT_PHP`.
+const HASH_SORT_EXPECTED: &str = concat!(
+    "ksort:ada,bruno,carl,dina;krsort:dina,carl,bruno,ada;",
+    "asort:dina,bruno,carl,ada;arsort:ada,bruno,carl,dina;",
+    "sorted:ada,bruno,carl,dina;copy:bruno,ada,carl,dina;",
+    "keys:|01|9|10|B|a;asort_pairs:y1x2z2;ynyn;name;bool(false)\n",
+);
+
 /// A JsonSerializable nested in a plain object, then the escaping and container cases.
 const JSON_ENCODE_PHP: &str = r##"<?php
 class Money implements JsonSerializable

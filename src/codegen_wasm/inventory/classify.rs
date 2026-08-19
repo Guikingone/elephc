@@ -391,6 +391,19 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_scalar_sorts_match_php",
             ][..],
         ),
+        // The four associative sorts share one merge over the insertion-order chain, and differ
+        // only in the mode word that picks the key or the value and the direction.
+        RuntimeFnId::Ksort
+        | RuntimeFnId::Krsort
+        | RuntimeFnId::Asort
+        | RuntimeFnId::Arsort => (
+            "codegen_wasm::builtins",
+            "codegen_wasm::builtins::lower_hash_sort",
+            &[
+                "codegen_wasm::builtins::tests::associative_sorts_take_a_hash_and_no_flag",
+                "codegen::cli::test_cli_wasm_hash_sorts_match_php",
+            ][..],
+        ),
         RuntimeFnId::Range => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_direct_builtin",

@@ -270,7 +270,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         // `__rt_decref_any` kind-4 dispatches to `__rt_decref_object`, so the object
         // runtime must be present to validate (generate() emits it alongside refcount).
         emit_object_runtime(&mut wm);
@@ -509,7 +509,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         emit_object_runtime(&mut wm);
         // `__rt_decref_object` calls `__rt_call_object_destructor`; this harness registers no
         // class with a destructor, so the 0-arm stub resolves the call as a no-op.

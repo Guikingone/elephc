@@ -2385,7 +2385,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
         emit_destructor_dispatch_stub(&mut wm);
@@ -2566,7 +2566,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
         emit_destructor_dispatch_stub(&mut wm);
@@ -2726,7 +2726,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
         emit_destructor_dispatch_stub(&mut wm);
@@ -3123,7 +3123,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
         emit_destructor_dispatch_stub(&mut wm);
@@ -3281,7 +3281,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
         emit_destructor_dispatch_stub(&mut wm);
@@ -3488,7 +3488,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
         emit_destructor_dispatch_stub(&mut wm);
@@ -3759,7 +3759,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
         emit_destructor_dispatch_stub(&mut wm);
@@ -4028,7 +4028,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
         emit_destructor_dispatch_stub(&mut wm);
@@ -4337,7 +4337,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
         emit_destructor_dispatch_stub(&mut wm);
@@ -4634,7 +4634,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
         emit_destructor_dispatch_stub(&mut wm);
@@ -4989,7 +4989,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
         emit_destructor_dispatch_stub(&mut wm);
@@ -5112,7 +5112,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
         emit_destructor_dispatch_stub(&mut wm);
@@ -5351,7 +5351,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        super::super::hashes::emit_hash_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm, false);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
         emit_destructor_dispatch_stub(&mut wm);

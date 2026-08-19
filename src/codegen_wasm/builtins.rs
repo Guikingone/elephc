@@ -4439,6 +4439,10 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::ArrayKeyExists
             | RuntimeFnId::Sort
             | RuntimeFnId::Rsort
+            | RuntimeFnId::Ksort
+            | RuntimeFnId::Krsort
+            | RuntimeFnId::Asort
+            | RuntimeFnId::Arsort
             | RuntimeFnId::ArraySearch
             | RuntimeFnId::Explode
             | RuntimeFnId::StrSplit
@@ -4562,6 +4566,10 @@ pub(super) fn direct_builtin_shape_issue(
     if target == RuntimeFnId::InArray {
         return in_array_shape_issue(function, call);
     }
+    // `array_search` shares that rule, and both of them reach a HASH haystack through the
+    // generic walk instead — which needs no per-type pairing, so the only shape left to check
+    // is the arity.
+
     if matches!(target, RuntimeFnId::Chr | RuntimeFnId::Ord) {
         return byte_conversion_shape_issue(function, call, target);
     }
@@ -4603,6 +4611,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if matches!(target, RuntimeFnId::Sort | RuntimeFnId::Rsort) {
         return scalar_sort_shape_issue(module, function, call);
+    }
+    if hash_sort_mode(target).is_some() {
+        return hash_sort_shape_issue(function, call);
     }
     if target == RuntimeFnId::ArrayKeyExists {
         return array_key_exists_shape_issue(function, call);
@@ -4925,6 +4936,9 @@ pub(super) fn lower_direct_builtin(
         return lower_string_predicate(ctx, inst, target);
     }
     if target == RuntimeFnId::InArray {
+        if in_array_haystack_is_hash(ctx.function, inst) {
+            return lower_hash_find(ctx, inst, false);
+        }
         return lower_in_array(ctx, inst);
     }
     if target == RuntimeFnId::Chr {
@@ -5016,10 +5030,16 @@ pub(super) fn lower_direct_builtin(
     if matches!(target, RuntimeFnId::Sort | RuntimeFnId::Rsort) {
         return lower_scalar_sort(ctx, inst, target == RuntimeFnId::Rsort);
     }
+    if let Some(mode) = hash_sort_mode(target) {
+        return lower_hash_sort(ctx, inst, mode);
+    }
     if target == RuntimeFnId::ArrayKeyExists {
         return super::inst_hash::lower_array_key_exists(ctx, inst);
     }
     if target == RuntimeFnId::ArraySearch {
+        if in_array_haystack_is_hash(ctx.function, inst) {
+            return lower_hash_find(ctx, inst, true);
+        }
         return lower_array_search(ctx, inst);
     }
     if target == RuntimeFnId::Range {
@@ -6686,6 +6706,21 @@ fn in_array_shape_issue(function: &Function, call: &Instruction) -> Option<Strin
     let Some(haystack_value) = function.value(*haystack) else {
         return Some("in_array haystack is missing from the value table".to_string());
     };
+    // A HASH haystack takes the generic walk, which compares through php's own comparison and so
+    // needs no needle/element pairing — only that the needle can be boxed for it.
+    if haystack_value.ir_type == IrType::Heap(IrHeapKind::Hash) {
+        if !super::capability::closure_argument_is_boxable(
+            needle_value.ir_type,
+            &needle_value.php_type,
+        ) {
+            return Some(format!(
+                "the search needle {:?}/{:?} cannot be boxed for an associative haystack",
+                needle_value.ir_type,
+                needle_value.php_type.codegen_repr()
+            ));
+        }
+        return strict_flag_issue(function, strict);
+    }
     if haystack_value.ir_type != IrType::Heap(IrHeapKind::Array) {
         return Some(format!(
             "in_array takes an indexed array, got {:?}",
@@ -6705,19 +6740,24 @@ fn in_array_shape_issue(function: &Function, call: &Instruction) -> Option<Strin
             element
         ));
     }
-    if let Some(strict) = strict {
-        let Some(value) = function.value(*strict) else {
-            return Some("in_array strict flag is missing from the value table".to_string());
-        };
-        if value.ir_type != IrType::I64
-            || !matches!(value.php_type.codegen_repr(), PhpType::Bool)
-        {
-            return Some(format!(
-                "in_array strict flag is {:?}/{:?}, expected I64/Bool",
-                value.ir_type,
-                value.php_type.codegen_repr()
-            ));
-        }
+    strict_flag_issue(function, strict)
+}
+
+/// Validates the optional third argument both searches share: php's `$strict` bool.
+fn strict_flag_issue(
+    function: &Function,
+    strict: Option<&crate::ir::ValueId>,
+) -> Option<String> {
+    let strict = strict?;
+    let Some(value) = function.value(*strict) else {
+        return Some("in_array strict flag is missing from the value table".to_string());
+    };
+    if value.ir_type != IrType::I64 || !matches!(value.php_type.codegen_repr(), PhpType::Bool) {
+        return Some(format!(
+            "in_array strict flag is {:?}/{:?}, expected I64/Bool",
+            value.ir_type,
+            value.php_type.codegen_repr()
+        ));
     }
     None
 }
@@ -6757,6 +6797,68 @@ fn lower_array_search(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.fb.ins("i64.const 0", "no high payload");
     ctx.fb.ins("call $__rt_mixed_from_value", "box false");
     ctx.fb.ins("end", "");
+    store_result(ctx, inst)
+}
+
+/// Whether an `in_array`/`array_search` haystack is a hash rather than an indexed array.
+fn in_array_haystack_is_hash(function: &Function, call: &Instruction) -> bool {
+    call.operands
+        .get(1)
+        .and_then(|haystack| function.value(*haystack))
+        .is_some_and(|value| value.ir_type == IrType::Heap(IrHeapKind::Hash))
+}
+
+/// Lowers `in_array`/`array_search` over a HASH, where the indexed specializations do not apply.
+///
+/// An indexed haystack has one element type and the scan is chosen for that pair; a hash may hold
+/// anything, so the walk compares through php's own comparison instead. `array_search` answers
+/// the KEY — a string here, not a position — which is why the helper hands one back rather than
+/// an index.
+fn lower_hash_find(ctx: &mut FnCtx, inst: &Instruction, want_key: bool) -> Result<()> {
+    let needle = operand(inst, 0)?;
+    let haystack = operand(inst, 1)?;
+    let cell = super::objects::emit_box_value_into_mixed(ctx, needle)?;
+    ctx.emit_load_value(haystack)?;
+    ctx.fb.ins(&format!("local.get {}", cell), "the boxed needle");
+    if inst.operands.len() == 3 {
+        ctx.emit_load_value(operand(inst, 2)?)?;
+        ctx.fb.ins("i32.wrap_i64", "the strict flag is a PHP bool");
+    } else {
+        ctx.fb.ins("i32.const 0", "no strict flag: php's loose comparison");
+    }
+    ctx.fb.ins(
+        "call $__rt_hash_find_value",
+        "walk the values in insertion order, answer the matching key",
+    );
+    let found = ctx.fresh_temp(super::wat::ValType::I32);
+    ctx.fb
+        .ins(&format!("local.set {}", found), "the matching key, or 0");
+    ctx.fb.ins(
+        &format!("(call $__rt_decref_any (local.get {}))", cell),
+        "the needle was boxed for this call alone",
+    );
+    if want_key {
+        // `array_search` answers `key|false`, and the key cell already IS that answer.
+        ctx.fb.ins(&format!("local.get {}", found), "the matching key");
+        ctx.fb.ins("if (result i32)", "key|false travels as a Mixed cell");
+        ctx.fb.ins(&format!("local.get {}", found), "the key cell");
+        ctx.fb.ins("else", "not found");
+        ctx.fb.ins("i64.const 3", "bool tag");
+        ctx.fb.ins("i64.const 0", "the value false");
+        ctx.fb.ins("i64.const 0", "no high payload");
+        ctx.fb.ins("call $__rt_mixed_from_value", "box false");
+        ctx.fb.ins("end", "");
+        return store_result(ctx, inst);
+    }
+    // `in_array` wanted only the fact, so the key it was handed is released.
+    ctx.fb.ins(
+        &format!("(call $__rt_decref_any (local.get {}))", found),
+        "the key was owned and is not the answer",
+    );
+    ctx.fb.ins(&format!("local.get {}", found), "the matching key, or 0");
+    ctx.fb.ins("i32.const 0", "0 means no entry matched");
+    ctx.fb.ins("i32.ne", "a key came back");
+    ctx.fb.ins("i64.extend_i32_u", "php answers a bool");
     store_result(ctx, inst)
 }
 
@@ -6968,6 +7070,78 @@ fn lower_scalar_sort(ctx: &mut FnCtx, inst: &Instruction, descending: bool) -> R
     // `sort($a)` rebinds `$a`: the runtime may have cloned, so the pointer goes back.
     ctx.emit_store_value(array)?;
     super::inst::write_back_container_slot(ctx, array)?;
+    Ok(())
+}
+
+/// Validates `ksort`/`krsort`/`asort`/`arsort`: one ASSOCIATIVE array, and nothing else.
+///
+/// The comparison is `zend_compare` over boxed keys or values, so no key or value type is refused
+/// here — what is refused is the receiver being anything but a hash, since these reorder a chain
+/// an indexed array does not have. php's own `sort` on an indexed array is the other function.
+///
+/// The FLAG argument (`SORT_NUMERIC` and friends) changes the comparison, so only the default
+/// form is admitted rather than accepting a flag and ignoring it.
+fn hash_sort_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [hash] = call.operands.as_slice() else {
+        return Some(format!(
+            "an associative sort takes one array, got {} operands (a sort flag changes the \
+             comparison, so only the default form is served)",
+            call.operands.len()
+        ));
+    };
+    let Some(value) = function.value(*hash) else {
+        return Some("the sorted array is missing from the value table".to_string());
+    };
+    if value.ir_type != IrType::Heap(IrHeapKind::Hash) {
+        return Some(format!(
+            "an associative sort takes an associative array, got {:?}",
+            value.ir_type
+        ));
+    }
+    None
+}
+
+/// The `__rt_hash_sort` mode for one of php's four key/value sorts, or `None` for anything else.
+///
+/// Bit 1 selects the VALUE over the key and bit 0 reverses the order, which is the whole
+/// difference between the four.
+fn hash_sort_mode(target: RuntimeFnId) -> Option<i32> {
+    match target {
+        RuntimeFnId::Ksort => Some(0),
+        RuntimeFnId::Krsort => Some(1),
+        RuntimeFnId::Asort => Some(2),
+        RuntimeFnId::Arsort => Some(3),
+        _ => None,
+    }
+}
+
+/// Lowers `ksort`/`krsort`/`asort`/`arsort`: reorder the hash's iteration, answer `true`.
+///
+/// The uniqueness split comes FIRST and is the whole reason this is not a bare call. php's
+/// copy-on-write means `$b = $a; ksort($a);` leaves `$b` in its original order, and these sorts
+/// mutate the links in place — so a shared hash has to be separated before its order moves, or
+/// the copy moves with it.
+fn lower_hash_sort(ctx: &mut FnCtx, inst: &Instruction, mode: i32) -> Result<()> {
+    let hash = operand(inst, 0)?;
+    ctx.emit_load_value(hash)?;
+    ctx.fb.ins(
+        "call $__rt_hash_ensure_unique",
+        "separate a shared hash before its order moves (COW)",
+    );
+    ctx.fb
+        .ins(&format!("i32.const {mode}"), "key/value and ascending/descending");
+    ctx.fb.ins(
+        "call $__rt_hash_sort",
+        "stable merge sort over the insertion-order chain",
+    );
+    // The split may have answered a different hash, so the pointer goes back to the caller's
+    // storage exactly as the indexed sorts do.
+    ctx.emit_store_value(hash)?;
+    super::inst::write_back_container_slot(ctx, hash)?;
+    if inst.result.is_some() {
+        ctx.fb.ins("i64.const 1", "php's array sorts answer true");
+        store_result(ctx, inst)?;
+    }
     Ok(())
 }
 
@@ -8376,6 +8550,78 @@ mod tests {
             assert_eq!(
                 stripped, expected,
                 "the profiles must agree on the ANSWER, not just on the diagnostic"
+            );
+        }
+    }
+
+    /// `RuntimeFnId::Ksort`, `RuntimeFnId::Krsort`, `RuntimeFnId::Asort` and
+    /// `RuntimeFnId::Arsort` take an ASSOCIATIVE array and nothing else.
+    ///
+    /// No element type is refused, because the comparison is `zend_compare` over boxed keys or
+    /// values rather than a per-pair specialization — which is the difference from the indexed
+    /// sorts beside them. What IS refused is an indexed receiver, since these reorder an
+    /// insertion-order chain a packed array does not have, and a sort FLAG, which would change
+    /// the comparison this serves.
+    #[test]
+    fn associative_sorts_take_a_hash_and_no_flag() {
+        let hash_of = |value: PhpType| {
+            (
+                IrType::Heap(IrHeapKind::Hash),
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Str),
+                    value: Box::new(value),
+                },
+            )
+        };
+        for target in [
+            RuntimeFnId::Ksort,
+            RuntimeFnId::Krsort,
+            RuntimeFnId::Asort,
+            RuntimeFnId::Arsort,
+        ] {
+            for value in [PhpType::Int, PhpType::Str, PhpType::Float, PhpType::Mixed] {
+                let probe = shaped_call(
+                    target,
+                    &[hash_of(value.clone())],
+                    IrType::I64,
+                    PhpType::Void,
+                );
+                let call = probe.instructions.last().expect("the probe emitted a call");
+                assert_eq!(
+                    direct_builtin_shape_issue(&command_probe_module(), &probe, call, target),
+                    None,
+                    "{target:?} orders a hash of {value:?}"
+                );
+            }
+            // An INDEXED receiver has no chain to reorder: `sort`/`rsort` are its functions.
+            let probe = shaped_call(
+                target,
+                &[(
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                )],
+                IrType::I64,
+                PhpType::Void,
+            );
+            let call = probe.instructions.last().expect("the probe emitted a call");
+            assert!(
+                direct_builtin_shape_issue(&command_probe_module(), &probe, call, target)
+                    .is_some_and(|issue| issue.contains("associative array")),
+                "{target:?} must refuse an indexed receiver"
+            );
+            // A sort flag changes the comparison, so the two-operand form is refused rather
+            // than accepted and ignored.
+            let probe = shaped_call(
+                target,
+                &[hash_of(PhpType::Int), (IrType::I64, PhpType::Int)],
+                IrType::I64,
+                PhpType::Void,
+            );
+            let call = probe.instructions.last().expect("the probe emitted a call");
+            assert!(
+                direct_builtin_shape_issue(&command_probe_module(), &probe, call, target)
+                    .is_some_and(|issue| issue.contains("one array")),
+                "{target:?} must refuse a sort flag"
             );
         }
     }

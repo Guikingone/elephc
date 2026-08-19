@@ -534,7 +534,7 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     classes::emit_class_runtime(&mut wm);
     arrays::emit_array_runtime(&mut wm);
     mixed::emit_mixed_runtime(&mut wm, has_main, Some(module));
-    hashes::emit_hash_runtime(&mut wm);
+    hashes::emit_hash_runtime(&mut wm, has_main);
     // Float<->string runtime (ftoa + strtod). Published with the `$__float_scratch`
     // global set to `FLOAT_SCRATCH_BASE` so cast/echo/mixed-stdout callers pass
     // `(global.get $__float_scratch)` as the bignum scratch base.

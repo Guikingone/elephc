@@ -38,8 +38,16 @@ use crate::web_prelude::PhpVersion;
 /// Adds the hash-table helper/teardown runtime to `wm`: hashing, key equality,
 /// allocation, deep free, and the refcount-dispatcher's hash branch. Emitted after
 /// the heap, refcount, array, and mixed runtimes.
-pub(super) fn emit_hash_runtime(wm: &mut WatModule) {
+pub(super) fn emit_hash_runtime(wm: &mut WatModule, has_main: bool) {
     emit_hash_runtime_for_version(wm, crate::codegen_support::compile_php_version());
+    if has_main {
+        // The sorts compare through `__rt_mixed_cmp_mixed` over cells the generic walk builds,
+        // and that walk is a command-runtime helper — so these are too.
+        wm.add_raw_func(RT_HASH_SLOT_NEXT);
+        wm.add_raw_func(RT_HASH_CMP_SLOTS);
+        wm.add_raw_func(RT_HASH_SORT);
+        wm.add_raw_func(RT_HASH_FIND_VALUE);
+    }
 }
 
 /// Emits the hash runtime for one PHP compatibility profile.
@@ -78,6 +86,154 @@ fn emit_hash_runtime_for_version(wm: &mut WatModule, _php_version: PhpVersion) {
     wm.add_raw_func(RT_HASH_FREE_DEEP);
     wm.add_raw_func(RT_DECREF_HASH);
 }
+
+/// `__rt_hash_slot_next`: the insertion-order successor of one slot, or -1.
+const RT_HASH_SLOT_NEXT: &str = r#"(func $__rt_hash_slot_next (param $hash i32) (param $slot i64) (result i64)
+  (i64.load offset=56 (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 72))))))
+"#;
+
+/// `__rt_hash_cmp_slots`: orders two slots the way php's own sort comparator does.
+///
+/// `$mode` bit 1 selects the VALUE rather than the key, and bit 0 reverses the result — so 0 is
+/// `ksort`, 1 `krsort`, 2 `asort` and 3 `arsort`.
+///
+/// The comparison itself is `__rt_mixed_cmp_mixed`, php-src's `zend_compare`, over cells the
+/// generic walk builds. That is not a shortcut: php's KEY order is that comparison and nothing
+/// simpler. Measured on 8.5.6, `["01"=>, "9"=>, "10"=>, "a"=>, "B"=>, ""=>]` sorts as
+/// `"", "01", 9, 10, "B", "a"` — the numeric-looking string compares NUMERICALLY against the
+/// integer keys, and the integer compares as a STRING against the non-numeric ones, which is
+/// exactly `zend_compare` and not "integers first".
+const RT_HASH_CMP_SLOTS: &str = r#"(func $__rt_hash_cmp_slots (param $hash i32) (param $a i64) (param $b i64) (param $mode i32) (result i64)
+  (local $ca i32) (local $cb i32) (local $r i64)
+  (if (i32.and (local.get $mode) (i32.const 2))
+    (then
+      (local.set $ca (call $__rt_mixed_iter_value (local.get $hash) (local.get $a) (i32.const 1)))
+      (local.set $cb (call $__rt_mixed_iter_value (local.get $hash) (local.get $b) (i32.const 1))))
+    (else
+      (local.set $ca (call $__rt_mixed_iter_key (local.get $hash) (local.get $a) (i32.const 1)))
+      (local.set $cb (call $__rt_mixed_iter_key (local.get $hash) (local.get $b) (i32.const 1)))))
+  (local.set $r (call $__rt_mixed_cmp_mixed (local.get $ca) (local.get $cb)))
+  (call $__rt_decref_any (local.get $ca))
+  (call $__rt_decref_any (local.get $cb))
+  (if (i32.and (local.get $mode) (i32.const 1))
+    (then (local.set $r (i64.sub (i64.const 0) (local.get $r)))))
+  (local.get $r))
+"#;
+
+/// `__rt_hash_sort`: reorders a hash's insertion-order chain, which is what its iteration shows.
+///
+/// A bottom-up merge sort over the `next` links: no allocation, and STABLE, which php 8's sorts
+/// are — `["bruno"=>7,"ada"=>9,"carl"=>7,"dina"=>4]` under `asort` keeps bruno ahead of carl on
+/// their shared 7, and `arsort` keeps that same pair in that same order rather than reversing it.
+/// A run is taken from the left whenever the comparison ties, which is where the stability comes
+/// from.
+///
+/// Only the links and the head/tail move. The probe table, the keys and the values stay where
+/// they are, so no key changes slot and nothing is rehashed — php's `ksort` reorders the bucket
+/// list too, and the observable is the iteration.
+const RT_HASH_SORT: &str = r#"(func $__rt_hash_sort (param $hash i32) (param $mode i32) (result i32)
+  (local $head i64) (local $p i64) (local $q i64) (local $e i64) (local $out_tail i64)
+  (local $psize i32) (local $qsize i32) (local $width i32) (local $merges i32) (local $i i32)
+  (local $take_p i32) (local $prev i64) (local $cur i64)
+  (local.set $head (i64.load offset=24 (local.get $hash)))
+  (if (i64.eq (local.get $head) (i64.const -1))                     ;; empty: nothing to order
+    (then (return (local.get $hash))))
+  (local.set $width (i32.const 1))
+  (block $sorted (loop $pass
+    (local.set $p (local.get $head))
+    (local.set $head (i64.const -1))
+    (local.set $out_tail (i64.const -1))
+    (local.set $merges (i32.const 0))
+    (block $pass_done (loop $runs
+      (br_if $pass_done (i64.eq (local.get $p) (i64.const -1)))
+      (local.set $merges (i32.add (local.get $merges) (i32.const 1)))
+      ;; q starts `width` links past p, and psize records how far it actually got.
+      (local.set $q (local.get $p))
+      (local.set $psize (i32.const 0))
+      (local.set $i (i32.const 0))
+      (block $adv_done (loop $adv
+        (br_if $adv_done (i32.ge_u (local.get $i) (local.get $width)))
+        (br_if $adv_done (i64.eq (local.get $q) (i64.const -1)))
+        (local.set $psize (i32.add (local.get $psize) (i32.const 1)))
+        (local.set $q (call $__rt_hash_slot_next (local.get $hash) (local.get $q)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $adv)))
+      (local.set $qsize (local.get $width))
+      (block $merged (loop $take
+        (br_if $merged (i32.and (i32.eqz (local.get $psize))
+                                (i32.or (i32.eqz (local.get $qsize))
+                                        (i64.eq (local.get $q) (i64.const -1)))))
+        ;; Take from the left run when it still has entries AND either the right one is spent
+        ;; or the comparison does not put the right one first. `<= 0` is the stable choice.
+        (local.set $take_p (i32.const 0))
+        (if (i32.ne (local.get $psize) (i32.const 0))
+          (then
+            (if (i32.or (i32.eqz (local.get $qsize)) (i64.eq (local.get $q) (i64.const -1)))
+              (then (local.set $take_p (i32.const 1)))
+              (else (local.set $take_p (i64.le_s (call $__rt_hash_cmp_slots (local.get $hash) (local.get $p) (local.get $q) (local.get $mode)) (i64.const 0)))))))
+        (if (local.get $take_p)
+          (then
+            (local.set $e (local.get $p))
+            (local.set $p (call $__rt_hash_slot_next (local.get $hash) (local.get $p)))
+            (local.set $psize (i32.sub (local.get $psize) (i32.const 1))))
+          (else
+            (local.set $e (local.get $q))
+            (local.set $q (call $__rt_hash_slot_next (local.get $hash) (local.get $q)))
+            (local.set $qsize (i32.sub (local.get $qsize) (i32.const 1)))))
+        (if (i64.eq (local.get $out_tail) (i64.const -1))
+          (then (local.set $head (local.get $e)))
+          (else (i64.store offset=56 (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $out_tail) (i64.const 72)))) (local.get $e))))
+        (local.set $out_tail (local.get $e))
+        (br $take)))
+      (local.set $p (local.get $q))
+      (br $runs)))
+    (i64.store offset=56 (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $out_tail) (i64.const 72)))) (i64.const -1))
+    (br_if $sorted (i32.le_u (local.get $merges) (i32.const 1)))    ;; one run left: the pass sorted it
+    (local.set $width (i32.shl (local.get $width) (i32.const 1)))
+    (br $pass)))
+  ;; Republish head/tail and rebuild the backward links from the new order.
+  (i64.store offset=24 (local.get $hash) (local.get $head))
+  (local.set $prev (i64.const -1))
+  (local.set $cur (local.get $head))
+  (block $relinked (loop $walk
+    (br_if $relinked (i64.eq (local.get $cur) (i64.const -1)))
+    (i64.store offset=48 (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))) (local.get $prev))
+    (local.set $prev (local.get $cur))
+    (local.set $cur (call $__rt_hash_slot_next (local.get $hash) (local.get $cur)))
+    (br $walk)))
+  (i64.store offset=32 (local.get $hash) (local.get $prev))
+  (local.get $hash))
+"#;
+
+/// `__rt_hash_find_value`: the KEY of the first entry whose value matches, or 0 for a miss.
+///
+/// This is what `in_array` and `array_search` are over a hash: both walk the VALUES in insertion
+/// order, and they differ only in what they report — a bool, or the key that matched.
+///
+/// `$strict` picks the comparison php picks. Loose is `zend_compare` reaching zero, which for
+/// scalars IS `==`: `in_array("30", ["age" => 30])` is true and `in_array("30", …, true)` is
+/// false, both measured. Strict is `__rt_strict_mixed_mixed`, php's `===`.
+///
+/// The answer is an OWNED key cell, so the caller releases it — including `in_array`, which
+/// wanted only the fact that there was one.
+const RT_HASH_FIND_VALUE: &str = r#"(func $__rt_hash_find_value (param $hash i32) (param $needle i32) (param $strict i32) (result i32)
+  (local $cur i64) (local $vcell i32) (local $hit i32)
+  (if (i32.eqz (local.get $hash))                                 ;; a null haystack matches nothing
+    (then (return (i32.const 0))))
+  (local.set $cur (i64.load offset=24 (local.get $hash)))         ;; head of the insertion order
+  (block $done (loop $entry
+    (br_if $done (i64.eq (local.get $cur) (i64.const -1)))
+    (local.set $vcell (call $__rt_mixed_iter_value (local.get $hash) (local.get $cur) (i32.const 1)))
+    (if (local.get $strict)
+      (then (local.set $hit (call $__rt_strict_mixed_mixed (local.get $needle) (local.get $vcell))))
+      (else (local.set $hit (i64.eqz (call $__rt_mixed_cmp_mixed (local.get $needle) (local.get $vcell))))))
+    (call $__rt_decref_any (local.get $vcell))
+    (if (local.get $hit)
+      (then (return (call $__rt_mixed_iter_key (local.get $hash) (local.get $cur) (i32.const 1)))))
+    (local.set $cur (call $__rt_hash_slot_next (local.get $hash) (local.get $cur)))
+    (br $entry)))
+  (i32.const 0))
+"#;
 
 /// `__rt_hash_fnv1a`: FNV-1a 64-bit hash of the `len` bytes at `ptr`. Each byte is
 /// XORed into the accumulator then the accumulator is multiplied by the FNV prime

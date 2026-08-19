@@ -7979,7 +7979,7 @@ fn value_is_callable_descriptor(function: &Function, value: ValueId) -> bool {
 }
 
 /// Returns whether `objects::emit_box_value_into_mixed` implements this source.
-fn closure_argument_is_boxable(ir_type: IrType, php_type: &PhpType) -> bool {
+pub(super) fn closure_argument_is_boxable(ir_type: IrType, php_type: &PhpType) -> bool {
     if transfer::validate_storage_pair(ir_type, php_type).is_err() {
         return false;
     }
@@ -8454,6 +8454,10 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayKeyExists
         | RuntimeFnId::Sort
         | RuntimeFnId::Rsort
+        | RuntimeFnId::Ksort
+        | RuntimeFnId::Krsort
+        | RuntimeFnId::Asort
+        | RuntimeFnId::Arsort
         | RuntimeFnId::ArraySearch
         | RuntimeFnId::Explode
         | RuntimeFnId::StrSplit
@@ -8531,10 +8535,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayUdiff
         | RuntimeFnId::ArrayUintersect
         | RuntimeFnId::ArrayWalkRecursive
-        | RuntimeFnId::Arsort
-        | RuntimeFnId::Asort
-        | RuntimeFnId::Krsort
-        | RuntimeFnId::Ksort
         | RuntimeFnId::Natcasesort
         | RuntimeFnId::Natsort
         | RuntimeFnId::Shuffle
