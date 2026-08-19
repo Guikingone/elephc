@@ -289,7 +289,7 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
             "codegen_wasm::inet",
             "codegen_wasm::builtins::lower_direct_builtin",
             &[
-                "codegen_wasm::builtins::tests::var_dump_admits_only_provably_scalar_values",
+                "codegen_wasm::builtins::tests::var_dump_admits_only_renderable_values",
                 "codegen::cli::test_cli_wasm_ipv4_conversions_and_scalar_var_dump_match_php",
             ][..],
         ),

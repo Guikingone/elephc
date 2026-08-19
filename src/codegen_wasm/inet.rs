@@ -188,7 +188,7 @@ const RT_INET_PTON: &str = r#"(func $__rt_inet_pton (param $ptr i32) (param $len
 /// Emitted from `runtime::emit_failure_runtime` for that reason rather than beside the other
 /// builtins: the fragment offsets are only known there.
 pub(super) fn emit_var_dump_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
-    debug_assert_eq!(offsets.len(), 9);
+    debug_assert_eq!(offsets.len(), 16);
     let (int_ptr, int_len) = offsets[0];
     // Reserved: php renders a `var_dump` float with serialize_precision (17), not the
     // precision (14) `echo` uses, so the existing formatter would print a DIFFERENT number
@@ -201,9 +201,59 @@ pub(super) fn emit_var_dump_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) 
     let (true_ptr, true_len) = offsets[6];
     let (false_ptr, false_len) = offsets[7];
     let (null_ptr, null_len) = offsets[8];
+    let (arr_ptr, arr_len) = offsets[9];
+    let (open_ptr, open_len) = offsets[10];
+    let (aclose_ptr, aclose_len) = offsets[11];
+    let (kopen_ptr, kopen_len) = offsets[12];
+    let (kclose_ptr, kclose_len) = offsets[13];
+    let (quote_ptr, quote_len) = offsets[14];
+    let (indent_ptr, indent_len) = offsets[15];
+
+    // Two spaces per level, written by the CALLER of a value line: php puts the key and its
+    // value on separate lines at the same indent, so the indent is not part of either render.
     wm.add_raw_func(&format!(
-        r#"(func $__rt_var_dump (param $cell i32) (result i64)
+        r#"(func $__rt_var_dump_indent (param $depth i32)
+  (local $i i32)
+  (block $done (loop $step
+    (br_if $done (i32.ge_s (local.get $i) (local.get $depth)))
+    (call $__rt_echo_str (i32.const {indent_ptr}) (i64.const {indent_len}))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br $step))))
+"#
+    ));
+
+    // The key line: `[0]=>` for an integer key, `["name"]=>` for a string one. php quotes
+    // exactly the string keys, which is why the key's own tag decides rather than the
+    // container's storage.
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_var_dump_key (param $cell i32)
   (local $tag i64) (local $lo i64) (local $hi i64) (local $tptr i32) (local $tlen i32)
+  (call $__rt_mixed_unbox (local.get $cell))
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (call $__rt_echo_str (i32.const {kopen_ptr}) (i64.const {kopen_len}))
+  (if (i64.eq (local.get $tag) (i64.const 1))
+    (then
+      (call $__rt_echo_str (i32.const {quote_ptr}) (i64.const {quote_len}))
+      (call $__rt_echo_str (i32.wrap_i64 (local.get $lo)) (local.get $hi))
+      (call $__rt_echo_str (i32.const {quote_ptr}) (i64.const {quote_len})))
+    (else
+      (call $__rt_itoa (local.get $lo) (global.get $__float_scratch))
+      (local.set $tlen)
+      (local.set $tptr)
+      (call $__rt_echo_str (local.get $tptr) (i64.extend_i32_u (local.get $tlen)))))
+  (call $__rt_echo_str (i32.const {kclose_ptr}) (i64.const {kclose_len})))
+"#
+    ));
+
+    // The value render. Writes NO leading indent: at the top level there is none, and inside a
+    // container the caller has already written it.
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_var_dump_at (param $cell i32) (param $depth i32)
+  (local $tag i64) (local $lo i64) (local $hi i64) (local $tptr i32) (local $tlen i32)
+  (local $src i32) (local $kind i32) (local $cursor i64) (local $more i64) (local $next i64)
+  (local $kcell i32) (local $vcell i32)
   (call $__rt_mixed_unbox (local.get $cell))
   (local.set $hi)
   (local.set $lo)
@@ -216,7 +266,7 @@ pub(super) fn emit_var_dump_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) 
       (local.set $tptr)
       (call $__rt_echo_str (local.get $tptr) (i64.extend_i32_u (local.get $tlen)))
       (call $__rt_echo_str (i32.const {close_ptr}) (i64.const {close_len}))
-      (return (i64.const 9223372036854775806))))
+      (return)))
   (if (i64.eq (local.get $tag) (i64.const 1))                      ;; tag 1 = string
     (then
       (call $__rt_echo_str (i32.const {str_ptr}) (i64.const {str_len}))
@@ -227,16 +277,55 @@ pub(super) fn emit_var_dump_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) 
       (call $__rt_echo_str (i32.const {mid_ptr}) (i64.const {mid_len}))
       (call $__rt_echo_str (i32.wrap_i64 (local.get $lo)) (local.get $hi))
       (call $__rt_echo_str (i32.const {suffix_ptr}) (i64.const {suffix_len}))
-      (return (i64.const 9223372036854775806))))
+      (return)))
   (if (i64.eq (local.get $tag) (i64.const 3))                      ;; tag 3 = bool
     (then
       (if (i64.eqz (local.get $lo))
         (then (call $__rt_echo_str (i32.const {false_ptr}) (i64.const {false_len})))
         (else (call $__rt_echo_str (i32.const {true_ptr}) (i64.const {true_len}))))
-      (return (i64.const 9223372036854775806))))
+      (return)))
+  (if (i32.or (i64.eq (local.get $tag) (i64.const 4))              ;; 4 indexed, 5 hash
+              (i64.eq (local.get $tag) (i64.const 5)))
+    (then
+      (local.set $src (i32.wrap_i64 (local.get $lo)))
+      (local.set $kind (select (i32.const 1) (i32.const 0) (i64.eq (local.get $tag) (i64.const 5))))
+      (call $__rt_echo_str (i32.const {arr_ptr}) (i64.const {arr_len}))
+      ;; Both storages keep their element count in the first header word.
+      (call $__rt_itoa (i64.load (local.get $src)) (global.get $__float_scratch))
+      (local.set $tlen)
+      (local.set $tptr)
+      (call $__rt_echo_str (local.get $tptr) (i64.extend_i32_u (local.get $tlen)))
+      (call $__rt_echo_str (i32.const {open_ptr}) (i64.const {open_len}))
+      ;; The same before-first seeds the dynamic `foreach` uses: -1 pre-increments to 0, and a
+      ;; hash walks its insertion-order list from -2.
+      (local.set $cursor (select (i64.const -2) (i64.const -1) (i32.eq (local.get $kind) (i32.const 1))))
+      (block $walked (loop $entry
+        (call $__rt_mixed_iter_next (local.get $src) (local.get $cursor) (local.get $kind))
+        (local.set $more)
+        (local.set $next)
+        (br_if $walked (i64.eqz (local.get $more)))
+        (local.set $cursor (local.get $next))
+        (call $__rt_var_dump_indent (i32.add (local.get $depth) (i32.const 1)))
+        (local.set $kcell (call $__rt_mixed_iter_key (local.get $src) (local.get $cursor) (local.get $kind)))
+        (call $__rt_var_dump_key (local.get $kcell))
+        (call $__rt_decref_any (local.get $kcell))
+        (call $__rt_var_dump_indent (i32.add (local.get $depth) (i32.const 1)))
+        (local.set $vcell (call $__rt_mixed_iter_value (local.get $src) (local.get $cursor) (local.get $kind)))
+        (call $__rt_var_dump_at (local.get $vcell) (i32.add (local.get $depth) (i32.const 1)))
+        (call $__rt_decref_any (local.get $vcell))
+        (br $entry)))
+      (call $__rt_var_dump_indent (local.get $depth))
+      (call $__rt_echo_str (i32.const {aclose_ptr}) (i64.const {aclose_len}))
+      (return)))
   ;; Every other tag is refused by the capability audit, so reaching here would be a gate bug.
-  (call $__rt_echo_str (i32.const {null_ptr}) (i64.const {null_len}))
-  (i64.const 9223372036854775806))
+  (call $__rt_echo_str (i32.const {null_ptr}) (i64.const {null_len})))
 "#
     ));
+
+    wm.add_raw_func(
+        r#"(func $__rt_var_dump (param $cell i32) (result i64)
+  (call $__rt_var_dump_at (local.get $cell) (i32.const 0))
+  (i64.const 9223372036854775806))
+"#,
+    );
 }

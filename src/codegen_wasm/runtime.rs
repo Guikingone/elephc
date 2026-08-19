@@ -100,6 +100,15 @@ const DUMP_CLOSE: &[u8] = b")\n";
 const DUMP_TRUE: &[u8] = b"bool(true)\n";
 const DUMP_FALSE: &[u8] = b"bool(false)\n";
 const DUMP_NULL: &[u8] = b"NULL\n";
+/// The container form. php indents two spaces per level, and writes the key and the value on
+/// SEPARATE lines at the same indent — measured on php-src 8.5.6.
+const DUMP_ARRAY_PREFIX: &[u8] = b"array(";
+const DUMP_ARRAY_OPEN: &[u8] = b") {\n";
+const DUMP_ARRAY_CLOSE: &[u8] = b"}\n";
+const DUMP_KEY_OPEN: &[u8] = b"[";
+const DUMP_KEY_CLOSE: &[u8] = b"]=>\n";
+const DUMP_QUOTE: &[u8] = b"\"";
+const DUMP_INDENT: &[u8] = b"  ";
 
 /// The message of a `throw_error_value` that no frame can catch. The text after the prefix is
 /// composed at RUNTIME (it names the receiver's method, or the class php-src would report), so
@@ -337,6 +346,13 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + DUMP_TRUE.len() as u32
     + DUMP_FALSE.len() as u32
     + DUMP_NULL.len() as u32
+    + DUMP_ARRAY_PREFIX.len() as u32
+    + DUMP_ARRAY_OPEN.len() as u32
+    + DUMP_ARRAY_CLOSE.len() as u32
+    + DUMP_KEY_OPEN.len() as u32
+    + DUMP_KEY_CLOSE.len() as u32
+    + DUMP_QUOTE.len() as u32
+    + DUMP_INDENT.len() as u32
     + ERR_TOO_FEW_ARGS_PREFIX.len() as u32
     + ERR_TOO_FEW_ARGS_PASSED.len() as u32
     + ERR_TOO_FEW_ARGS_EXACTLY.len() as u32
@@ -1085,6 +1101,13 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         DUMP_TRUE,
         DUMP_FALSE,
         DUMP_NULL,
+        DUMP_ARRAY_PREFIX,
+        DUMP_ARRAY_OPEN,
+        DUMP_ARRAY_CLOSE,
+        DUMP_KEY_OPEN,
+        DUMP_KEY_CLOSE,
+        DUMP_QUOTE,
+        DUMP_INDENT,
     ];
     let warning_messages = [
         WARN_UNDEFINED_ARRAY_KEY_PREFIX,
@@ -1230,7 +1253,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     wm.add_raw_func(&wat);
     emit_method_call_failure_runtime(wm, &method_offsets);
     emit_error_value_failure_runtime(wm, &method_offsets[21..23]);
-    super::inet::emit_var_dump_runtime(wm, &method_offsets[23..32]);
+    super::inet::emit_var_dump_runtime(wm, &method_offsets[23..39]);
     emit_undefined_array_key_warning_runtime(wm, &warning_offsets[..17]);
     emit_return_coercion_runtime(wm, &warning_offsets[17..34], &method_offsets[2..11]);
     emit_property_on_null_warning_runtime(wm, &warning_offsets[34..36]);
@@ -1652,7 +1675,7 @@ fn emit_uninit_string_offset_warning_runtime(wm: &mut WatModule, offsets: &[(u32
 /// The helper composes the PHP-visible method name with the runtime Mixed tag,
 /// writes the diagnostic to stderr, and terminates with PHP's fatal status 255.
 fn emit_method_call_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
-    debug_assert_eq!(offsets.len(), 32);
+    debug_assert_eq!(offsets.len(), 39);
     let (prefix_ptr, prefix_len) = offsets[0];
     let (suffix_ptr, suffix_len) = offsets[1];
     let type_offsets = &offsets[2..11];

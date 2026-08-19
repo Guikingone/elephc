@@ -4793,9 +4793,24 @@ pub(super) fn lower_direct_builtin(
         return store_result(ctx, inst);
     }
     if target == RuntimeFnId::VarDump {
-        ctx.emit_load_value(operand(inst, 0)?)?;
+        // Boxed first, because the renderer dispatches on a cell TAG: a raw container pointer
+        // carries no tag of its own, and the same call site can hand over either.
+        let allocated = super::transfer::emit_push_call_argument(
+            ctx,
+            operand(inst, 0)?,
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        )?;
         ctx.fb
-            .ins("call $__rt_var_dump", "php's typed dump of a scalar");
+            .ins("call $__rt_var_dump", "php's typed dump");
+        if let Some((cell, _kind)) = allocated {
+            ctx.fb.ins(
+                &format!("local.get {cell}"),
+                "the cell synthesized for the argument",
+            );
+            ctx.fb
+                .ins("call $__rt_decref_any", "free it now the dump is written");
+        }
         return store_result(ctx, inst);
     }
     if matches!(
@@ -5329,9 +5344,17 @@ fn var_dump_shape_issue(
     let Some(value) = function.value(*operand) else {
         return Some("operand is missing from the value table".to_string());
     };
-    if value.ir_type != IrType::Heap(IrHeapKind::Mixed) {
+    // A container reaches the call as a RAW POINTER, a scalar as its own representation, and a
+    // union already boxed; the lowering boxes whatever arrives, so what has to be proven here
+    // is the TYPE rather than the storage.
+    if !matches!(
+        value.ir_type,
+        IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Array | IrHeapKind::Hash)
+            | IrType::I64
+            | IrType::Str
+    ) {
         return Some(format!(
-            "var_dump operand {:?}/{:?} is not a boxed value",
+            "var_dump operand {:?}/{:?} has no boxing on this target",
             value.ir_type,
             value.php_type.codegen_repr()
         ));
@@ -5358,6 +5381,13 @@ fn php_type_is_dumpable_scalar(php: &PhpType) -> bool {
         | PhpType::False
         | PhpType::Str
         | PhpType::Void => true,
+        // A container renders through the same generic walk the dynamic `foreach` uses, so
+        // whichever storage it holds at runtime is read correctly. Its ELEMENTS still have to
+        // be renderable: an array of objects is refused, not printed half-way.
+        PhpType::Array(element) => php_type_is_dumpable_scalar(element),
+        PhpType::AssocArray { key, value } => {
+            php_type_is_dumpable_scalar(key) && php_type_is_dumpable_scalar(value)
+        }
         PhpType::Union(arms) => !arms.is_empty() && arms.iter().all(php_type_is_dumpable_scalar),
         // A named alias of a scalar still dumps as that scalar.
         other if *other != other.codegen_repr() => {
@@ -9156,12 +9186,16 @@ mod tests {
 
     /// `var_dump` admits a value only when EVERY type it can hold renders.
     ///
-    /// `int|false` does — both arms are scalars — while a bare `mixed` does not, and neither
-    /// does a union with an array arm. The distinction has to be made on the UNNORMALIZED type:
-    /// `codegen_repr` collapses every union to `Mixed`, which would make `int|false`
-    /// indistinguishable from the `mixed` that must keep refusing.
+    /// `int|false` does — both arms render — and so does a container whose elements do, because
+    /// the walk is the generic one the dynamic `foreach` uses. A bare `mixed` does not, and
+    /// neither does a container of objects: this target has no property walk, and an object
+    /// printed half-way would look right while being wrong.
+    ///
+    /// The distinction has to be made on the UNNORMALIZED type: `codegen_repr` collapses every
+    /// union to `Mixed`, which would make `int|false` indistinguishable from the `mixed` that
+    /// must keep refusing.
     #[test]
-    fn var_dump_admits_only_provably_scalar_values() {
+    fn var_dump_admits_only_renderable_values() {
         assert!(
             is_direct_builtin(RuntimeFnId::VarDump),
             "var_dump must be audited as a direct builtin"
@@ -9177,21 +9211,26 @@ mod tests {
             PhpType::Int,
             PhpType::False
         ])));
-        assert!(php_type_is_dumpable_scalar(&PhpType::Union(vec![
-            PhpType::Str,
-            PhpType::False
-        ])));
+        assert!(php_type_is_dumpable_scalar(&PhpType::Array(Box::new(
+            PhpType::Int
+        ))));
+        assert!(php_type_is_dumpable_scalar(&PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Array(Box::new(PhpType::Str))),
+        }));
 
         // A float is refused on purpose: php dumps it with serialize_precision, not the
         // precision `echo` uses, so the existing formatter would print a different number.
         assert!(!php_type_is_dumpable_scalar(&PhpType::Float));
         assert!(!php_type_is_dumpable_scalar(&PhpType::Mixed));
+        // No property walk exists on this target, so an object is refused wherever it sits.
+        assert!(!php_type_is_dumpable_scalar(&PhpType::Object("Cart".to_string())));
         assert!(!php_type_is_dumpable_scalar(&PhpType::Array(Box::new(
-            PhpType::Int
+            PhpType::Object("Cart".to_string())
         ))));
         assert!(!php_type_is_dumpable_scalar(&PhpType::Union(vec![
             PhpType::Int,
-            PhpType::Array(Box::new(PhpType::Int)),
+            PhpType::Object("Cart".to_string()),
         ])));
         // An empty union claims nothing, so it proves nothing.
         assert!(!php_type_is_dumpable_scalar(&PhpType::Union(Vec::new())));
