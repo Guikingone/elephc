@@ -62,7 +62,7 @@ pub(super) fn renders_php82_deltas() {
     #[test]
 pub(super) fn skips_injection_when_unused() {
         let program = parse("<?php echo 1;");
-        let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
+        let injected = inject_for_test(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         assert_eq!(injected.len(), program.len());
     }
 
@@ -70,7 +70,7 @@ pub(super) fn skips_injection_when_unused() {
     #[test]
 pub(super) fn injects_when_called() {
         let program = parse("<?php $c = opcache_get_configuration();");
-        let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
+        let injected = inject_for_test(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         assert!(injected.len() > program.len());
     }
 
@@ -95,10 +95,10 @@ pub(super) fn reset_body_follows_sapi() {
 pub(super) fn injects_reset_with_sapi_gated_constant() {
         let program = parse("<?php var_dump(opcache_reset());");
 
-        let cli = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
+        let cli = inject_for_test(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         assert!(cli.len() > program.len());
 
-        let web = inject_if_used(program.clone(), PhpVersion::Php85, true, None, &[], &[], None, false).0;
+        let web = inject_for_test(program.clone(), PhpVersion::Php85, true, None, &[], &[], None, false).0;
         assert!(web.len() > program.len());
     }
 
@@ -115,7 +115,7 @@ pub(super) fn injects_reset_with_sapi_gated_constant() {
     #[test]
 pub(super) fn injection_is_per_function() {
         let reset_only = parse("<?php opcache_reset();");
-        let injected = inject_if_used(reset_only.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
+        let injected = inject_for_test(reset_only.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         // Exactly one OPcache function plus the one shared state block.
         assert_eq!(injected.len(), reset_only.len() + 1 + STATE_HELPER_DECLS);
     }
@@ -300,7 +300,7 @@ pub(super) fn renders_php82_default_jit_tracing_under_clamp() {
     #[test]
 pub(super) fn injects_get_status_per_function() {
         let status_only = parse("<?php var_dump(opcache_get_status());");
-        let injected = inject_if_used(status_only.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
+        let injected = inject_for_test(status_only.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         // Exactly one OPcache function plus the one shared state block (`opcache_get_status`
         // reads the restart latch, the discard-aware `timestamp`, and the `asctime` formatter).
         assert_eq!(injected.len(), status_only.len() + 1 + STATE_HELPER_DECLS);
@@ -395,7 +395,7 @@ pub(super) fn injects_file_functions_per_function() {
             "<?php var_dump(opcache_compile_file(__FILE__));",
         ] {
             let program = parse(source);
-            let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
+            let injected = inject_for_test(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
             // Exactly one OPcache function per referenced name, plus the shared state block.
             assert_eq!(injected.len(), program.len() + 1 + STATE_HELPER_DECLS);
         }

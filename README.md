@@ -457,7 +457,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-Physical source (`.php` or `.lfc`) → source classification → Lexer → Parser (AST) → Magic constants (per-file) → strict-PHP audit (PHP files only) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → function-argument introspection desugaring → OPcache manifest bake → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → EIR lowering + validation → register allocation → EIR codegen → assembly/source-map write → runtime cache → read-only native requirement resolution → typed link plan → as + ld → native executable
+Physical source (`.php` or `.lfc`) → source classification → Lexer → Parser (AST) → Magic constants (per-file) → strict-PHP audit (PHP files only) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → function-argument introspection desugaring → OPcache manifest bake → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Optimizer (declaration reachability) → EIR lowering + validation → register allocation → EIR codegen → assembly/source-map write → runtime cache → read-only native requirement resolution → typed link plan → as + ld → native executable
 ```
 
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -467,7 +467,7 @@ elephc hello.php
 cat hello.s
 ```
 
-If you add `--source-map`, elephc also writes `hello.map`, a compact JSON sidecar that maps emitted assembly lines back to PHP line/column pairs. If you add `--timings`, the compiler prints per-phase durations such as lexing, parsing, early optimization, type checking, constant propagation, post-check pruning, control-flow normalization, dead-code elimination, runtime-cache preparation, code generation, assembling, and linking.
+If you add `--source-map`, elephc also writes `hello.map`, a compact JSON sidecar that maps emitted assembly lines back to PHP line/column pairs. If you add `--timings`, the compiler prints per-phase durations such as lexing, parsing, early optimization, type checking, constant propagation, post-check pruning, control-flow normalization, dead-code elimination, declaration reachability, runtime-cache preparation, code generation, assembling, and linking.
 
 ### Current optimization passes
 
@@ -478,6 +478,7 @@ elephc already performs a small but useful AST-level optimization pipeline befor
 - **Control-flow pruning after type checking**: removes constant-dead `if` / `elseif` / `while (false)` / `for (...; false; ...)` branches, materializes constant `switch` execution, prunes `match` arms, and trims unreachable statements after terminating constructs such as `return`, `throw`, `break`, and `continue`.
 - **Control-flow normalization after pruning**: canonicalizes equivalent residual shapes such as nested `elseif` chains, merged `if` heads/tails, single-case or fallthrough-only `switch` shells, canonical multi-catch handlers, folded outer `finally` wrappers, and identical `if` branches so later passes see fewer structurally different but semantically identical trees.
 - **Dead-code elimination after normalization**: removes empty control shells, simplifies single-path conditionals, and prunes guard contradictions across boolean, strict-scalar, loose-equality, proven-integer range, and cross-variable relational checks. Exact `int` parameters and typed locals seed discrete ranges; strict relational substitution feeds the full exact/truthiness/switch model; and pure, non-throwing `while` / `for` conditions strengthen their body entry. The pass also uses CFG-lite reachability for local `if` / `switch` / `try` shapes, hoists safe non-throwing `try` prefixes, and drops unused pure expression statements and dead pure subexpressions when the surrounding expression already determines the result.
+- **Whole-program declaration reachability after DCE**: removes unreachable functions, unused classes, and unused methods from user code and injected preludes before EIR lowering, while keeping `CheckResult` method/vtable metadata aligned. Dynamic calls, builtin callback parameters, `eval`, `unserialize`, and Reflection conservatively retain wider surfaces only when their containing body is executable; inherited and trait-flattened bodies follow checker ownership, while interface-required symbols remain structurally available without activating dormant dynamic branches. Prelude-producing `--with-pdo`, `--with-tz`, and `--with-image` root their injected groups; `--with-crypto` only force-links its bridge, and `--web` remains demand-pruned.
 - **Local effect summaries for purity / may-throw reasoning**: tracks known pure and non-throwing builtins, user functions, static methods, private `$this` methods, closures, first-class callables, and merged callable aliases through `if` / `switch` / `try` control flow so the optimizer can simplify `try` regions and prune dead handlers more precisely.
 
 The optimizer is intentionally conservative. It does not yet do full function-level CFG fixed-point propagation, aggressive whole-program optimization, or assembly-level peephole rewriting, but it does compute lightweight effect summaries and local CFG-lite reachability for known call targets and structured control flow so AST rewrites can stay more precise without becoming risky.
@@ -553,7 +554,7 @@ src/
 ├── source_map.rs        # Assembly/source-map sidecar emission
 ├── termination.rs       # Structured terminal-effect analysis
 ├── optimize.rs          # Optimizer public entry points and effect context
-├── optimize/            # AST optimizer: folding, propagation, pruning, normalization, dead-code elimination
+├── optimize/            # AST optimizer: folding, propagation, DCE, declaration reachability
 ├── names.rs             # Qualified/FQN name model + symbol mangling helpers
 ├── name_resolver/       # Namespace/use resolution to canonical names
 ├── pdo_prelude.rs       # PDO standard-library prelude (PHP source) injection entry point

@@ -23,6 +23,7 @@ mod effect_analysis;
 mod effects;
 mod fold;
 mod propagate;
+pub mod reachability;
 
 use control::*;
 use effect_analysis::{
@@ -31,6 +32,8 @@ use effect_analysis::{
 use effects::*;
 use fold::*;
 use propagate::*;
+
+pub use reachability::prune_unreachable_declarations;
 
 #[cfg(test)]
 mod tests;
@@ -228,13 +231,11 @@ pub fn eliminate_dead_code(program: Program) -> Program {
 }
 
 /// Returns true when the named builtin can invoke user code through a callback
-/// argument (registry convention: every callback parameter is named
-/// `callback`). Such builtins inherit the callback's powers: they can write
-/// globals and mutate any argument reachable through the callback's by-ref
-/// parameters.
+/// argument. Such builtins inherit the callback's powers: they can write globals
+/// and mutate any argument reachable through the callback's by-ref parameters.
 fn builtin_invokes_callbacks(name: &str) -> bool {
-    crate::builtins::registry::lookup(name).is_some_and(|def| {
-        def.params.iter().any(|(param, _)| param == "callback")
+    crate::builtins::registry::lookup(name).is_some_and(|definition| {
+        !crate::builtins::registry::callback_parameter_indices(definition).is_empty()
     })
 }
 

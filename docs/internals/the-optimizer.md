@@ -7,15 +7,19 @@ sidebar:
 
 **Source:** `src/optimize/`
 
-elephc's optimizer is intentionally simple and AST-focused. It does not build a separate IR or run heavyweight SSA passes. Instead, it performs a small set of local rewrites that already pay off in generated assembly quality and compile-time clarity.
+elephc optimizes at two levels. The AST layer performs PHP-aware rewrites and
+declaration pruning before lowering; the EIR backend then runs value-, block-,
+and dominance-aware passes over the lowered module. This page focuses on the
+AST layer.
 
-Today the optimizer is split into five passes:
+Today the AST optimizer is split into six passes:
 
 1. `fold_constants(program)` runs before type checking
 2. `propagate_constants(program)` runs after successful type checking
 3. `prune_constant_control_flow(program)` runs after propagation and warning collection
 4. `normalize_control_flow(program)` runs after pruning and rewrites structurally equivalent control-flow shells into simpler AST shapes
 5. `eliminate_dead_code(program)` runs after normalization and removes leftover unreachable or non-observable statements from the already-normalized AST
+6. `prune_unreachable_declarations(program, check_result, options)` runs after DCE and removes unreachable functions, classes, and methods while reconciling checker metadata
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
 
@@ -28,7 +32,9 @@ That effect information is what lets later pruning and dead-code elimination sta
 
 ## Why optimize at the AST level
 
-elephc goes straight from AST to target assembly. There is no middle IR for optimization to target, so the cheapest high-value place to simplify code is the AST itself.
+AST optimization remains the cheapest high-value place for PHP-semantic
+rewrites. The checked, pruned tree is then lowered to EIR, where backend passes
+handle transformations that require value identity, basic blocks, or dominance.
 
 This gives us a few immediate wins:
 
@@ -263,6 +269,103 @@ if (true) {
 
 After pruning and normalization, the dead branch disappears entirely. The final dead-code pass then has less structural noise to inspect, and codegen never emits the `pow` path.
 
+## Pass 6: Declaration reachability
+
+`prune_unreachable_declarations()` runs after AST DCE and before EIR lowering.
+The implementation in `src/optimize/reachability/` scans top-level executable
+roots, declaration contracts and bodies, prelude inventory groups, and exported
+functions, then follows function, class, method, and extern edges to a fixed
+point. Unreachable user declarations and compiler-prelude declarations are
+removed before EIR can lower them. A reachable include-loaded
+`FunctionVariantGroup` expands to every concrete variant that its runtime
+dispatcher may select.
+
+The scanner deliberately widens the keep-set for PHP-observable dynamic lookup:
+`eval` and unknown function calls retain free functions, unknown method lookup
+retains methods on live classes, and `unserialize`, dynamic class names, and
+Reflection retain class-like declarations conservatively. Literal
+`function_exists`, `class_exists`, `method_exists`, and class-string
+`property_exists` probes retain the named declaration instead of triggering a
+global widening. The same shared argument planner maps reordered named arguments
+before introspection targets, callbacks, or argument-dependent builtin link
+requirements are inspected. Registry parameters with a callable type or
+structural callback-slot metadata add callable edges, including named arguments
+and conservative dynamic-spread fallback. Explicit prelude requests
+such as `--with-pdo`, `--with-tz`, and `--with-image` root their complete
+inventory group; `--with-crypto` only force-links the bridge, and `--web` is
+demand-pruned from its executable bootstrap roots.
+
+Dynamic hazards are accumulated from top-level executable code and from
+declarations reached through executable calls; hazards hidden in dead bodies do
+not widen the graph. Interface-required methods have a separate structural
+reachability state: their symbols and static dependencies remain available for
+vtable metadata, but dynamic operations in those bodies widen the graph only if
+an executable edge also reaches the method. Compiler-owned prelude methods may
+likewise identify private closure dispatch that cannot name user declarations.
+
+Receiver tracking is a conservative may-analysis. Assignments union known
+classes, opaque writes forget the affected receiver, and interprocedural
+`global` or by-reference mutation turns calls through the aliased variable into
+wildcard method edges. A literal `$GLOBALS['name']` access applies that rule to
+the matching top-level variable; a computed `$GLOBALS[$key]` makes every tracked
+receiver name opaque. This models PHP's aliasing conservatively for declaration
+retention, but does not implement the still-unsupported `$GLOBALS` runtime alias
+storage itself. Likewise, an expression call such as `($value)()` intentionally
+sets both the dynamic-function and dynamic-method hazards because the value may
+be a function, closure, or callable array. Keeping every method of every live
+class in that case is a documented precision cost, not a correctness defect.
+Two-element array literals are treated as possible callable arrays even when
+they are ordinary data, for the same reason: the resulting over-retention is
+safe, while rejecting a runtime callable would not be.
+
+Compiler-invoked protocol methods (`Iterator`, `IteratorAggregate`,
+`Countable`, `ArrayAccess`, `JsonSerializable`) gain behavioral edges from the
+operations whose lowering can invoke them: `foreach`, `count()`, object offset
+access, `json_encode()`, the iterator builtins, and `IteratorIterator`
+construction. A statically known receiver contributes a class-qualified edge;
+an opaque receiver widens only the corresponding protocol method names, while
+recursive JSON encoding conservatively uses the `jsonSerialize` method name.
+Declared scalar/array locals and positive `is_array()` branch guards suppress
+impossible object protocol edges. A dynamic lookup inside a protocol body therefore widens the
+keep-set only when such an operation can execute it, just as it would in an
+ordinary reachable method. User interfaces that lowering does not invoke stay
+structural, so an unused `Runner::run()` body does not retain sibling methods.
+
+Late-static construction is also a family-wide runtime edge. A reachable
+`new static(...)` roots the lexical class and each checker-known descendant that
+could be selected by the called-class id. Their constructor bodies and signatures
+participate in the fixed point, so an override cannot disappear and callable or
+by-reference constructor parameters retain the same dependencies as direct calls.
+
+Compiler-internal declaration factories are scanned at their semantic call
+site. In particular, the runtime class selected by `PDO::prepare` roots the
+instantiable `PDOStatement` subclass family, while other non-literal
+`__elephc_new_without_constructor` calls fall back to the global dynamic-class
+hazard. This coupling must stay synchronized with PDO's validation and lowering
+until the dependency is represented in shared builtin metadata.
+
+Pruning the AST alone would be ineffective because EIR lowering reads flattened
+methods from `CheckResult`. The pass therefore filters `method_decls` and all
+related method maps, resolves inherited implementations through
+`method_impl_classes`, scans trait-imported bodies from each consuming class's
+flattened declarations, rebuilds instance and static vtable slots in survivor
+order, and keeps every shared virtual slot on the whole inheritance lineage once
+any occupant survives, so a mid-chain `parent::` call cannot renumber a
+grandparent-typed dispatch. It also removes dead extern schemas and link
+requirements, and keeps the checked metadata synchronized with the remaining AST. Conditional builtin requirements
+are rescanned from normalized parameter-order arguments before a bridge or system
+library is removed.
+
+Linker dead stripping is deliberately secondary. Linux user functions already
+live in separate text sections. The macOS runtime object uses
+`.subsections_via_symbols` to discard independent `__rt_*` helpers, but the
+generated user object does not: its address-taken callable labels and contiguous
+metadata are not yet modeled as independently rooted Mach-O atoms. Declaration
+reachability is therefore responsible for removing user functions and methods
+on macOS. Enabling user-object atom splitting requires explicit relocation and
+metadata roots plus callable regression coverage; applying the runtime-object
+strategy directly can produce dangling callable descriptors.
+
 ## Effect summaries: purity and `may_throw`
 
 The optimizer now maintains a small local effect-analysis layer that sits underneath the pruning and dead-code-elimination passes.
@@ -321,7 +424,7 @@ try {
 
 Because every `match` arm produces the same known pure / non-throwing callable, the optimizer can prove that the `catch` path is dead and avoid emitting the `pow` branch at all.
 
-## Why there are five passes
+## Why there are six passes
 
 If elephc removed whole branches before type checking, it could accidentally hide useful diagnostics.
 
@@ -344,6 +447,7 @@ So the current rule is:
 - prune larger dead control-flow only after checking
 - normalize the remaining control-flow into simpler equivalent shapes
 - run structural dead-code cleanup only after those earlier passes have already simplified the tree
+- prune whole declarations only after diagnostics and statement-level DCE have seen the complete program
 
 ## Conservatism and side effects
 

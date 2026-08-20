@@ -101,7 +101,7 @@ pub(super) fn env_override_helpers_are_injected_exactly_once() {
 
         for program in [&configuration_only, &ini_only, &both] {
             let cli =
-                inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
+                inject_for_test(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
             assert_eq!(
                 declarations_of(&cli, "__elephc_opcache_env"),
                 1,
@@ -110,14 +110,14 @@ pub(super) fn env_override_helpers_are_injected_exactly_once() {
             assert_eq!(declarations_of(&cli, "__elephc_opcache_env_raw"), 1);
             // web = true never emits it here; the web prelude bakes it instead.
             let web =
-                inject_if_used(program.clone(), PhpVersion::Php85, true, None, &[], &[], None, false).0;
+                inject_for_test(program.clone(), PhpVersion::Php85, true, None, &[], &[], None, false).0;
             assert_eq!(declarations_of(&web, "__elephc_opcache_env"), 0);
         }
 
         // A program that uses neither surface pays nothing.
         let unrelated = parse("<?php echo 1;");
         let none =
-            inject_if_used(unrelated.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
+            inject_for_test(unrelated.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         assert_eq!(declarations_of(&none, "__elephc_opcache_env"), 0);
     }
 
@@ -128,7 +128,7 @@ pub(super) fn env_override_helpers_are_injected_exactly_once() {
 pub(super) fn restricted_configuration_still_injects_the_env_helpers() {
         let program = parse("<?php $c = opcache_get_configuration();");
         let overrides = vec![("opcache.restrict_api".to_string(), "/nowhere".to_string())];
-        let injected = inject_if_used(
+        let injected = inject_for_test(
             program,
             PhpVersion::Php85,
             false,
@@ -147,7 +147,7 @@ pub(super) fn restricted_configuration_still_injects_the_env_helpers() {
     #[test]
 pub(super) fn cli_ini_get_respects_user_declaration() {
         let program = parse("<?php function ini_get($o): string|false { return 'x'; } echo ini_get('a');");
-        let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
+        let injected = inject_for_test(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         assert_eq!(injected.len(), program.len());
     }
 
@@ -273,7 +273,7 @@ pub(super) fn denying_restrict_api_renders_restricted_bodies() {
              opcache_is_script_cached(__FILE__); opcache_invalidate(__FILE__); \
              opcache_compile_file(__FILE__);",
         );
-        let injected = inject_if_used(program, PhpVersion::Php85, false, entry, &[], &overrides, None, false).0;
+        let injected = inject_for_test(program, PhpVersion::Php85, false, entry, &[], &overrides, None, false).0;
         let rendered = format!("{injected:?}");
 
         // The warning text appears once per restricted function, and never a sixth time.

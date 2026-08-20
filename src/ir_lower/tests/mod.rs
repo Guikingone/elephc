@@ -54,12 +54,13 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
         crate::resolver::resolve_collecting_includes_with_defines(parsed, parent, &defines)
             .expect("resolver failed");
     let ast = crate::autoload::collect_aliases(ast);
-    let ast = crate::pdo_prelude::inject_if_used(ast, false);
-    let ast = crate::tz_prelude::inject_if_used(ast, false);
-    let ast = crate::list_id_prelude::inject_if_used(ast);
-    let ast = crate::var_export_prelude::inject_if_used(ast);
-    let ast = crate::image_prelude::inject_if_used(ast, false);
-    let ast = crate::hash_prelude::inject_if_used(ast, false);
+    let mut prelude_inventory = crate::optimize::reachability::PreludeInventory::new();
+    let ast = crate::pdo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::tz_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
     let (ast, _) = crate::autoload::run_collecting_included_with_defines(
         ast,

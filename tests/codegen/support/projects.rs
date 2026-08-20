@@ -226,7 +226,12 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
-    let resolved = elephc::pdo_prelude::inject_if_used(resolved, false);
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let resolved = elephc::pdo_prelude::inject_if_used(
+        resolved,
+        false,
+        &mut prelude_inventory,
+    );
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");

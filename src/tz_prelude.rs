@@ -61,12 +61,17 @@ function timezone_abbreviations_list() {
 /// `force` (set by `--with-tz`) bypasses the usage scan so the timezone surface
 /// is always injected, making it available even when auto-detection would not see
 /// the usage.
-pub fn inject_if_used(program: Program, force: bool) -> Program {
+pub fn inject_if_used(
+    program: Program,
+    force: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
     if !force && !detect::program_uses_tz_introspection(&program) {
         return program;
     }
     let tokens = crate::lexer::tokenize(TZ_PRELUDE_SRC).expect("tz prelude must tokenize");
     let mut combined = crate::parser::parse_internal(&tokens).expect("tz prelude must parse");
+    inventory.record_program("tz", &combined);
     combined.extend(program);
     combined
 }

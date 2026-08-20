@@ -14,12 +14,40 @@ trade-offs.
 
 - **AST optimizer** — PHP-preserving rewrites expressed over syntax: constant
   folding, constant propagation, control-flow pruning and normalization, and
-  dead-code elimination. Always on; not behind a flag. See
+  dead-code elimination, followed by conservative whole-program declaration
+  reachability that removes unused functions, classes, and methods before EIR
+  lowering. Dynamic lookup and Reflection widen its keep-set, while explicit
+  `--with-<crate>` prelude requests become roots. Always on; not behind a flag. See
   [The Optimizer](../internals/the-optimizer.md).
 - **EIR optimization passes** — transformations that need value identity, basic
   blocks, or dominance, which the AST cannot express well. Run by a fixed-point
   pass driver after lowering. Controlled by `--ir-opt`. See
   [The EIR Design](../internals/the-ir.md#optimization-passes).
+
+Declaration reachability favors correctness over minimum size. Runtime-computed
+functions, methods, classes, callables, aliases, and Reflection may therefore
+retain a wider declaration family than the eventual runtime value needs. On
+macOS, linker atom splitting remains limited to the runtime object: generated
+user metadata and address-taken callable labels can rely on one contiguous user
+object, so user declarations are removed by the AST pass instead of by
+`.subsections_via_symbols`.
+
+Callback-consuming AOT builtins expose their callback slots through structural
+shared-contract metadata, independently of the PHP parameter name and its broad
+storage type. Registry validation rejects unknown or duplicate callback slots, and
+registry-wide tests pin the complete current set and require every conventional
+`$callback` parameter to resolve through structural metadata or a callable type.
+Mixed callback parameters with other names remain explicit semantic metadata because
+their role cannot be inferred from the PHP storage type alone.
+
+Operations that invoke PHP protocols implicitly, including `foreach`, `count()`,
+object offset access, `json_encode()`, and iterator helpers, keep the corresponding
+protocol methods behaviorally reachable. Known receiver classes produce
+class-qualified edges; opaque receivers widen only those protocol method names,
+and recursive JSON encoding conservatively keeps `jsonSerialize` by name.
+Declared array/scalar locals and positive `is_array()` guards avoid treating an array-only path as object dispatch.
+Attributes on reachable declarations are scanned at every supported location,
+including fixed and variadic parameters.
 
 ## EIR optimization passes
 
