@@ -167,22 +167,14 @@ pub(super) fn dynamic_new_candidate(
         // cannot supply the element type as-is drops the class from the ladder, which is a MISSING
         // constructor call — the behaviour this class had before the thunk existed — rather than a
         // fabricated integer.
-        if padding_thunk.is_some() && constructor.variadic.is_some() {
-            let regular = crate::types::call_args::regular_param_count(constructor);
-            for index in regular..materialized {
-                let argument = inst.operands.get(index + 1).copied().ok_or_else(|| {
-                    CodegenIrError::invalid_module("dynamic new candidate missing constructor arg")
-                })?;
-                // A `Mixed` element accepts anything, because that is the one slot codegen BOXES
-                // into rather than reinterpreting — which is why an untyped `...$r` was never
-                // affected. Requiring an exact match here refused `new $c(5, 2)` on
-                // `($a = 5, ...$r)` and took four working rows of the matrix with it.
-                if param_types[index] != PhpType::Mixed
-                    && ctx.value_php_type(argument)?.codegen_repr() != param_types[index]
-                {
-                    return Ok(None);
-                }
-            }
+        if padding_thunk.is_some()
+            && dynamic_new_variadic_element_mismatch(ctx, constructor, &param_types, inst)?
+                .is_some()
+        {
+            // NOT constructed, and NOT silently dropped either: `dynamic_new_mixed_refusals` asks
+            // the same judge and emits a ladder arm that REPORTS. Leaving only this half in place
+            // is what made `new $c("x")` on `int ...$r` answer with a constructor-less object.
+            return Ok(None);
         }
         Some(ConstructorCallTarget {
             impl_class,

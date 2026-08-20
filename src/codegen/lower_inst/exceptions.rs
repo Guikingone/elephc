@@ -281,6 +281,19 @@ pub(super) fn emit_argument_count_error(
     );
 }
 
+/// Throws a catchable PHP `TypeError` carrying a static message and a source location.
+///
+/// The located sibling of `emit_type_error`, for the same reason
+/// `emit_argument_count_error` takes one: a `new $c(...)` refusal belongs to a `new` expression the
+/// user wrote, so the report ends in ` in FILE:LINE` and `getLine()` answers when it is caught.
+pub(super) fn emit_type_error_at(
+    ctx: &mut FunctionContext<'_>,
+    message: &str,
+    location: Option<(String, u32)>,
+) {
+    emit_static_exception_at(ctx, "TypeError", "_spl_type_error_class_id", message, location);
+}
+
 /// Throws a catchable PHP `Error` whose message is a runtime string value.
 pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) -> Result<()> {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);

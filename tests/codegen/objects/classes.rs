@@ -420,19 +420,24 @@ echo $none->s, "|", $two->s, "
     assert_eq!(out, "n=0 v0=rien|n=2 v0=7\n");
 }
 
-/// Verifies a TYPED collector does not fabricate an integer out of a mismatched argument.
+/// Verifies a TYPED collector REFUSES a mismatched argument instead of skipping the constructor.
 ///
-/// Codegen materializes each overflow argument AS the declared element type, with no conversion:
-/// `new $c("x")` on `int ...$r` came back holding `4370954896` — the string's ADDRESS read as an
-/// integer — and `"7"` did the same, so it was not limited to values php rejects. Passing the
-/// overflow as `mixed` is not available either: the checker refuses a `mixed` argument to a typed
-/// variadic outright, even for a value php accepts.
+/// Codegen materializes each overflow argument AS the declared element type with no conversion, so
+/// `new $c("x")` on `int ...$r` first came back holding `4370954896` — the string's ADDRESS read as
+/// an integer. Dropping the class from the ladder stopped that, but left the site building an
+/// object from its property defaults with the constructor never run: silent, and wrong.
 ///
-/// So a typed collector is left out of the ladder while an argument would actually reach it, and
-/// this asserts the property that made that the right trade: whatever the object ends up holding,
-/// it is NEVER a fabricated integer. The arity where nothing reaches the collector still runs.
+/// It raises a catchable `TypeError` now, which is the class php raises here too.
+///
+/// THE MESSAGE IS ELEPHC'S, NOT PHP'S, on purpose. php COERCES at this boundary — `new $c("7")`
+/// and `new $c(1.5)` both succeed there — and elephc coerces at NO typed parameter boundary: the
+/// same mismatch at a static call site is the compile error `expects Int, got Str — PHP coerces
+/// this at run time … add an explicit cast at the call site`. Borrowing php's
+/// `must be of type int, string given` would promise a semantics this compiler does not have, so
+/// the runtime refusal says what the compile-time one says.
 #[test]
-fn test_dynamic_new_typed_variadic_never_fabricates_an_integer() {
+fn test_dynamic_new_typed_variadic_refuses_a_mismatched_argument() {
+    // The arity where nothing reaches the collector is unaffected and still runs.
     let out = compile_and_run(
         r#"<?php
 class V {
@@ -446,6 +451,23 @@ echo $safe->s, "
 "#,
     );
     assert_eq!(out, "a=x n=0\n");
+
+    // An argument that DOES reach a typed collector, and cannot be taken as its element type.
+    let caught = compile_and_run(
+        r#"<?php
+class W { public $s = "SANS-CONSTRUCTEUR"; function __construct(int ...$r) { $this->s = "ran"; } }
+$c = "W";
+try {
+    $o = new $c("x");
+    echo $o->s, "
+";
+} catch (TypeError $e) {
+    echo get_class($e), ":", (strpos($e->getMessage(), "W::__construct(): Argument #1") === 0 ? "prefixe-php" : "autre"), "
+";
+}
+"#,
+    );
+    assert_eq!(caught, "TypeError:prefixe-php\n");
 }
 
 /// Verifies the arity refusal counts a VARIADIC signature the way the checker does.

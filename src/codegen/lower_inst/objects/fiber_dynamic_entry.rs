@@ -185,7 +185,8 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
         .collect::<Vec<_>>();
     // A class the ladder knows but whose constructor this site cannot satisfy has to REFUSE, not
     // fall through: the fallback allocates by name and skips the constructor entirely, which
-    // answered with a half-built object where php raises `ArgumentCountError`.
+    // answered with a half-built object. TWO questions are settled here — too FEW arguments, and
+    // an argument the variadic collector cannot TAKE — and each raises its own throwable.
     //
     // NOT UNDER EVAL. The eval bridge resolves the class itself and raises its own diagnostic, and
     // these arms sit before the fallback that reaches it, so they would preempt a path measured
@@ -194,21 +195,22 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
         .iter()
         .map(|candidate| candidate.class_name.clone())
         .collect::<Vec<_>>();
-    let arity_refusals = if uses_runtime_arg_container || builtins::has_eval_context(ctx) {
+    let refusals = if uses_runtime_arg_container || builtins::has_eval_context(ctx) {
         Vec::new()
     } else {
-        dynamic_new_mixed_arity_refusals(
+        dynamic_new_mixed_refusals(
             ctx,
             constructor_args.len(),
             inst.span.map_or(0, |span| span.line),
             &matched,
-        )
+            inst,
+        )?
     };
-    let arity_labels = arity_refusals
+    let refusal_labels = refusals
         .iter()
-        .map(|(class_name, _)| {
-            let label = ctx.next_label("dynamic_new_mixed_arity");
-            emit_branch_if_dynamic_new_mixed_class_name_matches(ctx, class_name, &label);
+        .map(|refusal| {
+            let label = ctx.next_label("dynamic_new_mixed_refused");
+            emit_branch_if_dynamic_new_mixed_class_name_matches(ctx, &refusal.class_name, &label);
             label
         })
         .collect::<Vec<_>>();
@@ -229,20 +231,28 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
     }
 
     // Each arm diverges into the unwinder, so none of them falls through to `done_label` and none
-    // stores a result: an ArgumentCountError leaves no object behind.
+    // stores a result: a refused `new` leaves no object behind.
     let refusal_location = ctx
         .module
         .source_path
         .clone()
         .map(|file| (file, inst.span.map_or(0, |span| span.line)));
-    for ((_, message), label) in arity_refusals.iter().zip(arity_labels.iter()) {
+    for (refusal, label) in refusals.iter().zip(refusal_labels.iter()) {
         ctx.emitter.label(label);
         abi::emit_release_temporary_stack(ctx.emitter, 16);
-        super::super::exceptions::emit_argument_count_error(
-            ctx,
-            message,
-            refusal_location.clone(),
-        );
+        if refusal.argument_count {
+            super::super::exceptions::emit_argument_count_error(
+                ctx,
+                &refusal.message,
+                refusal_location.clone(),
+            );
+        } else {
+            super::super::exceptions::emit_type_error_at(
+                ctx,
+                &refusal.message,
+                refusal_location.clone(),
+            );
+        }
     }
 
     ctx.emitter.label(&fallback_label);

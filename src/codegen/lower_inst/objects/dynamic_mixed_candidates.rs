@@ -87,6 +87,42 @@ pub(super) fn dynamic_new_without_constructor_mixed_candidates(
     Ok(candidates)
 }
 
+/// The first overflow argument whose site type the COLLECTOR cannot take, as `(index, expected)`.
+///
+/// THE ONE JUDGE of that question. Two callers need the answer and must not disagree:
+/// `dynamic_factory::dynamic_new_candidate`, which refuses to build a candidate that would
+/// misrepresent the value, and `dynamic_new_mixed_refusals`, which turns the same condition into a
+/// ladder arm that REPORTS. A second copy would let a class be neither constructed nor refused.
+///
+/// `index` is the site's argument position, zero-based; `expected` is the collector's element type.
+///
+/// A `Mixed` element takes anything: it is the one slot codegen BOXES into rather than
+/// reinterpreting, which is why an untyped `...$r` never reaches this at all.
+pub(super) fn dynamic_new_variadic_element_mismatch(
+    ctx: &FunctionContext<'_>,
+    constructor: &crate::types::FunctionSig,
+    param_types: &[PhpType],
+    inst: &Instruction,
+) -> Result<Option<(usize, PhpType)>> {
+    if constructor.variadic.is_none() {
+        return Ok(None);
+    }
+    let regular = crate::types::call_args::regular_param_count(constructor);
+    for index in regular..param_types.len() {
+        let expected = &param_types[index];
+        if *expected == PhpType::Mixed {
+            continue;
+        }
+        let Some(argument) = inst.operands.get(index + 1).copied() else {
+            break;
+        };
+        if ctx.value_php_type(argument)?.codegen_repr() != *expected {
+            return Ok(Some((index, expected.clone())));
+        }
+    }
+    Ok(None)
+}
+
 /// Classes a `new $c(...)` can NAME but cannot CONSTRUCT at this site's arity, with php's message.
 ///
 /// A static `new C()` that passes too few arguments is a COMPILE error — the checker reports
@@ -111,12 +147,13 @@ pub(super) fn dynamic_new_without_constructor_mixed_candidates(
 /// ONLY CLASSES THE LADDER ALREADY OWNS are refused: same `is_dynamic_new_mixed_aot_candidate`
 /// filter as the candidates, minus the names that matched as candidates. A class outside that set
 /// reaches the fallback for reasons this function has not measured, and stays there.
-pub(super) fn dynamic_new_mixed_arity_refusals(
+pub(super) fn dynamic_new_mixed_refusals(
     ctx: &FunctionContext<'_>,
     arg_count: usize,
     line: u32,
     matched: &[String],
-) -> Vec<(String, String)> {
+    inst: &Instruction,
+) -> Result<Vec<DynamicNewRefusal>> {
     let constructor_key = php_symbol_key("__construct");
     let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
     sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
@@ -136,43 +173,111 @@ pub(super) fn dynamic_new_mixed_arity_refusals(
         // a variadic collector is the final parameter and carries no default, yet contributes
         // nothing to the minimum; and a required parameter can follow an optional one, so the
         // count is every defaultless slot, not the leading run of them.
-        let regular_param_count = crate::types::call_args::regular_param_count(constructor);
+        let regular = crate::types::call_args::regular_param_count(constructor);
         let required = constructor
             .defaults
             .iter()
-            .take(regular_param_count)
+            .take(regular)
             .filter(|default| default.is_none())
             .count();
-        if arg_count >= required {
+        if arg_count < required {
+            refusals.push(DynamicNewRefusal {
+                class_name: class_name.to_string(),
+                message: too_few_arguments_message(
+                    class_name,
+                    ctx.module.source_path.as_deref().unwrap_or(""),
+                    line,
+                    arg_count,
+                    required,
+                    required == regular && constructor.variadic.is_none(),
+                ),
+                argument_count: true,
+            });
             continue;
         }
-        // `exactly` only when there is nothing further to pass: no optional parameter and no
-        // variadic tail. php words those two cases apart and so does this.
-        let bound = if required == regular_param_count && constructor.variadic.is_none() {
-            "exactly"
-        } else {
-            "at least"
+        // The arity is satisfiable, so the site can still be refused for what it PASSES. An
+        // overflow argument the collector cannot take used to drop the class from the ladder in
+        // SILENCE, and `new $c("x")` on `int ...$r` then answered with a constructor-less object
+        // built from its property defaults. It reports now.
+        let Some(param_types) = (0..arg_count)
+            .map(|index| crate::types::call_args::positional_param_type(constructor, index))
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
         };
-        let message = if known_dynamic_new_builtin_class_names().contains(&class_name.as_str()) {
-            let plural = if required == 1 { "argument" } else { "arguments" };
-            format!(
-                "{}::__construct() expects {} {} {}, {} given",
-                class_name, bound, required, plural, arg_count
-            )
-        } else {
-            format!(
-                "Too few arguments to function {}::__construct(), {} passed in {} on line {} and {} {} expected",
-                class_name,
-                arg_count,
-                ctx.module.source_path.as_deref().unwrap_or(""),
-                line,
-                bound,
-                required
-            )
-        };
-        refusals.push((class_name.to_string(), message));
+        if let Some((index, expected)) =
+            dynamic_new_variadic_element_mismatch(ctx, constructor, &param_types, inst)?
+        {
+            let given = match inst.operands.get(index + 1).copied() {
+                Some(argument) => ctx.value_php_type(argument)?.codegen_repr(),
+                None => continue,
+            };
+            refusals.push(DynamicNewRefusal {
+                class_name: class_name.to_string(),
+                message: cannot_coerce_message(class_name, index + 1, &expected, &given),
+                argument_count: false,
+            });
+        }
     }
-    refusals
+    Ok(refusals)
+}
+
+/// One class a `new $c(...)` site NAMES but must refuse, and which throwable says why.
+pub(super) struct DynamicNewRefusal {
+    pub(super) class_name: String,
+    pub(super) message: String,
+    /// `true` raises `ArgumentCountError`, `false` raises `TypeError` — php's two answers to the
+    /// two questions this ladder settles before it will construct anything.
+    pub(super) argument_count: bool,
+}
+
+/// php's wording for a constructor the site passes too few arguments to.
+///
+/// PHP HAS TWO SHAPES and picks by whether the class is internal, so both are reproduced.
+/// `exactly` only when there is nothing further to pass — no optional parameter and no variadic
+/// tail; php words those cases apart and so does this.
+fn too_few_arguments_message(
+    class_name: &str,
+    source_path: &str,
+    line: u32,
+    given: usize,
+    required: usize,
+    exact: bool,
+) -> String {
+    let bound = if exact { "exactly" } else { "at least" };
+    if known_dynamic_new_builtin_class_names().contains(&class_name) {
+        let plural = if required == 1 { "argument" } else { "arguments" };
+        return format!(
+            "{}::__construct() expects {} {} {}, {} given",
+            class_name, bound, required, plural, given
+        );
+    }
+    format!(
+        "Too few arguments to function {}::__construct(), {} passed in {} on line {} and {} {} expected",
+        class_name, given, source_path, line, bound, required
+    )
+}
+
+/// elephc's wording for an argument the collector cannot take.
+///
+/// DELIBERATELY NOT php's `must be of type int, string given`. php COERCES at this boundary —
+/// `new $c("7")` and `new $c(1.5)` both succeed there — and elephc coerces at NO typed parameter
+/// boundary anywhere: the same mismatch at a static call site is a compile error reading
+/// `expects Int, got Str — PHP coerces this at run time … add an explicit cast at the call site`.
+/// Borrowing php's wording would promise a semantics this compiler does not implement, so the
+/// runtime refusal says what the compile-time one says. Reporting beats the constructor-less
+/// object either way.
+fn cannot_coerce_message(
+    class_name: &str,
+    argument: usize,
+    expected: &PhpType,
+    given: &PhpType,
+) -> String {
+    format!(
+        "{}::__construct(): Argument #{} expects {:?}, got {:?} — PHP coerces this at run time, \
+         which elephc cannot do at a parameter boundary; add an explicit cast at the call site",
+        class_name, argument, expected, given
+    )
 }
 
 /// Returns true when a class can safely use the static allocation path for `new $name`.
