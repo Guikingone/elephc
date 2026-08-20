@@ -100,6 +100,14 @@ pub(crate) fn program_may_reference_spl(program: &[crate::parser::ast::Stmt]) ->
     if usage.references("unserialize") {
         return true;
     }
+    // `new $c` names its class in a VALUE, so there is no reference site for the walk below to
+    // find and no `Unknown type` for the checker to report: the program compiles and dies at
+    // runtime with `Class "ArrayObject" not found`, where php constructs the object. Eleven of
+    // these classes are in `dynamic_new::supported_dynamic_new_builtin_class_names`, so the
+    // dispatch can reach them and the gate has to widen exactly as the throwable one does.
+    if usage.constructs_dynamic_class {
+        return true;
+    }
     SPL_CLASS_NAMES
         .iter()
         .chain(PHAR_CLASS_NAMES.iter())
@@ -179,6 +187,29 @@ mod tests {
         assert!(!program_may_reference_spl(&parse("<?php echo 1;")));
         assert!(!program_may_reference_spl(&parse(
             "<?php function f(array $a): int { return count($a); } echo f([1, 2]);"
+        )));
+    }
+
+    /// A `new $c` reaches these classes with NOTHING spelled, so the gate widens on the DISPATCH.
+    ///
+    /// Eleven SPL classes sit in `dynamic_new::supported_dynamic_new_builtin_class_names`, so
+    /// `new $c` can construct `ArrayObject`. The gate used to ask only whether some NAME in the
+    /// program referenced one of them. A dynamic new spells nothing, so nothing registered, and
+    /// the program compiled and then died at run time with `Class "ArrayObject" not found` where
+    /// php builds the object — the gate's "the failure mode is LOUD, the checker reports
+    /// `Unknown type` at the reference site" reasoning does not hold when there IS no reference
+    /// site.
+    ///
+    /// THE SECOND ASSERTION IS WHAT KEEPS THIS HONEST. The same fragments without a dynamic new
+    /// must still register nothing, so a passing first assertion cannot be explained by a literal
+    /// the walk happened to see.
+    #[test]
+    fn a_dynamic_new_registers_the_spl_surface_with_no_name_spelled() {
+        assert!(program_may_reference_spl(&parse(
+            "<?php $parts = ['Array', 'Object']; $c = $parts[0] . $parts[1]; new $c();"
+        )));
+        assert!(!program_may_reference_spl(&parse(
+            "<?php $parts = ['Array', 'Object']; echo $parts[0] . $parts[1];"
         )));
     }
 

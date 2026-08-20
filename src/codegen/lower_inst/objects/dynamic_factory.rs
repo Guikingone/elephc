@@ -105,7 +105,12 @@ pub(super) fn dynamic_new_candidate(
         // which constructor it is — so without this every builtin with an optional parameter fell
         // to the generic allocation path and came back with no constructor run at all.
         if let Some(arg_count) = arg_count {
-            if constructor.params.len() != arg_count {
+            // A VARIADIC constructor needs the thunk at EVERY arity, its declared one included:
+            // the site passes N separate arguments and the lowered callee takes the collector as
+            // ONE array, so no site arity ever matches the callee's frame. Calling it directly
+            // handed a scalar where the array belongs and produced EMPTY OUTPUT rather than a
+            // diagnostic — the worst row of the measured matrix.
+            if constructor.params.len() != arg_count || constructor.variadic.is_some() {
                 let thunk = crate::ir_lower::dynamic_constructor_thunk_name(
                     class_info.class_id,
                     arg_count,
@@ -135,18 +140,50 @@ pub(super) fn dynamic_new_candidate(
             .as_ref()
             .and_then(|_| arg_count)
             .unwrap_or(constructor.params.len());
-        let param_types = constructor
-            .params
-            .iter()
-            .take(materialized)
-            .map(|(_, ty)| ty.codegen_repr())
+        // SHARED WITH `ir_lower::lower_dynamic_constructor_thunk`, which declares the thunk's
+        // parameters from the same `positional_param_type`. Reading `params[index]` directly here
+        // would describe a different frame past the regular parameters, where the declared entry
+        // is the COLLECTION and each argument materialized at the site is one ELEMENT.
+        let Some(param_types) = (0..materialized)
+            .map(|index| {
+                crate::types::call_args::positional_param_type(constructor, index)
+                    .map(|ty| ty.codegen_repr())
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
+        let ref_params = (0..materialized)
+            .map(|index| constructor.ref_params.get(index).copied().unwrap_or(false))
             .collect::<Vec<_>>();
-        let ref_params = constructor
-            .ref_params
-            .iter()
-            .copied()
-            .take(materialized)
-            .collect::<Vec<_>>();
+        // An overflow argument lands in the COLLECTOR, which is materialized AS the declared
+        // element type with no conversion, so a site value of another representation is
+        // REINTERPRETED rather than rejected: `new $c("x")` on `int ...$r` came back holding
+        // `4370954896` — the string's ADDRESS read as an integer — and `"7"` did the same, so it
+        // was never limited to values php refuses.
+        //
+        // Passing the overflow as `Mixed` is not an alternative: the checker refuses a `mixed`
+        // argument to a typed variadic outright, even for a value php accepts. So a site that
+        // cannot supply the element type as-is drops the class from the ladder, which is a MISSING
+        // constructor call — the behaviour this class had before the thunk existed — rather than a
+        // fabricated integer.
+        if padding_thunk.is_some() && constructor.variadic.is_some() {
+            let regular = crate::types::call_args::regular_param_count(constructor);
+            for index in regular..materialized {
+                let argument = inst.operands.get(index + 1).copied().ok_or_else(|| {
+                    CodegenIrError::invalid_module("dynamic new candidate missing constructor arg")
+                })?;
+                // A `Mixed` element accepts anything, because that is the one slot codegen BOXES
+                // into rather than reinterpreting — which is why an untyped `...$r` was never
+                // affected. Requiring an exact match here refused `new $c(5, 2)` on
+                // `($a = 5, ...$r)` and took four working rows of the matrix with it.
+                if param_types[index] != PhpType::Mixed
+                    && ctx.value_php_type(argument)?.codegen_repr() != param_types[index]
+                {
+                    return Ok(None);
+                }
+            }
+        }
         Some(ConstructorCallTarget {
             impl_class,
             param_types,

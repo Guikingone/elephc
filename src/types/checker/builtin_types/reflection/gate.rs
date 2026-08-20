@@ -72,6 +72,13 @@ pub(crate) fn program_may_reference_reflection(program: &[Stmt]) -> bool {
     {
         return true;
     }
+    // Same hole as the SPL gate: `new $c` carries its class name in a VALUE, so nothing is
+    // spelled, nothing is reported, and the program dies at runtime with
+    // `Class "ReflectionClass" not found`. `ReflectionClass`, `ReflectionMethod` and
+    // `ReflectionProperty` are all in `dynamic_new::supported_dynamic_new_builtin_class_names`.
+    if usage.constructs_dynamic_class {
+        return true;
+    }
     REFLECTION_CLASS_NAMES.iter().any(|name| {
         let key = php_symbol_key(name);
         usage.classes.contains(&key) || usage.literals.contains(&key)
@@ -99,6 +106,24 @@ mod tests {
     fn parse(source: &str) -> Vec<Stmt> {
         let tokens = crate::lexer::tokenize(source).expect("tokenize");
         crate::parser::parse(&tokens).expect("parse")
+    }
+
+    /// Same hole as the SPL gate, and the same fix: `new $c` spells no Reflection name.
+    ///
+    /// `ReflectionClass`, `ReflectionMethod` and `ReflectionProperty` are all in
+    /// `dynamic_new::supported_dynamic_new_builtin_class_names`, so the dispatch reaches them
+    /// while the name scan sees nothing, and the program died at run time with
+    /// `Class "ReflectionClass" not found`.
+    ///
+    /// The second assertion proves the first is not passing on a literal the walk saw anyway.
+    #[test]
+    fn a_dynamic_new_registers_the_reflection_surface_with_no_name_spelled() {
+        assert!(program_may_reference_reflection(&parse(
+            "<?php $parts = ['Reflection', 'Class']; $c = $parts[0] . $parts[1]; new $c('X');"
+        )));
+        assert!(!program_may_reference_reflection(&parse(
+            "<?php $parts = ['Reflection', 'Class']; echo $parts[0] . $parts[1];"
+        )));
     }
 
     /// The case the gate exists for: nothing to register, and nothing to pay for.

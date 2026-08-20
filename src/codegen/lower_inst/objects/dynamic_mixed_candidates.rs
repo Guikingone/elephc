@@ -87,6 +87,94 @@ pub(super) fn dynamic_new_without_constructor_mixed_candidates(
     Ok(candidates)
 }
 
+/// Classes a `new $c(...)` can NAME but cannot CONSTRUCT at this site's arity, with php's message.
+///
+/// A static `new C()` that passes too few arguments is a COMPILE error — the checker reports
+/// `Constructor 'C::__construct' expects 1 to 2 arguments, got 0`. `new $c()` cannot be checked
+/// that way, because the class is a value. Without this the site fell through to the runtime
+/// fallback, which allocates by name through `__rt_new_by_name` and never runs a constructor, so
+///
+///     class K { public $v = "defaut"; function __construct($x) { $this->v = $x; } }
+///     $c = $argv[1]; $o = new $c();
+///
+/// answered `K v='defaut'` where php raises `ArgumentCountError`. The object came back built out
+/// of its property defaults with the constructor SKIPPED — no diagnostic, wrong object.
+///
+/// PHP HAS TWO WORDINGS and picks by whether the class is internal, so both are reproduced:
+///
+///     IteratorIterator::__construct() expects at least 1 argument, 0 given
+///     Too few arguments to function K::__construct(), 0 passed in FILE on line N and exactly 1 expected
+///
+/// `exactly` when the constructor declares no optional parameter, `at least` otherwise; both
+/// shapes agree on that. `known_dynamic_new_builtin_class_names` is the internal/user split.
+///
+/// ONLY CLASSES THE LADDER ALREADY OWNS are refused: same `is_dynamic_new_mixed_aot_candidate`
+/// filter as the candidates, minus the names that matched as candidates. A class outside that set
+/// reaches the fallback for reasons this function has not measured, and stays there.
+pub(super) fn dynamic_new_mixed_arity_refusals(
+    ctx: &FunctionContext<'_>,
+    arg_count: usize,
+    line: u32,
+    matched: &[String],
+) -> Vec<(String, String)> {
+    let constructor_key = php_symbol_key("__construct");
+    let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    let mut refusals = Vec::new();
+    for (class_name, class_info) in sorted_classes {
+        if !is_dynamic_new_mixed_aot_candidate(class_name)
+            || matched.iter().any(|name| name == class_name)
+        {
+            continue;
+        }
+        let Some(constructor) = class_info.methods.get(&constructor_key) else {
+            continue;
+        };
+        // SAME DEFINITION THE CHECKER USES for a static call — `checker::functions::
+        // call_validation` — reusing its `regular_param_count` rather than restating it. Two
+        // details make a hand-rolled count wrong, and both would REFUSE A CALL PHP ACCEPTS:
+        // a variadic collector is the final parameter and carries no default, yet contributes
+        // nothing to the minimum; and a required parameter can follow an optional one, so the
+        // count is every defaultless slot, not the leading run of them.
+        let regular_param_count = crate::types::call_args::regular_param_count(constructor);
+        let required = constructor
+            .defaults
+            .iter()
+            .take(regular_param_count)
+            .filter(|default| default.is_none())
+            .count();
+        if arg_count >= required {
+            continue;
+        }
+        // `exactly` only when there is nothing further to pass: no optional parameter and no
+        // variadic tail. php words those two cases apart and so does this.
+        let bound = if required == regular_param_count && constructor.variadic.is_none() {
+            "exactly"
+        } else {
+            "at least"
+        };
+        let message = if known_dynamic_new_builtin_class_names().contains(&class_name.as_str()) {
+            let plural = if required == 1 { "argument" } else { "arguments" };
+            format!(
+                "{}::__construct() expects {} {} {}, {} given",
+                class_name, bound, required, plural, arg_count
+            )
+        } else {
+            format!(
+                "Too few arguments to function {}::__construct(), {} passed in {} on line {} and {} {} expected",
+                class_name,
+                arg_count,
+                ctx.module.source_path.as_deref().unwrap_or(""),
+                line,
+                bound,
+                required
+            )
+        };
+        refusals.push((class_name.to_string(), message));
+    }
+    refusals
+}
+
 /// Returns true when a class can safely use the static allocation path for `new $name`.
 pub(super) fn is_dynamic_new_mixed_aot_candidate(class_name: &str) -> bool {
     if class_name.starts_with("__Elephc") {

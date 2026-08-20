@@ -702,38 +702,99 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     let Some(constructor) = class_info.methods.get(&php_symbol_key("__construct")) else {
         return;
     };
-    // Only the padding case: an exact arity needs no thunk, and a site passing MORE arguments than
-    // the constructor declares is not a candidate at all.
-    if provided_args >= constructor.params.len() {
-        return;
-    }
-    // Every omitted parameter must have a default to splice. One without is a call PHP would
-    // reject too, so there is nothing to build.
-    if constructor.defaults[provided_args..]
-        .iter()
-        .any(|default| default.is_none())
-    {
-        return;
+    let regular = crate::types::call_args::regular_param_count(constructor);
+    let is_variadic = constructor.variadic.is_some();
+    if is_variadic {
+        // A VARIADIC constructor needs a thunk at EVERY arity, including its declared one. The
+        // site passes N separate arguments; the lowered callee takes the collector as ONE array
+        // (`int ...$r` becomes a single `array<int>` parameter), so there is no arity at which the
+        // site's frame already matches. Without the thunk the class dropped out of the ladder and
+        // `new $c(...)` allocated by name with the constructor never run — measured wrong at 11 of
+        // 12 shape/arity combinations, against a STATIC `new V(...)` that works.
+        //
+        // Only the omitted REGULAR parameters need a default to splice. The collector is padded
+        // with nothing: the thunk body simply passes fewer arguments and the call lowering builds
+        // the empty collection, exactly as it does for a static `new V()`.
+        if provided_args < regular
+            && constructor.defaults[provided_args..regular]
+                .iter()
+                .any(|default| default.is_none())
+        {
+            return;
+        }
+    } else {
+        // Only the padding case: an exact arity needs no thunk, and a site passing MORE arguments
+        // than a non-collecting constructor declares is not a candidate at all.
+        if provided_args >= constructor.params.len() {
+            return;
+        }
+        // Every omitted parameter must have a default to splice. One without is a call PHP would
+        // reject too, so there is nothing to build.
+        if constructor.defaults[provided_args..]
+            .iter()
+            .any(|default| default.is_none())
+        {
+            return;
+        }
     }
     // A by-reference parameter would have to carry the callee's write back out through the thunk,
     // and no builtin constructor declares one, so that path has never been exercised. Refusing
     // leaves the site on the behaviour it had before padding existed rather than risking a write
-    // that silently goes nowhere.
-    if constructor.ref_params.iter().take(provided_args).any(|&by_ref| by_ref) {
+    // that silently goes nowhere. The collector's own flag counts too, since `&...$out` would have
+    // the same problem for every argument that lands in it.
+    if constructor
+        .ref_params
+        .iter()
+        .take(provided_args.min(regular))
+        .any(|&by_ref| by_ref)
+    {
+        return;
+    }
+    if is_variadic
+        && provided_args > regular
+        && constructor.ref_params.get(regular).copied().unwrap_or(false)
+    {
+        return;
+    }
+    // A TYPED collector is NOT refused here. Whether an overflow argument can safely land in it
+    // depends on what the SITE passes, which only codegen knows — `new $c(7)` on `int ...$r` is
+    // exactly right and must keep working — so that check lives in
+    // `codegen::…::dynamic_new_candidate`, next to the site's argument types.
+    // Names the thunk's own parameters. Past the regular ones there is no declared name to reuse,
+    // so the overflow slots are numbered; they are the thunk's locals and nothing reads them by
+    // name. The TYPE comes from the shared `positional_param_type`, which codegen also uses to
+    // materialize the matching arguments — the two must describe the same frame.
+    let slot_name = |index: usize| -> String {
+        if index < regular {
+            constructor.params[index].0.clone()
+        } else {
+            format!("__variadic_arg{}", index)
+        }
+    };
+    let slot_type = |index: usize| -> Option<PhpType> {
+        crate::types::call_args::positional_param_type(constructor, index)
+    };
+    if (0..provided_args).any(|index| slot_type(index).is_none()) {
         return;
     }
 
     let span = Span::dummy();
     let this_type = PhpType::Object(class_name.to_string());
-    let mut args = Vec::with_capacity(constructor.params.len());
+    let mut args = Vec::with_capacity(provided_args.max(constructor.params.len()));
     for index in 0..provided_args {
-        args.push(Expr::new(
-            ExprKind::Variable(constructor.params[index].0.clone()),
-            span,
-        ));
+        args.push(Expr::new(ExprKind::Variable(slot_name(index)), span));
     }
-    for default in &constructor.defaults[provided_args..] {
-        args.push(default.clone().expect("padding requires a default"));
+    // Pad only up to the last REGULAR parameter. For a collecting signature the entry beyond that
+    // is the collector, which takes what is passed rather than a default.
+    let pad_upto = if is_variadic {
+        regular
+    } else {
+        constructor.params.len()
+    };
+    if provided_args < pad_upto {
+        for default in &constructor.defaults[provided_args..pad_upto] {
+            args.push(default.clone().expect("padding requires a default"));
+        }
     }
     let body = vec![Stmt::new(
         StmtKind::ExprStmt(Expr::new(
@@ -758,12 +819,13 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         variadic: false,
     });
     for index in 0..provided_args {
-        let (name, php_type) = &constructor.params[index];
+        let name = slot_name(index);
+        let php_type = slot_type(index).expect("slot types were checked above");
         params.push((name.clone(), php_type.clone()));
         function.params.push(FunctionParam {
-            name: name.clone(),
-            ir_type: value_ir_type(php_type),
-            php_type: php_type.clone(),
+            name,
+            ir_type: value_ir_type(&php_type),
+            php_type,
             by_ref: constructor.ref_params.get(index).copied().unwrap_or(false),
             variadic: false,
         });

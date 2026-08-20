@@ -223,6 +223,11 @@ pub(crate) fn emit_runtime_data_user(
         // raise reference PHP's catchable DivisionByZeroError from codegen with
         // no EIR class reference to hang the id off.
         ("_spl_division_by_zero_error_class_id", "DivisionByZeroError"),
+        // Emitted for the `new $c(...)` arity refusals. The checker rejects a
+        // static `new C()` that passes too few arguments, but `new $c()` names
+        // its class in a VALUE, so the refusal has to be raised at run time and
+        // has no EIR class reference to hang the id off either.
+        ("_spl_argument_count_error_class_id", "ArgumentCountError"),
     ] {
         let class_id = all_class_id_by_name
             .get(class_name)

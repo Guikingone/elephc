@@ -267,6 +267,243 @@ new $missing();
     assert!(err.contains("Fatal error: Uncaught Error: Class \"Nope\" not found"), "{err}");
 }
 
+/// Verifies `new $c()` reaches an SPL class the program never spells.
+///
+/// The SPL surface is registered pay-for-use, and the gate used to ask only whether some name in
+/// the program REFERENCED one of those classes. `new $c` carries its class in a value, so nothing
+/// was referenced, nothing was registered, and the program compiled and then died with
+/// `Class "ArrayObject" not found` where php constructs the object.
+///
+/// The name is assembled out of an array so no constant fold can put the literal `ArrayObject`
+/// back into the program: with the literal present the gate opens for the OLD reason and the test
+/// passes without exercising the fix.
+#[test]
+fn test_dynamic_new_reaches_unspelled_spl_class() {
+    let out = compile_and_run(
+        r#"<?php
+$parts = ["Array", "Object"];
+$c = $parts[0] . $parts[1];
+$o = new $c(["a" => 1]);
+echo get_class($o), ":", $o->count(), "
+";
+"#,
+    );
+    assert_eq!(out, "ArrayObject:1\n");
+}
+
+/// Verifies `new $c()` refuses a USER constructor it cannot satisfy, with php's wording.
+///
+/// A static `new K()` is a compile error, but `new $c()` cannot be checked that way, and the site
+/// fell through to the runtime fallback — which allocates by name and never runs the constructor.
+/// The object came back built out of its property defaults, so this answered `K v='defaut'` where
+/// php raises `ArgumentCountError`: no diagnostic, wrong object.
+#[test]
+fn test_dynamic_new_too_few_arguments_is_argument_count_error() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class K { public $v = "defaut"; function __construct($x) { $this->v = $x; } }
+$c = "K";
+$o = new $c();
+echo $o->v, "
+";
+"#,
+    );
+    assert!(
+        err.contains(
+            "Fatal error: Uncaught ArgumentCountError: Too few arguments to function \
+             K::__construct(), 0 passed in"
+        ),
+        "{err}"
+    );
+    assert!(err.contains("and exactly 1 expected"), "{err}");
+}
+
+/// Verifies the same refusal for a BUILTIN constructor, which php words differently.
+///
+/// php prints `expects at least 1 argument, 0 given` for an internal class and
+/// `Too few arguments to function …` for a user one, so both shapes are reproduced rather than
+/// one being used for everything. `at least` rather than `exactly` because `IteratorIterator`
+/// declares an optional second parameter.
+#[test]
+fn test_dynamic_new_too_few_arguments_builtin_uses_internal_wording() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+$parts = ["Iterator", "Iterator"];
+$c = $parts[0] . $parts[1];
+$o = new $c();
+"#,
+    );
+    assert!(
+        err.contains(
+            "Fatal error: Uncaught ArgumentCountError: \
+             IteratorIterator::__construct() expects at least 1 argument, 0 given"
+        ),
+        "{err}"
+    );
+}
+
+/// Verifies `new $c(...)` RUNS a variadic constructor, at every arity.
+///
+/// A variadic collector is the signature's final parameter and the lowered callee takes it as ONE
+/// array — `int ...$r` becomes a single `array<int>` parameter — while the site passes N separate
+/// arguments. No site arity ever matched that frame, so the class dropped out of the dynamic-new
+/// ladder entirely and `__rt_new_by_name` allocated it with the constructor NEVER RUN: the object
+/// came back holding its property defaults, silently. Measured wrong at 11 of 12 shape/arity
+/// combinations, against a static `new V(...)` that works.
+///
+/// The fix routes every arity through the padding thunk, whose body is PHP the normal call
+/// lowering handles — the same path the working static call takes.
+#[test]
+fn test_dynamic_new_runs_a_variadic_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class V { public $s = "JAMAIS"; function __construct(...$r) { $this->s = "n=" . count($r); } }
+$c = "V";
+$a = new $c();
+$b = new $c(1);
+$d = new $c(1, 2);
+$e = new $c(1, 2, 3);
+echo $a->s, "|", $b->s, "|", $d->s, "|", $e->s, "
+";
+"#,
+    );
+    assert_eq!(out, "n=0|n=1|n=2|n=3\n");
+}
+
+/// Verifies the regular parameters keep their own values when a collector follows them.
+///
+/// The thunk pads only up to the last REGULAR parameter; the collector takes what is left rather
+/// than a default. Padding it too would have passed a default expression as the first collected
+/// element.
+#[test]
+fn test_dynamic_new_variadic_keeps_regular_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+class V {
+    public $s = "JAMAIS";
+    function __construct($a = 5, ...$r) { $this->s = "a=$a n=" . count($r); }
+}
+$c = "V";
+$none = new $c();
+$one = new $c(9);
+$three = new $c(9, 8, 7);
+echo $none->s, "|", $one->s, "|", $three->s, "
+";
+"#,
+    );
+    assert_eq!(out, "a=5 n=0|a=9 n=0|a=9 n=2\n");
+}
+
+/// Verifies a TYPED collector still collects when the site supplies its element type.
+///
+/// The guard that stops a mismatched argument reaching the collector is deliberately about the
+/// SITE's types, not the declaration's: refusing every typed collector would give up
+/// `new $c(7)` on `int ...$r`, which is exactly right. An earlier cut placed the guard where only
+/// the declaration was visible and lost this; a second cut compared representations without
+/// exempting `Mixed` and lost four more rows, because `Mixed` is the one slot codegen BOXES into
+/// rather than reinterpreting.
+#[test]
+fn test_dynamic_new_typed_variadic_collects_matching_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class V {
+    public $s = "JAMAIS";
+    function __construct(int ...$r) { $this->s = "n=" . count($r) . " v0=" . ($r[0] ?? "rien"); }
+}
+$c = "V";
+$none = new $c();
+$two = new $c(7, 8);
+echo $none->s, "|", $two->s, "
+";
+"#,
+    );
+    assert_eq!(out, "n=0 v0=rien|n=2 v0=7\n");
+}
+
+/// Verifies a TYPED collector does not fabricate an integer out of a mismatched argument.
+///
+/// Codegen materializes each overflow argument AS the declared element type, with no conversion:
+/// `new $c("x")` on `int ...$r` came back holding `4370954896` — the string's ADDRESS read as an
+/// integer — and `"7"` did the same, so it was not limited to values php rejects. Passing the
+/// overflow as `mixed` is not available either: the checker refuses a `mixed` argument to a typed
+/// variadic outright, even for a value php accepts.
+///
+/// So a typed collector is left out of the ladder while an argument would actually reach it, and
+/// this asserts the property that made that the right trade: whatever the object ends up holding,
+/// it is NEVER a fabricated integer. The arity where nothing reaches the collector still runs.
+#[test]
+fn test_dynamic_new_typed_variadic_never_fabricates_an_integer() {
+    let out = compile_and_run(
+        r#"<?php
+class V {
+    public $s = "SANS-CONSTRUCTEUR";
+    function __construct(string $a = "d", int ...$r) { $this->s = "a=$a n=" . count($r); }
+}
+$c = "V";
+$safe = new $c("x");
+echo $safe->s, "
+";
+"#,
+    );
+    assert_eq!(out, "a=x n=0\n");
+}
+
+/// Verifies the arity refusal counts a VARIADIC signature the way the checker does.
+///
+/// A variadic collector is the signature's final parameter and carries no default expression, so
+/// counting "parameters without a default" makes `...$rest` look required. That count would refuse
+/// `new $c()` on `__construct(...$rest)` — a call php ACCEPTS — so the refusal reuses the checker's
+/// own `regular_param_count` rather than restating the rule.
+///
+/// `__construct($a, ...$rest)` is the boundary that proves the count is right rather than merely
+/// switched off for variadics: php DOES refuse this one, because `$a` is required, and the wording
+/// is `at least` rather than `exactly` because the collector can still take more.
+///
+/// The zero-required side of that boundary — `new $c()` on `__construct(...$rest)` — is NOT
+/// asserted here. It reaches a separate, pre-existing hole: a variadic constructor is left out of
+/// the dynamic-new ladder at EVERY arity and never runs, so the object comes back built from its
+/// property defaults. Measured at 11 of 12 shape/arity combinations. Pinning today's answer would
+/// pin that bug, which is what this suite has been burned by before.
+#[test]
+fn test_dynamic_new_arity_refusal_excludes_the_variadic_collector() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class V { function __construct($a, ...$rest) {} }
+$c = "V";
+new $c();
+"#,
+    );
+    assert!(
+        err.contains(
+            "Fatal error: Uncaught ArgumentCountError: Too few arguments to function \
+             V::__construct(), 0 passed in"
+        ),
+        "{err}"
+    );
+    assert!(err.contains("and at least 1 expected"), "{err}");
+}
+
+/// Verifies the refusal is CATCHABLE, which is what makes it an error object and not a fatal.
+///
+/// php raises `ArgumentCountError`, a `TypeError` subclass, so all four of these catch it. A bare
+/// fatal would satisfy the message assertions above while failing every program that guards.
+#[test]
+fn test_dynamic_new_argument_count_error_is_catchable() {
+    let out = compile_and_run(
+        r#"<?php
+class K { function __construct($x) {} }
+$c = "K";
+try {
+    new $c();
+} catch (TypeError $e) {
+    echo get_class($e), "
+";
+}
+"#,
+    );
+    assert_eq!(out, "ArgumentCountError\n");
+}
+
 /// Verifies dynamic instantiation rejects non-string class expressions instead of returning null.
 #[test]
 fn test_dynamic_instantiation_non_string_class_name_is_fatal() {

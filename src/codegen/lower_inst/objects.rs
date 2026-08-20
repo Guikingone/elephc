@@ -117,7 +117,7 @@ struct ConstructorCallTarget {
 mod fixed_new;
 mod clone_and_spl;
 mod iterator_iterator;
-mod throwable_new;
+pub(in crate::codegen::lower_inst) mod throwable_new;
 mod fiber_dynamic_entry;
 mod dynamic_mixed_candidates;
 mod dynamic_factory;

@@ -14,7 +14,7 @@ mod plan;
 mod planner;
 mod static_spread;
 
-pub(crate) use matching::{named_param_index, regular_param_count};
+pub(crate) use matching::{named_param_index, positional_param_type, regular_param_count};
 pub(crate) use plan::{
     CallArgPlan, CallArgPlanError, PlannedRegularArg, PlannedSourceValue, SpreadBoundsCheck,
 };

@@ -257,6 +257,30 @@ pub(super) fn emit_arithmetic_error(ctx: &mut FunctionContext<'_>, message: &str
     );
 }
 
+/// Throws a catchable PHP `ArgumentCountError` carrying a static message.
+///
+/// Reference PHP raises this `TypeError` subclass when a call passes fewer arguments than the
+/// callee requires, so `catch (ArgumentCountError $e)`, `catch (TypeError $e)`, `catch (Error $e)`
+/// and `catch (Throwable $e)` all match.
+///
+/// THE MESSAGE IS STATIC EVEN THOUGH THE CLASS IS NOT. `new $c(...)` picks its class at run time,
+/// but each ladder arm is emitted for ONE class, and the argument count is the site's, so the
+/// wording is fully known while lowering that arm. Callers use php-src's two shapes — see
+/// `objects::dynamic_mixed_candidates::dynamic_new_mixed_arity_refusals`.
+pub(super) fn emit_argument_count_error(
+    ctx: &mut FunctionContext<'_>,
+    message: &str,
+    location: Option<(String, u32)>,
+) {
+    emit_static_exception_at(
+        ctx,
+        "ArgumentCountError",
+        "_spl_argument_count_error_class_id",
+        message,
+        location,
+    );
+}
+
 /// Throws a catchable PHP `Error` whose message is a runtime string value.
 pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) -> Result<()> {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
@@ -303,7 +327,36 @@ fn emit_static_exception(
     class_id_symbol: &str,
     message: &str,
 ) {
-    let fatal_message = format!("\nFatal error: Uncaught {}: {}\n", class_name, message);
+    emit_static_exception_at(ctx, class_name, class_id_symbol, message, None);
+}
+
+/// Same, for an emitter that KNOWS the source location the throwable belongs to.
+///
+/// Most codegen-raised throwables have no user `new` behind them — an `ArithmeticError` from a
+/// division, a `TypeError` from an argument check — so they carry no location, and PHP would name
+/// the internal call site anyway. `new $c(...)` is different: the refusal belongs to a `new`
+/// expression the user WROTE, and php reports it, so a caller holding the span passes it and gets
+/// both halves php prints — the ` in FILE:LINE` suffix on the uncaught report, and a `getLine()`
+/// that answers when the error is CAUGHT.
+///
+/// A `None` location keeps the previous bytes exactly: the creation-line slot is still cleared to
+/// zero, which is what `sentinels::emit_throwable_creation_line_unknown` wrote there.
+fn emit_static_exception_at(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    class_id_symbol: &str,
+    message: &str,
+    location: Option<(String, u32)>,
+) {
+    let suffix = match &location {
+        Some((file, line)) => format!(" in {}:{}", file, line),
+        None => String::new(),
+    };
+    let creation_line = location.as_ref().map_or(0, |(_, line)| *line);
+    let fatal_message = format!(
+        "\nFatal error: Uncaught {}: {}{}\n",
+        class_name, message, suffix
+    );
     let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
     emit_uncaught_exception_fatal_if_no_handler(ctx, &fatal_label, fatal_len);
 
@@ -322,7 +375,12 @@ fn emit_static_exception(
             abi::emit_load_int_immediate(ctx.emitter, "x9", message_len as i64);
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store the exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
+            super::objects::throwable_new::emit_throwable_creation_line_aarch64(
+                ctx,
+                "x0",
+                "x9",
+                creation_line,
+            );
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
@@ -342,7 +400,11 @@ fn emit_static_exception(
             abi::emit_load_int_immediate(ctx.emitter, "r10", message_len as i64);
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
+            super::objects::throwable_new::emit_throwable_creation_line_x86_64(
+                ctx,
+                "rax",
+                creation_line,
+            );
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
