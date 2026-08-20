@@ -723,6 +723,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "elephc-iconv"
+version = "0.1.0"
+
+[[package]]
 name = "elephc-image"
 version = "0.1.0"
 dependencies = [
@@ -746,6 +750,7 @@ dependencies = [
  "elephc-bcmath",
  "elephc-builtin-contract",
  "elephc-crypto",
+ "elephc-iconv",
  "elephc-phar",
  "flate2",
  "inventory",
