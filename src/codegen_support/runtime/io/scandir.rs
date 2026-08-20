@@ -355,8 +355,16 @@ mod tests {
                 .find("__rt_scandir_loop:")
                 .expect("scandir iterates the directory");
             let guard = &asm[open_at..loop_at];
-            let branches_away = guard.contains("cbz x0, __rt_scandir_ret")
-                || guard.contains("jz __rt_scandir_ret");
+            // The guard now branches to the arm that WARNS before returning, rather than
+            // straight to the epilogue, and x86_64 suffixes its local labels with `_x`. What
+            // the test is about is that a null handle leaves before the loop, so the target
+            // decides the label and the property stays the same.
+            let open_failed = match arch {
+                Arch::AArch64 => "__rt_scandir_open_failed",
+                Arch::X86_64 => "__rt_scandir_open_failed_x",
+            };
+            let branches_away = guard.contains(&format!("cbz x0, {open_failed}"))
+                || guard.contains(&format!("jz {open_failed}"));
             assert!(
                 branches_away,
                 "{arch:?}: a null DIR* must skip the loop, or readdir(NULL) segfaults:\n{guard}"

@@ -192,9 +192,13 @@ pub(super) fn emit_builtin_call_value(
                 span,
             )
             .unwrap_or_else(|error| {
+                // The enclosing function is named because a synthetic body — a prelude, or a
+                // built-in SPL class method — carries span 0:0, and `at 0:0` on its own gives a
+                // reader nothing to grep for.
                 panic!(
-                    "checked builtin {} failed backend-neutral EIR lowering at {}:{}: {}",
+                    "checked builtin {} failed backend-neutral EIR lowering in {} at {}:{}: {}",
                     def.name,
+                    ctx.builder.function_name(),
                     span.line,
                     span.col,
                     error,

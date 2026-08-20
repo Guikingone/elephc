@@ -116,9 +116,6 @@ impl Checker {
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
             crate::builtins::registry::check_arity(name, args.len(), span)?;
-            // A by-reference output needs storage to write back into. Derived from the `ref(T)`
-            // declaration so the rule holds for every such builtin without being restated.
-            out_params::check_write_only_args(name, args)?;
             // One authority for every builtin that declares a by-reference parameter. Several
             // builtins used to hand-roll this check, which is a catalogue: the ones nobody
             // wrote it for silently accepted a literal and ran, where PHP raises an Error.
@@ -144,6 +141,9 @@ impl Checker {
                     ),
                 ));
             }
+            // A by-reference output needs storage to write back into. Derived from the `ref(T)`
+            // declaration so the rule holds for every such builtin without being restated.
+            out_params::check_write_only_args(name, args)?;
             let requirement_input = crate::builtins::semantics::BuiltinRequirementInput {
                 args,
             };

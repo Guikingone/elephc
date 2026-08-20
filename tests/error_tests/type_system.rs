@@ -134,18 +134,6 @@ fn test_error_mixed_rejected_at_array_return_boundary() {
     );
 }
 
-/// Verifies that referencing an undefined variable produces an "Undefined variable" error.
-#[test]
-fn test_error_undefined_variable() {
-    expect_error("<?php echo $x;", "Undefined variable: $x");
-}
-
-/// Verifies that a plain self-referential assignment is not mistaken for `+=`.
-#[test]
-fn test_error_plain_self_read_assignment_remains_undefined() {
-    expect_error("<?php $x = $x + 1;", "Undefined variable: $x");
-}
-
 /// Verifies that reassigning a typed variable to a different type is rejected.
 /// Input: `$x = 42; $x = "hello";` — `$x` is int, reassignment to string fails.
 #[test]
@@ -290,17 +278,6 @@ fn test_error_word_logical_missing_rhs() {
 #[test]
 fn test_error_assignment_expression_rejects_non_lvalue() {
     expect_error("<?php echo 1 = 2;", "Invalid assignment target");
-}
-
-/// Verifies that a variable assigned inside a short-circuit `&&` is flagged as possibly undefined
-/// when referenced after the `&&` expression that did not execute.
-/// Input: `echo false && ($x = 1); echo $x;` — `$x` may not be defined.
-#[test]
-fn test_error_short_circuit_assignment_effect_is_not_definite() {
-    expect_error(
-        "<?php echo false && ($x = 1); echo $x;",
-        "Undefined variable: $x",
-    );
 }
 
 /// Verifies that the short ternary (`?:`) with no default expression produces an error.
@@ -819,17 +796,6 @@ fn test_error_log_too_many_args() {
     expect_error("<?php log(1, 2, 3);", "log() takes 1 or 2 arguments");
 }
 
-/// Verifies that a closure `use()` clause referencing an undefined variable is rejected.
-#[test]
-fn test_error_closure_use_undefined_variable() {
-    expect_error(
-        r#"<?php
-$fn = function() use ($undefined) { echo $undefined; };
-"#,
-        "Undefined variable in use(): $undefined",
-    );
-}
-
 // --- Pointer error tests ---
 
 /// Verifies that loose pointer comparison (`==` or `!=`) is rejected; only `===`/`!==` are allowed.
@@ -1024,20 +990,6 @@ fn test_scalar_match_merge_stays_mixed_and_rejects_array_use() {
         "<?php $r = match($argc) { 1 => 1, default => \"a\" }; echo array_sum($r);",
         "array_sum() argument must be array",
     );
-}
-
-/// Verifies the `Undefined variable` diagnostic still fires for an ordinary read, so the null-probe
-/// tolerance is scoped to `isset`/`empty`/`unset`/`??` and nothing else.
-#[test]
-fn test_undefined_variable_read_is_still_rejected() {
-    expect_error("<?php echo $neverDefined;", "Undefined variable: $neverDefined");
-}
-
-/// Verifies only the probe's chain SPINE is tolerated: PHP warns about `$b` in `isset($a[$b])`
-/// but not about `$a`, so the index subexpression keeps the diagnostic.
-#[test]
-fn test_null_probe_index_subexpression_still_requires_a_defined_variable() {
-    expect_error("<?php var_dump(isset($a[$b]));", "Undefined variable: $b");
 }
 
 /// Verifies `isset()`, `empty()`, `unset()` and `??` accept a never-declared variable, which is

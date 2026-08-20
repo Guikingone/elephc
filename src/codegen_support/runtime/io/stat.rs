@@ -435,10 +435,14 @@ mod tests {
     #[test]
     fn the_stat_field_helpers_check_the_syscall_before_reading_their_buffer() {
         for (platform, arch, failure_labels) in [
+            // The two emitters name the failure arm differently: the AArch64 helpers answer
+            // through the `_false` arm that returns php's `false`, the x86_64 ones through
+            // `_fail`. The names are per target on purpose — checking one spelling against
+            // both emitters is how a defect survives on the target the host cannot run.
             (
                 Platform::MacOS,
                 Arch::AArch64,
-                ["__rt_filesize_fail", "__rt_filemtime_fail"],
+                ["__rt_filesize_false", "__rt_filemtime_false"],
             ),
             (
                 Platform::Linux,

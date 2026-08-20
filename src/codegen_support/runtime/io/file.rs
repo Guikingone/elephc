@@ -72,9 +72,8 @@ pub fn emit_file(emitter: &mut Emitter) {
     // A null payload pointer is the reader's failure signal — php answers FALSE for a file it
     // cannot read, and a null return is what the caller's boxing turns into that false. An
     // EMPTY file arrives as a non-null pointer with length zero and still answers `[]`.
-    emitter.instruction("cbz x1, __rt_file_failed");
-    emitter.instruction("stp x1, x2, [sp, #0]");                                // save file data ptr and len on stack
     emitter.instruction("cbz x1, __rt_file_failed");                            // a null payload is a FAILED read, which PHP reports as false
+    emitter.instruction("stp x1, x2, [sp, #0]");                                // save file data ptr and len on stack
 
     // -- create a new string array (capacity = 256 lines) --
     emitter.instruction("mov x0, #256");                                        // initial capacity of 256 elements
@@ -132,7 +131,7 @@ pub fn emit_file(emitter: &mut Emitter) {
     // -- return array pointer --
     emitter.label("__rt_file_ret");
     emitter.instruction("ldr x0, [sp, #16]");                                   // return array pointer
-    emitter.instruction("b __rt_file_epilogue");                                // skip the failure result on the success path
+    emitter.instruction("b __rt_file_out");                                     // skip the failure result on the success path
 
     // -- a read that failed answers null, which the lowering boxes as PHP's false --
     emitter.label("__rt_file_failed");
@@ -143,10 +142,6 @@ pub fn emit_file(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
-
-    emitter.label("__rt_file_failed");
-    emitter.instruction("mov x0, #0");                                          // the caller boxes the null as PHP false
-    emitter.instruction("b __rt_file_out");
 }
 
 /// Emits the ARM64 `$flags` handling applied to one complete `file()` line before it is pushed.
@@ -221,12 +216,10 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     // must survive section-level garbage collection.
     emitter.label_shared("__rt_file_split_x");
     // See the AArch64 counterpart: a null payload pointer answers null, which boxes to false.
-    emitter.instruction("test rax, rax");
-    emitter.instruction("jz __rt_file_failed_x");
+    emitter.instruction("test rax, rax");                                       // a null payload is a FAILED read, which PHP reports as false
+    emitter.instruction("jz __rt_file_failed_x");                               // answer null rather than the empty array an EMPTY file produces
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the owned file payload pointer across the later array allocation and line pushes
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the owned file payload length across the later array allocation and scan loop
-    emitter.instruction("test rax, rax");                                       // a null payload is a FAILED read, which PHP reports as false
-    emitter.instruction("jz __rt_file_failed");                                 // answer null rather than the empty array an EMPTY file produces
 
     emitter.instruction("mov rdi, 256");                                        // request an initial array capacity of 256 line slots for the line-splitting helper
     emitter.instruction("mov rsi, 16");                                         // request 16-byte elements so each slot can hold a string pointer and string length pair
@@ -357,16 +350,28 @@ mod tests {
                 .find("__rt_file_scan:")
                 .expect("file() scans the payload for line terminators");
             let guard = &asm[read_at..scan_at];
-            let branches_away = guard.contains("cbz x1, __rt_file_failed")
-                || guard.contains("jz __rt_file_failed");
+            // The two emitters spell the failure label differently — the x86_64 one suffixes
+            // every local label with `_x` — so the target decides which name to look for. A
+            // single spelling passed on AArch64 and hid a branch to an undefined symbol on
+            // x86_64, which is the shape of bug this test exists to catch.
+            let failure_label = match arch {
+                Arch::AArch64 => "__rt_file_failed",
+                Arch::X86_64 => "__rt_file_failed_x",
+            };
+            let branches_away = guard.contains(&format!("cbz x1, {failure_label}"))
+                || guard.contains(&format!("jz {failure_label}"));
             assert!(
                 branches_away,
                 "{arch:?}: a null payload must skip the scan, or a failed read answers an \
                  empty array instead of false:\n{guard}"
             );
             assert!(
-                asm.contains("__rt_file_failed:"),
+                asm.contains(&format!("{failure_label}:")),
                 "{arch:?}: the failure path must be emitted"
+            );
+            assert!(
+                !asm.contains(&format!("jz __rt_file_failed\n")),
+                "{arch:?}: no branch may name the other target's failure label"
             );
         }
     }

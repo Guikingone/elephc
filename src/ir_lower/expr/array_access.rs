@@ -198,7 +198,28 @@ pub(super) fn lower_subscript_receiver_silently(
     if let ExprKind::ArrayAccess { array: inner_array, index: inner_index } = &array.kind {
         return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
     }
-    lower_expr(ctx, array)
+    // "Silently" reaches the undefined-variable warning too: `isset($a[$b])` PROBES `$a` and
+    // READS `$b`, and PHP warns about `$b` alone. Without this the probe's own spine raised the
+    // warning the construct exists to avoid.
+    lower_null_probe_chain(ctx, array)
+}
+
+/// Lowers the CHAIN a null probe examines, without PHP's undefined-variable warning.
+///
+/// `isset($x)`, `empty($x)` and `$x ?? "d"` exist to ask whether storage was ever named, so PHP
+/// raises nothing for the chain itself — MEASURED on `php -n` 8.5.6, which prints only the
+/// result for all three. What sits INSIDE the chain stays an ordinary read: the same PHP warns
+/// about `$b` in `isset($a[$b])`, and about `$y` in `$x ?? $y`. Array operands reach here
+/// through `lower_subscript_receiver_silently`, which descends the chain and leaves the index
+/// outside the spine — that split is what keeps the two halves of the rule apart.
+pub(super) fn lower_null_probe_chain(
+    ctx: &mut LoweringContext<'_, '_>,
+    chain: &Expr,
+) -> LoweredValue {
+    ctx.enter_probe_spine();
+    let value = lower_expr(ctx, chain);
+    ctx.leave_probe_spine();
+    value
 }
 
 /// Lowers array access once the receiver is already evaluated.

@@ -95,7 +95,9 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
             return lower_initialized_static_property_value(ctx, receiver, property, value);
         }
     }
-    lower_expr(ctx, value)
+    // The LEFT side of `??` is a probe, so a name that was never assigned raises nothing there.
+    // The right side is not, and keeps the ordinary read: `$x ?? $y` warns about `$y` alone.
+    lower_null_probe_chain(ctx, value)
 }
 
 /// Returns the materialized result type for a null-coalesce merge.

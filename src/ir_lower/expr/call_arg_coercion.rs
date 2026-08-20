@@ -31,6 +31,74 @@ pub(super) fn lower_arg_with_signature(
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
 
+/// Creates the variables a call's BY-REFERENCE parameters are about to bind.
+///
+/// Binding a name by reference creates it in PHP rather than reading it, so no diagnostic is
+/// raised and the variable is NULL afterwards: `function f(&$x) { $x = 7; } f($nope);` prints
+/// `int(7)` in silence — MEASURED on `php -n` 8.5.6, against the by-VALUE spelling of the same
+/// call, which warns. Without the store the argument reached the backend as an
+/// `undefined_local_read`, which has no by-reference form, and the program was refused.
+///
+/// It lives in `lower_args_with_signature` so every call shape gets it from one place: plain
+/// functions, instance and static methods, nullable method calls and closure calls all lower
+/// their arguments through there. Placing it at the function-call site only left the method,
+/// static-method and closure spellings of the same program warning twice and answering NULL.
+///
+/// This is only the CREATION. `prepare_by_ref_null_out_locals` keeps its own narrower rule
+/// about converting the slot to a Mixed cell, which answers a different question — what the
+/// callee will WRITE — and deliberately does not run for builtins.
+pub(super) fn create_by_ref_arg_locals(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+) {
+    let regular = crate::types::call_args::regular_param_count(sig);
+    let by_ref_variadic = super::variadic_args::variadic_param_is_by_ref(sig);
+    for (index, arg) in args.iter().enumerate() {
+        let binds_by_ref = if index >= regular {
+            by_ref_variadic
+        } else {
+            sig.ref_params.get(index).copied().unwrap_or(false)
+        };
+        if !binds_by_ref {
+            continue;
+        }
+        let ExprKind::Variable(name) = &arg.kind else {
+            continue;
+        };
+        let declared = sig.params.get(index).map(|(_, ty)| ty.clone());
+        create_by_ref_arg_local(ctx, name, declared.as_ref(), arg);
+    }
+}
+
+/// Creates ONE by-reference argument's variable, in storage the callee can write through.
+///
+/// The value is always PHP's null, because that is what the variable holds until the callee
+/// writes. The STORAGE follows the parameter's declared type: a `mixed` out-parameter — which
+/// is how every builtin with an out-parameter declares one, `stream_socket_server`'s
+/// `$error_code` and `$error_message` included — needs a boxed cell, and creating a bare null
+/// slot for it made the backend refuse with `by-ref string output written into a null slot`,
+/// taking `examples/udp-socket` and `examples/udg-socket` from wrong output to no output. An
+/// untyped user parameter keeps the plain null slot, which is what its caller reads back.
+pub(super) fn create_by_ref_arg_local(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    declared: Option<&PhpType>,
+    arg: &Expr,
+) {
+    if !ctx.local_name_is_undefined(name) {
+        return;
+    }
+    if matches!(declared, Some(PhpType::Mixed)) {
+        let null = lower_boxed_null(ctx, arg);
+        ctx.set_local_type(name, PhpType::Mixed);
+        ctx.store_local(name, null, PhpType::Mixed, Some(arg.span));
+        return;
+    }
+    let null = lower_null(ctx, arg);
+    ctx.store_local(name, null, PhpType::Void, Some(arg.span));
+}
+
 /// Converts every local holding NULL that a USER function's by-reference parameter WRITES.
 ///
 /// This is php's out-parameter idiom — `$x = null; f($x);` with `function f(&$a) { $a = 5; }` —
@@ -54,6 +122,9 @@ pub(super) fn prepare_by_ref_null_out_locals(
     let Some(sig) = sig else {
         return;
     };
+    // The name has to EXIST before the load below, or that load is an undefined read and what
+    // gets boxed into the Mixed cell is the warning's null rather than the caller's slot.
+    create_by_ref_arg_locals(ctx, sig, args);
     // A by-reference VARIADIC needs the same treatment past its fixed parameters: every argument
     // in the tail binds to `&...$out`, and `$out[$i] = …` writes through to the caller's cell. A
     // caller local still holding `null` has no Mixed storage for that write to land in, so
@@ -371,6 +442,7 @@ pub(super) fn lower_args_with_signature(
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
+    create_by_ref_arg_locals(ctx, sig, args);
     let literal_bound = rewrite_literal_param_bindings(sig, args);
     let args = literal_bound.as_deref().unwrap_or(args);
     if crate::types::call_args::has_named_args(args) {

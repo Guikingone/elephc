@@ -1862,6 +1862,12 @@ fn direct_closure_return_expr_type(
         if let Some((_, php_type)) = params.iter().find(|(param_name, _)| param_name == name) {
             return php_type.clone();
         }
+        // Neither captured nor a parameter, in a body that is exactly `return $name;`: PHP has
+        // no other way for that name to hold anything, so the read is an undefined one and the
+        // closure returns null. The syntactic fallback below answers `int` for any variable,
+        // which stamped this closure `-> I64` and made `var_dump($f())` print
+        // `int(9223372036854775806)` — the raw null sentinel read back as an integer.
+        return PhpType::Void;
     }
     if let ExprKind::PropertyAccess { object, property } = &expr.kind {
         let receiver_name = match &object.kind {

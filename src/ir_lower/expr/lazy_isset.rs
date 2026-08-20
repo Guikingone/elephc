@@ -36,7 +36,9 @@ pub(super) fn lower_lazy_isset(
             let value = if let ExprKind::ArrayAccess { array, index } = &arg.kind {
                 lower_array_access_with_missing_warning(ctx, array, index, arg, false)
             } else {
-                lower_expr(ctx, arg)
+                // Nor an undefined-variable warning: `isset($x)` is the construct for asking
+                // whether `$x` was ever assigned, and PHP answers `false` in silence.
+                lower_null_probe_chain(ctx, arg)
             };
             emit_builtin_call_value(ctx, name, vec![value.value], PhpType::Int, arg.span, None)
         });
@@ -136,6 +138,20 @@ pub(super) fn lower_lazy_empty(
     }
     if let ExprKind::ArrayAccess { array, index } = &args[0].kind {
         let value = lower_array_access_with_missing_warning(ctx, array, index, &args[0], false);
+        return Some(emit_builtin_call_value(
+            ctx,
+            name,
+            vec![value.value],
+            PhpType::Bool,
+            expr.span,
+            None,
+        ));
+    }
+    // A plain variable has no magic-property semantics to lower lazily, so it used to fall
+    // through to the eager builtin — which reads its operand like any other expression and so
+    // warned about a name `empty()` exists to ask about. PHP answers `true` in silence.
+    if matches!(&args[0].kind, ExprKind::Variable(_)) {
+        let value = lower_null_probe_chain(ctx, &args[0]);
         return Some(emit_builtin_call_value(
             ctx,
             name,

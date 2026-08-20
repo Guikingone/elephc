@@ -313,6 +313,11 @@ impl<'f> Builder<'f> {
     /// rewrites a `LocalSlot`'s `php_type`/`ir_type` in place, and `terminate` writes a
     /// terminator into a block that already existed. Only a wholesale clone restores both the
     /// tables' lengths and the contents of the entries that survived.
+    /// Returns the name of the function being built.
+    pub fn function_name(&self) -> &str {
+        &self.func.name
+    }
+
     pub fn snapshot_function(&self) -> Function {
         self.func.clone()
     }

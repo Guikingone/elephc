@@ -267,8 +267,120 @@ fn wrap_array_or_false_args_impl(
     values[index] = wrapped;
 }
 
+
+/// Creates the variables a builtin's BY-REFERENCE parameters are about to bind.
+///
+/// `stream_socket_server($address, $errno, $errstr, ...)` names `$errno` and `$errstr` for the
+/// callee to write into, and PHP creates them there rather than reading them: MEASURED on
+/// `php -n` 8.5.6, which raises nothing for either, against the same two names read one line
+/// earlier, which do warn. Without this they were ordinary reads, and `examples/udp-socket` and
+/// `examples/udg-socket` each printed two warnings PHP does not.
+///
+/// The predicate is `by_ref`, not `writes`: `writes` marks the narrower write-ONLY subset
+/// (`ref(Int) error_code`), while `preg_match`'s `$matches` is a plain `ref` the callee also
+/// reads. PHP creates the variable for both, so the wider flag is the right one. Either way the
+/// positions come from the registry, the single source `out_params` reads too, so the checker's
+/// idea of which parameters are out-parameters and the lowering's cannot drift apart.
+fn create_by_ref_arg_locals(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    args: &[Expr],
+) {
+    let Some(def) = crate::builtins::registry::lookup(canonical) else {
+        return;
+    };
+    for (index, arg) in args.iter().enumerate() {
+        let (target, param) = match &arg.kind {
+            ExprKind::NamedArg { name, value } => (
+                value.as_ref(),
+                def.spec.params.iter().find(|param| param.name == name),
+            ),
+            _ => (arg, def.spec.params.get(index)),
+        };
+        let binds_by_ref = match param {
+            Some(param) => param.by_ref,
+            None => index >= def.spec.params.len() && def.spec.variadic_writes.is_some(),
+        };
+        if !binds_by_ref {
+            continue;
+        }
+        let ExprKind::Variable(name) = &target.kind else {
+            continue;
+        };
+        let declared = param.map(|param| crate::builtins::convert::type_spec_to_php(&param.ty));
+        create_by_ref_arg_local(ctx, name, declared.as_ref(), target);
+    }
+}
+
 /// Lowers builtin call operands, applying builtin-specific preservation where source order matters.
 pub(super) fn lower_builtin_call_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let mut values = lower_builtin_call_operands(ctx, name, sig, args);
+    let canonical = php_symbol_key(name.trim_start_matches('\\'));
+    coerce_null_operands_to_builtin_params(ctx, &canonical, args, &mut values);
+    values
+}
+
+/// Replaces a NULL operand with what PHP coerces it to for an INTERNAL function's scalar
+/// parameter.
+///
+/// php-src coerces null into a non-nullable scalar parameter of an internal function rather
+/// than refusing: `strlen(null)` answers `int(0)` and `ord(null)` answers `int(0)`, each after
+/// a `Passing null to parameter #N ... is deprecated` notice. USER functions do NOT get this —
+/// `function f(int $v) {} f(null);` is an uncaught `TypeError` — which is why this is keyed to
+/// the builtin registry and not to the shared argument coercion.
+///
+/// Without it a null operand reached the builtin's own EIR lowering, which has no null case
+/// and PANICKED the compiler: `if ($c) { $x = "a"; } strlen($x);` — a program `php -n` 8.5.6
+/// runs to `int(0)` — died with `strlen cannot lower checked operand type Void`. Adopting PHP's
+/// semantics for undefined variables is what made that reachable; a conditionally assigned
+/// variable is null on the path that skips the assignment, exactly as PHP says.
+///
+/// The operand it replaces is left in place and still runs: it is the `undefined_local_read`
+/// that raises `Warning: Undefined variable $x`, which PHP raises here too. Only the VALUE
+/// handed to the builtin changes.
+///
+/// The DEPRECATION notice is not emitted — a measured, separate gap that elephc has for an
+/// explicit `null` argument as well.
+fn coerce_null_operands_to_builtin_params(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    args: &[Expr],
+    values: &mut [crate::ir::ValueId],
+) {
+    let Some(def) = crate::builtins::registry::lookup(canonical) else {
+        return;
+    };
+    for (index, value) in values.iter_mut().enumerate() {
+        let Some(param) = def.spec.params.get(index) else {
+            break;
+        };
+        if param.by_ref {
+            continue;
+        }
+        if !matches!(ctx.builder.value_php_type(*value), PhpType::Void) {
+            continue;
+        }
+        let Some(arg) = args.get(index) else {
+            break;
+        };
+        let coerced = match crate::builtins::convert::type_spec_to_php(&param.ty) {
+            PhpType::Str => lower_string_literal(ctx, "", arg),
+            PhpType::Int => lower_int_literal(ctx, 0, arg),
+            PhpType::Float => lower_float_literal(ctx, 0.0, arg),
+            PhpType::Bool => lower_bool_literal(ctx, false, arg),
+            _ => continue,
+        };
+        *value = coerced.value;
+    }
+}
+
+/// Lowers builtin call operands before PHP's null-to-scalar parameter coercion is applied.
+fn lower_builtin_call_operands(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     sig: Option<&FunctionSig>,
@@ -281,6 +393,7 @@ pub(super) fn lower_builtin_call_args(
     if canonical == "eval" {
         return lower_eval_args(ctx, sig, args);
     }
+    create_by_ref_arg_locals(ctx, &canonical, args);
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering)
         .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
