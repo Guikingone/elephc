@@ -11,7 +11,7 @@
 //!   resolver statically loaded, which `crate::opcache_prelude` bakes into the OPcache script
 //!   manifest.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 mod contains;
@@ -95,14 +95,38 @@ pub fn resolve_collecting_includes(
     resolve_collecting_includes_with_defines(program, base_dir, &HashSet::new())
 }
 
+/// Which physical file declares each class-like and function pulled in through includes.
+///
+/// Collected while each include is loaded, so a declaration is attributed to the file it was
+/// written in rather than to whichever file happened to include it. Consumed by
+/// `Reflection*::getFileName()`.
+#[derive(Default)]
+pub struct IncludedDeclarationSources {
+    /// Canonical class-like name to the physical path that declares it.
+    pub class_likes: HashMap<String, String>,
+    /// Canonical function name to the physical path that declares it.
+    pub functions: HashMap<String, String>,
+}
+
 /// Resolves includes while applying the invocation's conditional symbols to every loaded file.
 pub fn resolve_collecting_includes_with_defines(
     program: Program,
     base_dir: &Path,
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    resolve_collecting_includes_with_defines_and_sources(program, base_dir, defines)
+        .map(|(program, files, _)| (program, files))
+}
+
+/// Same as [`resolve_collecting_includes_with_defines`], and also reports which physical file
+/// declares each class-like and function the includes brought in.
+pub fn resolve_collecting_includes_with_defines_and_sources(
+    program: Program,
+    base_dir: &Path,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>, IncludedDeclarationSources), CompileError> {
     if !has_includes(&program) {
-        return Ok((program, Vec::new()));
+        return Ok((program, Vec::new(), IncludedDeclarationSources::default()));
     }
 
     let discovery = discover_include_declarations(&program, base_dir, defines)?;
@@ -118,11 +142,16 @@ pub fn resolve_collecting_includes_with_defines(
         &discovery.function_variants,
     )?;
 
+    let sources = IncludedDeclarationSources {
+        class_likes: std::mem::take(&mut state.declared_class_files),
+        functions: std::mem::take(&mut state.declared_function_files),
+    };
+
     let mut included_files: Vec<PathBuf> = declared_once.into_iter().collect();
     included_files.sort();
 
     if discovery.declarations.is_empty() {
-        return Ok((resolved, included_files));
+        return Ok((resolved, included_files, sources));
     }
 
     let prelude_span = discovery
@@ -138,5 +167,5 @@ pub fn resolve_collecting_includes_with_defines(
         prelude_span,
     )];
     resolved_with_prelude.extend(resolved);
-    Ok((resolved_with_prelude, included_files))
+    Ok((resolved_with_prelude, included_files, sources))
 }

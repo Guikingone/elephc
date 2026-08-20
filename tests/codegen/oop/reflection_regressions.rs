@@ -319,6 +319,36 @@ echo $r->getName(), "|", count($r->getMethods());
     assert_eq!(out, "Narrow|1");
 }
 
+/// Verifies `getFileName()` reports the file a class was DECLARED in, not the entry file.
+///
+/// Declaration-to-file attribution ran after `require` targets were spliced into their parent
+/// program, so a class written in another file was either attributed to whichever file included it
+/// or — for the entry program's own includes — recorded nowhere at all, at which point
+/// `reflection_source_file` fell back to the module source path. The fallback always yields a real
+/// existing path, which is what kept this silent: `is_file()` stayed true and Symfony's
+/// `getProjectDir()` even recovered, because its walk-up to `composer.json` compensated.
+#[test]
+fn test_reflection_get_file_name_reports_the_declaring_file() {
+    // Driven through the real CLI: the in-process multi-file helper is a hand-rolled pipeline
+    // that never populates declaration-to-file attribution at all, so it would observe the
+    // fallback no matter what the compiler does.
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire __DIR__ . '/loader.php';\n$o = new \\Inc\\Widget();\n$r = new \\ReflectionObject($o);\necho basename((string) $r->getFileName()), '|', $o->file() === $r->getFileName() ? 'same' : 'different';\n",
+            ),
+            ("loader.php", "<?php\nrequire __DIR__ . '/Widget.php';\n"),
+            (
+                "Widget.php",
+                "<?php\nnamespace Inc;\nclass Widget { public function file(): string { return __FILE__; } }\nfunction widget_file(): string { return __FILE__; }\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "Widget.php|same");
+}
+
 /// Verifies the deprecated `ReflectionParameter::getClass()` still reports the parameter's class
 /// when the program actually calls it.
 ///

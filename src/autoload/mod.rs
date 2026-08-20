@@ -448,14 +448,20 @@ fn load_autoloaded_file(
         .map_err(|e| e.with_file(file_label.clone()))?;
     let parsed =
         crate::source::finalize_physical_program(parsed, path, source_mode, defines)?;
-    let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_with_defines(
-        parsed,
-        path.parent().unwrap_or(base_dir),
-        defines,
-    )?;
+    let (resolved, nested_includes, included_sources) =
+        crate::resolver::resolve_collecting_includes_with_defines_and_sources(
+            parsed,
+            path.parent().unwrap_or(base_dir),
+            defines,
+        )?;
     let resolved = alias::collect_aliases(resolved);
     let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;
-    let declaration_sources = declaration_source_files(&canonicalized, &file_label);
+    let mut declaration_sources = declaration_source_files(&canonicalized, &file_label);
+    // Everything this file's own includes declared is attributed to the file that WROTE it, which
+    // the walk above cannot know: by now those statements have been spliced in and are
+    // indistinguishable from this file's. Per-file attribution therefore overwrites it.
+    declaration_sources.class_likes.extend(included_sources.class_likes);
+    declaration_sources.functions.extend(included_sources.functions);
     // name_resolver has already flattened namespace nodes and canonicalized
     // declarations, so we splice the statements directly into the top-level
     // program.

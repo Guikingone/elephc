@@ -85,6 +85,7 @@ pub(super) fn resolve_include_stmt(
 
     let included_stmts =
         parse_file(&resolved, stmt.span, &state.conditional_defines)?;
+    record_declaration_sources(&included_stmts, &canonical, state)?;
 
     let included_dir = resolved.parent().unwrap_or(base_dir);
     include_chain.push(canonical.clone());
@@ -290,4 +291,54 @@ fn rewrite_top_level_return(body: &mut Vec<Stmt>, temp: &str) -> bool {
         }
     }
     false
+}
+
+/// Records which class-likes and functions one PHYSICAL file declares, against that file's path.
+///
+/// `Reflection*::getFileName()` must report the file a declaration was written in. The only place
+/// that knows this is here, while the file's own statements are still separate: once its includes
+/// are spliced in, every declaration looks like it came from the same program.
+///
+/// The statements are not name-resolved yet, so `class Widget` inside `namespace Inc;` is still
+/// spelled `Widget`. Canonicalizing by hand would duplicate the name resolver's rules and drift
+/// from them, so this reuses `name_resolver::resolve` on a copy and reads the canonical names back.
+/// Name resolution errors are propagated with this physical file's path: the same statements
+/// would fail again after splicing, while swallowing the error here would leave a silently wrong
+/// Reflection source-file fallback.
+fn record_declaration_sources(
+    stmts: &[Stmt],
+    path: &Path,
+    state: &mut ResolveState,
+) -> Result<(), CompileError> {
+    let canonical = crate::name_resolver::resolve(stmts.to_vec())
+        .map_err(|error| error.with_file(path.display().to_string()))?;
+    let file = path.display().to_string();
+    collect_declared_names(&canonical, &file, state);
+    Ok(())
+}
+
+/// Walks canonicalized statements, recording each declaration against `file`.
+fn collect_declared_names(stmts: &[Stmt], file: &str, state: &mut ResolveState) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::ClassDecl { name, .. }
+            | StmtKind::InterfaceDecl { name, .. }
+            | StmtKind::TraitDecl { name, .. }
+            | StmtKind::EnumDecl { name, .. }
+            | StmtKind::PackedClassDecl { name, .. } => {
+                state.declared_class_files.insert(
+                    crate::names::php_symbol_key(name.trim_start_matches('\\')),
+                    file.to_string(),
+                );
+            }
+            StmtKind::FunctionDecl { name, .. } => {
+                state.declared_function_files.insert(
+                    crate::names::php_symbol_key(name.trim_start_matches('\\')),
+                    file.to_string(),
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_declared_names(body, file, state),
+            _ => {}
+        }
+    }
 }

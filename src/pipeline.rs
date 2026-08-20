@@ -119,8 +119,10 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     // `resolve_collecting_includes` also hands back the canonical path of every file the
     // resolver statically inlined — group 2 of the OPcache script manifest.
-    let (ast, opcache_included_files) =
-        match resolver::resolve_collecting_includes_with_defines(parsed, parent, &defines) {
+    let (ast, opcache_included_files, entry_included_sources) =
+        match resolver::resolve_collecting_includes_with_defines_and_sources(
+            parsed, parent, &defines,
+        ) {
         Ok(resolved) => resolved,
         Err(e) => {
             crate::progress::clear();
@@ -574,6 +576,16 @@ pub(crate) fn compile(config: CliConfig) {
     };
     ir_module.declared_class_source_files = declaration_source_files.class_likes;
     ir_module.declared_function_source_files = declaration_source_files.functions;
+    // Declarations the ENTRY program pulled in with `require` are attributed to the file that
+    // wrote them; the autoload pass could not see those, and without this they fall through to
+    // `Reflection*::getFileName()`'s entry-file fallback, which silently reports a real but wrong
+    // path. Per-file attribution wins over the post-splice walk.
+    ir_module
+        .declared_class_source_files
+        .extend(entry_included_sources.class_likes);
+    ir_module
+        .declared_function_source_files
+        .extend(entry_included_sources.functions);
     timings.record_since("ir-lower", phase_started);
 
     crate::progress::phase("ir-opt");

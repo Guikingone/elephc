@@ -24,6 +24,15 @@ pub(super) struct ResolveState {
     pub(super) const_imports: HashMap<String, String>,
     /// Invocation-level symbols used to select `ifdef` branches in every physical file.
     pub(super) conditional_defines: HashSet<String>,
+    /// Canonical class-like name to the PHYSICAL file that declares it, recorded as each
+    /// include is loaded and therefore before its own includes are spliced into it.
+    ///
+    /// `Reflection*::getFileName()` needs the declaring file, not the file that happened to pull
+    /// the declaration in. Attribution done after splicing cannot tell them apart, so it is
+    /// collected here where the path is still known.
+    pub(super) declared_class_files: HashMap<String, String>,
+    /// Canonical function name to the physical file that declares it, same rule as above.
+    pub(super) declared_function_files: HashMap<String, String>,
 }
 
 impl ResolveState {

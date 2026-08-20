@@ -180,6 +180,46 @@ fn compile_cli_file_and_run_with_native(
     String::from_utf8(output.stdout).unwrap()
 }
 
+/// Compiles a multi-file project through the real `elephc` CLI and runs the binary.
+///
+/// Use this instead of `compile_and_run_files` when the behaviour under test depends on the
+/// production pipeline. The in-process multi-file helpers are hand-rolled reimplementations of
+/// `pipeline::compile` and do not carry everything it does — declaration-to-file attribution for
+/// the entry program's own includes, for one — so a fixture that needs it silently observes the
+/// fallback instead of the real answer.
+pub(crate) fn compile_cli_files_and_run(files: &[(&str, &str)], main_file: &str) -> String {
+    let dir = make_cli_test_dir("elephc_cli_project");
+
+    for (path, content) in files {
+        let full_path = dir.join(path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&full_path, content).unwrap();
+    }
+
+    let main_path = dir.join(main_file);
+    let mut compile_cmd = elephc_cli_command(&dir);
+    compile_cmd.arg(&main_path);
+    let compile_out = compile_cmd.output().expect("failed to run elephc CLI");
+    assert!(
+        compile_out.status.success(),
+        "elephc CLI failed: {}",
+        String::from_utf8_lossy(&compile_out.stderr)
+    );
+
+    let bin_path = main_path.with_extension("");
+    let output = run_binary(&bin_path, &dir);
+    assert!(
+        output.status.success(),
+        "CLI-compiled binary exited with error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    String::from_utf8(output.stdout).unwrap()
+}
+
 // Compiles a PHP source string and runs the resulting binary, asserting that it
 // terminates with a non-zero exit code. Returns stderr from the failed binary.
 // Uses the library directly (not CLI), with default heap size 8_388_608 bytes.
