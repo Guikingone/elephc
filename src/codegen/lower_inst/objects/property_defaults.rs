@@ -193,6 +193,21 @@ pub(super) fn emit_property_default(
             abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);
             abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);
         }
+        LiteralDefaultValue::BoxedArray {
+            elem_type,
+            elements,
+        } => {
+            abi::emit_push_reg(ctx.emitter, object_reg);
+            emit_array_literal_default_to_result(ctx, elem_type, elements)?;
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Array(Box::new(elem_type.clone())),
+            );
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);
+            abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);
+        }
         LiteralDefaultValue::EmptyAssocArray { value_type } => {
             abi::emit_push_reg(ctx.emitter, object_reg);
             emit_empty_assoc_array_literal_to_result(ctx, value_type);
@@ -215,6 +230,7 @@ pub(super) fn emit_constructor_call(
     constructor_key: &str,
     constructor_param_types: &[PhpType],
     constructor_ref_params: &[bool],
+    padding_thunk: Option<&str>,
 ) -> Result<()> {
     let mut args = Vec::with_capacity(constructor_args.len() + 1);
     args.push(object);
@@ -234,7 +250,15 @@ pub(super) fn emit_constructor_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_call_label(ctx.emitter, &method_symbol(impl_class, constructor_key));
+    // A padding thunk stands in for the constructor when the site omitted defaulted arguments:
+    // it takes what was passed and calls the real one with the declared defaults appended.
+    // The thunk is an ordinary module function, so it answers to `function_symbol`; naming it
+    // raw would emit a call to a symbol nothing defines.
+    let symbol = match padding_thunk {
+        Some(thunk) => crate::names::function_symbol(thunk),
+        None => method_symbol(impl_class, constructor_key),
+    };
+    abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     super::super::emit_call_arg_temp_cleanups(ctx, &call_args, None)?;

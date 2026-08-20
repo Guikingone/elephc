@@ -602,3 +602,92 @@ echo $a, $b, $c, $d, $e;
     let (allocs, frees) = parse_gc_stats(&out.stderr);
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
+
+/// Verifies `??` on a declared `mixed` property, instance and static.
+///
+/// `public mixed $x;` IS declared and starts uninitialized, but its type is literally `Mixed` —
+/// the same value an UNTYPED `public $x;` carries, which is plain null from the start and must
+/// stay on the ordinary read. The gate tested the representation and so read the declared one as
+/// untyped, and both `??` cases raised where PHP answers the default. The predicates ask the
+/// schema now (`property_slot_is_declared` / `declared_static_properties`), which is the question
+/// they always meant.
+#[test]
+fn test_coalesce_on_declared_mixed_property() {
+    let instance = compile_and_run(
+        r#"<?php
+class D { public mixed $x; }
+$o = new D();
+echo $o->x ?? "def";
+"#,
+    );
+    assert_eq!(instance, "def");
+
+    let statik = compile_and_run(
+        r#"<?php
+class S { public static mixed $s; }
+echo S::$s ?? "def";
+"#,
+    );
+    assert_eq!(statik, "def");
+}
+
+/// Verifies `isset($o->p)` on an uninitialized typed property does not leak an OWNING receiver.
+///
+/// The probe branches before reading, and only the read arm hands the receiver to
+/// `lower_property_get_from_value`, which consumes it — so a receiver produced by the expression
+/// itself had nowhere to go. Three calls reported `allocs=3 frees=0` where the same program with
+/// an INITIALIZED property closed at 3/3.
+///
+/// Both halves are asserted because the obvious fix breaks the other one: releasing on type alone
+/// frees a BORROWED `?C` receiver too, and `isset($c->p); $c->p ??= new P();` then dies with
+/// `Attempt to assign property "p" on null`. The release is gated on
+/// `value_is_owning_temporary`, the same gate the nullsafe chain uses.
+#[test]
+fn test_isset_on_uninitialized_property_balances_an_owning_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $p; }
+class P { public int $v = 7; }
+class B { public ?P $p; }
+function mk() { return new C(); }
+var_dump(isset(mk()->p));
+var_dump(isset(mk()->p));
+function f(?B $b) { var_dump(isset($b->p)); $b->p ??= new P(); return $b->p->v; }
+echo f(new B());
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(false)\nbool(false)\n7");
+}
+
+/// Verifies `empty($o->p)` on a declared INSTANCE property, including the uninitialized slot.
+///
+/// An uninitialized typed slot IS empty in PHP, and the ordinary read that would find that out
+/// raises instead — so `empty($o->p)` on `class C { public int $p; }` died with
+/// `Typed property C::$p must not be accessed before initialization` where PHP answers
+/// `bool(true)`. Only the STATIC path probed; the instance dispatch had no arm for it.
+///
+/// The matrix is what makes the probe safe rather than merely quiet: an initialized slot must
+/// still answer from its VALUE (`$q = 5` is not empty), a declared `mixed` slot counts as
+/// uninitialized, `unset()` returns a defaulted slot to that state, and a receiver the expression
+/// produced itself must not leak — the arm answers without the read that would have consumed it.
+/// Expected output is verbatim `php -n`.
+#[test]
+fn test_empty_on_declared_instance_property() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $p; public int $q = 5; public mixed $m; }
+function mk() { return new C(); }
+$o = new C();
+var_dump(empty($o->p));
+var_dump(empty($o->q));
+var_dump(empty($o->m));
+unset($o->q);
+var_dump(empty($o->q));
+var_dump(empty(mk()->p));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\n"
+    );
+}

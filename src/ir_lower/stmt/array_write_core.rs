@@ -75,7 +75,7 @@ pub(in crate::ir_lower) fn indexed_array_write_element_type(
 /// after the right-hand side, so `$i = 0; $a[$i] = ($i = 1);` writes index 1, not index 0.
 /// Only the read moves — the index expression keeps its place so side-effect order is
 /// unchanged, which for a bare variable is no order at all.
-fn lower_write_key_and_value(
+pub(super) fn lower_write_key_and_value(
     ctx: &mut LoweringContext<'_, '_>,
     index: &Expr,
     value: &Expr,

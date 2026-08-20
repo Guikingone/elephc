@@ -129,11 +129,11 @@ ksort($grid[1]);
     );
     assert!(!out.success, "scalar nested value should fail");
     assert!(
-        out.stderr.contains("ksort()")
-            && out.stderr.contains("Argument #1")
-            && out.stderr.contains("array"),
+        out.stdout.contains("ksort()")
+            && out.stdout.contains("Argument #1")
+            && out.stdout.contains("array"),
         "expected a controlled ksort array TypeError, got: {}",
-        out.stderr,
+        out.stdout,
     );
 }
 
@@ -148,10 +148,10 @@ ksort($grid[9]);
     );
     assert!(!out.success, "missing nested value should fail");
     assert!(
-        out.stderr.contains("ksort()")
-            && out.stderr.contains("Argument #1")
-            && out.stderr.contains("array"),
+        out.stdout.contains("ksort()")
+            && out.stdout.contains("Argument #1")
+            && out.stdout.contains("array"),
         "expected a controlled ksort array TypeError, got: {}",
-        out.stderr,
+        out.stdout,
     );
 }

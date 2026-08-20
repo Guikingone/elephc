@@ -79,6 +79,100 @@ pub(in crate::codegen) fn emit_count_countable_guard_from_result(
     Ok(())
 }
 
+/// Raises PHP's `count()` TypeError when the counted object turns out not to be `Countable`.
+///
+/// The upstream tag guard lets every object through: whether a class is countable depends on its
+/// class id, which the guard does not resolve. `__rt_mixed_count` does resolve it — the runtime's
+/// own containers by id, then any PHP `Countable` through the dense method table — and answers
+/// `-1` for an object that is neither. A count of `-1` is one no container can produce, so it is
+/// safe to read as that verdict, and it is the only way to tell a non-countable object apart from
+/// an empty one: both used to answer `0`, silently, where PHP stops.
+///
+/// The class name is read from the same dense metadata table `get_class()` uses, so the message is
+/// php-src's wording verbatim, class name included.
+fn emit_non_countable_object_type_error(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let countable = ctx.next_label("count_object_countable");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmn {}, #1", result_reg));        // is the count the not-countable sentinel (-1)?
+            ctx.emitter.instruction(&format!("b.ne {}", countable));            // any real count is returned untouched
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, -1", result_reg));        // is the count the not-countable sentinel (-1)?
+            ctx.emitter.instruction(&format!("jne {}", countable));             // any real count is returned untouched
+        }
+    }
+
+    // Re-materialize the receiver: the count call clobbered the registers, and the class name has
+    // to come from the object itself.
+    ctx.load_value_to_result(value)?;
+    let (name_ptr_reg, name_len_reg) = abi::string_result_regs(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                        // unbox the object payload from the Mixed cell
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the receiver class id
+            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_entries");
+            ctx.emitter.instruction("lsl x11, x9, #4");                         // scale the class id to the 16-byte class-name row
+            ctx.emitter.instruction("add x10, x10, x11");                       // address the receiver's class-name metadata
+            ctx.emitter.instruction(&format!("ldr {}, [x10]", name_ptr_reg));   // borrow the class-name pointer
+            ctx.emitter
+                .instruction(&format!("ldr {}, [x10, #8]", name_len_reg));      // borrow the class-name byte length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");            // unbox the object payload from the Mixed cell
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // load the receiver class id
+            abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
+            ctx.emitter.instruction("shl r9, 4");                               // scale the class id to the 16-byte class-name row
+            ctx.emitter
+                .instruction(&format!("mov {}, QWORD PTR [r10 + r9]", name_ptr_reg)); // borrow the class-name pointer
+            ctx.emitter
+                .instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", name_len_reg)); // borrow the class-name byte length
+        }
+    }
+    emit_count_error_concat_prefix(ctx, COUNT_TYPE_ERROR_PREFIX);
+    emit_count_error_concat_suffix(ctx, " given");
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    super::super::exceptions::emit_type_error_from_string_result(ctx);
+
+    ctx.emitter.label(&countable);
+    Ok(())
+}
+
+/// Prepends a static fragment to the message held in the string-result registers.
+fn emit_count_error_concat_prefix(ctx: &mut FunctionContext<'_>, prefix: &str) {
+    let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
+    let (right_ptr, right_len) = count_concat_right_operand_regs(ctx);
+    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
+    ctx.emitter
+        .instruction(&format!("mov {}, {}", right_ptr, text_ptr));              // move the built text into the concat right operand
+    ctx.emitter
+        .instruction(&format!("mov {}, {}", right_len, text_len));              // move its length into the concat right operand
+    abi::emit_symbol_address(ctx.emitter, text_ptr, &prefix_label);
+    abi::emit_load_int_immediate(ctx.emitter, text_len, prefix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+}
+
+/// Appends a static fragment to the message held in the string-result registers.
+fn emit_count_error_concat_suffix(ctx: &mut FunctionContext<'_>, suffix: &str) {
+    let (right_ptr, right_len) = count_concat_right_operand_regs(ctx);
+    let (suffix_label, suffix_len) = ctx.data.add_string(suffix.as_bytes());
+    abi::emit_symbol_address(ctx.emitter, right_ptr, &suffix_label);
+    abi::emit_load_int_immediate(ctx.emitter, right_len, suffix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+}
+
+/// The register pair `__rt_concat` reads its right operand from.
+fn count_concat_right_operand_regs(ctx: &FunctionContext<'_>) -> (&'static str, &'static str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x3", "x4"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    }
+}
+
 /// Raises the `count()` TypeError naming `type_name`, exactly as php-src words it.
 fn emit_count_type_error(ctx: &mut FunctionContext<'_>, type_name: &str) {
     super::exceptions::emit_type_error(ctx, &format!("{COUNT_TYPE_ERROR_PREFIX}{type_name} given"));
@@ -137,6 +231,7 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             emit_count_countable_guard(ctx, value)?;
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
+            emit_non_countable_object_type_error(ctx, value)?;
             store_if_result(ctx, inst)
         }
         PhpType::Object(class_name)
@@ -147,6 +242,15 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             } else {
                 super::lower_runtime_object_method_call(ctx, inst, &class_name, "count")
             }
+        }
+        // Any other object: PHP raises, naming the class. It is known statically on this path,
+        // so the message is a constant — the `Mixed` path has to resolve the name at run time.
+        PhpType::Object(class_name) => {
+            super::exceptions::emit_type_error(
+                ctx,
+                &format!("{COUNT_TYPE_ERROR_PREFIX}{class_name} given"),
+            );
+            store_if_result(ctx, inst)
         }
         other => Err(CodegenIrError::unsupported(format!(
             "count for PHP type {:?}",

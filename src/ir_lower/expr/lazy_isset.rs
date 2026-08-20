@@ -155,6 +155,21 @@ pub(super) fn lower_lazy_empty(
             ));
         }
     }
+    // The instance twin of the static arm above: an uninitialized typed slot is EMPTY, and the
+    // ordinary read that would say so raises. `property_isset_action` already decides whether the
+    // slot is a declared one worth probing — the same decision `isset()` makes, reused rather than
+    // re-derived so the two constructs cannot drift on which properties they consider declared.
+    if let ExprKind::PropertyAccess { object, property } = &args[0].kind {
+        if matches!(
+            property_isset_action(ctx, object, property),
+            Some(IssetPropertyAction::Initialized)
+        ) {
+            let object = lower_expr(ctx, object);
+            return Some(lower_initialized_property_empty(
+                ctx, object, property, name, &args[0],
+            ));
+        }
+    }
     let (exists_call, get_call) = lazy_empty_magic_property_calls(ctx, &args[0])?;
 
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);

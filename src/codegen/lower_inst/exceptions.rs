@@ -283,6 +283,19 @@ pub(super) fn emit_value_error_from_string_result(ctx: &mut FunctionContext<'_>)
     emit_dynamic_throwable_object(ctx, "_spl_value_error_class_id");
 }
 
+/// Throws a catchable PHP `TypeError` whose message already sits in the string-result registers.
+///
+/// The static `emit_type_error()` covers the guards whose wording is fixed. PHP's `count()`
+/// refusal names the offending class — `must be of type Countable|array, Foo given` — and that
+/// class is only known at run time when the value arrives as a boxed `Mixed`, so the caller
+/// composes the message and hands it over as a persisted pointer/length pair.
+pub(super) fn emit_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
+    let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
+    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "TypeError");
+    emit_dynamic_throwable_object(ctx, "_spl_type_error_class_id");
+}
+
 /// Allocates one built-in throwable and transfers control to the standard unwinder.
 fn emit_static_exception(
     ctx: &mut FunctionContext<'_>,
@@ -290,7 +303,7 @@ fn emit_static_exception(
     class_id_symbol: &str,
     message: &str,
 ) {
-    let fatal_message = format!("Fatal error: Uncaught {}: {}\n", class_name, message);
+    let fatal_message = format!("\nFatal error: Uncaught {}: {}\n", class_name, message);
     let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
     emit_uncaught_exception_fatal_if_no_handler(ctx, &fatal_label, fatal_len);
 
@@ -348,9 +361,13 @@ fn emit_uncaught_exception_fatal_if_no_handler(
         Arch::AArch64 => {
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_exc_handler_top", 0);
             ctx.emitter.instruction(&format!("cbnz x9, {}", throw_label));      // use the standard unwinder when a catch handler is active
+            // Drain buffered output first: PHP emits it before the report, and this path used to
+            // exit without flushing, discarding everything a program had buffered. `bl` leaves sp
+            // untouched, so the message slots read below are unaffected.
+            ctx.emitter.instruction("bl __rt_ob_flush_all");
             abi::emit_symbol_address(ctx.emitter, "x1", fatal_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", fatal_len as i64);
-            ctx.emitter.instruction("mov x0, #2");                              // write the uncaught PHP diagnostic to stderr
+            ctx.emitter.instruction("mov x0, #1");                              // fd = stdout, where PHP writes this report
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
         }
@@ -358,9 +375,17 @@ fn emit_uncaught_exception_fatal_if_no_handler(
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_exc_handler_top", 0);
             ctx.emitter.instruction("test r10, r10");                           // check whether a catch handler is active
             ctx.emitter.instruction(&format!("jnz {}", throw_label));           // use the standard unwinder when a handler can receive the error
+            // See the ARM64 path. rsp is SAVED and restored rather than simply aligned: the
+            // dynamic form reads its message from temporary stack slots, which `and rsp, -16`
+            // alone would move out from under it. r15 is callee-saved and the flush helper
+            // touches no callee-saved register.
+            ctx.emitter.instruction("mov r15, rsp");
+            ctx.emitter.instruction("and rsp, -16");
+            ctx.emitter.instruction("call __rt_ob_flush_all");
+            ctx.emitter.instruction("mov rsp, r15");
             abi::emit_symbol_address(ctx.emitter, "rsi", fatal_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", fatal_len as i64);
-            ctx.emitter.instruction("mov edi, 2");                              // write the uncaught PHP diagnostic to stderr
+            ctx.emitter.instruction("mov edi, 1");                              // fd = stdout, where PHP writes this report
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the specific fatal message
             abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
@@ -379,22 +404,26 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
     class_name: &str,
 ) {
     let throw_label = ctx.next_label("dynamic_error_throw");
-    let prefix = format!("Fatal error: Uncaught {}: ", class_name);
+    let prefix = format!("\nFatal error: Uncaught {}: ", class_name);
     let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
     let (suffix_label, suffix_len) = ctx.data.add_string(b"\n");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_exc_handler_top", 0);
             ctx.emitter.instruction(&format!("cbnz x9, {}", throw_label));      // use the standard unwinder when a catch handler is active
-            ctx.emitter.instruction("mov x0, #2");                              // write the uncaught dynamic-error prefix to stderr
+            // Drain buffered output first: PHP emits it before the report, and this path used to
+            // exit without flushing, discarding everything a program had buffered. `bl` leaves sp
+            // untouched, so the message slots read below are unaffected.
+            ctx.emitter.instruction("bl __rt_ob_flush_all");
+            ctx.emitter.instruction("mov x0, #1");                              // fd = stdout for the dynamic-error prefix
             abi::emit_symbol_address(ctx.emitter, "x1", &prefix_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", prefix_len as i64);
             ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, #2");                              // write the runtime error message to stderr
+            ctx.emitter.instruction("mov x0, #1");                              // fd = stdout for the runtime error message
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
             ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, #2");                              // terminate the uncaught diagnostic with a newline
+            ctx.emitter.instruction("mov x0, #1");                              // fd = stdout to terminate the diagnostic
             abi::emit_symbol_address(ctx.emitter, "x1", &suffix_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", suffix_len as i64);
             ctx.emitter.syscall(4);
@@ -404,19 +433,27 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_exc_handler_top", 0);
             ctx.emitter.instruction("test r10, r10");                           // check whether a catch handler is active
             ctx.emitter.instruction(&format!("jnz {}", throw_label));           // use the standard unwinder when a handler can receive the error
+            // See the ARM64 path. rsp is SAVED and restored rather than simply aligned: the
+            // dynamic form reads its message from temporary stack slots, which `and rsp, -16`
+            // alone would move out from under it. r15 is callee-saved and the flush helper
+            // touches no callee-saved register.
+            ctx.emitter.instruction("mov r15, rsp");
+            ctx.emitter.instruction("and rsp, -16");
+            ctx.emitter.instruction("call __rt_ob_flush_all");
+            ctx.emitter.instruction("mov rsp, r15");
             abi::emit_symbol_address(ctx.emitter, "rsi", &prefix_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", prefix_len as i64);
-            ctx.emitter.instruction("mov edi, 2");                              // write the uncaught dynamic-error prefix to stderr
+            ctx.emitter.instruction("mov edi, 1");                              // fd = stdout for the dynamic-error prefix
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the dynamic-error prefix
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 0);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", 8);
-            ctx.emitter.instruction("mov edi, 2");                              // write the runtime error message to stderr
+            ctx.emitter.instruction("mov edi, 1");                              // fd = stdout for the runtime error message
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the runtime error message
             abi::emit_symbol_address(ctx.emitter, "rsi", &suffix_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", suffix_len as i64);
-            ctx.emitter.instruction("mov edi, 2");                              // terminate the uncaught diagnostic with a newline
+            ctx.emitter.instruction("mov edi, 1");                              // fd = stdout to terminate the diagnostic
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the dynamic-error suffix
             abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);

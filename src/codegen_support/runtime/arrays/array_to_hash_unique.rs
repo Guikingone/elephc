@@ -32,9 +32,9 @@ pub fn emit_array_to_hash_unique(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_to_hash_unique ---");
     emitter.label_global("__rt_array_to_hash_unique");
-    emitter.instruction("sub sp, sp, #80");                                     // allocate the conversion stack frame
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // set up the new frame pointer
+    emitter.instruction("sub sp, sp, #96");                                     // allocate the conversion stack frame, incl. the saved scan index
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #80");                                    // set up the new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the indexed array pointer
     emitter.instruction("ldr x9, [x0]");                                        // load the indexed array length
     emitter.instruction("str x9, [sp, #24]");                                   // save the length
@@ -75,9 +75,33 @@ pub fn emit_array_to_hash_unique(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_array_to_hash_uniq_first");                  // no earlier element matched: this is a first occurrence
     emitter.instruction("mul x13, x7, x12");                                    // byte offset of element[j]
     emitter.instruction("add x13, x11, x13");                                   // address of element[j]
+    // A string slot holds a POINTER in its low word, so comparing words compares addresses:
+    // `array_unique(["a", "a"])` would keep both when the two live at different addresses. PHP
+    // compares elements by their string rendering, which for a string array is byte equality.
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the value_type
+    emitter.instruction("cmp x9, #1");                                          // is the element a string?
+    emitter.instruction("b.eq __rt_array_to_hash_uniq_scan_string");            // strings compare by value
     emitter.instruction("ldr x8, [x13]");                                       // load the earlier element low word
     emitter.instruction("cmp x8, x6");                                          // is the earlier element equal to the candidate?
     emitter.instruction("b.eq __rt_array_to_hash_uniq_skip");                   // duplicate: PHP keeps only the FIRST occurrence
+    emitter.instruction("b __rt_array_to_hash_uniq_scan_next");                 // share the scan advance
+    emitter.label("__rt_array_to_hash_uniq_scan_string");
+    emitter.instruction("str x7, [sp, #64]");                                   // the comparison call clobbers the scan index
+    emitter.instruction("ldr x14, [sp, #56]");                                  // reload the candidate slot address
+    emitter.instruction("ldr x1, [x14]");                                       // candidate string pointer
+    emitter.instruction("ldr x2, [x14, #8]");                                   // candidate string length
+    emitter.instruction("ldr x3, [x13]");                                       // earlier string pointer
+    emitter.instruction("ldr x4, [x13, #8]");                                   // earlier string length
+    emitter.instruction("bl __rt_str_eq");                                      // byte equality, not address equality
+    emitter.instruction("cbnz x0, __rt_array_to_hash_uniq_skip");               // duplicate: PHP keeps only the FIRST occurrence
+    // Every loop register is caller-saved, so the scan state is rebuilt from the frame.
+    emitter.instruction("ldr x7, [sp, #64]");                                   // scan index j
+    emitter.instruction("ldr x10, [sp, #16]");                                  // candidate index i
+    emitter.instruction("ldr x11, [sp, #0]");                                   // indexed array pointer
+    emitter.instruction("add x11, x11, #24");                                   // skip the 24-byte indexed-array header
+    emitter.instruction("ldr x12, [sp, #40]");                                  // element stride
+    emitter.instruction("ldr x6, [sp, #48]");                                   // candidate element low word
+    emitter.label("__rt_array_to_hash_uniq_scan_next");
     emitter.instruction("add x7, x7, #1");                                      // advance the backward scan
     emitter.instruction("b __rt_array_to_hash_uniq_scan");                      // keep scanning earlier elements
 
@@ -118,8 +142,8 @@ pub fn emit_array_to_hash_unique(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_to_hash_uniq_loop");                      // continue converting elements
     emitter.label("__rt_array_to_hash_uniq_done");
     emitter.instruction("ldr x0, [sp, #8]");                                    // x0 = result hash pointer
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // deallocate the stack frame
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // deallocate the stack frame
     emitter.instruction("ret");                                                 // return the result hash in x0
 }
 
@@ -172,9 +196,32 @@ fn emit_array_to_hash_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the element stride
     emitter.instruction("imul r11, r9");                                        // byte offset of element[j]
     emitter.instruction("add r11, r10");                                        // address of element[j]
+    // See the ARM64 path: a string slot's low word is a POINTER, so word equality would keep two
+    // equal strings that live at different addresses.
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the value_type
+    emitter.instruction("cmp rdx, 1");                                          // is the element a string?
+    emitter.instruction("je __rt_array_to_hash_uniq_scan_string");              // strings compare by value
     emitter.instruction("mov rdx, QWORD PTR [r11]");                            // load the earlier element low word
     emitter.instruction("cmp rdx, rcx");                                        // is the earlier element equal to the candidate?
     emitter.instruction("je __rt_array_to_hash_uniq_skip");                     // duplicate: PHP keeps only the FIRST occurrence
+    emitter.instruction("jmp __rt_array_to_hash_uniq_scan_next");               // share the scan advance
+    emitter.label("__rt_array_to_hash_uniq_scan_string");
+    emitter.instruction("mov QWORD PTR [rbp - 80], r9");                        // the comparison call clobbers the scan index
+    emitter.instruction("mov r8, QWORD PTR [rbp - 72]");                        // reload the candidate slot address
+    emitter.instruction("mov rdi, QWORD PTR [r8]");                             // candidate string pointer
+    emitter.instruction("mov rsi, QWORD PTR [r8 + 8]");                         // candidate string length
+    emitter.instruction("mov rdx, QWORD PTR [r11]");                            // earlier string pointer
+    emitter.instruction("mov rcx, QWORD PTR [r11 + 8]");                        // earlier string length
+    emitter.instruction("call __rt_str_eq");                                    // byte equality, not address equality
+    emitter.instruction("test rax, rax");                                       // did the two strings match?
+    emitter.instruction("jne __rt_array_to_hash_uniq_skip");                    // duplicate: PHP keeps only the FIRST occurrence
+    // Every loop register is caller-saved, so the scan state is rebuilt from the frame.
+    emitter.instruction("mov r9, QWORD PTR [rbp - 80]");                        // scan index j
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // candidate index i
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // indexed array pointer
+    emitter.instruction("add r10, 24");                                         // skip the 24-byte indexed-array header
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // candidate element low word
+    emitter.label("__rt_array_to_hash_uniq_scan_next");
     emitter.instruction("add r9, 1");                                           // advance the backward scan
     emitter.instruction("jmp __rt_array_to_hash_uniq_scan");                    // keep scanning earlier elements
 

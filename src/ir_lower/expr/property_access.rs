@@ -326,16 +326,19 @@ pub(super) fn property_can_be_uninitialized(
     let Some(index) = info.properties.iter().position(|(name, _)| name == property) else {
         return false;
     };
-    // The DECLARED type, not its codegen representation: `?string` represents as `Mixed` and
-    // is still a declared type that starts uninitialized, while an untyped `public $x;` is
-    // plain null from the start and must stay on the ordinary path.
+    // Whether the slot was DECLARED with a type — asked of the schema, not inferred from the
+    // stored `PhpType`. Both questions agree on `?string`, which represents as `Mixed` and is
+    // still declared, and on an untyped `public $x;`, which is plain null from the start and
+    // must stay on the ordinary path. They disagree on `public mixed $x;`: it IS declared and
+    // starts uninitialized, but its type is literally `Mixed`, so a test on the representation
+    // read it as untyped and `$o->x ?? "d"` raised where PHP answers the default.
     //
     // A DEFAULT does not exclude the property. It used to: a defaulted slot is live from
     // construction, so it looked as though it could never be uninitialized. `unset($o->x)`
     // returns a typed property to the uninitialized state whatever its default, and the
     // ordinary read then raises where PHP's `??` answers the default. The runtime probe
     // settles both cases, so the gate asks only whether the property is TYPED.
-    !matches!(info.properties[index].1, PhpType::Mixed)
+    info.property_slot_is_declared(index, property)
 }
 
 /// Reads `property` the way `isset()` does: yields null instead of raising when the slot is
@@ -443,14 +446,18 @@ pub(super) fn static_property_can_be_uninitialized(
     let Some(class_info) = ctx.classes.get(class_name.as_str()) else {
         return false;
     };
-    let Some((_, property_ty)) = class_info
+    if !class_info
         .static_properties
         .iter()
-        .find(|(name, _)| name == property)
-    else {
+        .any(|(name, _)| name == property)
+    {
         return false;
-    };
-    !matches!(property_ty, PhpType::Mixed)
+    }
+    // Whether the slot was DECLARED with a type, asked of the schema rather than inferred from
+    // the stored `PhpType`. `public static mixed $s;` is declared AND stores `Mixed`, so a test
+    // on the representation read it as untyped and `S::$s ?? "d"` raised where PHP answers the
+    // default — the same confusion the instance predicate above had.
+    class_info.declared_static_properties.contains(property)
 }
 
 /// Reads a static `property` the way `isset()` does: yields null instead of raising when the

@@ -7,6 +7,10 @@
 //!
 //! Key details:
 //! - Boxed indexed arrays and hashes read the entry count from their payload header.
+//! - Objects resolve in two steps: the runtime's OWN list types by class id, then any PHP
+//!   class declaring `Countable`, through the dense `_class_count_ptrs` table. Without the
+//!   second step a `Countable` written in PHP — the synthetic builtins like `ArrayObject`
+//!   included — counted as 0 while `$o->count()` on the SAME object answered correctly.
 //! - Non-countable tags return zero. That is a KNOWN divergence, not a modelling
 //!   choice: PHP 8 throws a `TypeError` and stops. See the note on the emitter below
 //!   for the measurement and for why the checker's strict union rule depends on it.
@@ -34,6 +38,9 @@ pub fn emit_mixed_count(emitter: &mut Emitter) {
 /// Behavior:
 /// - Tag 4 (indexed array) or tag 5 (associative array): reads the count from the
 ///   payload header at offset 0 and returns it in `x0`.
+/// - Tag 6 (object): the runtime's own list types dispatch by class id; any other class
+///   reaches its `Countable::count` through `_class_count_ptrs`, and only a class that
+///   declares no such interface still returns 0.
 /// - Any other tag (including null): returns 0 silently. ⚠️ This does NOT match PHP.
 ///   PHP 8 raises `TypeError: count(): Argument #1 ($value) must be of type
 ///   Countable|array, <type> given` and stops; the quiet return dates from PHP 7.2's
@@ -83,13 +90,34 @@ fn emit_mixed_count_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x12, [x12]");                                      // load SplQueue class id
     emitter.instruction("cmp x11, x12");                                        // is this a SplQueue object?
     emitter.instruction("b.eq __rt_mixed_count_spl_dll");                       // SplQueue shares doubly-linked-list storage
-    emitter.instruction("b __rt_mixed_count_zero");                             // unsupported object payloads are not counted here
+    emitter.instruction("b __rt_mixed_count_php_countable");                    // anything else may still be a PHP-level Countable
     emitter.label("__rt_mixed_count_spl_fixed");
     emitter.instruction("mov x0, x10");                                         // pass the unboxed SplFixedArray receiver
     emitter.instruction("b __rt_spl_fixed_count");                              // tail-call the fixed-array counter
     emitter.label("__rt_mixed_count_spl_dll");
     emitter.instruction("mov x0, x10");                                         // pass the unboxed SPL list receiver
     emitter.instruction("b __rt_spl_dll_count");                                // tail-call the list counter
+
+    // Classes above are the runtime's OWN list types, recognised by class id. Everything else is a
+    // PHP class, whose `Countable::count` is reachable only through the dense method table — this
+    // is the whole reason a synthetic `ArrayObject` used to count as 0.
+    emitter.label("__rt_mixed_count_php_countable");
+    emitter.instruction("tbnz x11, #63, __rt_mixed_count_not_countable");       // synthetic negative ids cannot index metadata
+    abi::emit_load_symbol_to_reg(emitter, "x12", "_class_iface_method_count", 0);
+    emitter.instruction("cmp x11, x12");                                        // is the id within the dense table?
+    emitter.instruction("b.hs __rt_mixed_count_not_countable");                 // out-of-range ids have no entry
+    abi::emit_symbol_address(emitter, "x12", "_class_count_ptrs");
+    emitter.instruction("ldr x12, [x12, x11, lsl #3]");                         // resolve the concrete or inherited `count`
+    emitter.instruction("cbz x12, __rt_mixed_count_not_countable");             // 0 means the class is not Countable
+    emitter.instruction("mov x0, x10");                                         // pass the unboxed receiver
+    emitter.instruction("br x12");                                              // tail-call count(), which returns its int in x0
+
+    // An object that reaches here is not countable at all. Returning 0 would be indistinguishable
+    // from an empty container, so the caller could never raise PHP's TypeError; -1 is a count no
+    // container can produce, and `count()` turns it into that error.
+    emitter.label("__rt_mixed_count_not_countable");
+    emitter.instruction("mov x0, #-1");                                         // sentinel: the receiver is an object, but not Countable
+    emitter.instruction("ret");                                                 // return -1 in x0
 
     emitter.label("__rt_mixed_count_zero");
     emitter.instruction("mov x0, #0");                                          // not a container → return 0
@@ -104,6 +132,9 @@ fn emit_mixed_count_aarch64(emitter: &mut Emitter) {
 /// Behavior:
 /// - Tag 4 (indexed array) or tag 5 (associative array): reads the count from the
 ///   payload header at offset 0 and returns it in `rax`.
+/// - Tag 6 (object): the runtime's own list types dispatch by class id; any other class
+///   reaches its `Countable::count` through `_class_count_ptrs`, and only a class that
+///   declares no such interface still returns 0.
 /// - Any other tag (including null): returns 0 silently. ⚠️ This does NOT match PHP.
 ///   PHP 8 raises `TypeError: count(): Argument #1 ($value) must be of type
 ///   Countable|array, <type> given` and stops; the quiet return dates from PHP 7.2's
@@ -150,13 +181,33 @@ fn emit_mixed_count_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r12", "_spl_queue_class_id", 0);
     emitter.instruction("cmp r11, r12");                                        // is this a SplQueue object?
     emitter.instruction("je __rt_mixed_count_spl_dll");                         // SplQueue shares doubly-linked-list storage
-    emitter.instruction("jmp __rt_mixed_count_zero");                           // unsupported object payloads are not counted here
+    emitter.instruction("jmp __rt_mixed_count_php_countable");                  // anything else may still be a PHP-level Countable
     emitter.label("__rt_mixed_count_spl_fixed");
     emitter.instruction("mov rdi, r10");                                        // pass the unboxed SplFixedArray receiver
     emitter.instruction("jmp __rt_spl_fixed_count");                            // tail-call the fixed-array counter
     emitter.label("__rt_mixed_count_spl_dll");
     emitter.instruction("mov rdi, r10");                                        // pass the unboxed SPL list receiver
     emitter.instruction("jmp __rt_spl_dll_count");                              // tail-call the list counter
+
+    // See the ARM64 path: the ids above are the runtime's own list types, everything else is a PHP
+    // class whose `Countable::count` is only reachable through the dense method table.
+    emitter.label("__rt_mixed_count_php_countable");
+    emitter.instruction("test r11, r11");                                       // reject negative synthetic class ids
+    emitter.instruction("js __rt_mixed_count_not_countable");                   // synthetic ids cannot index metadata
+    emitter.instruction("cmp r11, QWORD PTR [rip + _class_iface_method_count]"); // is the id within the dense table?
+    emitter.instruction("jae __rt_mixed_count_not_countable");                  // out-of-range ids have no entry
+    emitter.instruction("lea r12, [rip + _class_count_ptrs]");                  // dense Countable::count table
+    emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");                  // resolve the concrete or inherited `count`
+    emitter.instruction("test r12, r12");                                       // 0 means the class is not Countable
+    emitter.instruction("jz __rt_mixed_count_not_countable");                   // report it rather than pass for an empty container
+    emitter.instruction("mov rdi, r10");                                        // pass the unboxed receiver
+    emitter.instruction("jmp r12");                                             // tail-call count(), which returns its int in rax
+
+    // See the ARM64 path: -1 is a count no container can produce, so `count()` can tell a
+    // non-countable object apart from an empty one and raise PHP's TypeError.
+    emitter.label("__rt_mixed_count_not_countable");
+    emitter.instruction("mov rax, -1");                                         // sentinel: the receiver is an object, but not Countable
+    emitter.instruction("ret");                                                 // return -1 in rax
 
     emitter.label("__rt_mixed_count_zero");
     emitter.instruction("xor rax, rax");                                        // not a container → return 0

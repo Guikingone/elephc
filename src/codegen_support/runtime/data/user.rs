@@ -480,6 +480,56 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Dense class-id-indexed interface-method tables for the runtime helpers that meet an object
+    // only as a boxed `Mixed` and so cannot know its class during EIR lowering: `count($m)` reaches
+    // `__rt_mixed_count` and `$m[$k]` reaches `__rt_mixed_array_get`. Both answered for a short
+    // hard-coded ladder of RUNTIME-NATIVE SPL classes and returned 0 / null for everything else, so
+    // a `Countable`/`ArrayAccess` written in PHP — the synthetic builtins like `ArrayObject`
+    // included — was skipped in silence.
+    //
+    // An entry is filled only when all three hold, and is `0` otherwise so the helper keeps its
+    // previous answer:
+    //   - the class DECLARES the interface. A class that merely owns a `count` method must keep
+    //     PHP's refusal rather than start answering.
+    //   - the method resolves through its implementing class, so an inherited one dispatches to the
+    //     ancestor's emitted symbol.
+    //   - the method's return REPRESENTATION is the one the helper returns. `count` hands back a
+    //     bare integer and `offsetGet` an owned `Mixed*`; a method typed otherwise would have its
+    //     pointer read as an integer, or its payload read as a cell.
+    out.push_str(".globl _class_iface_method_count\n_class_iface_method_count:\n");
+    out.push_str(&format!(
+        "    .quad {}\n",
+        max_class_id.map_or(0, |class_id| class_id + 1)
+    ));
+    for (table, interface, method, returns) in [
+        ("_class_count_ptrs", "Countable", "count", PhpType::Int),
+        ("_class_offsetget_ptrs", "ArrayAccess", "offsetGet", PhpType::Mixed),
+        ("_class_offsetset_ptrs", "ArrayAccess", "offsetSet", PhpType::Void),
+    ] {
+        out.push_str(&format!(".globl {table}\n{table}:\n"));
+        if let Some(max_class_id) = max_class_id {
+            let method_key = php_symbol_key(method);
+            for class_id in 0..=max_class_id {
+                let entry = class_info_by_id
+                    .get(&class_id)
+                    .filter(|class_info| {
+                        class_info
+                            .interfaces
+                            .iter()
+                            .any(|name| name.eq_ignore_ascii_case(interface))
+                            && class_info
+                                .methods
+                                .get(&method_key)
+                                .is_some_and(|sig| sig.return_type.codegen_repr() == returns)
+                    })
+                    .and_then(|class_info| class_info.method_impl_classes.get(&method_key))
+                    .map(|impl_class| method_symbol(impl_class, &method_key))
+                    .unwrap_or_else(|| "0".to_string());
+                out.push_str(&format!("    .quad {}\n", entry));
+            }
+        }
+    }
+
     // Per-class serialize-magic symbol tables — consulted by __rt_serialize_object
     // and __rt_unser_at_object. Each is a dense class_id-indexed table whose entry
     // resolves through the implementing class (so an inherited magic method

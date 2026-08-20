@@ -205,6 +205,43 @@ new $className();
     assert_eq!(out, "dynamic");
 }
 
+/// Verifies `new $c(...)` fills in a builtin constructor's DEFAULT arguments.
+///
+/// The checker pads a constructor call with its declared defaults only when it can see which
+/// constructor it is; `new $c(["a" => 1])` names its class in a string, so it cannot. Codegen knows
+/// the class at run time, but by then the arguments are materialized values rather than
+/// expressions, and it used to refuse any candidate whose arity did not match exactly — the site
+/// fell to the generic allocation path and came back with the constructor never run: `ArrayObject`
+/// answered a count of `0` where PHP answers `1`. A padding thunk lowered per (class, argc) pair
+/// closes that gap.
+///
+/// Both arities are here because they fail differently. The zero-argument form has to synthesise
+/// EVERY argument, and calling the two-parameter constructor with none of them left `$flags`
+/// holding whatever the register happened to carry — a fatal about an impossible array size.
+///
+/// The reads go through the METHODS, not `count($o)` and `$o["a"]`: those two dispatch through a
+/// `mixed` value, which does not reach a synthetic class's `Countable`/`ArrayAccess` at all, and a
+/// statically built `ArrayObject` fails them identically. That is a separate defect, and pinning it
+/// here would tie this test to it.
+#[test]
+fn test_dynamic_new_pads_builtin_constructor_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+$c = "ArrayObject";
+$one = new $c(["a" => 1]);
+echo $one->count(), ":", $one->offsetGet("a"), "
+";
+$none = new $c();
+$none->append(7);
+echo $none->count(), ":", $none->offsetGet(0), "
+";
+"#,
+    );
+    assert_eq!(out, "1:1
+1:7
+");
+}
+
 /// Verifies dynamic instantiation of an unknown class exits with PHP's class-not-found fatal.
 #[test]
 fn test_dynamic_instantiation_missing_class_is_fatal() {

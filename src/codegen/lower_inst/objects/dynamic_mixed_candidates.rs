@@ -440,10 +440,14 @@ pub(super) fn emit_dynamic_new_mixed_constructor_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_call_label(
-        ctx.emitter,
-        &method_symbol(&constructor.impl_class, &php_symbol_key("__construct")),
-    );
+    // A padding thunk stands in for the constructor when the site passes fewer arguments than it
+    // declares: it takes the same receiver and arguments, then supplies the declared defaults. It
+    // is an ordinary module function, so it answers to `function_symbol`, not `method_symbol`.
+    let call_symbol = match constructor.padding_thunk.as_deref() {
+        Some(thunk) => crate::names::function_symbol(thunk),
+        None => method_symbol(&constructor.impl_class, &php_symbol_key("__construct")),
+    };
+    abi::emit_call_label(ctx.emitter, &call_symbol);
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)

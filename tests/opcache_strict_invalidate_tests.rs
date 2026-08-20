@@ -150,9 +150,13 @@ fn strict_flag_throws_only_on_the_forced_manifest_member() {
     // The trailing `C:` is not slop: `echo "C:", var_export(...)` emits its arguments LEFT TO
     // RIGHT, so the label reaches stdout before the throw inside the second argument. Its
     // presence is what proves the throw happened at shape C and not earlier.
-    assert_eq!(
-        stdout, "A:true\nB:true\nC:",
-        "shapes A and B must still return true; only the forced manifest member throws"
+    //
+    // A PREFIX, not an equality: the uncaught report follows PHP onto stdout, so it lands right
+    // after `C:` on the same stream. What this test pins is where execution stopped, and the
+    // report's own wording is asserted by the test below.
+    assert!(
+        stdout.starts_with("A:true\nB:true\nC:"),
+        "shapes A and B must still return true; only the forced manifest member throws; got: {stdout:?}"
     );
     let _ = fs::remove_dir_all(&dir);
 }

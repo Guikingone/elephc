@@ -117,6 +117,23 @@ fn propagate_write_key_and_value(index: Expr, value: Expr, env: &ConstantEnv) ->
     (propagate_expr(index, &after), value)
 }
 
+/// Returns true when every part of a nested write target is a bare variable.
+///
+/// `$a[$i][$j]` qualifies; `$a[f()][$i]` does not. The distinction is what makes deferring the
+/// WHOLE target past the right-hand side safe: with no index expression there is no side effect
+/// whose order could change, so the only thing that moves is the READ of each variable — which is
+/// exactly PHP's store-time rule, applied to a chain instead of one index.
+fn nested_target_is_all_bare_variables(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::Variable(_) => true,
+        ExprKind::ArrayAccess { array, index } => {
+            matches!(index.kind, ExprKind::Variable(_))
+                && nested_target_is_all_bare_variables(array)
+        }
+        _ => false,
+    }
+}
+
 /// Iterates through a block of statements, propagating constants and stopping early
 /// when a terminal effect (return, throw, exit) is encountered.
 pub(crate) fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stmt>, ConstantEnv) {
@@ -243,8 +260,19 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             )
         }
         StmtKind::NestedArrayAssign { target, value } => {
-            let target = propagate_expr(target, &env);
-            let value = propagate_expr(value, &env);
+            // The store-time rule, extended to a chain. `$a[$i][$i] = ($i = 1)` reads BOTH
+            // indices after the right-hand side, so folding them against the pre-value
+            // environment writes through the old ones. Deferring the whole target is only sound
+            // when it carries no index EXPRESSION — otherwise this would move a call across the
+            // right-hand side — so the shape is checked first and anything else keeps its order.
+            let (target, value) = if nested_target_is_all_bare_variables(&target) {
+                let value = propagate_expr(value, &env);
+                let after = env_after_expr_side_effects(env.clone(), &[&value]);
+                (propagate_expr(target, &after), value)
+            } else {
+                let target = propagate_expr(target, &env);
+                (target, propagate_expr(value, &env))
+            };
             let mut next_env = env;
             let stmt = Stmt::new(StmtKind::NestedArrayAssign { target, value }, span);
             stmt_invalidation(&stmt).apply(&mut next_env);
@@ -536,8 +564,8 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             index,
             value,
         } => {
-            let index = propagate_expr(index, &env);
-            let value = propagate_expr(value, &env);
+            // The store-time rule, as for the property and bare-local arms.
+            let (index, value) = propagate_write_key_and_value(index, value, &env);
             let next_env = env_after_expr_side_effects(env, &[&index, &value]);
             (
                 Stmt::new(
@@ -579,8 +607,11 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             value,
         } => {
             let object = propagate_expr(*object, &env);
-            let index = propagate_expr(index, &env);
-            let value = propagate_expr(value, &env);
+            // Same store-time rule the bare-local `ArrayAssign` arm above follows: a plain
+            // variable index is read AFTER the right-hand side, so folding it against the
+            // pre-value environment writes to the old index. Fixing the lowering alone changes
+            // nothing — this fold has already replaced `$i` with its constant by then.
+            let (index, value) = propagate_write_key_and_value(index, value, &env);
             let next_env = env_after_expr_side_effects(env, &[&object, &index, &value]);
             (
                 Stmt::new(

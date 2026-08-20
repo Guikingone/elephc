@@ -172,3 +172,94 @@ echo $a[0], ",", $a[1], ",", $a[2];
     );
     assert_eq!(out, "10,25,3");
 }
+
+/// Verifies a plain-variable index is read at STORE time for PROPERTY and STATIC-property writes.
+///
+/// PHP freezes an index EXPRESSION into a temporary before the right-hand side runs, but a plain
+/// variable index is not frozen — the store reads the variable's slot after the right-hand side.
+/// The bare-local write already followed that rule; `$o->a[$i] = ($i = 1)` and `C::$a[$i] = …`
+/// did not, and both wrote index 0 where PHP writes index 1.
+///
+/// TWO authorities have to agree, which is why fixing the lowering alone changed nothing at all:
+/// constant propagation runs ahead of EIR lowering and had already folded `$i` to its old value,
+/// so the lowering never saw a variable to defer. Both now route through the same helper as the
+/// bare-local case.
+#[test]
+fn test_store_time_index_for_property_and_static_writes() {
+    let property = compile_and_run(
+        r#"<?php
+class O { public array $a = [10, 20]; }
+$o = new O();
+$i = 0;
+$o->a[$i] = ($i = 1);
+echo $o->a[0], ":", $o->a[1];
+"#,
+    );
+    assert_eq!(property, "10:1");
+
+    let static_property = compile_and_run(
+        r#"<?php
+class C { public static array $a = [10, 20]; }
+$i = 0;
+C::$a[$i] = ($i = 1);
+echo C::$a[0], ":", C::$a[1];
+"#,
+    );
+    assert_eq!(static_property, "10:1");
+}
+
+/// Verifies a COMPOUND write whose right-hand side mutates the index through a closure.
+///
+/// `+=` reads its element at store time as well, so the read and the write must see the SAME
+/// index — the one the closure left behind. This shape is the witness the earlier gate could not
+/// see: that gate settled the right-hand side into a temporary only when it MENTIONED the index
+/// by name, and a closure capturing `&$k` mentions nothing. It answers correctly today; without a
+/// test, a return to the "mentions the index" rule would pass every existing case and break this
+/// one silently.
+#[test]
+fn test_compound_write_index_mutated_by_a_closure() {
+    let out = compile_and_run(
+        r#"<?php
+$c = [10, 20];
+$k = 0;
+$c[$k] += (function () use (&$k) { $k = 1; return 5; })();
+echo $c[0], ":", $c[1];
+"#,
+    );
+    assert_eq!(out, "10:25");
+}
+
+/// Verifies a NESTED write reads every plain-variable index at store time, and only those.
+///
+/// `$a[$i][$i] = ($i = 1)` reads BOTH indices after the right-hand side, so it must leave
+/// `$a[0]` alone — this answered `1:20` where PHP answers `10:20`. The index lives inside the
+/// target expression rather than beside it, so the helper the flat writes share does not apply;
+/// the rule here defers the WHOLE target, which is sound only because the shape is checked first.
+///
+/// The second half is what makes that check load-bearing rather than decorative. With an index
+/// EXPRESSION the target must keep its place, or a call moves across the right-hand side:
+/// `$a[idx()][idx()] = val()` prints `[idx][idx][val]` on both engines. A rule that deferred
+/// unconditionally would still pass the first assertion and reorder those calls silently.
+#[test]
+fn test_store_time_index_for_nested_writes() {
+    let bare_variables = compile_and_run(
+        r#"<?php
+$a = [[10, 20], "s"];
+$i = 0;
+$a[$i][$i] = ($i = 1);
+echo $a[0][0], ":", $a[0][1];
+"#,
+    );
+    assert_eq!(bare_variables, "10:20");
+
+    let index_expressions = compile_and_run(
+        r#"<?php
+function idx() { echo "[idx]"; return 0; }
+function val() { echo "[val]"; return 9; }
+$a = [[10, 20], "s"];
+$a[idx()][idx()] = val();
+echo ":", $a[0][0];
+"#,
+    );
+    assert_eq!(index_expressions, "[idx][idx][val]:9");
+}

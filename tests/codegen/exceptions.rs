@@ -573,12 +573,14 @@ fn test_private_method_access_uncaught_is_fatal() {
     );
     assert!(!output.success, "expected a fatal exit");
     // Byte-identical to reference PHP 8.5.6 up to its ` in <file>:<line>` suffix.
+    // STDOUT: PHP writes its uncaught report there, and elephc now matches — measured by capturing
+    // the two streams into separate files, where stderr came back empty.
     assert!(
         output
-            .stderr
+            .stdout
             .contains("Fatal error: Uncaught Error: Call to private method C::secret() from global scope"),
         "expected a fatal diagnostic naming the class and message, got: {}",
-        output.stderr
+        output.stdout
     );
 }
 
@@ -590,12 +592,13 @@ fn test_readonly_property_write_uncaught_is_fatal() {
     );
     assert!(!output.success, "expected a fatal exit");
     // Byte-identical to reference PHP 8.5.6 up to its ` in <file>:<line>` suffix.
+    // See above: the report is on stdout.
     assert!(
         output
-            .stderr
+            .stdout
             .contains("Fatal error: Uncaught Error: Cannot modify readonly property Box::$x"),
         "expected a fatal diagnostic naming the class and message, got: {}",
-        output.stderr
+        output.stdout
     );
 }
 

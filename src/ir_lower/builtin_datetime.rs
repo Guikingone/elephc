@@ -296,8 +296,11 @@ fn builtin_call_is_eval(module: &Module, inst: &crate::ir::Instruction) -> bool 
     if inst.op != Op::LanguageConstructCall {
         return false;
     }
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return false;
+    // A profiled call carries the SAME construct name, in a different immediate shape. Matching
+    // only the bare form let `eval($computed)` past this filter unseen.
+    let data = match inst.immediate {
+        Some(Immediate::Data(data)) | Some(Immediate::ProfiledData { data, .. }) => data,
+        _ => return false,
     };
     module
         .data

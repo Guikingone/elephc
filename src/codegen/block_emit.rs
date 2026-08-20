@@ -1048,6 +1048,19 @@ fn emit_static_property_default_value(
         LiteralDefaultValue::EmptyAssocArray { value_type } => {
             emit_empty_assoc_array_literal_to_result(ctx, value_type);
         }
+        LiteralDefaultValue::BoxedArray {
+            elem_type,
+            elements,
+        } => {
+            emit_array_literal_default_to_result(ctx, elem_type, elements)?;
+            // The OWNED boxer, because the literal above allocated the array and the box takes
+            // its own reference: the plain one retains without releasing, which leaked one block
+            // per object (`allocs=3 frees=2` where the `mixed $s = "x"` default closed at 3/3).
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Array(Box::new(elem_type.clone())),
+            );
+        }
     }
     let symbol = static_property_symbol(class_name, property);
     abi::emit_store_result_to_symbol(ctx.emitter, &symbol, php_type, false);

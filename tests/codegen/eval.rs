@@ -7333,40 +7333,60 @@ eval($code);
 /// - a bare variable call (`$f("…")`), whose target no static walk can name,
 /// - a dynamic method call (`$d->$m(…)`), which reaches a method without naming it.
 ///
-/// Each is a separate assertion rather than one program, so a regression names the channel it
-/// broke instead of failing an opaque composite. All four answered correctly when the narrowing
-/// landed; without them, tightening it further would break them silently at run time.
+/// Each channel is its own TEST, not an assertion inside a shared one. That names the channel a
+/// regression broke instead of failing an opaque composite — and it is also what keeps them
+/// runnable: every one of these programs emits the whole date surface, which is the point, and one
+/// alone takes ~20s to compile. Four in a row exceeded the harness's per-test budget and the
+/// composite timed out, reporting nothing about any channel.
+///
+/// All four answered correctly when the narrowing landed; without them, tightening it further
+/// would break them silently at run time.
 #[test]
-fn test_eval_reaches_datetime_through_indirect_channels() {
-    let literal_callable = compile_and_run(
+fn test_eval_reaches_datetime_through_a_literal_callable() {
+    let out = compile_and_run(
         r#"<?php
 eval('$r = array_map("date_create", ["2024-01-02"]); echo $r[0]->format("Y-m-d");');
 "#,
     );
-    assert_eq!(literal_callable, "2024-01-02", "array_map with a literal alias");
+    assert_eq!(out, "2024-01-02");
+}
 
-    let string_static_callable = compile_and_run(
+/// A `Class::method` string callable, whose class and method are inside ONE literal.
+///
+/// See `test_eval_reaches_datetime_through_a_literal_callable` for why these four channels are
+/// separate tests rather than one.
+#[test]
+fn test_eval_reaches_datetime_through_a_string_static_callable() {
+    let out = compile_and_run(
         r#"<?php
 eval('$d = call_user_func("DateTime::createFromFormat", "Y-m-d", "2024-12-13"); echo $d->format("Y-m-d");');
 "#,
     );
-    assert_eq!(string_static_callable, "2024-12-13", "\"Class::method\" string callable");
+    assert_eq!(out, "2024-12-13");
+}
 
-    let variable_call = compile_and_run(
+/// A bare variable call, whose target no static walk can name.
+#[test]
+fn test_eval_reaches_datetime_through_a_variable_call() {
+    let out = compile_and_run(
         r#"<?php
 eval('$f = "date_create"; $d = $f("2024-10-11"); echo $d->format("Y-m-d");');
 "#,
     );
-    assert_eq!(variable_call, "2024-10-11", "bare variable call");
+    assert_eq!(out, "2024-10-11");
+}
 
-    let dynamic_method = compile_and_run(
+/// A dynamic method call, which reaches a method without naming it.
+#[test]
+fn test_eval_reaches_datetime_through_a_dynamic_method_call() {
+    let out = compile_and_run(
         r#"<?php
 $d = date_create("2024-09-10");
 $m = "format";
 eval('echo $d->$m("Y-m-d");');
 "#,
     );
-    assert_eq!(dynamic_method, "2024-09-10", "dynamic method call");
+    assert_eq!(out, "2024-09-10");
 }
 
 /// Verifies a literal `eval` fragment that INCLUDES another file still reaches the date surface.

@@ -350,3 +350,61 @@ pub(in crate::ir_lower) fn php_method_key(method_name: &str) -> String {
     crate::names::php_symbol_key(method_name)
 }
 
+/// Lowers a constructor-padding thunk for every (class, argument count) a dynamic `new` can reach.
+///
+/// Runs after `main` because the argument counts are read off the LOWERED instructions: a
+/// `new $c($a)` site carries its operands, and codegen will later dispatch that site across every
+/// candidate class. A class whose constructor declares more parameters than the site passes needs
+/// its defaults filled in, and only a thunk lowered here can do that — see
+/// `function::lower_dynamic_constructor_thunk`.
+///
+/// The pass is bounded by the sites actually present: one thunk per (class, argc) pair, and only
+/// for classes that can pad. A program with no dynamic `new` lowers nothing.
+pub(super) fn lower_dynamic_constructor_thunks(
+    module: &mut Module,
+    check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
+) {
+    let mut arg_counts = BTreeSet::new();
+    for function in all_lowered_functions(module) {
+        for inst in &function.instructions {
+            if inst.op != Op::DynamicObjectNewMixed {
+                continue;
+            }
+            // A runtime argument container carries its arguments dynamically; there is no static
+            // count to pad against, and codegen does not build fixed candidates for it either.
+            if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+                continue;
+            }
+            arg_counts.insert(inst.operands.len().saturating_sub(1));
+        }
+    }
+    if arg_counts.is_empty() {
+        return;
+    }
+    // The MODULE's ClassInfo, not the checker's: codegen forms the thunk symbol from
+    // `module.class_infos[..].class_id`, and looking the class up anywhere else risks naming a
+    // symbol nothing will call.
+    let classes = module
+        .class_infos
+        .iter()
+        .map(|(name, info)| (name.clone(), info.clone()))
+        .collect::<Vec<_>>();
+    for (class_name, class_info) in classes {
+        if !is_dynamic_new_mixed_metadata_candidate(&class_name) {
+            continue;
+        }
+        for &provided_args in &arg_counts {
+            function::lower_dynamic_constructor_thunk(
+                &class_name,
+                &class_info,
+                provided_args,
+                module,
+                check_result,
+                constants,
+                fiber_return_sigs,
+            );
+        }
+    }
+}

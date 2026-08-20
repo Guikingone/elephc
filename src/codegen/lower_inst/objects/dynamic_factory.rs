@@ -97,9 +97,29 @@ pub(super) fn dynamic_new_candidate(
         return Ok(None);
     }
     let constructor_key = php_symbol_key("__construct");
+    let mut padding_thunk = None;
     let constructor_impl = if let Some(constructor) = class_info.methods.get(&constructor_key) {
-        if arg_count.is_some_and(|arg_count| constructor.params.len() != arg_count) {
-            return Ok(None);
+        // A site that passes FEWER arguments than the constructor declares is still a candidate
+        // when every omitted parameter has a default and `ir_lower` emitted the padding thunk for
+        // this (class, argc) pair. `new $c(…)` cannot be padded by the checker — it does not know
+        // which constructor it is — so without this every builtin with an optional parameter fell
+        // to the generic allocation path and came back with no constructor run at all.
+        if let Some(arg_count) = arg_count {
+            if constructor.params.len() != arg_count {
+                let thunk = crate::ir_lower::dynamic_constructor_thunk_name(
+                    class_info.class_id,
+                    arg_count,
+                );
+                let emitted = ctx
+                    .module
+                    .functions
+                    .iter()
+                    .any(|function| function.name == thunk);
+                if !emitted {
+                    return Ok(None);
+                }
+                padding_thunk = Some(thunk);
+            }
         }
         let impl_class = class_info
             .method_impl_classes
@@ -109,16 +129,30 @@ pub(super) fn dynamic_new_candidate(
         if !class_method_already_emitted(ctx, &impl_class, &constructor_key, false) {
             return Ok(None);
         }
+        // When a thunk pads the call, the SITE's arity is what gets materialized — the thunk
+        // itself supplies the rest — so the parameter list is truncated to what is passed.
+        let materialized = padding_thunk
+            .as_ref()
+            .and_then(|_| arg_count)
+            .unwrap_or(constructor.params.len());
         let param_types = constructor
             .params
             .iter()
+            .take(materialized)
             .map(|(_, ty)| ty.codegen_repr())
+            .collect::<Vec<_>>();
+        let ref_params = constructor
+            .ref_params
+            .iter()
+            .copied()
+            .take(materialized)
             .collect::<Vec<_>>();
         Some(ConstructorCallTarget {
             impl_class,
             param_types,
-            ref_params: constructor.ref_params.clone(),
+            ref_params,
             sig: constructor.clone(),
+            padding_thunk: padding_thunk.clone(),
         })
     } else if arg_count.is_none_or(|arg_count| arg_count == 0) {
         None
@@ -319,6 +353,7 @@ pub(super) fn emit_dynamic_new_candidate(
             &php_symbol_key("__construct"),
             &constructor.param_types,
             &constructor.ref_params,
+            constructor.padding_thunk.as_deref(),
         )?;
     }
     Ok(())

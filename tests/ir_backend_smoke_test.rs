@@ -4116,14 +4116,15 @@ fn ir_backend_handles_intdiv_division_by_zero() {
         !run.status.success(),
         "IR backend intdiv zero fixture unexpectedly succeeded"
     );
-    assert_eq!(
-        String::from_utf8(run.stdout).expect("intdiv stdout should be utf8"),
-        ""
-    );
-    let stderr = String::from_utf8(run.stderr).expect("intdiv stderr should be utf8");
+    // The report is on STDOUT, where PHP puts it, so stdout is no longer empty and stderr is.
+    let reported = String::from_utf8(run.stdout).expect("intdiv stdout should be utf8");
     assert!(
-        stderr.contains("Uncaught DivisionByZeroError: Division by zero"),
-        "unexpected intdiv stderr: {stderr}"
+        reported.contains("Uncaught DivisionByZeroError: Division by zero"),
+        "unexpected intdiv output: {reported}"
+    );
+    assert_eq!(
+        String::from_utf8(run.stderr).expect("intdiv stderr should be utf8"),
+        ""
     );
 }
 

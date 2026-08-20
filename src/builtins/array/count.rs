@@ -76,16 +76,13 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         PhpType::Union(members) if members.iter().any(union_member_is_countable_array) => {
             Ok(PhpType::Int)
         }
-        PhpType::Object(class_name) => {
-            if cx.checker.class_implements_interface(class_name, "Countable") {
-                Ok(PhpType::Int)
-            } else {
-                Err(CompileError::new(
-                    cx.span,
-                    "count() object argument must implement Countable",
-                ))
-            }
-        }
+        // A non-Countable object is accepted here and REFUSED AT RUN TIME, the way PHP does it.
+        // Refusing at compile time looked stricter for free, but it stopped programs PHP runs:
+        // a `count($plain)` inside a function that is never called took the whole program down,
+        // where PHP printed its output and never reached the line. The lowering raises PHP's own
+        // `TypeError`, and the class is known statically here so the message needs no run-time
+        // lookup.
+        PhpType::Object(_) => Ok(PhpType::Int),
         _ => Err(CompileError::new(
             cx.span,
             "count() argument must be array or Countable object",

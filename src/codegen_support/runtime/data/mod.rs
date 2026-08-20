@@ -126,6 +126,15 @@ pub(crate) const UNSER_ALLOWED_CLASSES_POLICY_PREFIX: &str =
 /// Prefix for a catchable TypeError naming an invalid `allowed_classes` list entry.
 pub(crate) const UNSER_ALLOWED_CLASSES_ENTRY_PREFIX: &str =
     "unserialize(): Option \"allowed_classes\" must be an array of class names, ";
+/// Prefix for PHP's catchable Error when an object is indexed like an array.
+///
+/// `$o["k"]` on anything that is not `ArrayAccess` stops the program in PHP — including a plain
+/// `stdClass`, and including the quiet contexts `isset`, `??` and `empty`, all measured against
+/// 8.5. The class is only known at run time when the value arrives boxed, so the message is
+/// composed from these two fragments around the name.
+pub(crate) const OBJECT_NOT_ARRAY_PREFIX: &str = "Cannot use object of type ";
+/// Suffix for PHP's catchable Error when an object is indexed like an array.
+pub(crate) const OBJECT_NOT_ARRAY_SUFFIX: &str = " as array";
 /// Prefix for PHP's catchable object-to-string conversion Error in an allowed-class list.
 pub(crate) const UNSER_OBJECT_STRING_ERROR_PREFIX: &str = "Object of class ";
 /// Suffix for PHP's catchable object-to-string conversion Error in an allowed-class list.

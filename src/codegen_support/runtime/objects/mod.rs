@@ -15,6 +15,7 @@ mod handles;
 mod mixed_array_append;
 mod mixed_array_fetch_for_write;
 mod mixed_array_get;
+mod object_not_array;
 mod mixed_array_set;
 mod mixed_cell_autovivify;
 mod new_by_name;
@@ -36,6 +37,7 @@ pub(crate) use handles::{
 pub(crate) use mixed_array_append::emit_mixed_array_append;
 pub(crate) use mixed_array_fetch_for_write::emit_mixed_array_fetch_for_write;
 pub(crate) use mixed_array_get::emit_mixed_array_get;
+pub(crate) use object_not_array::emit_throw_object_not_array;
 pub(crate) use mixed_array_set::emit_mixed_array_set;
 pub(crate) use mixed_cell_autovivify::emit_mixed_cell_autovivify_array;
 pub(crate) use new_by_name::emit_new_by_name;

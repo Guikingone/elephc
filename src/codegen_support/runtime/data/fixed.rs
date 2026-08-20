@@ -16,7 +16,8 @@ use super::{
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
     OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
-    OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OB_WARN_BAD_CALLBACK_GENERIC,
+    OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
+    OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
     SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
@@ -69,6 +70,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     ));
     out.push_str(&format!(
         ".globl _unser_allowed_classes_entry_prefix\n_unser_allowed_classes_entry_prefix:\n    .ascii {UNSER_ALLOWED_CLASSES_ENTRY_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _object_not_array_prefix\n_object_not_array_prefix:\n    .ascii {OBJECT_NOT_ARRAY_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _object_not_array_suffix\n_object_not_array_suffix:\n    .ascii {OBJECT_NOT_ARRAY_SUFFIX:?}\n"
     ));
     out.push_str(&format!(
         ".globl _unser_object_string_error_prefix\n_unser_object_string_error_prefix:\n    .ascii {UNSER_OBJECT_STRING_ERROR_PREFIX:?}\n"
@@ -529,7 +536,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
     out.push_str(".globl _uncaught_exc_msg\n_uncaught_exc_msg:\n    .ascii \"Fatal error: uncaught exception\\n\"\n");
-    out.push_str(".globl _uncaught_exc_prefix\n_uncaught_exc_prefix:\n    .ascii \"Fatal error: Uncaught \"\n");
+    // PHP prefixes the report with a newline UNCONDITIONALLY — measured against 8.5 on a script
+    // that writes nothing at all before throwing, where the output still begins with "\n".
+    out.push_str(".globl _uncaught_exc_prefix\n_uncaught_exc_prefix:\n    .ascii \"\\nFatal error: Uncaught \"\n");
     out.push_str(".globl _uncaught_exc_sep\n_uncaught_exc_sep:\n    .ascii \": \"\n");
     out.push_str(".globl _uncaught_exc_in\n_uncaught_exc_in:\n    .ascii \" in \"\n");
     out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");

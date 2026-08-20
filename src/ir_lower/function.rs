@@ -666,6 +666,169 @@ pub(crate) fn lower_property_init_thunk(
     module.add_function(function);
 }
 
+/// Lowers a synthetic `_class_ctor_<id>_<argc>` thunk that pads a constructor call with defaults.
+///
+/// `new $c(…)` names its class in a string, so the checker cannot pad the call with the
+/// constructor's default arguments the way it does when the class is written down — it does not
+/// know which constructor it is. Codegen dispatches on the class at run time and therefore knows,
+/// but by then the arguments are materialized SSA values and a default expression is not one.
+///
+/// The thunk closes that gap where expressions can still be lowered: it takes `$this` plus the
+/// arguments the site actually passed, and calls the real constructor with those followed by the
+/// declared defaults, spliced in as ordinary AST. Codegen then calls one symbol and needs to know
+/// nothing about defaults.
+///
+/// Without it every class whose constructor has an optional parameter was refused as a candidate
+/// on a strict arity comparison and fell to the generic allocation path, which produces an object
+/// with no constructor run at all: `new $c(["a" => 1])` on `ArrayObject` answered
+/// `ArrayObject|0|` where PHP answers `ArrayObject|1|1`.
+pub(crate) fn lower_dynamic_constructor_thunk(
+    class_name: &str,
+    class_info: &ClassInfo,
+    provided_args: usize,
+    module: &mut Module,
+    check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+) {
+    let function_name = dynamic_constructor_thunk_name(class_info.class_id, provided_args);
+    if module
+        .functions
+        .iter()
+        .any(|function| function.name == function_name)
+    {
+        return;
+    }
+    let Some(constructor) = class_info.methods.get(&php_symbol_key("__construct")) else {
+        return;
+    };
+    // Only the padding case: an exact arity needs no thunk, and a site passing MORE arguments than
+    // the constructor declares is not a candidate at all.
+    if provided_args >= constructor.params.len() {
+        return;
+    }
+    // Every omitted parameter must have a default to splice. One without is a call PHP would
+    // reject too, so there is nothing to build.
+    if constructor.defaults[provided_args..]
+        .iter()
+        .any(|default| default.is_none())
+    {
+        return;
+    }
+    // A by-reference parameter would have to carry the callee's write back out through the thunk,
+    // and no builtin constructor declares one, so that path has never been exercised. Refusing
+    // leaves the site on the behaviour it had before padding existed rather than risking a write
+    // that silently goes nowhere.
+    if constructor.ref_params.iter().take(provided_args).any(|&by_ref| by_ref) {
+        return;
+    }
+
+    let span = Span::dummy();
+    let this_type = PhpType::Object(class_name.to_string());
+    let mut args = Vec::with_capacity(constructor.params.len());
+    for index in 0..provided_args {
+        args.push(Expr::new(
+            ExprKind::Variable(constructor.params[index].0.clone()),
+            span,
+        ));
+    }
+    for default in &constructor.defaults[provided_args..] {
+        args.push(default.clone().expect("padding requires a default"));
+    }
+    let body = vec![Stmt::new(
+        StmtKind::ExprStmt(Expr::new(
+            ExprKind::MethodCall {
+                object: Box::new(Expr::new(ExprKind::This, span)),
+                method: "__construct".to_string(),
+                args,
+            },
+            span,
+        )),
+        span,
+    )];
+
+    let mut function = Function::new(function_name.clone(), IrType::Void, PhpType::Void);
+    function.flags.is_synthetic = true;
+    let mut params = vec![("this".to_string(), this_type.clone())];
+    function.params.push(FunctionParam {
+        name: "this".to_string(),
+        ir_type: value_ir_type(&this_type),
+        php_type: this_type.clone(),
+        by_ref: false,
+        variadic: false,
+    });
+    for index in 0..provided_args {
+        let (name, php_type) = &constructor.params[index];
+        params.push((name.clone(), php_type.clone()));
+        function.params.push(FunctionParam {
+            name: name.clone(),
+            ir_type: value_ir_type(php_type),
+            php_type: php_type.clone(),
+            by_ref: constructor.ref_params.get(index).copied().unwrap_or(false),
+            variadic: false,
+        });
+    }
+    let sig = FunctionSig {
+        params: params.clone(),
+        param_type_exprs: vec![None; params.len()],
+        param_attributes: Vec::new(),
+        defaults: vec![None; params.len()],
+        return_type: PhpType::Void,
+        declared_return: false,
+        by_ref_return: false,
+        ref_params: vec![false; params.len()],
+        declared_params: vec![false; params.len()],
+        variadic: None,
+        deprecation: None,
+    };
+    function.source_signature = Some(source_signature(&function_name, &sig));
+    function.signature = Some(eir_runtime_metadata_signature(&sig));
+    let mut env = TypeEnv::new();
+    for (name, php_type) in &params {
+        env.insert(name.clone(), php_type.clone());
+    }
+    let web = module.web;
+    let closures = lower_body_into_function(
+        &mut function,
+        &mut module.data,
+        &body,
+        env,
+        web_gated_global_env(&check_result.global_env, web),
+        &check_result.functions,
+        &check_result.extern_functions,
+        &check_result.extern_globals,
+        &check_result.callable_param_sigs,
+        &check_result.return_alias_summaries,
+        fiber_return_sigs,
+        &module.class_infos,
+        &check_result.enums,
+        &check_result.interfaces,
+        &check_result.packed_classes,
+        &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
+        &check_result.loop_storage_types,
+        &check_result.string_incdec_locals,
+        function_name.clone(),
+        constants,
+        Some(class_name.to_string()),
+        PhpType::Void,
+        &params,
+        None,
+        false,
+        std::collections::HashSet::new(),
+        module.source_path.clone(),
+        None,
+        web,
+    );
+    add_closures(module, closures);
+    module.add_function(function);
+}
+
+/// The symbol a dynamic-new candidate calls when it has to pad the constructor with defaults.
+pub(crate) fn dynamic_constructor_thunk_name(class_id: u64, provided_args: usize) -> String {
+    format!("_class_ctor_{}_{}", class_id, provided_args)
+}
+
 /// Builds `$this->property = <default>;` statements for property-default initialization.
 ///
 /// A null default whose slot type cannot represent null (a scalar slot rebound by

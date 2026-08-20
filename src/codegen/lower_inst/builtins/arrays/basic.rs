@@ -344,7 +344,55 @@ pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instructi
             inst.result_php_type
         )));
     };
-    let elem_ty = eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
+    // An argument that is ALREADY a hash takes its own helper. PHP accepts it — `array_unique` of
+    // an associative array is ordinary code — and the indexed builder cannot serve it, because it
+    // walks fixed-size slots and a hash has none.
+    if let PhpType::AssocArray { value, .. } = ctx.value_php_type(array)?.codegen_repr() {
+        let value_ty = value.codegen_repr();
+        // Boxed values would be keyed by their POINTER in the seen table, deduplicating by
+        // identity instead of by value; refused for the same reason as the indexed path.
+        if !matches!(value_ty, PhpType::Int | PhpType::Str) {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_unique for hash values of PHP type {:?}",
+                value_ty
+            )));
+        }
+        ctx.load_value_to_result(array)?;
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the source hash as the dedup helper argument
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_hash_to_hash_unique");
+        return store_if_result(ctx, inst);
+    }
+
+    // The element type is read here rather than through the shared 8-byte gate: that gate is also
+    // `array_reverse`, `shuffle` and `array_merge`, none of which compare their elements, and it
+    // refuses `Str` because a string slot is a 16-byte (pointer, length) pair. `array_unique` can
+    // take strings — the helper reads its stride from the array header and compares string slots
+    // BY VALUE — so refusing them here would only keep `array_unique($names)` from compiling.
+    let PhpType::Array(elem) = ctx.value_php_type(array)?.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_unique for PHP type {:?}",
+            ctx.value_php_type(array)?
+        )));
+    };
+    let elem_ty = elem.codegen_repr();
+    if !matches!(
+        elem_ty,
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Callable
+            | PhpType::Void
+            | PhpType::Never
+    ) && !elem_ty.is_refcounted()
+    {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_unique for indexed-array element PHP type {:?}",
+            elem_ty
+        )));
+    }
     // The dedup scan compares slots as RAW words, which is a POINTER for a boxed element, so
     // two separately boxed `1`s never matched: `array_unique([1,"b",1,4])` answered `1,b,1,4`
     // where PHP answers `1,b,4`. PHP compares these elements by their STRING rendering.

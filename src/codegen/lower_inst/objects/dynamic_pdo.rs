@@ -226,6 +226,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_statement_constructor_ca
                 .collect(),
             ref_params: signature.ref_params.clone(),
             sig: signature,
+            padding_thunk: None,
         });
         let label = ctx.next_label("pdo_statement_constructor_match");
         emit_branch_if_dynamic_new_mixed_class_name_matches(ctx, class_name, &label);
