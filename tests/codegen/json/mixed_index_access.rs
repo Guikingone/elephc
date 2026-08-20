@@ -156,21 +156,6 @@ fn test_mixed_count_assoc() {
     assert_eq!(out, "3");
 }
 
-/// `count()` on a non-container Mixed payload raises PHP's `TypeError`.
-///
-/// The old expectation was `0`, and its comment guessed at what PHP does rather than measuring
-/// it. `php -n` 8.5.6 raises here, and answering `0` made `count($x) === 0` read a scalar as an
-/// empty collection. The type is named with the VALUE's own spelling, which is why a boolean
-/// would read `false` rather than `bool`.
-#[test]
-fn test_mixed_count_scalar_raises_type_error() {
-    let out = compile_and_run(
-        r#"<?php
-try {
-    echo count(json_decode("42"));
-} catch (\TypeError $e) {
-    echo $e->getMessage();
-}"#,
 /// `count()` on a non-container Mixed payload raises PHP 8's TypeError.
 ///
 /// This asserted `0` and passed — which is what a divergence looks like once a test

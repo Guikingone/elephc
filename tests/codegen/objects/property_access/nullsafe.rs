@@ -325,12 +325,12 @@ echo $root?->branch->leaf->name ?? "fallback";
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
-    assert!(
-        out.diagnostics.contains("Warning: Attempt to read property \"name\" on null"),
-        "{}",
-        out.diagnostics
+    // The two sides of the merge asserted OPPOSITE things here: upstream that the warning IS
+    // raised, this branch that `??` suppresses it. The suppression is what `php -n` 8.5.6 does
+    // for this exact program — it prints `fallback` and raises nothing — and it is what the test
+    // is named for.
     assert_eq!(
-        out.stderr, "",
+        out.diagnostics, "",
         "`??` must suppress the mid-chain property-on-null warning"
     );
 }
