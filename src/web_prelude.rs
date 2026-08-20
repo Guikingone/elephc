@@ -374,17 +374,25 @@ mod tests {
         )
     }
 
-    /// Plain web injection defers function pruning but skips its optional callable-handler class.
+    /// Plain web programs keep auto-start/finalization roots but shed optional APIs.
+    ///
+    /// This asserted the opposite until the web prelude gained pruning: injection used to DEFER
+    /// all function pruning, so every session entry point came along. What survives now is what
+    /// the program can actually reach without naming it — `__elephc_session_start_core`, because
+    /// `session.auto_start` is seeded per request from `ELEPHC_SESSION_AUTO_START`, and
+    /// `session_write_close`, which the catch-all wrapper calls from a `finally`. The entry
+    /// points a program must SPELL to use, `session_start` and `session_regenerate_id`, are not
+    /// roots for a program that spells neither.
     #[test]
-    fn plain_web_program_defers_function_pruning() {
+    fn plain_web_program_prunes_optional_session_declarations() {
         let injected = inject_web_for_test(parse("<?php echo 'ok';"), true, PhpVersion::Php85, &[]);
         assert!(declares_function(
             &injected,
             "__elephc_session_start_core"
         ));
-        assert!(declares_function(&injected, "session_start"));
+        assert!(!declares_function(&injected, "session_start"));
         assert!(declares_function(&injected, "session_write_close"));
-        assert!(declares_function(&injected, "session_regenerate_id"));
+        assert!(!declares_function(&injected, "session_regenerate_id"));
         assert!(!declares_function(&injected, "session_set_save_handler"));
         assert!(!declares_class(
             &injected,
@@ -413,7 +421,7 @@ mod tests {
     /// string whenever the prefix was the default empty one.
     #[test]
     fn session_create_id_maps_empty_entropy_result_to_false() {
-        let injected = inject_if_web(
+        let injected = inject_web_for_test(
             parse("<?php session_create_id();"),
             true,
             PhpVersion::Php85,
@@ -544,7 +552,7 @@ mod tests {
     /// meant to serve.
     #[test]
     fn a_computed_name_is_not_harvested() {
-        let injected = inject_if_web(
+        let injected = inject_web_for_test(
             parse("<?php $name = 'session_' . 'regenerate_id'; $name();"),
             true,
             PhpVersion::Php85,

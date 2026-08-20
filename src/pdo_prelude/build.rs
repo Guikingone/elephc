@@ -3358,7 +3358,9 @@ fn pdostatement_copyconstructorargs() -> MethodBuilder {
         .returns(t_array())
         .body(vec![
             s_assign("_copy", e_array(vec![])),
-            s_foreach(e_var("source"), Some("_key"), "_value", vec![
+            // `(array)` mirrors the cast upstream added to the PHP this builder must match:
+            // a non-array `$source` would otherwise not iterate at all.
+            s_foreach(e_cast(CastType::Array, e_var("source")), Some("_key"), "_value", vec![
                 s_array_assign("_copy", e_var("_key"), e_var("_value")),
             ]),
             s_return(e_var("_copy")),

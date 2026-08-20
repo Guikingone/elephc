@@ -553,20 +553,47 @@ fn prune_drops_unused_function_and_keeps_called_one() {
 }
 
 /// Verifies pruning source declarations leaves checker-injected runtime class metadata intact.
+///
+/// Split in two because registration is now PAY-FOR-USE. The throwables below are seeded
+/// unconditionally — `ALWAYS_REGISTERED_THROWABLES` mirrors the codegen seeder, since a runtime
+/// helper can raise `DivisionByZeroError` or `JsonException` with no class reference in the
+/// source to hang an id off. Everything else, `ReflectionClass` and `DateTime` included, arrives
+/// only when the program can reach it, so a program that never mentions them has nothing to
+/// preserve and asserting otherwise would pin the absence of that gate rather than this pass.
+///
+/// What this test is about is unchanged: pruning SOURCE declarations must not take
+/// checker-injected metadata with it.
 #[test]
 fn prune_preserves_synthetic_checker_classes() {
     let (program, check) = prune(
         "<?php class UnusedSourceClass { public function unused(): int { return 1; } } echo 1;",
     );
     assert!(!has_class(&program, "UnusedSourceClass"));
-    for class in [
-        "Exception",
-        "Error",
-        "TypeError",
-        "ReflectionClass",
-        "DateTime",
-        "SplFixedArray",
-    ] {
+    for class in ["Exception", "Error", "TypeError"] {
+        assert!(
+            check
+                .classes
+                .keys()
+                .any(|candidate| php_symbol_key(candidate) == php_symbol_key(class)),
+            "unconditional throwable {class} must survive source declaration pruning"
+        );
+    }
+
+    // The gated half: mentioned by the program, so registered.
+    //
+    // `UnusedSourceClass` SURVIVES here, and that is not a weaker assertion — it is the pruner
+    // being right. `new ReflectionClass($name)` can name any class at run time, so a program
+    // holding one gives the pass nothing it may drop. Pinning the survival is what would catch a
+    // future pruner that got clever about reflection.
+    let (program, check) = prune(
+        "<?php class UnusedSourceClass { public function unused(): int { return 1; } } \
+         $r = new ReflectionClass(\"Exception\"); $d = new DateTime(); $f = new SplFixedArray(1); echo 1;",
+    );
+    assert!(
+        has_class(&program, "UnusedSourceClass"),
+        "a reflection construct must keep source classes reachable"
+    );
+    for class in ["ReflectionClass", "DateTime", "SplFixedArray"] {
         assert!(
             check
                 .classes

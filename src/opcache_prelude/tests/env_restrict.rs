@@ -274,7 +274,9 @@ pub(super) fn denying_restrict_api_renders_restricted_bodies() {
              opcache_compile_file(__FILE__);",
         );
         let injected = inject_for_test(program, PhpVersion::Php85, false, entry, &[], &overrides, None, false).0;
-        let rendered = format!("{injected:?}");
+        // NOT `rendered`: this module already has a `rendered()` helper, and a binding of that
+        // name shadows it for the rest of the function.
+        let debug = format!("{injected:?}");
 
         // The warning text appears once per restricted function, and never a sixth time.
         // Counted on a QUOTE-FREE slice of the message: the AST's `Debug` rendering escapes the
