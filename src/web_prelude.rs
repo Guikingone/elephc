@@ -145,13 +145,15 @@ pub fn inject_if_web(
     // a semantic change wearing an optimisation's clothes. `session_auto_start_env_activates_session`
     // in `tests/web_session_tests.rs` is the test that would go red, and it is right to.
     //
-    // The catch-all wrapper runs code the user never wrote — `session_write_close()` from a
-    // `finally` — so its references are roots even though it is not in the program yet.
-    let mut roots = crate::prelude_prune::collect_roots(&program);
-    roots.add(usage::collect_stmt(&web_wrap_stmt()));
-    let mut combined = crate::prelude_prune::prune(combined, &roots);
-    // Recorded AFTER pruning, like the image prelude: the inventory should describe the surface
-    // the program actually receives.
+    // Trimming what the program cannot reach is NOT done here. A local pass that harvests literal
+    // names cannot see a computed one — `$name = 'session_' . 'regenerate_id'; $name();` had its
+    // target removed and the program died with `Call to undefined function`, where PHP answers.
+    // The global declaration reachability pass already treats an unknown `$fn()` conservatively,
+    // so the COMPLETE selected prelude is recorded and that pass decides what survives.
+    //
+    // The callable-handler drop above stays here because it is POLICY, not reachability: those
+    // declarations are heavy and a program that never mentions `session_set_save_handler` cannot
+    // want them, which is a different question from what it can reach.
     inventory.record_program("web", &combined);
     combined.extend(program);
 
@@ -384,15 +386,21 @@ mod tests {
     /// points a program must SPELL to use, `session_start` and `session_regenerate_id`, are not
     /// roots for a program that spells neither.
     #[test]
-    fn plain_web_program_prunes_optional_session_declarations() {
+    fn plain_web_program_keeps_the_surface_and_drops_only_the_handler() {
         let injected = inject_web_for_test(parse("<?php echo 'ok';"), true, PhpVersion::Php85, &[]);
         assert!(declares_function(
             &injected,
             "__elephc_session_start_core"
         ));
-        assert!(!declares_function(&injected, "session_start"));
+        // INJECTION no longer prunes. It used to, and got a computed name wrong; the global
+        // declaration reachability pass owns that now, so what arrives here is the complete
+        // selected surface and the trimming happens later, where an unknown `$fn()` is handled.
+        assert!(declares_function(&injected, "session_start"));
         assert!(declares_function(&injected, "session_write_close"));
-        assert!(!declares_function(&injected, "session_regenerate_id"));
+        assert!(declares_function(&injected, "session_regenerate_id"));
+        // The callable handler is the exception, because dropping it is POLICY rather than
+        // reachability: it is heavy, and a program that neither mentions
+        // `session_set_save_handler` nor calls anything dynamically cannot want it.
         assert!(!declares_function(&injected, "session_set_save_handler"));
         assert!(!declares_class(
             &injected,
@@ -515,7 +523,7 @@ mod tests {
     /// string literal, which is how a real dispatcher is written, so it is rooted; a function the
     /// program never mentions is not.
     #[test]
-    fn dynamic_call_disables_prelude_function_pruning() {
+    fn a_dynamic_call_keeps_even_the_callable_handler() {
         let injected = inject_web_for_test(
             parse("<?php $name = 'session_regenerate_id'; $name();"),
             true,
@@ -523,9 +531,12 @@ mod tests {
             &[],
         );
         assert!(declares_function(&injected, "session_regenerate_id"));
+        // The handler policy reads `$fn()` as a hazard, not as the literal it happens to hold:
+        // the same syntax could name `session_set_save_handler`, so the surface stays. Reading
+        // the literal instead is what removed a computed name's target elsewhere.
         assert!(
-            !declares_function(&injected, "session_set_save_handler"),
-            "a name the program never mentions is not reachable through a literal dispatch"
+            declares_function(&injected, "session_set_save_handler"),
+            "a dynamic dispatch could name the handler, so policy must not drop it"
         );
     }
 
@@ -551,16 +562,19 @@ mod tests {
     /// targets; string arithmetic over function names does not appear in code this compiler is
     /// meant to serve.
     #[test]
-    fn a_computed_name_is_not_harvested() {
+    fn a_computed_name_keeps_its_target() {
         let injected = inject_web_for_test(
             parse("<?php $name = 'session_' . 'regenerate_id'; $name();"),
             true,
             PhpVersion::Php85,
             &[],
         );
+        // This asserted the OPPOSITE, and pinned a runtime failure as expected behaviour: a
+        // literal harvest cannot see a concatenated name, so the target was pruned and the
+        // program died with `Call to undefined function` where PHP answers.
         assert!(
-            !declares_function(&injected, "session_regenerate_id"),
-            "concatenated names are outside what a literal harvest can see"
+            declares_function(&injected, "session_regenerate_id"),
+            "a name no literal harvest can see must not cost the program its target"
         );
     }
 

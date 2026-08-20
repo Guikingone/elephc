@@ -91,18 +91,6 @@ pub(crate) struct Usage {
 }
 
 impl Usage {
-    /// Merges another subtree summary into this one.
-    pub(crate) fn merge(&mut self, other: Self) {
-        self.functions.extend(other.functions);
-        self.classes.extend(other.classes);
-        self.methods.extend(other.methods);
-        self.literals.extend(other.literals);
-        self.variables.extend(other.variables);
-        self.dynamic_function_call |= other.dynamic_function_call;
-        self.constructs_dynamic_class |= other.constructs_dynamic_class;
-        self.uses_yield |= other.uses_yield;
-        self.introspects |= other.introspects;
-    }
 
     /// Returns true when a PHP function is referenced case-insensitively.
     pub(crate) fn references(&self, name: &str) -> bool {
@@ -272,12 +260,6 @@ pub(crate) fn collect(program: &[Stmt]) -> Usage {
     usage
 }
 
-/// Collects references from one statement and all nested AST children.
-pub(crate) fn collect_stmt(stmt: &Stmt) -> Usage {
-    let mut usage = Usage::default();
-    scan_stmt(stmt, &mut usage);
-    usage
-}
 
 
 /// Records one normalized PHP function name.

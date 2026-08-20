@@ -14398,21 +14398,14 @@ pub fn inject_if_used(
     }
     // Injecting the surface is pay-for-use; what gets injected was not. A program calling two GD
     // functions was dragging Imagick, Gmagick and Cairo through codegen, the assembler and the
-    // linker — measured at 162,630 lines of assembly against 9,501, and 1.8 s against 297 ms.
-    // Pruning what the program cannot reach is the difference; see `crate::prelude_prune`.
+    // linker — measured at 162,630 lines of assembly against 9,501.
     //
-    // NOT UNDER `force`. `--with-image` means "inject even though the scan sees no usage" — the
-    // user is overriding the static analysis on purpose. Pruning would re-apply that same
-    // analysis and take the surface away again, which is the one thing the flag exists to stop.
-    let declarations = image_declarations();
-    let mut combined = if force {
-        declarations
-    } else {
-        let roots = crate::prelude_prune::collect_roots(&program);
-        crate::prelude_prune::prune(declarations, &roots)
-    };
-    // Recorded AFTER pruning: the inventory should describe what actually reaches the program,
-    // not the surface that was built and then dropped.
+    // That trimming is NOT done here. A local pass that harvests literal names cannot see a
+    // computed one: `$fn = 'image' . 'colorallocate'; $fn($im, …)` had its target removed and the
+    // program died with `Call to undefined function`, where PHP answers. The global declaration
+    // reachability pass already treats an unknown `$fn()` conservatively, so the COMPLETE selected
+    // prelude is recorded and that pass decides what survives.
+    let mut combined = image_declarations();
     inventory.record_program("image", &combined);
     combined.extend(program);
     combined
