@@ -72,6 +72,34 @@ Note `finalize_physical_program` is also where `__FILE__` is substituted
 per file while `getFileName()` is not: the same knowledge exists, it is just not recorded for
 declarations.
 
+## ⚠️ The trap at the obvious insertion point
+
+`src/resolver/engine_includes.rs:86` is where a single physical file's statements exist before its
+own includes are spliced:
+
+```rust
+let included_stmts = parse_file(&resolved, stmt.span, &state.conditional_defines)?;
+```
+
+Recording `included_stmts` against `resolved` here looks like a two-line change. It is not:
+**those statements are not name-resolved yet.** `collect_declaration_source_files` keys on
+`php_symbol_key(name)` and works today only because it runs *after* `name_resolver::resolve` has
+flattened namespaces and canonicalized declaration names. At this point a `class Widget` inside
+`namespace Inc;` is still `Widget`, so it would be recorded as `widget` instead of `inc\widget` —
+and the lookup in `reflection_source_file` would miss, fall through to the same entry-file fallback,
+and the bug would look unfixed while quietly attributing other classes to the wrong file.
+
+Two ways out, in preference order:
+
+1. Carry the physical path *with* the statements through name resolution, so attribution can be
+   done after canonicalization where it is correct today. This is the same missing "file identity"
+   that task #106 needs for diagnostics and #104 for `debug_backtrace`, so it pays for itself.
+2. Track the namespace while walking `included_stmts` and build FQNs locally. Cheaper, but it
+   duplicates name-resolution rules (`namespace` statements, braced blocks, `use` aliases) and will
+   drift from them.
+
+Do not take option 2 without a test per namespace form.
+
 ## Semantic invariants
 
 1. A class declared in the entry file keeps reporting the entry file.
