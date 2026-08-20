@@ -288,3 +288,55 @@ foreach ([1] as $index) {
     );
     assert_eq!(out, "ready|direct");
 }
+
+/// Pins that reflecting an object whose method parameter names another class stays bounded.
+///
+/// ⚠️ This does NOT reproduce the open `--web` defect, and must not be mistaken for it: reflecting
+/// an object whose parameter is typed `Symfony\Component\DependencyInjection\ContainerBuilder`
+/// exhausts the heap identically at `--heap-size` 8 MiB and 1 GiB, where php charges 96 bytes for
+/// the same handle. Every attempt to reproduce that locally has passed — including a
+/// self-referential class with 40 methods, 120 classes x 12 methods, traits, attributes and
+/// associative class constants. The trigger is not class size, cycles, or any feature reproduced
+/// here. See `.plans/reflection-slot-reachability.md`; this case only guards the shape from
+/// regressing further.
+#[test]
+fn test_reflection_object_with_class_typed_parameter_stays_bounded() {
+    let out = compile_and_run(
+        r#"<?php
+class Wide {
+    public function a(Wide $x, ?Wide $y = null): ?Wide { return null; }
+    public function b(Wide $x, ?Wide $y = null): ?Wide { return null; }
+    public function c(Wide $x, ?Wide $y = null): ?Wide { return null; }
+    public function d(Wide $x, ?Wide $y = null): ?Wide { return null; }
+}
+class Narrow {
+    public function m(Wide $w): void {}
+}
+$r = new ReflectionObject(new Narrow());
+echo $r->getName(), "|", count($r->getMethods());
+"#,
+    );
+    assert_eq!(out, "Narrow|1");
+}
+
+/// Verifies the deprecated `ReflectionParameter::getClass()` still reports the parameter's class
+/// when the program actually calls it.
+///
+/// This is the over-pruning guard for the slot-reachability gate: it is the test that fails if the
+/// gate ever decides a slot is dead while a reachable accessor can still read it.
+#[test]
+fn test_reflection_parameter_get_class_still_reports_the_parameter_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Dep {}
+class Uses {
+    public function m(Dep $d): void {}
+}
+$r = new ReflectionObject(new Uses());
+$p = $r->getMethod('m')->getParameters()[0];
+$c = $p->getClass();
+echo $c === null ? "null" : $c->getName();
+"#,
+    );
+    assert_eq!(out, "Dep");
+}
