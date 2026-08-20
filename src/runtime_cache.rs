@@ -1,6 +1,8 @@
 //! Purpose:
 //! Builds and caches the reusable runtime object that is linked beside generated user code.
-//! Keys cache entries by compiler version, target, heap size, and runtime feature shape.
+//! Keys cache entries by compiler version, target, heap size, and runtime feature shape — by the
+//! inputs that produce the assembly, not by a hash of the assembly itself, so a cache hit never
+//! builds it.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` before user assembly is linked into the final binary.

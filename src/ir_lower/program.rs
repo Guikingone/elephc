@@ -29,6 +29,14 @@ use crate::types::{CheckResult, ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 mod metadata;
 mod runtime_features;
 mod eval_aot;
+/// Read by `builtin_datetime`, which decides whether a module's eval fragments can reach the
+/// date alias surface — a question only the fragment text can answer.
+/// Read by `builtin_datetime`, which asks whether a module's eval fragments can reach the date
+/// alias surface. `eval_literal_call_requires_bridge` is the authority on that: a fragment the
+/// planner can compile ahead of time resolves its names through ordinary lowering, where the
+/// reachability fixpoint already sees them; one that still needs the bridge resolves them at
+/// runtime and can reach anything, including through an `include`.
+pub(crate) use runtime_features::eval_literal_call_requires_bridge;
 mod declaration_metadata;
 mod function_declarations;
 mod class_methods;

@@ -110,6 +110,9 @@ fn lower_eval_date_alias_methods_if_needed(
     if !module_uses_eval(module) {
         return;
     }
+    if !eval_fragments_may_reach_dates(module) {
+        return;
+    }
     let mut methods = eval_date_alias_builtin_datetime_methods(module);
     methods.sort();
     methods.dedup();
@@ -131,9 +134,28 @@ fn eval_date_alias_builtin_datetime_methods(module: &Module) -> Vec<(String, Str
     for class_name in ["DateTime", "DateTimeImmutable", "DateTimeZone", "DateInterval"] {
         push_constructor_and_interface_methods(&mut methods, module, class_name);
     }
-    for method_name in [
-        "createFromFormat",
-        "getLastErrors",
+    for method_name in EVAL_DATE_ALIAS_METHOD_NAMES {
+        methods.push(("DateTime".to_string(), php_method_key(method_name)));
+        methods.push(("DateTimeImmutable".to_string(), php_method_key(method_name)));
+    }
+    for method_name in ["createFromDateString", "format"] {
+        methods.push(("DateInterval".to_string(), php_method_key(method_name)));
+    }
+    for method_name in DATE_TIMEZONE_ALIAS_METHOD_NAMES {
+        methods.push(("DateTimeZone".to_string(), php_method_key(method_name)));
+    }
+    methods
+}
+
+/// The `DateTime`/`DateTimeImmutable` methods an eval alias can dispatch to.
+///
+/// A CONSTANT rather than a literal inside the emitter because two passes read it: the emitter
+/// below, and `eval_fragments_may_reach_dates`, which decides whether to run the emitter at all.
+/// A second copy would be free to drift, and the drift would be silent in the expensive
+/// direction — a name missing from the predicate's copy makes a fragment look harmless.
+const EVAL_DATE_ALIAS_METHOD_NAMES: &[&str] = &[
+    "createFromFormat",
+    "getLastErrors",
         "__elephc_date_parse_from_format",
         "__elephc_date_parse",
         "__elephc_date_sun_info",
@@ -173,24 +195,61 @@ fn eval_date_alias_builtin_datetime_methods(module: &Module) -> Vec<(String, Str
         "setDate",
         "setISODate",
         "setTime",
-    ] {
-        methods.push(("DateTime".to_string(), php_method_key(method_name)));
-        methods.push(("DateTimeImmutable".to_string(), php_method_key(method_name)));
+];
+
+/// The `DateTimeZone` methods an eval alias can dispatch to. Same reason as above.
+const DATE_TIMEZONE_ALIAS_METHOD_NAMES: &[&str] = &[
+    "getName",
+    "getOffset",
+    "listIdentifiers",
+    "getLocation",
+    "getTransitions",
+    "listAbbreviations",
+];
+
+/// Returns true when this module's `eval` fragments could reach the date alias surface.
+///
+/// The surface above exists because `eval` resolves names at runtime: `eval('date_create()')`
+/// reaches `DateTime::__construct` through a string, so every alias target has to be lowered in
+/// advance. A fragment the AOT planner can compile does not do that — it becomes an ordinary EIR
+/// function, lowered before this pass runs, so the reachability fixpoint below sees its calls the
+/// way it sees any others.
+///
+/// So the question is not what the fragment NAMES but whether it still needs the bridge, and
+/// `eval_literal_call_requires_bridge` is already the authority on that — the same predicate
+/// `runtime_features` uses to decide whether to link the bridge at all. Asking it instead of
+/// re-deriving an answer is what makes this correct for the cases a name scan cannot see: a
+/// fragment doing `include "d.php"` names nothing, and the included file's `date_create()` is not
+/// in the source this pass can read. The planner classifies that as bridge-only, and the surface
+/// is emitted.
+///
+/// What it saves is not marginal. `createFromFormat` is 369 lines of PHP lowered twice, and on a
+/// four-line program one `eval('echo 1;')` took the emitted assembly from 94 KB to 6.5 MB.
+fn eval_fragments_may_reach_dates(module: &Module) -> bool {
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for (inst_index, inst) in function.instructions.iter().enumerate() {
+            if !instruction_uses_eval(module, inst) {
+                continue;
+            }
+            // Every eval op other than a literal call resolves its source at runtime, and
+            // `eval_literal_call_requires_bridge` answers `true` for them on the same reasoning.
+            if crate::ir_lower::program::eval_literal_call_requires_bridge(
+                module, function, inst_index, inst,
+            ) {
+                return true;
+            }
+        }
     }
-    for method_name in ["createFromDateString", "format"] {
-        methods.push(("DateInterval".to_string(), php_method_key(method_name)));
-    }
-    for method_name in [
-        "getName",
-        "getOffset",
-        "listIdentifiers",
-        "getLocation",
-        "getTransitions",
-        "listAbbreviations",
-    ] {
-        methods.push(("DateTimeZone".to_string(), php_method_key(method_name)));
-    }
-    methods
+    false
 }
 
 /// Returns true when the lowered module has any dependency on the eval bridge.

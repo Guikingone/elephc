@@ -7297,6 +7297,100 @@ echo ":" . (timezone_version_get() === "" ? "bad" : "version");');
     assert_eq!(out, "2024-01-02 03:04:05:2024:01:UTC:1:version");
 }
 
+/// Verifies a COMPUTED eval fragment can still execute DateTime-family procedural aliases.
+///
+/// This pins the fallback of `ir_lower::builtin_datetime`'s date-alias emission, which lowers
+/// ~45 method bodies — `createFromFormat` alone is 369 lines of PHP, lowered for two classes —
+/// whenever a module might dispatch into them from eval. That emission is now skipped when every
+/// fragment is a LITERAL naming no date symbol, which is what makes `eval('echo 1;')` cheap; the
+/// test above covers that half.
+///
+/// Here the fragment is built at run time, so nothing can read it and the whole surface has to be
+/// emitted anyway. Without this case the narrowing could be tightened until it dropped the
+/// dynamic path too, and the only symptom would be an eval'd program failing to find a method —
+/// at run time, in generated code, with nothing in the suite pointing at the cause.
+#[test]
+fn test_eval_dispatches_datetime_aliases_from_a_computed_fragment() {
+    let out = compile_and_run(
+        r#"<?php
+$verb = "date_create";
+$code = 'echo ' . $verb . '("2024-05-06")->format("Y-m-d");';
+eval($code);
+"#,
+    );
+    assert_eq!(out, "2024-05-06");
+}
+
+/// Verifies the four OTHER channels a fragment can reach a date method by, each of which the
+/// narrowing must treat as unreadable.
+///
+/// The test above covers a fragment built by concatenation. These four are literal fragments that
+/// reach the family without spelling an alias as a called name — the shapes a reader of the
+/// predicate would most plausibly convince themselves are safe:
+///
+/// - a literal callable handed to a callable-taking builtin (`array_map("date_create", …)`),
+/// - a `Class::method` string callable, whose class and method are inside ONE literal,
+/// - a bare variable call (`$f("…")`), whose target no static walk can name,
+/// - a dynamic method call (`$d->$m(…)`), which reaches a method without naming it.
+///
+/// Each is a separate assertion rather than one program, so a regression names the channel it
+/// broke instead of failing an opaque composite. All four answered correctly when the narrowing
+/// landed; without them, tightening it further would break them silently at run time.
+#[test]
+fn test_eval_reaches_datetime_through_indirect_channels() {
+    let literal_callable = compile_and_run(
+        r#"<?php
+eval('$r = array_map("date_create", ["2024-01-02"]); echo $r[0]->format("Y-m-d");');
+"#,
+    );
+    assert_eq!(literal_callable, "2024-01-02", "array_map with a literal alias");
+
+    let string_static_callable = compile_and_run(
+        r#"<?php
+eval('$d = call_user_func("DateTime::createFromFormat", "Y-m-d", "2024-12-13"); echo $d->format("Y-m-d");');
+"#,
+    );
+    assert_eq!(string_static_callable, "2024-12-13", "\"Class::method\" string callable");
+
+    let variable_call = compile_and_run(
+        r#"<?php
+eval('$f = "date_create"; $d = $f("2024-10-11"); echo $d->format("Y-m-d");');
+"#,
+    );
+    assert_eq!(variable_call, "2024-10-11", "bare variable call");
+
+    let dynamic_method = compile_and_run(
+        r#"<?php
+$d = date_create("2024-09-10");
+$m = "format";
+eval('echo $d->$m("Y-m-d");');
+"#,
+    );
+    assert_eq!(dynamic_method, "2024-09-10", "dynamic method call");
+}
+
+/// Verifies a literal `eval` fragment that INCLUDES another file still reaches the date surface.
+///
+/// This is the case a name scan cannot see, and it is why the narrowing asks the AOT planner
+/// rather than reading the fragment itself: `include "d.php"` names no date symbol, and the
+/// `date_create()` it runs lives in a file this pass never reads. The planner classifies such a
+/// fragment as bridge-only — it resolves its names at runtime, so it can reach anything — and the
+/// surface is emitted.
+///
+/// The first version of the narrowing harvested names from the fragment and got this wrong: the
+/// program compiled and failed at run time, with nothing in the suite to catch it.
+#[test]
+fn test_eval_fragment_including_a_file_reaches_the_date_surface() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("eval_include_date.php", '<?php echo date_create("2024-01-02")->format("Y-m-d");');
+eval('include "eval_include_date.php";');
+unlink("eval_include_date.php");
+"#,
+    );
+    assert_eq!(out, "2024-01-02");
+}
+
 /// Verifies eval can execute timezone-introspection aliases without static DateTimeZone references.
 #[test]
 fn test_eval_dispatches_timezone_introspection_aliases_without_static_references() {

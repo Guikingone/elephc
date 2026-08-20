@@ -311,12 +311,10 @@ pub(super) fn make_add_sub(name: &str, mutable: bool, class_name: &str, is_add: 
 /// `"-2 weeks"`, `"14:30"`) by re-parsing it against the object's current timestamp via
 /// `strtotime($modifier, $this->timestamp)`. Mutates in place for `DateTime` and returns a
 /// new instance for `DateTimeImmutable`. Supports exactly the forms `strtotime()` accepts.
-pub(super) fn make_modify(mutable: bool, class_name: &str) -> ClassMethod {
-    // Parsed-PHP preamble (parsing lives in static helpers to keep this frame
-    // small): pull any `<±N> microsecond[s]|usec[s]` clauses out of the modifier,
-    // strtotime() the remainder, then apply the microsecond delta with a carry into
-    // the whole-second timestamp. result_tail_micro emits the new instant.
-    let src = r#"<?php
+/// The PHP the `modify()` preamble used to be parsed from. Test-only: the compilation
+/// path builds it with `bodies::modify_preamble`, and the oracle checks the two agree.
+#[cfg(test)]
+pub(super) const MODIFY_PREAMBLE_SRC: &str = r#"<?php
 $__md = DateTime::__elephc_extract_modify_micros($modifier);
 $__rest = DateTime::__elephc_strip_modify_micros($modifier);
 if ($__rest === "") {
@@ -336,8 +334,13 @@ if ($__micro < 0) {
 }
 $__ts = $__ts + $__carry;
 "#;
-    let tokens = crate::lexer::tokenize(src).expect("modify body must tokenize");
-    let mut body = crate::parser::parse_internal(&tokens).expect("modify body must parse");
+
+pub(super) fn make_modify(mutable: bool, class_name: &str) -> ClassMethod {
+    // Parsed-PHP preamble (parsing lives in static helpers to keep this frame
+    // small): pull any `<±N> microsecond[s]|usec[s]` clauses out of the modifier,
+    // strtotime() the remainder, then apply the microsecond delta with a carry into
+    // the whole-second timestamp. result_tail_micro emits the new instant.
+    let mut body = super::bodies::modify_preamble();
     body.extend(result_tail_micro(
         Expr::new(ExprKind::Variable("__ts".to_string()), dummy()),
         Some(Expr::new(ExprKind::Variable("__micro".to_string()), dummy())),

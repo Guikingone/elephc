@@ -53,6 +53,10 @@ use super::*;
             RuntimeFeatures { eval_scope: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { web: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { pdo_udf: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { fiber: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { generator: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { popen_resource: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { directory_resource: true, ..RuntimeFeatures::none() },
         ];
 
         let mut keys = std::collections::HashSet::from([baseline]);

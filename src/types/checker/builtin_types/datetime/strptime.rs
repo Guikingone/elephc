@@ -18,6 +18,7 @@ use super::*;
 /// (`tm_sec`/`tm_min`/`tm_hour`/`tm_mday`/`tm_mon` (0-based)/`tm_year` (since 1900)/`tm_wday`/
 /// `tm_yday`/`unparsed`) or `false` on mismatch. Unparsed date fields stay 0 and `tm_wday`/`tm_yday`
 /// are computed (via `gmmktime`/`gmdate`) only when a full year+month+day was parsed, matching glibc.
+#[cfg(test)]
 pub(super) const STRPTIME_SRC: &str = r#"<?php
 $slen = strlen($timestamp);
 $flen = strlen($format);
@@ -148,8 +149,7 @@ return [
 /// the `strptime()` procedural function (the name resolver desugars the call to it). See
 /// `STRPTIME_SRC` for the supported specifiers and return shape.
 pub(super) fn datetime_strptime() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(STRPTIME_SRC).expect("strptime body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("strptime body source must parse");
+    let body = super::bodies::strptime();
     ClassMethod {
         name: "__elephc_strptime".to_string(),
         visibility: Visibility::Public,

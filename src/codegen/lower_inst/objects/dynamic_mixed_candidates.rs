@@ -98,7 +98,14 @@ pub(super) fn is_dynamic_new_mixed_aot_candidate(class_name: &str) -> bool {
     !known_dynamic_new_builtin_class_names().contains(&class_name)
 }
 
-/// Builtin class names with allocation paths that are safe for dynamic `new`.
+/// Builtin class names the MIXED dynamic-`new` path can allocate ahead of time.
+///
+/// NOT the same question as `codegen_support::dynamic_new::supported_dynamic_new_builtin_class_names`,
+/// despite the near-identical name: that list is what a `new $c` can construct at all, and this
+/// one is the subset whose allocation this path can emit statically. Widening this to the other
+/// list makes `new $c("stdClass")` with `ReflectionClass` fail to compile —
+/// `unsupported EIR backend feature: dynamic_object_new_mixed for default value of property
+/// $__constants with PHP type Mixed` — so the difference is load-bearing, not drift.
 pub(super) fn supported_dynamic_new_builtin_class_names() -> &'static [&'static str] {
     &[
         "ArgumentCountError",

@@ -19,6 +19,7 @@ use super::*;
 /// with `is_localtime` set), and the reset metas (`! |`). Built as `false` literals then
 /// conditionally overwritten, because an int|false union flowing through a single variable would
 /// coerce to `0`.
+#[cfg(test)]
 pub(super) const DATE_PARSE_FROM_FORMAT_SRC: &str = r#"<?php
 $Y = 0; $mo = 0; $da = 0; $H = 0; $mi = 0; $se = 0;
 $pY = false; $pmo = false; $pda = false; $pH = false; $pmi = false; $pse = false;
@@ -194,10 +195,7 @@ return $r;
 /// since values are heterogeneous int|false). Self-contained parsed-source body, like
 /// `createFromFormat`.
 pub(super) fn datetime_date_parse_from_format() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(DATE_PARSE_FROM_FORMAT_SRC)
-        .expect("date_parse_from_format body source must tokenize");
-    let body =
-        crate::parser::parse_internal(&tokens).expect("date_parse_from_format body source must parse");
+    let body = super::bodies::date_parse_from_format();
     ClassMethod {
         name: "__elephc_date_parse_from_format".to_string(),
         visibility: Visibility::Public,
