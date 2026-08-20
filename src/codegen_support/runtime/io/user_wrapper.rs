@@ -277,7 +277,7 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");
     emitter.instruction("mov x0, #0");                                          // failure flag → fread() answers false
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("add sp, sp, #64");                                     // release the WHOLE frame, which grew for the boxed-result spills
     emitter.instruction("ret");                                                 // return the failure result
 
     emitter.label("__rt_uwfread_empty");
@@ -310,7 +310,7 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jc __rt_uwfread_boxed_x86");                           // convert the boxed result instead of reading the pair
     emitter.instruction("call r11");                                            // invoke stream_read on the wrapper object
     emitter.instruction("mov ecx, 1");                                          // fread's result flag: a wrapper read is a real result
-    emitter.instruction("add rsp, 16");                                         // release the helper frame
+    emitter.instruction("add rsp, 48");                                         // release the WHOLE frame, which grew for the boxed-result spills
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
 
@@ -319,7 +319,7 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");
     emitter.instruction("xor edx, edx");
     emitter.instruction("xor ecx, ecx");                                        // failure flag → fread() answers false
-    emitter.instruction("add rsp, 16");                                         // release the helper frame
+    emitter.instruction("add rsp, 48");                                         // release the WHOLE frame, which grew for the boxed-result spills
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the failure result
 
@@ -327,9 +327,34 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // empty-string pointer for the missing stream_read fallback
     emitter.instruction("xor edx, edx");                                        // empty-string length for the missing stream_read fallback
     emitter.instruction("mov ecx, 1");                                          // and a real (empty) result, not a failure
-    emitter.instruction("add rsp, 16");                                         // release the helper frame
+    emitter.instruction("add rsp, 48");                                         // release the WHOLE frame, which grew for the boxed-result spills
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the empty-string result
+
+    // -- a `string|false` return arrives BOXED; convert it instead of reading the pair --
+    // The AArch64 twin of this arm; see it for why the box is retagged before the release.
+    // The two helpers this path calls take their argument in DIFFERENT registers on x86_64:
+    // `__rt_mixed_cast_string` reads RDI (System V), while `__rt_mixed_free_deep` reads RAX.
+    // On AArch64 `x0` is both, so the distinction exists only here.
+    emitter.label("__rt_uwfread_boxed_x86");
+    emitter.instruction("call r11");                                            // invoke stream_read; rax = owned Mixed cell
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // keep the boxed result across the conversion
+    emitter.instruction("mov rdi, rax");                                        // the conversion helper takes its box in rdi
+    emitter.instruction("call __rt_mixed_cast_string");                         // rax/rdx = owned string; false unboxes to the empty-string result
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the converted pointer across the box release
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the converted length across the box release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the boxed result the method handed us
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_uwfread_boxed_done_x86");                      // a null box owns nothing to release
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // retag the box as an int: its payload now belongs to the pair above
+    emitter.instruction("call __rt_mixed_free_deep");                           // release the box storage only, never the string being returned
+    emitter.label("__rt_uwfread_boxed_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // restore the converted read result pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // restore the converted read result length
+    emitter.instruction("mov ecx, 1");                                          // fread's result flag: a wrapper read is a real result
+    emitter.instruction("add rsp, 48");                                         // release the WHOLE frame, which grew for the boxed-result spills
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
 }
 
 /// `__rt_user_wrapper_fwrite`: invoke the wrapper's `stream_write($data)`
@@ -1146,6 +1171,74 @@ mod tests {
         let mut emitter = Emitter::new(Target::new(platform, arch));
         emit_user_wrapper_fread(&mut emitter);
         emitter.output()
+    }
+
+    /// Every user-wrapper helper releases exactly the frame it reserved, on BOTH targets.
+    ///
+    /// `fread` grew its frame for the boxed-result spills — 32 to 64 on AArch64, 16 to 48 on
+    /// x86_64 — and only the epilogue on the edited path was updated. The fallback arms went on
+    /// releasing the OLD size, leaving the stack pointer short of where the caller left it, on
+    /// the two paths a program takes when the wrapper class declares no `stream_read()`.
+    ///
+    /// Nothing observable says so until some later call reads through the misplaced pointer, and
+    /// no behaviour test could reach the x86_64 half from this host at all. Reading the sizes
+    /// out of the emitted assembly is what makes the imbalance itself the failure.
+    #[test]
+    fn every_helper_releases_the_frame_it_reserved() {
+        let helpers: &[(&str, fn(&mut Emitter))] = &[
+            ("fread", emit_user_wrapper_fread),
+            ("fwrite", emit_user_wrapper_fwrite),
+            ("fclose", emit_user_wrapper_fclose),
+            ("fseek", emit_user_wrapper_fseek),
+            ("feof", emit_user_wrapper_feof),
+            ("ftell", emit_user_wrapper_ftell),
+            ("fflush", emit_user_wrapper_fflush),
+            ("flock", emit_user_wrapper_flock),
+            ("ftruncate", emit_user_wrapper_ftruncate),
+            ("fstat", emit_user_wrapper_fstat),
+        ];
+        for (platform, arch, reserve, release) in [
+            (Platform::MacOS, Arch::AArch64, "sub sp, sp, #", "add sp, sp, #"),
+            (Platform::Linux, Arch::X86_64, "sub rsp, ", "add rsp, "),
+        ] {
+            for (name, emit) in helpers {
+                let mut emitter = Emitter::new(Target::new(platform, arch));
+                emit(&mut emitter);
+                let asm = emitter.output();
+                let reserved = frame_sizes(&asm, reserve);
+                let released = frame_sizes(&asm, release);
+                // A leaf helper may reserve nothing at all — several do on x86_64 — but then
+                // it must release nothing either. Anything else is a mismatch.
+                assert!(
+                    reserved.len() <= 1,
+                    "{arch:?} {name}: more than one frame reservation, got {reserved:?}"
+                );
+                let Some(frame) = reserved.first().copied() else {
+                    assert!(
+                        released.is_empty(),
+                        "{arch:?} {name}: releases {released:?} without reserving a frame"
+                    );
+                    continue;
+                };
+                for size in &released {
+                    assert_eq!(
+                        *size, frame,
+                        "{arch:?} {name}: an epilogue releases {size} of a {frame} byte frame"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Collects the byte counts that follow every occurrence of a stack-adjust prefix.
+    fn frame_sizes(asm: &str, prefix: &str) -> Vec<u32> {
+        asm.match_indices(prefix)
+            .filter_map(|(at, _)| {
+                let rest = &asm[at + prefix.len()..];
+                let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+                digits.parse().ok()
+            })
+            .collect()
     }
 
     /// The read helper dispatches both result shapes on BOTH architectures.

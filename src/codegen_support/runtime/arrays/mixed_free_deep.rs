@@ -306,13 +306,13 @@ mod tests {
 
     use super::*;
 
-    /// One target's ladder shapes: the dispatch test and the branch taken by each gated arm.
+    /// One target's ladder shapes: how it spells a comparison and the branch each arm takes.
     struct LadderShapes {
         platform: Platform,
         arch: Arch,
         compare: &'static str,
-        popen_branch: &'static str,
-        dir_branch: &'static str,
+        registry_branch: &'static str,
+        hash_branch: &'static str,
     }
 
     const LADDERS: &[LadderShapes] = &[
@@ -320,15 +320,15 @@ mod tests {
             platform: Platform::MacOS,
             arch: Arch::AArch64,
             compare: "cmp x9, #",
-            popen_branch: "b.eq __rt_mixed_free_deep_resource_popen\n",
-            dir_branch: "b.eq __rt_mixed_free_deep_resource_dir\n",
+            registry_branch: "b.eq __rt_mixed_free_deep_resource_registry\n",
+            hash_branch: "b.eq __rt_mixed_free_deep_resource_hash\n",
         },
         LadderShapes {
             platform: Platform::Linux,
             arch: Arch::X86_64,
             compare: "cmp r9, ",
-            popen_branch: "je __rt_mixed_free_deep_resource_popen\n",
-            dir_branch: "je __rt_mixed_free_deep_resource_dir\n",
+            registry_branch: "je __rt_mixed_free_deep_resource_registry\n",
+            hash_branch: "je __rt_mixed_free_deep_resource_hash\n",
         },
     ];
 
@@ -339,88 +339,41 @@ mod tests {
         emitter.output()
     }
 
-    /// Returns a feature set with only the named resource kinds enabled.
-    fn only(popen: bool, directory: bool) -> RuntimeFeatures {
-        RuntimeFeatures {
-            popen_resource: popen,
-            directory_resource: directory,
-            ..RuntimeFeatures::none()
-        }
-    }
-
-    /// The two kind-specific destructor arms appear only for a program whose EIR can produce
-    /// that kind, and each one follows its OWN bit.
+    /// Every registry-owned resource kind releases through the REGISTRY, on both targets.
     ///
-    /// Both directions are checked, because an "is it absent" assertion alone passes just as
-    /// well against an emitter that has stopped emitting anything at all. The two bits are then
-    /// checked independently: they are separate producers, and a gate written as one shared
-    /// condition would still satisfy a both-on/both-off test.
+    /// A close has to be refcounted, exact-once and lifecycle-published, and
+    /// `__rt_resource_release` is the one helper that does all three. A per-kind arm calling
+    /// `__rt_pclose` or `__rt_closedir` straight from this ladder bypasses the registry's
+    /// bookkeeping, which is what makes the destination — not merely "some destructor" — the
+    /// property worth pinning.
+    ///
+    /// The HashContext kind keeps its own arm because it is not a registry resource: it is
+    /// stamped by the runtime helper `__rt_hash_init` rather than by any lowering, and closes
+    /// through `crypto_free`.
     #[test]
-    fn the_kind_specific_destructor_arms_follow_their_producers() {
+    fn every_registry_owned_kind_releases_through_the_registry() {
         for shapes in LADDERS {
             let arch = shapes.arch;
-
-            let wide = emit_for(shapes, RuntimeFeatures::all());
-            assert!(wide.contains(shapes.popen_branch), "{arch:?}: popen arm must be emitted");
-            assert!(wide.contains(shapes.dir_branch), "{arch:?}: directory arm must be emitted");
+            let asm = emit_for(shapes, RuntimeFeatures::all());
+            for kind in [1, 3, 4, 9] {
+                let dispatch = format!("{}{}\n    {}", shapes.compare, kind, shapes.registry_branch);
+                assert!(
+                    asm.contains(&dispatch),
+                    "{arch:?}: resource kind {kind} must release through the registry:\n{asm}"
+                );
+            }
+            let hash = format!("{}2\n    {}", shapes.compare, shapes.hash_branch);
             assert!(
-                wide.contains("__rt_pclose"),
-                "{arch:?}: the popen arm is the only runtime reference to the pclose helper"
+                asm.contains(&hash),
+                "{arch:?}: the HashContext kind keeps its own arm, it is not a registry resource:\n{asm}"
             );
             assert!(
-                wide.contains("__rt_closedir"),
-                "{arch:?}: the directory arm is the only runtime reference to the closedir helper"
-            );
-
-            let narrow = emit_for(shapes, RuntimeFeatures::none());
-            assert!(!narrow.contains(shapes.popen_branch), "{arch:?}: popen arm must be gone");
-            assert!(!narrow.contains(shapes.dir_branch), "{arch:?}: directory arm must be gone");
-            assert!(
-                !narrow.contains("__rt_pclose"),
-                "{arch:?}: nothing may still reach the pclose helper, or pclose stays imported"
+                asm.contains("__rt_resource_release"),
+                "{arch:?}: the registry arm must call the registry:\n{asm}"
             );
             assert!(
-                !narrow.contains("__rt_closedir"),
-                "{arch:?}: nothing may still reach the closedir helper, or closedir, globfree \
-                 and close stay imported"
-            );
-
-            let popen_only = emit_for(shapes, only(true, false));
-            assert!(
-                popen_only.contains(shapes.popen_branch) && !popen_only.contains(shapes.dir_branch),
-                "{arch:?}: the popen bit must select the popen arm alone"
-            );
-
-            let dir_only = emit_for(shapes, only(false, true));
-            assert!(
-                dir_only.contains(shapes.dir_branch) && !dir_only.contains(shapes.popen_branch),
-                "{arch:?}: the directory bit must select the directory arm alone"
-            );
-        }
-    }
-
-    /// The kinds with no producing builtin are NOT gated and must survive the narrowest build.
-    ///
-    /// Kind 1 closes with a raw syscall on AArch64 and imports nothing, and kind 2 is stamped by
-    /// the runtime helper `__rt_hash_init` rather than by a lowering, so no EIR call names it and
-    /// no feature bit could honestly carry it. Gating either by mistake would leak a descriptor or
-    /// a hash context in exactly the programs that never mention a directory or a pipe.
-    #[test]
-    fn the_ungated_kinds_survive_the_narrowest_build() {
-        for shapes in LADDERS {
-            let arch = shapes.arch;
-            let narrow = emit_for(shapes, RuntimeFeatures::none());
-            assert!(
-                narrow.contains("__rt_mixed_free_deep_resource_stream:\n"),
-                "{arch:?}: the kind 1 stream arm is not gated"
-            );
-            assert!(
-                narrow.contains("__rt_hash_ctx_free"),
-                "{arch:?}: the kind 2 hash-context arm is not gated"
-            );
-            assert!(
-                narrow.contains("__rt_mixed_free_deep_box:\n"),
-                "{arch:?}: the generic box-free path must survive the gating"
+                asm.contains("__rt_mixed_free_deep_box:\n"),
+                "{arch:?}: the generic box-free path must exist for kind 0:\n{asm}"
             );
         }
     }
@@ -428,27 +381,56 @@ mod tests {
     /// The ladder tests the SAME number the lowering stamps.
     ///
     /// `RuntimeFnId::resource_cleanup_kind` is the one authority: the lowering stamps `stamp()`
-    /// into the Mixed high payload word, and `lowered_runtime_features` turns that same answer
-    /// into the bit gating the arm here. Nothing else ties this emitter's literal to it, so
-    /// renumbering a kind on one side only is caught here rather than by a resource that quietly
-    /// stops being released.
+    /// into the Mixed high payload word, and this ladder compares against it. Nothing else ties
+    /// this emitter's literals to it, so renumbering a kind on one side only is caught here
+    /// rather than by a resource that quietly stops being released.
     #[test]
     fn each_arm_matches_the_kind_its_producer_stamps() {
         for shapes in LADDERS {
             let arch = shapes.arch;
-            let wide = emit_for(shapes, RuntimeFeatures::all());
-            for (kind, branch) in [
-                (ResourceCleanupKind::PopenPipe, shapes.popen_branch),
-                (ResourceCleanupKind::Directory, shapes.dir_branch),
+            let asm = emit_for(shapes, RuntimeFeatures::all());
+            for kind in [
+                ResourceCleanupKind::StreamFd,
+                ResourceCleanupKind::PopenPipe,
+                ResourceCleanupKind::Directory,
             ] {
-                let dispatch = format!("{}{}\n    {}", shapes.compare, kind.stamp(), branch);
+                let dispatch = format!(
+                    "{}{}\n    {}",
+                    shapes.compare,
+                    kind.stamp(),
+                    shapes.registry_branch
+                );
                 assert!(
-                    wide.contains(&dispatch),
+                    asm.contains(&dispatch),
                     "{arch:?}: {kind:?} must dispatch on the kind its producer stamps ({}), \
-                     not on some other number:\n{wide}",
+                     not on some other number:\n{asm}",
                     kind.stamp()
                 );
             }
+        }
+    }
+
+    /// The ladder does not depend on the feature set, and says so rather than pretending to.
+    ///
+    /// Upstream gated a per-kind destructor arm on `popen_resource` / `directory_resource`. The
+    /// registry replaced those arms, so there is nothing left in this emitter for a bit to
+    /// select and the two feature sets must produce the SAME assembly. Asserting it keeps the
+    /// inert parameter honest: a future gate added here without a test would otherwise pass
+    /// unnoticed, and a gate on this ladder is exactly what must not come back.
+    ///
+    /// The pay-for-use property still holds one level up, MEASURED on this tree: a program of
+    /// arrays and scalars references neither this helper nor `__rt_resource_release`, and a
+    /// program that opens a stream reaches `__rt_pclose` through `__rt_stream_close_backend` —
+    /// the path `fclose()` takes anyway, which no gate here could have avoided.
+    #[test]
+    fn the_ladder_is_the_same_whatever_the_feature_set() {
+        for shapes in LADDERS {
+            let arch = shapes.arch;
+            assert_eq!(
+                emit_for(shapes, RuntimeFeatures::none()),
+                emit_for(shapes, RuntimeFeatures::all()),
+                "{arch:?}: the resource ladder must not depend on a feature bit"
+            );
         }
     }
 }
