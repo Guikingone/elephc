@@ -205,9 +205,9 @@ scales with the number of declarations while the text section does not.
 
 Two flags keep the names, for the two reasons to want them:
 
-- `--debug-info` already means "I am going to debug this". Stripping runs after
-  `dsymutil` has baked the dSYM, never before — a stripped binary has no debug
-  map for it to read.
+- `--debug-info` already means "I am going to debug this", so the pipeline does
+  not invoke `strip` in this mode. On macOS, `dsymutil` still bakes the dSYM and
+  the linked executable keeps its symbol table too.
 - `--keep-symbols` is for profilers, which read the symbol table and have no
   other source of names.
 

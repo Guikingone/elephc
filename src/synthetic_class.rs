@@ -41,8 +41,10 @@
 //!   it: the checker resolves a method-body variable's type against top-level variables of the
 //!   same name, so a user global named `$node` would otherwise clash with a plain method-local
 //!   `$node`.
-//! - Spans are `Span::dummy()`. A synthetic declaration has no source location, and aiming a
-//!   diagnostic at a line of the compiler's own Rust would be worse than aiming it nowhere.
+//! - Most nodes use `Span::dummy()` because a synthetic declaration has no source location.
+//!   Free-function call nodes and loops that serve as checker/lowering map keys use distinct
+//!   `Span::synthetic()` identities instead; those spans still identify generated nodes rather
+//!   than PHP source.
 
 #[cfg(test)]
 pub mod transcribe;

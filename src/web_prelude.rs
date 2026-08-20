@@ -553,14 +553,12 @@ mod tests {
         assert!(!declares_function(&injected, "session_set_save_handler"));
     }
 
-    /// THE DOCUMENTED RESIDUAL RISK, pinned so it is a decision rather than a surprise.
+    /// Verifies a computed name keeps its target through global declaration reachability.
     ///
-    /// A name that is COMPUTED and never appears as a literal cannot be harvested, so the target
-    /// is pruned and the call fails at runtime with an undefined function. The alternative —
-    /// keeping the whole surface whenever any dynamic call exists — is what this rule replaced,
-    /// and it cost every `--web` binary the complete session surface. Real dispatchers name their
-    /// targets; string arithmetic over function names does not appear in code this compiler is
-    /// meant to serve.
+    /// The local literal harvest cannot see a concatenated name, so prelude injection records the
+    /// complete selected surface and lets the global reachability pass handle the unknown dynamic
+    /// call conservatively. Pruning locally instead made this call fail at runtime with an
+    /// undefined function.
     #[test]
     fn a_computed_name_keeps_its_target() {
         let injected = inject_web_for_test(

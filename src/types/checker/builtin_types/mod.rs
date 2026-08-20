@@ -31,8 +31,8 @@ mod timezone_ids;
 /// the inheritance chain: Error/Exception extend Throwable; TypeError/ValueError/
 /// ArithmeticError/AssertionError/UnhandledMatchError extend Error;
 /// ArgumentCountError extends TypeError; DivisionByZeroError extends
-/// ArithmeticError; RuntimeException/ReflectionException extend Exception;
-/// JsonException extends RuntimeException; FiberError extends Error. Fiber is
+/// ArithmeticError; RuntimeException/ReflectionException/JsonException extend
+/// Exception; FiberError extends Error. Fiber is
 /// final with no parent.
 pub(crate) use declarations::{
     inject_builtin_throwables, InterfaceDeclInfo, RESERVED_FOR_INTERNAL_USE,

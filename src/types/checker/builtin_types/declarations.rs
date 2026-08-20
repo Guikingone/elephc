@@ -62,8 +62,8 @@ impl Clone for InterfaceDeclInfo {
 /// the inheritance chain: Error/Exception extend Throwable; TypeError/ValueError/
 /// ArithmeticError/AssertionError/UnhandledMatchError extend Error;
 /// ArgumentCountError extends TypeError; DivisionByZeroError extends
-/// ArithmeticError; RuntimeException/ReflectionException extend Exception;
-/// JsonException extends RuntimeException; FiberError extends Error. Fiber is
+/// ArithmeticError; RuntimeException/ReflectionException/JsonException extend
+/// Exception; FiberError extends Error. Fiber is
 /// final with no parent.
 ///
 /// The nominal parents mirror reference PHP 8.5.6 exactly, verified with
