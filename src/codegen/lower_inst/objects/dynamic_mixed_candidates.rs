@@ -124,16 +124,20 @@ pub(super) fn dynamic_new_uncastable_collector(
 /// that way, because the class is a value. Without this the site fell through to the runtime
 /// fallback, which allocates by name through `__rt_new_by_name` and never runs a constructor, so
 ///
-///     class K { public $v = "defaut"; function __construct($x) { $this->v = $x; } }
-///     $c = $argv[1]; $o = new $c();
+/// ```text
+/// class K { public $v = "defaut"; function __construct($x) { $this->v = $x; } }
+/// $c = $argv[1]; $o = new $c();
+/// ```
 ///
 /// answered `K v='defaut'` where php raises `ArgumentCountError`. The object came back built out
 /// of its property defaults with the constructor SKIPPED — no diagnostic, wrong object.
 ///
 /// PHP HAS TWO WORDINGS and picks by whether the class is internal, so both are reproduced:
 ///
-///     IteratorIterator::__construct() expects at least 1 argument, 0 given
-///     Too few arguments to function K::__construct(), 0 passed in FILE on line N and exactly 1 expected
+/// ```text
+/// IteratorIterator::__construct() expects at least 1 argument, 0 given
+/// Too few arguments to function K::__construct(), 0 passed in FILE on line N and exactly 1 expected
+/// ```
 ///
 /// `exactly` when the constructor declares no optional parameter, `at least` otherwise; both
 /// shapes agree on that. `known_dynamic_new_builtin_class_names` is the internal/user split.
