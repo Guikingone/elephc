@@ -38,15 +38,11 @@ pub(super) fn runtime_cache_key_with_build_identity(
     pic: bool,
     build_identity: &[u8],
 ) -> u64 {
-    let feature_bits = (features.regex as u16)
-        | ((features.mb_strlen as u16) << 1)
-        | ((features.phar_archive as u16) << 2)
-        | ((features.descriptor_invoker as u16) << 3)
-        | ((features.eval_bridge as u16) << 4)
-        | ((features.eval_scope as u16) << 5)
-        | ((features.web as u16) << 6)
-        | ((features.pdo_udf as u16) << 7)
-        | ((pic as u16) << 8);
+    // The feature bits come from `RuntimeFeatures` itself rather than being re-packed here: it
+    // owns the layout, and a feature that gates emission but is missing from this key would name
+    // two different runtime objects with one key. `pic` rides in the HIGH bit precisely so that
+    // appending a feature never shifts it.
+    let feature_bits = features.cache_key_bits() | ((pic as u64) << 63);
     let mut identity = format!("{}:{heap_size}:{feature_bits}:", target.as_str()).into_bytes();
     identity.extend_from_slice(build_identity);
     runtime_bytes_hash(&identity)

@@ -25,6 +25,14 @@
 //! elephc now emits the class, the message, the ` in <file>:<line>` suffix, and exits `255` like
 //! PHP.
 //!
+//! Two framing details were measured later, from RAW BYTES rather than from the message text, and
+//! both had gone unnoticed because reading a merged `2>&1` hides them:
+//!
+//! - PHP prefixes the report with `\n`, UNCONDITIONALLY — even when the script has written
+//!   nothing at all before throwing.
+//! - PHP writes it to STDOUT. Captured into separate files, stdout held every byte and stderr was
+//!   empty. A program redirecting only stdout used to lose the diagnostic entirely.
+//!
 //! Called from:
 //! - `cargo test --test uncaught_exception_report_tests` through Rust's test harness.
 //!
@@ -101,17 +109,24 @@ fn compile(dir: &Path, source: &str, stem: &str) -> PathBuf {
     dir.join(stem)
 }
 
-/// Compiles and runs `source`, returning `(stderr, exit_code)`.
+/// Compiles and runs `source`, returning `(stdout, exit_code)`.
+///
+/// STDOUT, not stderr: PHP writes this report to stdout. Measured against 8.5 by capturing the
+/// two streams into separate files — stdout held all 465 bytes and stderr was empty. Reading it
+/// off `2>&1` cannot tell them apart, which is how the stream went unnoticed until a program that
+/// redirected only stdout lost its diagnostic entirely.
 ///
 /// The temp directory is NOT removed before returning, because the location suffix names the
 /// script by its canonical path and the assertions have to rebuild that path to compare.
+/// The returned text now carries the program's OWN output too, since both share stdout — which is
+/// why the assertions below match a FRAGMENT rather than a prefix.
 fn run_uncaught(prefix: &str, source: &str) -> (String, Option<i32>, PathBuf) {
     let dir = make_test_dir(prefix);
     let bin = compile(&dir, source, prefix);
     let output = Command::new(&bin).output().expect("failed to run compiled binary");
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let reported = String::from_utf8_lossy(&output.stdout).into_owned();
     let code = output.status.code();
-    (stderr, code, dir)
+    (reported, code, dir)
 }
 
 /// Returns the ` in <file>:<line>` suffix reference PHP prints for `script` in `dir`.
@@ -131,18 +146,18 @@ fn location_suffix(dir: &Path, script: &str, line: u32) -> String {
 #[test]
 fn uncaught_builtin_subclass_reports_class_and_message() {
     let prefix = "elephc_uncaught_builtin";
-    let (stderr, code, dir) = run_uncaught(
+    let (reported, code, dir) = run_uncaught(
         prefix,
         "<?php\nthrow new RuntimeException(\"boom detail\");\n",
     );
     let expected = format!(
-        "Fatal error: Uncaught RuntimeException: boom detail{}",
+        "\nFatal error: Uncaught RuntimeException: boom detail{}",
         location_suffix(&dir, &format!("{prefix}.php"), 2)
     );
 
     assert!(
-        stderr.starts_with(&expected),
-        "stderr must name the class, the message and the location;\n  expected prefix: {expected:?}\n  got:             {stderr:?}"
+        reported.contains(&expected),
+        "the report must name the class, the message and the location;\n  attendu (fragment): {expected:?}\n  got:             {reported:?}"
     );
     assert_eq!(code, Some(255), "PHP exits 255 for an uncaught exception");
     let _ = fs::remove_dir_all(&dir);
@@ -152,18 +167,18 @@ fn uncaught_builtin_subclass_reports_class_and_message() {
 #[test]
 fn uncaught_user_subclass_reports_its_own_name() {
     let prefix = "elephc_uncaught_user";
-    let (stderr, code, dir) = run_uncaught(
+    let (reported, code, dir) = run_uncaught(
         prefix,
         "<?php\nclass MyErr extends Exception {}\nthrow new MyErr(\"custom text\");\n",
     );
     let expected = format!(
-        "Fatal error: Uncaught MyErr: custom text{}",
+        "\nFatal error: Uncaught MyErr: custom text{}",
         location_suffix(&dir, &format!("{prefix}.php"), 3)
     );
 
     assert!(
-        stderr.starts_with(&expected),
-        "a user subclass must be named from the runtime class table;\n  expected prefix: {expected:?}\n  got:             {stderr:?}"
+        reported.contains(&expected),
+        "a user subclass must be named from the runtime class table;\n  attendu (fragment): {expected:?}\n  got:             {reported:?}"
     );
     assert_eq!(code, Some(255));
     let _ = fs::remove_dir_all(&dir);
@@ -178,14 +193,14 @@ fn uncaught_user_subclass_reports_its_own_name() {
 #[test]
 fn uncaught_empty_message_omits_the_separator() {
     let prefix = "elephc_uncaught_empty";
-    let (stderr, code, dir) = run_uncaught(prefix, "<?php\nthrow new Exception(\"\");\n");
+    let (reported, code, dir) = run_uncaught(prefix, "<?php\nthrow new Exception(\"\");\n");
     let expected = format!(
-        "Fatal error: Uncaught Exception{}\n",
+        "\nFatal error: Uncaught Exception{}\n",
         location_suffix(&dir, &format!("{prefix}.php"), 2)
     );
 
     assert_eq!(
-        stderr, expected,
+        reported, expected,
         "an empty message must not be preceded by a colon, yet must still carry the location"
     );
     assert_eq!(code, Some(255));
@@ -200,18 +215,18 @@ fn uncaught_empty_message_omits_the_separator() {
 #[test]
 fn uncaught_reports_the_construction_site_not_the_throw_site() {
     let prefix = "elephc_uncaught_construction_site";
-    let (stderr, code, dir) = run_uncaught(
+    let (reported, code, dir) = run_uncaught(
         prefix,
         "<?php\nfunction make() { return new LogicException(\"made here\"); }\n$e = make();\necho \"still running\\n\";\nthrow $e;\n",
     );
     let expected = format!(
-        "Fatal error: Uncaught LogicException: made here{}",
+        "\nFatal error: Uncaught LogicException: made here{}",
         location_suffix(&dir, &format!("{prefix}.php"), 2)
     );
 
     assert!(
-        stderr.starts_with(&expected),
-        "the location must be the `new` on line 2, not the `throw` on line 5;\n  expected prefix: {expected:?}\n  got:             {stderr:?}"
+        reported.contains(&expected),
+        "the location must be the `new` on line 2, not the `throw` on line 5;\n  attendu (fragment): {expected:?}\n  got:             {reported:?}"
     );
     assert_eq!(code, Some(255));
     let _ = fs::remove_dir_all(&dir);
@@ -228,13 +243,13 @@ fn uncaught_reports_the_construction_site_not_the_throw_site() {
 #[test]
 fn synthesized_error_omits_the_location_and_still_exits_255() {
     let prefix = "elephc_uncaught_synthesized";
-    let (stderr, code, dir) = run_uncaught(
+    let (reported, code, dir) = run_uncaught(
         prefix,
         "<?php\n$n = 1;\n$d = 0;\necho intdiv($n, $d);\n",
     );
 
     assert_eq!(
-        stderr, "Fatal error: Uncaught DivisionByZeroError: Division by zero\n",
+        reported, "\nFatal error: Uncaught DivisionByZeroError: Division by zero\n",
         "an error with no construction site must omit the location, never print `:0`"
     );
     assert_eq!(
@@ -247,6 +262,38 @@ fn synthesized_error_omits_the_location_and_still_exits_255() {
 
 /// An exception that IS caught prints nothing and exits cleanly — the report is uncaught-only.
 ///
+/// Verifies buffered output SURVIVES an uncaught exception, and precedes the report.
+///
+/// This helper used to write its message and exit without draining `ob_*` buffers, so
+/// `ob_start(); echo "x"; throw …` printed NOTHING of the program's own output — the bytes were
+/// simply dropped on the way out. PHP flushes the buffer first, then reports, so the program's
+/// output comes first and the report follows.
+///
+/// The order is what this asserts, not merely the presence of both: reporting before flushing
+/// would still show every byte, in the wrong sequence, and a `contains` check could not tell the
+/// difference.
+#[test]
+fn buffered_output_survives_and_precedes_the_report() {
+    let prefix = "elephc_uncaught_buffered";
+    let (reported, code, dir) = run_uncaught(
+        prefix,
+        "<?php\nob_start();\necho \"BUFFERED\\n\";\nthrow new RuntimeException(\"boom\");\n",
+    );
+
+    assert_eq!(code, Some(255));
+    let fatal = reported
+        .find("\nFatal error: Uncaught RuntimeException: boom")
+        .unwrap_or_else(|| panic!("no report in output: {reported:?}"));
+    let buffered = reported
+        .find("BUFFERED\n")
+        .unwrap_or_else(|| panic!("buffered output was dropped: {reported:?}"));
+    assert!(
+        buffered < fatal,
+        "buffered output must precede the report, as PHP orders them; got: {reported:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Without this the reporting path could fire on every throw and still pass the tests above.
 #[test]
 fn caught_exception_prints_no_fatal_report() {
@@ -264,8 +311,11 @@ fn caught_exception_prints_no_fatal_report() {
         "caught:handled\n",
         "the catch body must run normally"
     );
+    // BOTH streams: the report moved to stdout, so a stderr-only check could no longer fail and
+    // would have kept passing however broken the reporting became.
     assert!(
-        !String::from_utf8_lossy(&output.stderr).contains("Fatal error"),
+        !String::from_utf8_lossy(&output.stderr).contains("Fatal error")
+            && !String::from_utf8_lossy(&output.stdout).contains("Fatal error"),
         "a caught exception must print no fatal report"
     );
     let _ = fs::remove_dir_all(&dir);

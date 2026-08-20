@@ -68,6 +68,22 @@ pub(super) fn emit_module(
 ) -> Result<()> {
     let mut shared = SharedCodegenState::default();
     function_variants::emit_dispatchers(module, emitter, data);
+    // Emitted before the module's own bodies so every string context that calls them is
+    // lowered against helpers that already exist.
+    super::shared_mixed_string::emit_shared_mixed_string_helpers(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
+    super::shared_count_guard::emit_shared_count_guard(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
     // In `--web` builds the reset routine references every request superglobal.
     // If a superglobal is never read or written by user/prelude code, the symbol
     // would otherwise be missing from the object, so reserve storage up front.
@@ -1031,6 +1047,19 @@ fn emit_static_property_default_value(
         }
         LiteralDefaultValue::EmptyAssocArray { value_type } => {
             emit_empty_assoc_array_literal_to_result(ctx, value_type);
+        }
+        LiteralDefaultValue::BoxedArray {
+            elem_type,
+            elements,
+        } => {
+            emit_array_literal_default_to_result(ctx, elem_type, elements)?;
+            // The OWNED boxer, because the literal above allocated the array and the box takes
+            // its own reference: the plain one retains without releasing, which leaked one block
+            // per object (`allocs=3 frees=2` where the `mixed $s = "x"` default closed at 3/3).
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Array(Box::new(elem_type.clone())),
+            );
         }
     }
     let symbol = static_property_symbol(class_name, property);

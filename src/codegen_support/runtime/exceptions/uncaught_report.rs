@@ -66,7 +66,7 @@ use crate::codegen_support::sentinels::THROWABLE_CREATION_LINE_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter};
 
 /// Byte length of `"Fatal error: Uncaught "`.
-const UNCAUGHT_PREFIX_LEN: i64 = 22;
+const UNCAUGHT_PREFIX_LEN: i64 = 23;
 
 /// Byte length of the `": "` separator between class name and message.
 const UNCAUGHT_SEPARATOR_LEN: i64 = 2;
@@ -102,12 +102,18 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.comment("--- runtime: report_uncaught_exception ---");
     emitter.label_global("__rt_report_uncaught_exception");
 
+    // Drain still-active output buffers FIRST. PHP writes this report through the same output
+    // path as `echo`, so buffered text precedes it; this helper used to exit without flushing,
+    // which discarded every byte a program had buffered — `ob_start(); echo "x"; throw …` printed
+    // nothing at all on stdout. Nothing is live yet at the entry, so the call costs no spill.
+    emitter.instruction("bl __rt_ob_flush_all");
+
     abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
     emitter.instruction("cbz x9, __rt_uncaught_fallback");                      // no throwable published: keep the constant message rather than dereferencing null
 
     abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_prefix");
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_PREFIX_LEN));          // "Fatal error: Uncaught "
-    emitter.instruction("mov x0, #2");                                          // fd = stderr for fatal runtime diagnostics
+    emitter.instruction("mov x0, #1");                                          // fd = stdout: PHP writes this report to stdout, not stderr (measured)
     emitter.syscall(4);
 
     emitter.instruction("ldr x10, [x9]");                                       // runtime class id from the object header
@@ -119,7 +125,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, x10, lsl #4");                           // each entry is a 16-byte (ptr, len) pair
     emitter.instruction("ldr x1, [x11]");                                       // class-name pointer
     emitter.instruction("ldr x2, [x11, #8]");                                   // class-name length
-    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
 
     emitter.label("__rt_uncaught_no_name");
@@ -127,11 +133,11 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("cbz x2, __rt_uncaught_location");                      // an EMPTY message drops the ": " separator, matching reference PHP — but keeps the location
     abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_sep");
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_SEPARATOR_LEN));       // ": "
-    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
     emitter.instruction("ldr x1, [x9, #8]");                                    // Throwable message pointer lives at payload offset 8
     emitter.instruction("ldr x2, [x9, #16]");                                   // and its length at offset 16
-    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
 
     emitter.label("__rt_uncaught_location");
@@ -146,15 +152,15 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
 
     abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_in");
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_IN_LEN));              // " in "
-    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
     abi::emit_symbol_address(emitter, "x1", "_script_source_file");
     abi::emit_load_symbol_to_reg(emitter, "x2", "_script_source_file_len", 0);
-    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
     abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_colon");
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_COLON_LEN));           // ":"
-    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
     abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);               // reload: the file-length load above resolved its symbol through x9
     emitter.instruction(&format!(
@@ -162,13 +168,13 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
         THROWABLE_CREATION_LINE_OFFSET
     ));                                                                         // itoa takes the line in x0
     emitter.instruction("bl __rt_itoa");                                        // returns pointer in x1 and length in x2 — already the write arguments
-    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
 
     emitter.label("__rt_uncaught_newline");
     abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_nl");
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_NEWLINE_LEN));         // terminating newline
-    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.syscall(1);
@@ -176,7 +182,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.label("__rt_uncaught_fallback");
     abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_msg");
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_FALLBACK_LEN));        // the pre-existing constant message
-    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // same status as the reporting path
     emitter.syscall(1);
@@ -188,13 +194,18 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: report_uncaught_exception ---");
     emitter.label_global("__rt_report_uncaught_exception");
 
+    // See the ARM64 path. `and rsp, -16` is the realignment the shared exit path performs for the
+    // same call; this helper never returns, so clobbering the alignment afterwards is harmless.
+    emitter.instruction("and rsp, -16");
+    emitter.instruction("call __rt_ob_flush_all");
+
     abi::emit_load_symbol_to_reg(emitter, "r8", "_exc_value", 0);
     emitter.instruction("test r8, r8");                                         // no throwable published: keep the constant message rather than dereferencing null
     emitter.instruction("jz __rt_uncaught_fallback");                           // use the constant fallback when no throwable is published
 
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_prefix");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_PREFIX_LEN));          // "Fatal error: Uncaught "
-    emitter.instruction("mov edi, 2");                                          // fd = stderr for fatal runtime diagnostics
+    emitter.instruction("mov edi, 1");                                          // fd = stdout: PHP writes this report to stdout, not stderr (measured)
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // write the fatal-error prefix to stderr
 
@@ -208,7 +219,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, r9");                                         // address of this class's entry
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // class-name pointer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // class-name length
-    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // write the throwable class name to stderr
 
@@ -218,12 +229,12 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_uncaught_location");                           // an EMPTY message keeps the location suffix, only the ": " separator goes
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_sep");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_SEPARATOR_LEN));       // ": "
-    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // write the message separator to stderr
     emitter.instruction("mov rsi, QWORD PTR [r8 + 8]");                         // Throwable message pointer lives at payload offset 8
     emitter.instruction("mov rdx, QWORD PTR [r8 + 16]");                        // and its length at offset 16
-    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // write the throwable message to stderr
 
@@ -241,17 +252,17 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
 
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_in");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_IN_LEN));              // " in "
-    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // write the location introducer to stderr
     abi::emit_symbol_address(emitter, "rsi", "_script_source_file");
     abi::emit_load_symbol_to_reg(emitter, "rdx", "_script_source_file_len", 0);
-    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // write the source filename to stderr
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_colon");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_COLON_LEN));           // ":"
-    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // write the filename/line separator to stderr
     abi::emit_load_symbol_to_reg(emitter, "r8", "_exc_value", 0);               // reload for symmetry: SysV `syscall` spares r8/r9, but the AArch64 arm cannot
@@ -261,14 +272,14 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     ));                                                                         // itoa takes the line in rax
     emitter.instruction("call __rt_itoa");                                      // returns pointer in rax and length in rdx
     emitter.instruction("mov rsi, rax");                                        // move the digits out of rax before it becomes the syscall number
-    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // write the decimal creation line to stderr
 
     emitter.label("__rt_uncaught_newline");
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_nl");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_NEWLINE_LEN));         // terminating newline
-    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // terminate the uncaught-exception diagnostic with a newline
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
@@ -278,7 +289,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_uncaught_fallback");
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_msg");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_FALLBACK_LEN));        // the pre-existing constant message
-    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // write the constant fallback diagnostic to stderr
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // same status as the reporting path
@@ -312,7 +323,14 @@ mod tests {
         assert!(asm.contains("ldr x2, [x9, #16]"));
         assert!(asm.contains("ldr x1, [x9, #8]"));
         assert_eq!(asm.matches("mov x0, #255").count(), 2);
-        assert_eq!(asm.matches("mov x0, #1\n").count(), 0);
+        // The stream and the exit status both live in x0, so they are pinned separately now that
+        // `mov x0, #1` is a legitimate fd. The count above is what still guards the exit status —
+        // it caught a revision that had left the fallback on the old `1`.
+        assert_eq!(asm.matches("mov x0, #2\n").count(), 0, "the report must not write to stderr");
+        assert!(
+            asm.matches("mov x0, #1\n").count() >= 2,
+            "every write in the report goes to stdout, where PHP puts it"
+        );
     }
 
     /// Verifies the AArch64 location suffix reads the payload line and formats it through itoa.
@@ -355,7 +373,12 @@ mod tests {
         assert!(asm.contains("jz __rt_uncaught_newline"));
         assert!(asm.contains("mov rsi, QWORD PTR [r8 + 8]"));
         assert_eq!(asm.matches("mov edi, 255").count(), 2);
-        assert_eq!(asm.matches("mov edi, 1\n").count(), 0);
+        // See the AArch64 test: stream and exit status are pinned apart.
+        assert_eq!(asm.matches("mov edi, 2\n").count(), 0, "the report must not write to stderr");
+        assert!(
+            asm.matches("mov edi, 1\n").count() >= 2,
+            "every write in the report goes to stdout, where PHP puts it"
+        );
     }
 
     /// Verifies the x86_64 location suffix makes the same decisions, in SysV registers.

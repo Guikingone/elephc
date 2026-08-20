@@ -3079,7 +3079,8 @@ class BaseCallbacks {
     public static function run(): void {
         echo array_reduce([1, 2], static::add(...), 0);
         echo ":";
-        array_walk([1, 2], static::show(...));
+        $walked = [1, 2];
+        array_walk($walked, static::show(...));
         echo ":";
         $usorted = [1, 2, 3];
         usort($usorted, static::compare(...));
@@ -3174,7 +3175,8 @@ class CallbackBox {
 $box = new CallbackBox();
 echo array_reduce([1, 2], $box->add_offset(...), 0);
 echo "|";
-array_walk([1, 2], $box->show(...));
+$walked = [1, 2];
+array_walk($walked, $box->show(...));
 "#;
     assert_eq!(
         compile_and_run_ir_backend("instance_method_reduce_and_walk_callbacks", source),
@@ -3309,7 +3311,8 @@ $box = new StoredReduceWalkBox();
 $box->base = 100;
 echo array_reduce([1, 2], $reduce, 0);
 echo "|";
-array_walk([1, 2], $walk);
+$walked = [1, 2];
+array_walk($walked, $walk);
 "#;
     assert_eq!(
         compile_and_run_ir_backend("stored_instance_method_reduce_and_walk_callbacks", source),
@@ -4113,14 +4116,15 @@ fn ir_backend_handles_intdiv_division_by_zero() {
         !run.status.success(),
         "IR backend intdiv zero fixture unexpectedly succeeded"
     );
-    assert_eq!(
-        String::from_utf8(run.stdout).expect("intdiv stdout should be utf8"),
-        ""
-    );
-    let stderr = String::from_utf8(run.stderr).expect("intdiv stderr should be utf8");
+    // The report is on STDOUT, where PHP puts it, so stdout is no longer empty and stderr is.
+    let reported = String::from_utf8(run.stdout).expect("intdiv stdout should be utf8");
     assert!(
-        stderr.contains("Uncaught DivisionByZeroError: Division by zero"),
-        "unexpected intdiv stderr: {stderr}"
+        reported.contains("Uncaught DivisionByZeroError: Division by zero"),
+        "unexpected intdiv output: {reported}"
+    );
+    assert_eq!(
+        String::from_utf8(run.stderr).expect("intdiv stderr should be utf8"),
+        ""
     );
 }
 
@@ -4813,10 +4817,15 @@ fn ir_backend_handles_indexed_array_reverse() {
     assert_eq!(compile_and_run_ir_backend("array_reverse_indexed", source), "213:312");
 }
 
-/// Verifies indexed-array deduplication returns first occurrences without mutating the source.
+/// Verifies indexed-array deduplication returns first occurrences without mutating the source,
+/// KEEPING each survivor's original key.
+///
+/// The reads are `$b[0] . $b[1] . $b[3]`, not `[0][1][2]`: PHP preserves the key of every
+/// survivor, so de-duplicating `[1,2,1,3,2]` yields keys `0, 1, 3` and there is no key 2. The
+/// dense reading this test used to make is the divergence it recorded.
 #[test]
 fn ir_backend_handles_indexed_array_unique() {
-    let source = "<?php $a = [1, 2, 1, 3, 2]; $b = array_unique($a); echo count($b); echo ':'; echo $b[0] . $b[1] . $b[2]; echo ':'; echo count($a); echo ':'; echo $a[0] . $a[1] . $a[2] . $a[3] . $a[4];";
+    let source = "<?php $a = [1, 2, 1, 3, 2]; $b = array_unique($a); echo count($b); echo ':'; echo $b[0] . $b[1] . $b[3]; echo ':'; echo count($a); echo ':'; echo $a[0] . $a[1] . $a[2] . $a[3] . $a[4];";
     assert_eq!(
         compile_and_run_ir_backend("array_unique_indexed", source),
         "3:123:5:12132"

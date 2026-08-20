@@ -89,8 +89,6 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_chunk_to_hash(emitter);
     arrays::emit_range(emitter);
     arrays::emit_shuffle(emitter);
-    arrays::emit_array_unique(emitter);
-    arrays::emit_array_unique_refcounted(emitter);
     arrays::emit_array_rand(emitter);
     arrays::emit_array_fill(emitter);
     arrays::emit_array_fill_assoc(emitter);
@@ -134,6 +132,8 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_intersect_key(emitter);
     arrays::emit_array_to_hash(emitter);
     arrays::emit_array_to_hash_reverse(emitter);
+    arrays::emit_array_to_hash_unique(emitter);
+    arrays::emit_hash_to_hash_unique(emitter);
     arrays::emit_array_replace(emitter);
     arrays::emit_array_replace_recursive(emitter);
     arrays::emit_assoc_diff_intersect(emitter);
@@ -180,7 +180,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_mixed_intval_base(emitter);
     arrays::emit_mixed_cast_string(emitter);
     arrays::emit_mixed_count(emitter);
-    arrays::emit_mixed_free_deep(emitter);
+    arrays::emit_mixed_free_deep(emitter, features);
     arrays::emit_mixed_is_empty(emitter);
     arrays::emit_mixed_numeric_binops(emitter);
     arrays::emit_int_checked_binops(emitter);
@@ -190,7 +190,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_strict_eq(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_write_stdout(emitter);
-    arrays::emit_object_free_deep(emitter);
+    arrays::emit_object_free_deep(emitter, features);
     arrays::emit_refcount(emitter);
     if features.eval_bridge {
         eval_bridge::emit_eval_bridge_runtime(emitter);
@@ -221,6 +221,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_mixed_property_set(emitter);
     objects::emit_mixed_cell_autovivify_array(emitter);
     objects::emit_mixed_array_get(emitter);
+    objects::emit_throw_object_not_array(emitter);
     objects::emit_mixed_array_set(emitter);
     objects::emit_mixed_array_append(emitter);
     objects::emit_mixed_array_fetch_for_write(emitter);

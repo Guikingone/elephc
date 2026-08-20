@@ -109,6 +109,108 @@ pub(super) fn lower_assoc_array_key_set_op(
     store_if_result(ctx, inst)
 }
 
+/// Sorts a hash receiver by value and republishes it re-keyed `0..n-1`, the way `sort()` does.
+///
+/// `sort()` and `rsort()` DISCARD keys: PHP renumbers the result from zero, which is what makes
+/// `sort(array_unique($xs))` — a hash, since `array_unique` preserves the original keys — an
+/// everyday idiom. The backend used to refuse the whole call (`sort for PHP type AssocArray`),
+/// so that idiom did not compile at all.
+///
+/// Renumbering a hash in place is not available: an entry's position is `hash(key) % capacity`
+/// under linear probing, so rewriting a key without moving its entry would make it unfindable.
+/// The receiver is therefore rebuilt from three steps that already exist and already agree on
+/// ownership — take the values into a fresh list, sort the list, turn the list back into a hash
+/// keyed `0..n-1` — rather than a new sorter that would have to redo bucket placement itself.
+///
+/// The receiver keeps its `AssocArray` type across the call. A hash whose keys are exactly
+/// `0..n-1` in iteration order holds what PHP's own result holds, so nothing downstream has to
+/// know that a sort happened.
+pub(super) fn lower_hash_reindexing_sort(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    int_helper: &str,
+    str_helper: &str,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, name, 1)?;
+    let array = expect_operand(inst, 0)?;
+    let PhpType::AssocArray { value, .. } = ctx.value_php_type(array)?.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            name,
+            ctx.value_php_type(array)?
+        )));
+    };
+    let value_ty = value.codegen_repr();
+    let helper = match value_ty {
+        PhpType::Str => str_helper,
+        PhpType::Int => int_helper,
+        ref other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} for hash values of PHP type {:?}",
+                name, other
+            )))
+        }
+    };
+
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
+    receiver.require_writable(name)?;
+    // Same opening as the key-preserving hash sorts: drop the slot's ownership, split a shared
+    // table so a copy taken before the call keeps its order, and publish the split pointer.
+    if let Some(slot) = receiver.slot() {
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
+    ensure_unique_hash_sort_source(ctx, array)?;
+    receiver.store_back_value(ctx, array)?;
+
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+
+    // Park the table being replaced; it is released once its values have been copied out.
+    ctx.load_value_to_result(array)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    super::values::emit_loaded_assoc_array_values(ctx, &value_ty)?;
+
+    // Sort the fresh list in place. The sorters answer nothing useful and clobber the argument
+    // registers, so the list pointer is parked rather than read back afterwards.
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_reg_move(ctx.emitter, arg0, result_reg);
+    abi::emit_call_label(ctx.emitter, helper);
+
+    // Rebuild a hash keyed 0..n-1 out of the sorted list. `__rt_array_slice_to_hash` reads
+    // (array, offset, length, length_present), and a zero flag means "to the end", so the length
+    // argument is ignored. The list is re-read from the stack because the sort call clobbered it.
+    abi::emit_pop_reg(ctx.emitter, arg0);
+    abi::emit_push_reg(ctx.emitter, arg0);
+    for index in 1..=3 {
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, index),
+            0,
+        );
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_slice_to_hash");
+
+    // Publish the rebuilt table as the receiver's value, then release the two intermediates in
+    // the order they were stacked: the sorted list, then the table its values came from.
+    ctx.store_result_value(array)?;
+    receiver.store_back_value(ctx, array)?;
+    // Both release helpers read their pointer from the RESULT register, not the first argument
+    // register — `x0` on ARM64, `rax` on x86_64. Passing it in `arg0` happened to work on ARM64,
+    // where the two are the same register, and released a garbage pointer on x86_64.
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        0x7fff_ffff_ffff_fffe,
+    );
+    store_if_result(ctx, inst)
+}
+
 /// Calls a mutating indexed-array sort helper after copy-on-write splitting.
 pub(super) fn lower_indexed_array_sort(
     ctx: &mut FunctionContext<'_>,

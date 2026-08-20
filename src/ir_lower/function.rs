@@ -20,8 +20,10 @@ use crate::ir_lower::context::{
 use crate::ir_lower::effects_lookup;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    AttributeGroup, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr,
+    AttributeGroup, BinOp, CastType, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind,
+    TypeExpr,
 };
+use crate::names::Name;
 use crate::span::Span;
 use crate::types::{
     collect_attribute_args, collect_attribute_names, CheckResult, ClassInfo, FunctionSig,
@@ -664,6 +666,357 @@ pub(crate) fn lower_property_init_thunk(
     );
     add_closures(module, closures);
     module.add_function(function);
+}
+
+/// Lowers a synthetic `_class_ctor_<id>_<argc>` thunk that pads a constructor call with defaults.
+///
+/// `new $c(…)` names its class in a string, so the checker cannot pad the call with the
+/// constructor's default arguments the way it does when the class is written down — it does not
+/// know which constructor it is. Codegen dispatches on the class at run time and therefore knows,
+/// but by then the arguments are materialized SSA values and a default expression is not one.
+///
+/// The thunk closes that gap where expressions can still be lowered: it takes `$this` plus the
+/// arguments the site actually passed, and calls the real constructor with those followed by the
+/// declared defaults, spliced in as ordinary AST. Codegen then calls one symbol and needs to know
+/// nothing about defaults.
+///
+/// Without it every class whose constructor has an optional parameter was refused as a candidate
+/// on a strict arity comparison and fell to the generic allocation path, which produces an object
+/// with no constructor run at all: `new $c(["a" => 1])` on `ArrayObject` answered
+/// `ArrayObject|0|` where PHP answers `ArrayObject|1|1`.
+/// Builds `if (<not coercible>) { throw new TypeError(...); }` for one overflow argument.
+///
+/// php COERCES a scalar into a typed variadic collector — `"7"` and `1.5` both reach an
+/// `int ...$r` — and raises a `TypeError` only for a value it cannot read as one. Casting without
+/// this guard would turn that TypeError into a silent `(int)"x" === 0`, which is the failure this
+/// whole path exists to stop.
+///
+/// The predicate is per target: a numeric target takes anything numeric, plus booleans, which php
+/// converts but `is_numeric()` reports false for. A string or bool target takes any scalar.
+///
+/// The message names the class and the argument position — both known while this is built — and
+/// asks `gettype()` for the part that is only known at run time. It does NOT carry php's
+/// `called in FILE on line N` clause: this thunk is shared by every site of the same arity, so it
+/// has no single call line to name, and inventing one would be worse than omitting it.
+fn coercible_or_throw_stmt(
+    class_name: &str,
+    variable: &Expr,
+    argument: usize,
+    target: CastType,
+    span: Span,
+) -> Stmt {
+    let predicate = |name: &str| {
+        Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified(name),
+                args: vec![variable.clone()],
+            },
+            span,
+        )
+    };
+    let accepted = match target {
+        CastType::Int | CastType::Float => Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(predicate("is_numeric")),
+                op: BinOp::Or,
+                right: Box::new(predicate("is_bool")),
+            },
+            span,
+        ),
+        _ => predicate("is_scalar"),
+    };
+    let expected = match target {
+        CastType::Int => "int",
+        CastType::Float => "float",
+        CastType::String => "string",
+        _ => "bool",
+    };
+    let concat = |left: Expr, right: Expr| {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(left),
+                op: BinOp::Concat,
+                right: Box::new(right),
+            },
+            span,
+        )
+    };
+    let literal = |text: String| Expr::new(ExprKind::StringLiteral(text), span);
+    let message = concat(
+        literal(format!(
+            "{}::__construct(): Argument #{} expects {}, ",
+            class_name, argument, expected
+        )),
+        concat(predicate("gettype"), literal(" given".to_string())),
+    );
+    Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(ExprKind::Not(Box::new(accepted)), span),
+            then_body: vec![Stmt::new(
+                StmtKind::Throw(Expr::new(
+                    ExprKind::NewObject {
+                        class_name: Name::unqualified("TypeError"),
+                        args: vec![message],
+                    },
+                    span,
+                )),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+pub(crate) fn lower_dynamic_constructor_thunk(
+    class_name: &str,
+    class_info: &ClassInfo,
+    provided_args: usize,
+    module: &mut Module,
+    check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+) {
+    let function_name = dynamic_constructor_thunk_name(class_info.class_id, provided_args);
+    if module
+        .functions
+        .iter()
+        .any(|function| function.name == function_name)
+    {
+        return;
+    }
+    let Some(constructor) = class_info.methods.get(&php_symbol_key("__construct")) else {
+        return;
+    };
+    let regular = crate::types::call_args::regular_param_count(constructor);
+    let is_variadic = constructor.variadic.is_some();
+    if is_variadic {
+        // A VARIADIC constructor needs a thunk at EVERY arity, including its declared one. The
+        // site passes N separate arguments; the lowered callee takes the collector as ONE array
+        // (`int ...$r` becomes a single `array<int>` parameter), so there is no arity at which the
+        // site's frame already matches. Without the thunk the class dropped out of the ladder and
+        // `new $c(...)` allocated by name with the constructor never run — measured wrong at 11 of
+        // 12 shape/arity combinations, against a STATIC `new V(...)` that works.
+        //
+        // Only the omitted REGULAR parameters need a default to splice. The collector is padded
+        // with nothing: the thunk body simply passes fewer arguments and the call lowering builds
+        // the empty collection, exactly as it does for a static `new V()`.
+        if provided_args < regular
+            && constructor.defaults[provided_args..regular]
+                .iter()
+                .any(|default| default.is_none())
+        {
+            return;
+        }
+    } else {
+        // Only the padding case: an exact arity needs no thunk, and a site passing MORE arguments
+        // than a non-collecting constructor declares is not a candidate at all.
+        if provided_args >= constructor.params.len() {
+            return;
+        }
+        // Every omitted parameter must have a default to splice. One without is a call PHP would
+        // reject too, so there is nothing to build.
+        if constructor.defaults[provided_args..]
+            .iter()
+            .any(|default| default.is_none())
+        {
+            return;
+        }
+    }
+    // A by-reference parameter would have to carry the callee's write back out through the thunk,
+    // and no builtin constructor declares one, so that path has never been exercised. Refusing
+    // leaves the site on the behaviour it had before padding existed rather than risking a write
+    // that silently goes nowhere. The collector's own flag counts too, since `&...$out` would have
+    // the same problem for every argument that lands in it.
+    if constructor
+        .ref_params
+        .iter()
+        .take(provided_args.min(regular))
+        .any(|&by_ref| by_ref)
+    {
+        return;
+    }
+    if is_variadic
+        && provided_args > regular
+        && constructor.ref_params.get(regular).copied().unwrap_or(false)
+    {
+        return;
+    }
+    // A TYPED collector is NOT refused here. Whether an overflow argument can safely land in it
+    // depends on what the SITE passes, which only codegen knows — `new $c(7)` on `int ...$r` is
+    // exactly right and must keep working — so that check lives in
+    // `codegen::…::dynamic_new_candidate`, next to the site's argument types.
+    // Names the thunk's own parameters. Past the regular ones there is no declared name to reuse,
+    // so the overflow slots are numbered; they are the thunk's locals and nothing reads them by
+    // name. The TYPE comes from the shared `positional_param_type`, which codegen also uses to
+    // materialize the matching arguments — the two must describe the same frame.
+    let slot_name = |index: usize| -> String {
+        if index < regular {
+            constructor.params[index].0.clone()
+        } else {
+            format!("__variadic_arg{}", index)
+        }
+    };
+    let slot_type = |index: usize| -> Option<PhpType> {
+        crate::types::call_args::positional_param_type(constructor, index)
+    };
+    if (0..provided_args).any(|index| slot_type(index).is_none()) {
+        return;
+    }
+    // What the collector declares one element to be. `None` means it collects anything, and the
+    // overflow is passed through untouched.
+    let element = crate::types::call_args::variadic_element_type(constructor);
+    let cast = match element.as_ref().map(PhpType::codegen_repr) {
+        None | Some(PhpType::Mixed) => None,
+        Some(PhpType::Int) => Some(CastType::Int),
+        Some(PhpType::Float) => Some(CastType::Float),
+        Some(PhpType::Str) => Some(CastType::String),
+        Some(PhpType::Bool) => Some(CastType::Bool),
+        // A collector of objects or arrays has no cast that means what php means, so the class
+        // stays out of the ladder and `dynamic_new_mixed_refusals` reports the site instead.
+        Some(_) => return,
+    };
+
+    let span = Span::dummy();
+    let this_type = PhpType::Object(class_name.to_string());
+    let mut args = Vec::with_capacity(provided_args.max(constructor.params.len()));
+    let mut guards = Vec::new();
+    for index in 0..provided_args {
+        let variable = Expr::new(ExprKind::Variable(slot_name(index)), span);
+        let overflow = is_variadic && index >= regular;
+        match cast.clone().filter(|_| overflow) {
+            None => args.push(variable),
+            Some(target) => {
+                // php COERCES at this boundary, so the thunk does too — in PHP, where the rules
+                // can be spelled out, rather than in two architectures of hand-written assembly.
+                // `new $c("7")` and `new $c(1.5)` construct here exactly as they do in php.
+                //
+                // The guard is what keeps that from becoming a silent `(int)"x" === 0`: php raises
+                // a TypeError for a value it cannot read as a number, and so does this.
+                guards.push(coercible_or_throw_stmt(
+                    class_name,
+                    &variable,
+                    index + 1,
+                    target.clone(),
+                    span,
+                ));
+                args.push(Expr::new(
+                    ExprKind::Cast {
+                        target,
+                        expr: Box::new(variable),
+                    },
+                    span,
+                ));
+            }
+        }
+    }
+    // Pad only up to the last REGULAR parameter. For a collecting signature the entry beyond that
+    // is the collector, which takes what is passed rather than a default.
+    let pad_upto = if is_variadic {
+        regular
+    } else {
+        constructor.params.len()
+    };
+    if provided_args < pad_upto {
+        for default in &constructor.defaults[provided_args..pad_upto] {
+            args.push(default.clone().expect("padding requires a default"));
+        }
+    }
+    let mut body = guards;
+    body.push(Stmt::new(
+        StmtKind::ExprStmt(Expr::new(
+            ExprKind::MethodCall {
+                object: Box::new(Expr::new(ExprKind::This, span)),
+                method: "__construct".to_string(),
+                args,
+            },
+            span,
+        )),
+        span,
+    ));
+
+    let mut function = Function::new(function_name.clone(), IrType::Void, PhpType::Void);
+    function.flags.is_synthetic = true;
+    let mut params = vec![("this".to_string(), this_type.clone())];
+    function.params.push(FunctionParam {
+        name: "this".to_string(),
+        ir_type: value_ir_type(&this_type),
+        php_type: this_type.clone(),
+        by_ref: false,
+        variadic: false,
+    });
+    for index in 0..provided_args {
+        let name = slot_name(index);
+        let php_type = slot_type(index).expect("slot types were checked above");
+        params.push((name.clone(), php_type.clone()));
+        function.params.push(FunctionParam {
+            name,
+            ir_type: value_ir_type(&php_type),
+            php_type,
+            by_ref: constructor.ref_params.get(index).copied().unwrap_or(false),
+            variadic: false,
+        });
+    }
+    let sig = FunctionSig {
+        params: params.clone(),
+        param_type_exprs: vec![None; params.len()],
+        param_attributes: Vec::new(),
+        defaults: vec![None; params.len()],
+        return_type: PhpType::Void,
+        declared_return: false,
+        by_ref_return: false,
+        ref_params: vec![false; params.len()],
+        declared_params: vec![false; params.len()],
+        variadic: None,
+        deprecation: None,
+    };
+    function.source_signature = Some(source_signature(&function_name, &sig));
+    function.signature = Some(eir_runtime_metadata_signature(&sig));
+    let mut env = TypeEnv::new();
+    for (name, php_type) in &params {
+        env.insert(name.clone(), php_type.clone());
+    }
+    let web = module.web;
+    let closures = lower_body_into_function(
+        &mut function,
+        &mut module.data,
+        &body,
+        env,
+        web_gated_global_env(&check_result.global_env, web),
+        &check_result.functions,
+        &check_result.extern_functions,
+        &check_result.extern_globals,
+        &check_result.callable_param_sigs,
+        &check_result.return_alias_summaries,
+        fiber_return_sigs,
+        &module.class_infos,
+        &check_result.enums,
+        &check_result.interfaces,
+        &check_result.packed_classes,
+        &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
+        &check_result.loop_storage_types,
+        &check_result.string_incdec_locals,
+        function_name.clone(),
+        constants,
+        Some(class_name.to_string()),
+        PhpType::Void,
+        &params,
+        None,
+        false,
+        std::collections::HashSet::new(),
+        module.source_path.clone(),
+        None,
+        web,
+    );
+    add_closures(module, closures);
+    module.add_function(function);
+}
+
+/// The symbol a dynamic-new candidate calls when it has to pad the constructor with defaults.
+pub(crate) fn dynamic_constructor_thunk_name(class_id: u64, provided_args: usize) -> String {
+    format!("_class_ctor_{}_{}", class_id, provided_args)
 }
 
 /// Builds `$this->property = <default>;` statements for property-default initialization.

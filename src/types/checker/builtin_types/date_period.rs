@@ -16,6 +16,11 @@
 //!   parses `Rn/start[/interval[/end]]` and forwards to the regular constructor; returns
 //!   `false` on malformed input. The deprecated `new DatePeriod(string)` constructor is not
 //!   registered; callers should use the static factory instead.
+//! - Those bodies are BUILT, not parsed: `bodies` holds one statement-builder function each, so
+//!   no PHP is tokenized or parsed on the compilation path. The `*_SRC` constants survive under
+//!   `cfg(test)` as the oracle those builders are checked against.
+
+mod bodies;
 
 use std::collections::HashMap;
 
@@ -393,6 +398,7 @@ fn date_period_valid() -> ClassMethod {
     )
 }
 
+#[cfg(test)]
 const CURRENT_SRC: &str = r#"<?php
 if ($this->startIsImmutable) {
     $d = new DateTimeImmutable();
@@ -406,8 +412,7 @@ return $d;
 /// `DatePeriod::current(): DateTimeInterface` — returns a fresh snapshot at the cursor,
 /// preserving the concrete class of the start object (`DateTime` or `DateTimeImmutable`).
 fn date_period_current() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(CURRENT_SRC).expect("current body must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("current body must parse");
+    let body = bodies::current();
     method(
         "current",
         Vec::new(),
@@ -434,6 +439,7 @@ fn date_period_next() -> ClassMethod {
     )
 }
 
+#[cfg(test)]
 const GET_START_DATE_SRC: &str = r#"<?php
 if ($this->startIsImmutable) {
     $d = new DateTimeImmutable();
@@ -444,6 +450,7 @@ $d->setTimestamp($this->startTs);
 return $d;
 "#;
 
+#[cfg(test)]
 const GET_END_DATE_SRC: &str = r#"<?php
 if ($this->useCount) { return null; }
 $d = new DateTime();
@@ -454,8 +461,7 @@ return $d;
 /// `DatePeriod::getStartDate(): DateTimeInterface` — returns the start instant as the same
 /// concrete class that was passed to the constructor.
 fn date_period_get_start_date() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(GET_START_DATE_SRC).expect("getStartDate body must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("getStartDate body must parse");
+    let body = bodies::get_start_date();
     method(
         "getStartDate",
         Vec::new(),
@@ -467,8 +473,7 @@ fn date_period_get_start_date() -> ClassMethod {
 /// `DatePeriod::getEndDate(): ?DateTime` — returns the end bound for the end-date form, or `null`
 /// when the period was constructed with a recurrence count.
 fn date_period_get_end_date() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(GET_END_DATE_SRC).expect("getEndDate body must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("getEndDate body must parse");
+    let body = bodies::get_end_date();
     method(
         "getEndDate",
         Vec::new(),
@@ -536,6 +541,7 @@ fn date_period_get_iterator() -> ClassMethod {
 /// On malformed input it throws `DateMalformedPeriodStringException`, matching PHP 8.3+: a
 /// `Recurrence count must be greater or equal to 1 ...` message for an out-of-range recurrence
 /// (`R0`), and `Unknown or bad format (<input>)` for every other parse failure.
+#[cfg(test)]
 const CREATE_FROM_ISO8601_SRC: &str = r#"<?php
 $bad = "Unknown or bad format (" . $specification . ")";
 $badRecur = "DatePeriod::createFromISO8601String(): Recurrence count must be greater or equal to 1 and lower than 2147483640";
@@ -598,14 +604,12 @@ return new DatePeriod($start_dt, $iv, $recurrences, $options);
 /// Builds the static `createFromISO8601String(string $specification, int $options = 0): DatePeriod`
 /// method.
 ///
-/// The body is the parsed `CREATE_FROM_ISO8601_SRC` PHP source. It forwards to the regular
+/// The body is built by `bodies::create_from_iso8601`, which reproduces the AST
+/// `CREATE_FROM_ISO8601_SRC` parses to. It forwards to the regular
 /// `(start, interval, end|recurrences, options)` constructor on success and throws
 /// `DateMalformedPeriodStringException` on malformed input (PHP 8.3+ never returns `false`).
 fn date_period_create_from_iso8601_string() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(CREATE_FROM_ISO8601_SRC)
-        .expect("createFromISO8601String body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens)
-        .expect("createFromISO8601String body source must parse");
+    let body = bodies::create_from_iso8601();
     ClassMethod {
         name: "createFromISO8601String".to_string(),
         visibility: Visibility::Public,
@@ -695,4 +699,69 @@ pub(crate) fn inject_builtin_date_period(class_map: &mut HashMap<String, Flatten
             trait_aliases: Vec::new(),
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every `(label, php, built)` triple the oracle sweeps.
+    fn cases() -> Vec<(&'static str, &'static str, Vec<Stmt>)> {
+        vec![
+            ("CURRENT_SRC", CURRENT_SRC, bodies::current()),
+            ("GET_START_DATE_SRC", GET_START_DATE_SRC, bodies::get_start_date()),
+            ("GET_END_DATE_SRC", GET_END_DATE_SRC, bodies::get_end_date()),
+            ("CREATE_FROM_ISO8601_SRC", CREATE_FROM_ISO8601_SRC, bodies::create_from_iso8601()),
+        ]
+    }
+
+    /// THE ORACLE FOR THE TRANSCRIPTION: each built body must equal the parse of the PHP it
+    /// replaced, statement by statement.
+    ///
+    /// The builders were generated by `synthetic_class::transcribe` and then reviewed by hand,
+    /// and neither step proves anything on its own — a transcription that drops a qualifier or
+    /// an argument still compiles and quietly means something else. This is what makes them
+    /// safe to rely on, and it is why the PHP stays in the file under `cfg(test)`.
+    ///
+    /// Spans are stripped because a built node has none and a parsed one does; everything else
+    /// — order, operators, nesting, name qualification — has to match exactly.
+    #[test]
+    fn built_bodies_match_the_php() {
+        for (label, php, built) in cases() {
+            let tokens = crate::lexer::tokenize(php)
+                .unwrap_or_else(|e| panic!("{label} must tokenize: {e:?}"));
+            let parsed = crate::parser::parse_internal(&tokens)
+                .unwrap_or_else(|e| panic!("{label} must parse: {e:?}"));
+
+            assert_eq!(
+                built.len(),
+                parsed.len(),
+                "{label}: statement COUNT differs — built {} vs parsed {}",
+                built.len(),
+                parsed.len()
+            );
+            for (index, (built_stmt, parsed_stmt)) in built.iter().zip(parsed.iter()).enumerate() {
+                assert_eq!(
+                    strip_spans(&format!("{built_stmt:?}")),
+                    strip_spans(&format!("{parsed_stmt:?}")),
+                    "{label}: statement {index} differs from its PHP"
+                );
+            }
+        }
+    }
+
+    /// Removes span payloads so a built node and a parsed node compare on structure alone.
+    fn strip_spans(rendered: &str) -> String {
+        let mut cleaned = String::with_capacity(rendered.len());
+        let mut rest = rendered;
+        while let Some(at) = rest.find("Span {") {
+            cleaned.push_str(&rest[..at]);
+            cleaned.push_str("Span");
+            let after = &rest[at..];
+            let close = after.find('}').map(|end| end + 1).unwrap_or(after.len());
+            rest = &after[close..];
+        }
+        cleaned.push_str(rest);
+        cleaned
+    }
 }

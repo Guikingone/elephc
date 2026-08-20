@@ -27,9 +27,21 @@ pub(super) fn lower_nested_array_assign(
     // lowered with fetch-for-write semantics so missing or null intermediate
     // elements autovivify as arrays instead of dropping the write (#555).
     if let ExprKind::ArrayAccess { array, index } = &target.kind {
+        // PHP reads a plain-variable index at STORE time, and a nested target reads EVERY one of
+        // them there: `$a[$i][$i] = ($i = 1)` writes through the index the right-hand side left
+        // behind, not the one it started with. Deferring the whole target is sound only when it
+        // carries no index EXPRESSION — otherwise a call would move across the right-hand side —
+        // so the shape is checked and anything else keeps the original order. Constant
+        // propagation applies the same rule ahead of this pass; fixing either alone changes
+        // nothing, because the fold has already replaced the variable by the time lowering runs.
+        let deferred = nested_target_is_all_bare_variables(target);
+        let value_first = deferred.then(|| lower_expr(ctx, value));
         let parent = lower_nested_assign_parent(ctx, array, span);
         let key = lower_expr(ctx, index);
-        let value = lower_expr(ctx, value);
+        let value = match value_first {
+            Some(value) => value,
+            None => lower_expr(ctx, value),
+        };
         ctx.emit_void(
             Op::RuntimeCall,
             vec![parent.value, key.value, value.value],
@@ -230,4 +242,20 @@ pub(super) fn lower_hash_parent_fetch_for_write(
         Op::HashGetForWrite.default_effects(),
         Some(span),
     )
+}
+
+/// Returns true when every part of a nested write target is a bare variable.
+///
+/// `$a[$i][$j]` qualifies; `$a[f()][$i]` does not. With no index expression there is no side
+/// effect whose order could change, so deferring the target past the right-hand side moves only
+/// the READ of each variable — which is exactly PHP's store-time rule applied to a chain.
+fn nested_target_is_all_bare_variables(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::Variable(_) => true,
+        ExprKind::ArrayAccess { array, index } => {
+            matches!(index.kind, ExprKind::Variable(_))
+                && nested_target_is_all_bare_variables(array)
+        }
+        _ => false,
+    }
 }

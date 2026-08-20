@@ -105,13 +105,19 @@ struct ConstructorCallTarget {
     param_types: Vec<PhpType>,
     ref_params: Vec<bool>,
     sig: crate::types::FunctionSig,
+    /// Symbol to call instead of the constructor itself, when the site passes fewer arguments
+    /// than the constructor declares. `ir_lower` emits `_class_ctor_<id>_<argc>` for exactly
+    /// those pairs; it takes what the site passed and calls the real constructor with the
+    /// declared defaults appended. Codegen cannot build those defaults itself — by the time it
+    /// runs, arguments are materialized SSA values and a default is still an expression.
+    padding_thunk: Option<String>,
 }
 
 
 mod fixed_new;
 mod clone_and_spl;
 mod iterator_iterator;
-mod throwable_new;
+pub(in crate::codegen::lower_inst) mod throwable_new;
 mod fiber_dynamic_entry;
 mod dynamic_mixed_candidates;
 mod dynamic_factory;

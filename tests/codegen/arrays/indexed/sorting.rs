@@ -9,6 +9,113 @@
 
 use super::*;
 
+/// Verifies `array_unique()` accepts an argument that is ALREADY a hash.
+///
+/// It did not compile at all — `unsupported EIR backend feature: array_unique for PHP type
+/// AssocArray` — which turned ordinary PHP into a build failure. The indexed builder cannot serve
+/// this case: it walks fixed-size slots, and a hash has none.
+///
+/// Duplicates are found through a second hash keyed by the VALUE rather than by rescanning what
+/// has been emitted, so the walk stays linear and equal strings collapse without a byte scan —
+/// hash keys already compare by value. The two `"pomme"` are built by separate concatenations to
+/// pin that: keyed by pointer they would both survive.
+///
+/// Each survivor keeps its ORIGINAL key, which is the whole reason `array_unique` returns a hash
+/// in the first place, so the keys are what the assertion checks.
+#[test]
+fn test_array_unique_accepts_a_hash_and_keeps_the_first_key() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(array_unique([7 => 30, 2 => 10, 9 => 30, 4 => 20, 1 => 10]));
+var_dump(array_unique(["c" => "pear", "a" => "apple", "z" => "pear", "b" => "fig"]));
+$x = "po" . "mme";
+$y = "pom" . "me";
+var_dump(array_unique(["k1" => $x, "k2" => $y, "k3" => "kiwi"]));
+echo count(array_unique(["a" => 1, "b" => 1, "c" => 1])), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [7]=>\n  int(30)\n  [2]=>\n  int(10)\n  [4]=>\n  int(20)\n}\n\
+         array(3) {\n  [\"c\"]=>\n  string(4) \"pear\"\n  [\"a\"]=>\n  string(5) \"apple\"\n  \
+         [\"b\"]=>\n  string(3) \"fig\"\n}\n\
+         array(2) {\n  [\"k1\"]=>\n  string(5) \"pomme\"\n  [\"k3\"]=>\n  string(4) \"kiwi\"\n}\n1\n"
+    );
+}
+
+/// Verifies `array_unique()` accepts a STRING list and compares its elements by value.
+///
+/// The call did not compile at all: the shared 8-byte element gate refuses `Str`, because a string
+/// slot is a 16-byte (pointer, length) pair. That gate is also `array_reverse`, `shuffle` and
+/// `array_merge`, none of which compare their elements, so it stays as it is and `array_unique`
+/// reads the element type itself.
+///
+/// The two `"pomme"` below are built by separate concatenations on purpose. They are equal
+/// strings at DIFFERENT addresses, so the word-equality the scan used for integers would have
+/// kept both — the same defect that still makes boxed elements a refusal rather than an answer.
+/// PHP compares by string rendering, which for a string array is byte equality.
+///
+/// Keys are asserted through `var_dump` and `json_encode`: `array_unique` keeps each survivor's
+/// ORIGINAL key, so the result is sparse and encodes as a JSON object, not a list.
+#[test]
+fn test_array_unique_deduplicates_a_string_list_by_value() {
+    let out = compile_and_run(
+        r#"<?php
+$u = array_unique(["pear", "apple", "pear", "fig", "apple"]);
+var_dump($u);
+echo json_encode($u), "\n";
+$x = "po" . "mme";
+$y = "pom" . "me";
+var_dump(array_unique([$x, $y, "kiwi"]));
+echo count(array_unique(["a", "a", "a"])), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  string(4) \"pear\"\n  [1]=>\n  string(5) \"apple\"\n  \
+         [3]=>\n  string(3) \"fig\"\n}\n{\"0\":\"pear\",\"1\":\"apple\",\"3\":\"fig\"}\n\
+         array(2) {\n  [0]=>\n  string(5) \"pomme\"\n  [2]=>\n  string(4) \"kiwi\"\n}\n1\n"
+    );
+}
+
+/// Verifies `sort()` and `rsort()` accept a HASH receiver and renumber it from zero.
+///
+/// `sort(array_unique($xs))` is everyday PHP — `array_unique` preserves the original keys, so its
+/// result is a hash the moment anything was dropped — and the backend used to refuse the whole
+/// program with `unsupported EIR backend feature: sort for PHP type AssocArray`. That refusal was
+/// the only thing keeping this branch's CI red, on all three architectures.
+///
+/// The result is asserted through its SHAPE, not just its order: `sort()` discards keys, so what
+/// distinguishes a correct result from a merely value-sorted one is that the keys come back as
+/// `0..n-1`. `var_dump` and `json_encode` are the two readers that show it — a hash whose keys are
+/// not dense would encode as an object instead of a list.
+#[test]
+fn test_sort_and_rsort_renumber_a_hash_receiver_from_zero() {
+    let out = compile_and_run(
+        r#"<?php
+$u = array_unique([30, 10, 30, 20, 10]);
+sort($u);
+var_dump($u);
+echo json_encode($u), "\n";
+foreach ($u as $k => $v) { echo $k, "=>", $v, " "; }
+echo "\n", count($u), ":", $u[0], ":", $u[2], "\n";
+
+$s = ["c" => "pear", "a" => "apple", "b" => "fig"];
+sort($s);
+echo implode(",", $s), "\n";
+
+$r = array_unique([1, 3, 1, 2]);
+rsort($r);
+echo implode(",", $r), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  int(10)\n  [1]=>\n  int(20)\n  [2]=>\n  int(30)\n}\n\
+         [10,20,30]\n0=>10 1=>20 2=>30 \n3:10:30\napple,fig,pear\n3,2,1\n"
+    );
+}
+
 /// Verifies asort maintains key-value associations and sorts by values in ascending order.
 /// Fixture: [3, 1, 2] → sorted [1, 2, 3] → first element $a[0] should be 1.
 #[test]
@@ -345,11 +452,11 @@ krsort($grid[1]);
     );
     assert!(!out.success, "scalar nested value should fail");
     assert!(
-        out.stderr.contains("krsort()")
-            && out.stderr.contains("Argument #1")
-            && out.stderr.contains("array"),
+        out.stdout.contains("krsort()")
+            && out.stdout.contains("Argument #1")
+            && out.stdout.contains("array"),
         "expected a controlled krsort array TypeError, got: {}",
-        out.stderr,
+        out.stdout,
     );
 }
 
@@ -364,11 +471,11 @@ krsort($grid[9]);
     );
     assert!(!out.success, "missing nested value should fail");
     assert!(
-        out.stderr.contains("krsort()")
-            && out.stderr.contains("Argument #1")
-            && out.stderr.contains("array"),
+        out.stdout.contains("krsort()")
+            && out.stdout.contains("Argument #1")
+            && out.stdout.contains("array"),
         "expected a controlled krsort array TypeError, got: {}",
-        out.stderr,
+        out.stdout,
     );
 }
 
@@ -399,11 +506,11 @@ krsort($matrix["missing"]);
     );
     assert!(!out.success, "missing nested array should fail");
     assert!(
-        out.stderr.contains("krsort()")
-            && out.stderr.contains("Argument #1")
-            && out.stderr.contains("array"),
+        out.stdout.contains("krsort()")
+            && out.stdout.contains("Argument #1")
+            && out.stdout.contains("array"),
         "expected a controlled krsort array TypeError, got: {}",
-        out.stderr,
+        out.stdout,
     );
 }
 

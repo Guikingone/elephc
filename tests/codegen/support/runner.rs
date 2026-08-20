@@ -1031,5 +1031,11 @@ pub(crate) fn assemble_and_run_expect_failure(
     let output = run_binary(&bin_path, dir);
     assert!(!output.status.success(), "binary unexpectedly succeeded");
 
-    String::from_utf8(output.stderr).unwrap()
+    // BOTH streams. PHP writes its uncaught-exception report to STDOUT — measured against 8.5 with
+    // the two streams captured to separate files — and elephc now does the same, so a helper that
+    // read only stderr would hand every failure assertion an empty string. Compiler diagnostics
+    // still arrive on stderr, so both are returned rather than either one.
+    let mut combined = String::from_utf8(output.stdout).unwrap();
+    combined.push_str(&String::from_utf8(output.stderr).unwrap());
+    combined
 }

@@ -74,6 +74,13 @@ pub fn parse(tokens: &[SpannedToken]) -> Result<Program, CompileError> {
 }
 
 /// Parses compiler-generated tagged source without exposing it to user strict-PHP rules.
+///
+/// No compilation path calls this any more: the synthetic preludes it existed for are BUILT
+/// rather than parsed, so the only callers left are the oracles that check those builders
+/// against the PHP they replaced. The lib keeps it as public API; the bin compiles the same
+/// sources through its own module tree, where nothing reaches it — hence the allow, exactly as
+/// `parse` above carries it.
+#[allow(dead_code)]
 pub fn parse_internal(tokens: &[SpannedToken]) -> Result<Program, CompileError> {
     parse_with_mode(tokens, crate::source::SourceMode::Internal)
 }

@@ -8,7 +8,7 @@
 //! Key details:
 //! - Matching uses caller-visible regular parameters so hidden implementation parameters do not leak into PHP semantics.
 
-use crate::types::FunctionSig;
+use crate::types::{FunctionSig, PhpType};
 
 /// Discriminates a named-parameter match into regular positional, variadic, or unknown categories.
 pub(super) enum NamedParamMatch {
@@ -62,6 +62,54 @@ impl NamedParamTracker {
 
 /// Returns the number of visible regular parameters for named-argument matching.
 ///
+/// The type ONE positional argument occupies at `index` in a call to `sig`.
+///
+/// NOT `sig.params[index].1`. Past the regular parameters a variadic signature keeps collecting,
+/// and the collector's own entry describes the COLLECTION: `int ...$r` is stored as one parameter
+/// of type `array<int>`, and the lowered callee receives exactly that — one array — while the
+/// CALLER materializes each argument separately and pushes it in. A caller that reads
+/// `params[regular]` therefore builds an argument typed `array<int>` where one `int` belongs.
+///
+/// Two callers need this and MUST agree, or the thunk's declared parameters and the call codegen
+/// emits describe different frames: `ir_lower::lower_dynamic_constructor_thunk` declares the
+/// padding thunk's parameters, and `codegen::…::dynamic_new_candidate` materializes the arguments
+/// passed to it. They share this function rather than each deriving the rule.
+///
+/// Returns `None` when `index` is past the regular parameters of a signature that cannot collect,
+/// which is a call the caller has to refuse rather than materialize.
+pub(crate) fn positional_param_type(sig: &FunctionSig, index: usize) -> Option<PhpType> {
+    let regular = regular_param_count(sig);
+    if index < regular {
+        return sig.params.get(index).map(|(_, ty)| ty.clone());
+    }
+    sig.variadic.as_ref()?;
+    sig.params.get(regular)?;
+    // MIXED, NOT THE ELEMENT TYPE. A caller materializing an overflow argument has to BOX it —
+    // that is the one slot codegen boxes rather than reinterpreting — because materializing it AS
+    // the declared element type performs no conversion: `new $c("x")` on `int ...$r` came back
+    // holding the string's ADDRESS read as an integer. What the collector actually declares is a
+    // separate question, answered by `variadic_element_type`, and it is the CALLEE's business:
+    // the padding thunk casts each boxed argument down to it, in PHP, where php's own coercion
+    // rules can be spelled out.
+    Some(PhpType::Mixed)
+}
+
+/// What ONE element of `sig`'s variadic collector is declared to be, or `None` when it collects
+/// anything.
+///
+/// The collector's own signature entry describes the COLLECTION — `int ...$r` is stored as one
+/// parameter of type `array<int>` — so the element is that array's inner type. Both spellings are
+/// tolerated on purpose: a path that stores the element type directly still answers correctly, so
+/// this cannot become the silent half of a disagreement.
+pub(crate) fn variadic_element_type(sig: &FunctionSig) -> Option<PhpType> {
+    sig.variadic.as_ref()?;
+    let (_, collector) = sig.params.get(regular_param_count(sig))?;
+    Some(match collector {
+        PhpType::Array(element) => (**element).clone(),
+        other => other.clone(),
+    })
+}
+
 /// If the signature is variadic, excludes the variadic slot from the count so that
 /// named arguments address only the caller-visible parameters.
 pub(crate) fn regular_param_count(sig: &FunctionSig) -> usize {

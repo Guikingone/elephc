@@ -417,3 +417,51 @@ fn emit_linux_access_check(emitter: &mut Emitter, mode: u32) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the access helper call sequence
     emitter.instruction("ret");                                                 // return the readability or writability predicate to the caller
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::emit_stat;
+
+    /// Both size and mtime helpers must test the stat result before reading their buffer, on
+    /// BOTH architectures.
+    ///
+    /// The buffer is a stack allocation the syscall fills only on success, so reading it
+    /// unconditionally returns untouched stack for a missing path — measured on AArch64 as
+    /// `filesize()` answering `int(4)` and `filemtime()` `int(8322009384)`. The x86_64 helpers
+    /// already tested `eax`, which is exactly why a behaviour test running on one host could
+    /// not see the defect: it has to be pinned on the EMITTED assembly of each target.
+    #[test]
+    fn the_stat_field_helpers_check_the_syscall_before_reading_their_buffer() {
+        for (platform, arch, failure_labels) in [
+            (
+                Platform::MacOS,
+                Arch::AArch64,
+                ["__rt_filesize_fail", "__rt_filemtime_fail"],
+            ),
+            (
+                Platform::Linux,
+                Arch::X86_64,
+                ["__rt_filesize_fail", "__rt_filemtime_fail"],
+            ),
+        ] {
+            let mut emitter = Emitter::new(Target::new(platform, arch));
+            emit_stat(&mut emitter);
+            let asm = emitter.output();
+            for label in failure_labels {
+                assert!(
+                    asm.contains(&format!("{label}:")),
+                    "{arch:?}: {label} must exist, or the buffer is read unconditionally:\n{asm}"
+                );
+                let branch_to_failure = asm.contains(&format!("b.ne {label}"))
+                    || asm.contains(&format!("jne {label}"));
+                assert!(
+                    branch_to_failure,
+                    "{arch:?}: a failed stat must branch to {label}:\n{asm}"
+                );
+            }
+        }
+    }
+}

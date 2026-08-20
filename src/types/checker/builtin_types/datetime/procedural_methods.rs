@@ -12,8 +12,7 @@ use super::*;
 /// Builds the internal static `__elephc_sun_rs(...)` core shared by `date_sun_info()`,
 /// `date_sunrise()`, and `date_sunset()`. See `SUN_RS_SRC` for the algorithm and return shape.
 pub(super) fn datetime_sun_rs() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(SUN_RS_SRC).expect("sun_rs body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("sun_rs body source must parse");
+    let body = super::bodies::sun_rs();
     ClassMethod {
         name: "__elephc_sun_rs".to_string(),
         visibility: Visibility::Public,
@@ -44,8 +43,7 @@ pub(super) fn datetime_sun_rs() -> ClassMethod {
 /// Returns `bool` for the polar all-day/all-night edge cases and the precomputed `int` timestamp
 /// otherwise; the `mixed` return type preserves each branch's runtime tag. See `SUN_VAL_SRC`.
 pub(super) fn datetime_sun_val() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(SUN_VAL_SRC).expect("sun_val body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("sun_val body source must parse");
+    let body = super::bodies::sun_val();
     ClassMethod {
         name: "__elephc_sun_val".to_string(),
         visibility: Visibility::Public,
@@ -72,8 +70,7 @@ pub(super) fn datetime_sun_val() -> ClassMethod {
 /// Builds the internal static `__elephc_date_sun_info($timestamp, $latitude, $longitude)` method on
 /// `DateTime` backing the `date_sun_info()` procedural function. See `SUN_INFO_SRC`.
 pub(super) fn datetime_sun_info() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(SUN_INFO_SRC).expect("sun_info body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("sun_info body source must parse");
+    let body = super::bodies::sun_info();
     ClassMethod {
         name: "__elephc_date_sun_info".to_string(),
         visibility: Visibility::Public,
@@ -103,8 +100,7 @@ pub(super) fn datetime_sun_info() -> ClassMethod {
 /// optional latitude/longitude/zenith parameters default to a `-999` sentinel so the body can
 /// substitute PHP's ini defaults; `$returnFormat` defaults to `SUNFUNCS_RET_STRING` (1).
 pub(super) fn datetime_sunfunc() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(SUNFUNC_SRC).expect("sunfunc body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("sunfunc body source must parse");
+    let body = super::bodies::sunfunc();
     ClassMethod {
         name: "__elephc_date_sunfunc".to_string(),
         visibility: Visibility::Public,
@@ -162,9 +158,7 @@ pub(super) fn datetime_sunfunc() -> ClassMethod {
 /// the `date_parse()` procedural function (the name resolver desugars the call to it). Returns the
 /// same component array as `date_parse_from_format`. Self-contained parsed-source body.
 pub(super) fn datetime_date_parse() -> ClassMethod {
-    let tokens =
-        crate::lexer::tokenize(DATE_PARSE_SRC).expect("date_parse body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("date_parse body source must parse");
+    let body = super::bodies::date_parse();
     ClassMethod {
         name: "__elephc_date_parse".to_string(),
         visibility: Visibility::Public,

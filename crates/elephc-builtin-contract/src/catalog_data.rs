@@ -29,7 +29,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Ptr,
         by_ref_return: false,
         summary: "Reinterprets a closure / first-class callable as its raw descriptor pointer.",
         examples: &[
@@ -445,7 +445,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Callable,
         by_ref_return: false,
         summary: "Normalizes a PHP callable into an owned runtime descriptor.",
         examples: &[
@@ -597,7 +597,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Ptr,
         by_ref_return: false,
         summary: "Returns the address of the shared __rt_pdo_* callback adapter for a kind.",
         examples: &[
@@ -1156,7 +1156,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -1184,7 +1184,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -1218,7 +1218,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11642,7 +11642,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Ptr,
         by_ref_return: false,
         summary: "Returns a raw pointer to the given variable.",
         examples: &[
@@ -11661,7 +11661,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11689,7 +11689,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11720,7 +11720,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: Some("ptr_null() takes 0 arguments"),
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Ptr,
         by_ref_return: false,
         summary: "Returns a null raw pointer.",
         examples: &[
@@ -11739,7 +11739,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11754,7 +11754,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Ptr,
         by_ref_return: false,
         summary: "Returns a new pointer offset from the given pointer by the given byte count.",
         examples: &[
@@ -11773,7 +11773,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11801,7 +11801,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11829,7 +11829,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11857,7 +11857,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11891,7 +11891,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11953,7 +11953,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -11987,7 +11987,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -12021,7 +12021,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -12055,7 +12055,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "pointer",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -16889,7 +16889,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "zval",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -16926,7 +16926,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Ptr,
         by_ref_return: false,
         summary: "Packs an elephc runtime value into a heap-allocated PHP zval pointer.",
         examples: &[
@@ -16945,7 +16945,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "zval",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },
@@ -16973,7 +16973,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "zval",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Ptr,
                 default: None,
                 by_ref: false,
             },

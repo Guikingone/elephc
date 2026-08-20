@@ -89,7 +89,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "__elephc_callable_ptr",
@@ -1581,7 +1581,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "callable",
       "variadic": null
     },
     "slug": "__elephc_normalize_callable",
@@ -2110,7 +2110,7 @@
           "type": "int"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "__elephc_pdo_adapter_addr",
@@ -4340,7 +4340,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "required_param_count": 1,
@@ -4439,7 +4439,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "return_type": "bool",
@@ -4457,7 +4457,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -4563,7 +4563,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -4588,7 +4588,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -4694,7 +4694,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -22125,7 +22125,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/count_empty.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 92,
+      "codegen_line": 284,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
@@ -24079,7 +24079,7 @@
           "type": "string"
         }
       ],
-      "return_type": "array",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "fgetcsv",
@@ -24374,7 +24374,7 @@
           "type": "int"
         }
       ],
-      "return_type": "array",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "file",
@@ -33496,7 +33496,7 @@
       "checker_line": null,
       "codegen_file": "src/hash_prelude.rs",
       "codegen_function": "hash_copy",
-      "codegen_line": 103,
+      "codegen_line": 1,
       "notes": [
         "Implemented by the compiler-injected hash prelude."
       ],
@@ -33916,7 +33916,7 @@
       "checker_line": null,
       "codegen_file": "src/hash_prelude.rs",
       "codegen_function": "hash_final",
-      "codegen_line": 98,
+      "codegen_line": 1,
       "notes": [
         "Implemented by the compiler-injected hash prelude."
       ],
@@ -34223,7 +34223,7 @@
       "checker_line": null,
       "codegen_file": "src/hash_prelude.rs",
       "codegen_function": "hash_init",
-      "codegen_line": 89,
+      "codegen_line": 1,
       "notes": [
         "Implemented by the compiler-injected hash prelude."
       ],
@@ -34319,7 +34319,7 @@
       "checker_line": null,
       "codegen_file": "src/hash_prelude.rs",
       "codegen_function": "hash_update",
-      "codegen_line": 93,
+      "codegen_line": 1,
       "notes": [
         "Implemented by the compiler-injected hash prelude."
       ],
@@ -51758,7 +51758,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "ptr",
@@ -51773,7 +51773,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "required_param_count": 1,
@@ -51800,7 +51800,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "required_param_count": 1,
@@ -51910,7 +51910,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "required_param_count": 1,
@@ -51937,7 +51937,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "required_param_count": 1,
@@ -52145,7 +52145,7 @@
     },
     "sig": {
       "params": [],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "ptr_null",
@@ -52160,7 +52160,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -52194,7 +52194,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -52303,7 +52303,7 @@
           "type": "int"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "ptr_offset",
@@ -52318,7 +52318,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "required_param_count": 1,
@@ -52345,7 +52345,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "required_param_count": 1,
@@ -52455,7 +52455,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "required_param_count": 1,
@@ -52482,7 +52482,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "required_param_count": 1,
@@ -52592,7 +52592,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "required_param_count": 1,
@@ -52619,7 +52619,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "required_param_count": 1,
@@ -52729,7 +52729,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -52763,7 +52763,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -52887,7 +52887,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -52921,7 +52921,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -53182,7 +53182,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -53216,7 +53216,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -53340,7 +53340,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -53374,7 +53374,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -53498,7 +53498,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -53532,7 +53532,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -53656,7 +53656,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -53690,7 +53690,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -75186,7 +75186,7 @@
           "default": null,
           "name": "zval",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "required_param_count": 1,
@@ -75420,7 +75420,7 @@
           "default": null,
           "name": "zval",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "required_param_count": 1,
@@ -75537,7 +75537,7 @@
           "default": null,
           "name": "zval",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "required_param_count": 1,

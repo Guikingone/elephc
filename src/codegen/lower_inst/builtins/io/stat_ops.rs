@@ -9,6 +9,8 @@
 
 use super::*;
 
+use super::wrapper_dispatch::{URL_STAT_FLAGS_LINK, URL_STAT_FLAGS_NOCACHE};
+
 /// Lowers `getcwd()` through the target-aware runtime helper.
 pub(crate) fn lower_getcwd(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "getcwd", 0)?;
@@ -50,10 +52,11 @@ pub(crate) fn lower_filemtime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    // The same composer `fileatime`, `filectime`, `fileinode`, `fileowner`, `filegroup` and
-    // `fileperms` go through. It read as a plain integer here, so the runtime's failure flag had
-    // nowhere to land and php's `false` was discarded at the boundary.
-    lower_unary_path_stat_int_or_false(ctx, inst, "filemtime", "__rt_filemtime")
+    // Unlike `fileatime`, `filectime`, `fileinode`, `fileowner`, `filegroup` and `fileperms`, this
+    // one probes registered wrappers first, so it cannot share their composer. The wrapper
+    // composer boxes int|false itself: read as a plain integer the runtime's failure flag would
+    // have nowhere to land and php's `false` would be discarded at the boundary.
+    super::wrapper_dispatch::lower_filemtime_with_wrapper(ctx, inst)
 }
 
 /// Lowers `linkinfo(path)` through the target-aware runtime lstat helper.
@@ -147,12 +150,24 @@ pub(crate) fn lower_filetype(
 
 /// Lowers `stat(path)` and boxes the runtime stat array or PHP false result.
 pub(crate) fn lower_stat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_stat_array_or_false(ctx, inst, "stat", "__rt_stat_array")
+    super::wrapper_dispatch::lower_path_stat_with_wrapper(
+        ctx,
+        inst,
+        "stat",
+        "__rt_stat_array",
+        URL_STAT_FLAGS_NOCACHE,
+    )
 }
 
 /// Lowers `lstat(path)` and boxes the runtime lstat array or PHP false result.
 pub(crate) fn lower_lstat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_stat_array_or_false(ctx, inst, "lstat", "__rt_lstat_array")
+    super::wrapper_dispatch::lower_path_stat_with_wrapper(
+        ctx,
+        inst,
+        "lstat",
+        "__rt_lstat_array",
+        URL_STAT_FLAGS_LINK,
+    )
 }
 
 /// Lowers `fstat(stream)` and boxes the runtime stat array or PHP false result.
@@ -221,7 +236,7 @@ pub(crate) fn lower_is_dir(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_predicate(ctx, inst, "is_dir", "__rt_is_dir")
+    super::wrapper_dispatch::lower_is_dir_with_wrapper(ctx, inst)
 }
 
 /// Lowers `is_readable(path)` through the target-aware runtime access helper.
@@ -229,7 +244,7 @@ pub(crate) fn lower_is_readable(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_predicate(ctx, inst, "is_readable", "__rt_is_readable")
+    super::wrapper_dispatch::lower_is_readable_with_wrapper(ctx, inst)
 }
 
 /// Lowers `is_writable(path)` through the target-aware runtime access helper.
@@ -237,7 +252,7 @@ pub(crate) fn lower_is_writable(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_predicate(ctx, inst, "is_writable", "__rt_is_writable")
+    super::wrapper_dispatch::lower_is_writable_with_wrapper(ctx, inst, "is_writable")
 }
 
 /// Lowers `is_writeable(path)`, PHP's alias of `is_writable(path)`.
@@ -245,7 +260,7 @@ pub(crate) fn lower_is_writeable(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_predicate(ctx, inst, "is_writeable", "__rt_is_writable")
+    super::wrapper_dispatch::lower_is_writable_with_wrapper(ctx, inst, "is_writeable")
 }
 
 /// Lowers `is_executable(path)` through the target-aware runtime access helper.
@@ -253,7 +268,7 @@ pub(crate) fn lower_is_executable(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_predicate(ctx, inst, "is_executable", "__rt_is_executable")
+    super::wrapper_dispatch::lower_is_executable_with_wrapper(ctx, inst)
 }
 
 /// Lowers `is_link(path)` through the target-aware runtime lstat helper.

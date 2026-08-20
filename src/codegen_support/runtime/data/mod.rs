@@ -19,6 +19,7 @@ pub(crate) use fixed::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
 pub(crate) use user::emit_runtime_data_user;
 pub(crate) use user::{is_user_filter_contract_method, is_user_wrapper_contract_method};
+pub(crate) use user::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 
 /// Fatal error message when `php_uname()` receives a `$mode` argument whose length is not exactly 1.
 pub(crate) const PHP_UNAME_MODE_LEN_MSG: &str =
@@ -125,6 +126,15 @@ pub(crate) const UNSER_ALLOWED_CLASSES_POLICY_PREFIX: &str =
 /// Prefix for a catchable TypeError naming an invalid `allowed_classes` list entry.
 pub(crate) const UNSER_ALLOWED_CLASSES_ENTRY_PREFIX: &str =
     "unserialize(): Option \"allowed_classes\" must be an array of class names, ";
+/// Prefix for PHP's catchable Error when an object is indexed like an array.
+///
+/// `$o["k"]` on anything that is not `ArrayAccess` stops the program in PHP — including a plain
+/// `stdClass`, and including the quiet contexts `isset`, `??` and `empty`, all measured against
+/// 8.5. The class is only known at run time when the value arrives boxed, so the message is
+/// composed from these two fragments around the name.
+pub(crate) const OBJECT_NOT_ARRAY_PREFIX: &str = "Cannot use object of type ";
+/// Suffix for PHP's catchable Error when an object is indexed like an array.
+pub(crate) const OBJECT_NOT_ARRAY_SUFFIX: &str = " as array";
 /// Prefix for PHP's catchable object-to-string conversion Error in an allowed-class list.
 pub(crate) const UNSER_OBJECT_STRING_ERROR_PREFIX: &str = "Object of class ";
 /// Suffix for PHP's catchable object-to-string conversion Error in an allowed-class list.

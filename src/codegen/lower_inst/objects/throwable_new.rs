@@ -158,7 +158,7 @@ pub(super) fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id:
 /// `payload_reg` holds the freshly allocated payload. The store is UNCONDITIONAL even for line
 /// `0`: `__rt_heap_alloc` recycles blocks without zeroing them, so an unwritten slot would hand
 /// `getLine()` whatever the previous owner left behind.
-pub(super) fn emit_throwable_creation_line_aarch64(
+pub(in crate::codegen::lower_inst) fn emit_throwable_creation_line_aarch64(
     ctx: &mut FunctionContext<'_>,
     payload_reg: &str,
     scratch_reg: &str,
@@ -182,7 +182,7 @@ pub(super) fn emit_throwable_creation_line_aarch64(
 ///
 /// Mirrors [`emit_throwable_creation_line_aarch64`]; the two architectures emit independently, and
 /// an upstream fix has already been lost once by living on only one of them.
-pub(super) fn emit_throwable_creation_line_x86_64(
+pub(in crate::codegen::lower_inst) fn emit_throwable_creation_line_x86_64(
     ctx: &mut FunctionContext<'_>,
     payload_reg: &str,
     creation_line: u32,
