@@ -162,10 +162,15 @@ class mysqli_result implements IteratorAggregate {
             throw new ValueError("mysqli_result::fetch_all(): Argument #1 (\$mode) must be one of MYSQLI_NUM, MYSQLI_ASSOC, or MYSQLI_BOTH");
         }
         $_all = [];
-        $_row = $this->fetch_array($mode);
-        while ($_row !== null) {
-            $_all[] = $_row;
+        // A fresh `$_row` each iteration, narrowed by the `=== null` break, so it
+        // is never reassigned from the narrowed `array` back to `?array` (which
+        // the checker rejects inside the narrowed scope).
+        while (true) {
             $_row = $this->fetch_array($mode);
+            if ($_row === null) {
+                break;
+            }
+            $_all[] = $_row;
         }
         return $_all;
     }

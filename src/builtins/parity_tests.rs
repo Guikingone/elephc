@@ -99,7 +99,10 @@ fn preludes_built_in_rust_never_call_php_visible_extension_builtins() {
     // calls nothing, and the PDO build above already carries it, so it needs no
     // separate entry.
     for &(name, src) in crate::mysqli_prelude::fragment_sources() {
-        let tokens = crate::lexer::tokenize(src).expect("mysqli fragment must tokenize");
+        // Fragments carry no `<?php` header (they are concatenated after one in
+        // `source_for_version`), so add it before tokenizing this one on its own.
+        let source = format!("<?php\n{src}");
+        let tokens = crate::lexer::tokenize(&source).expect("mysqli fragment must tokenize");
         let program =
             crate::parser::parse_internal(&tokens).expect("mysqli fragment must parse");
         built.push((name, program));

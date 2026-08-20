@@ -26,6 +26,7 @@
 
 #[cfg(test)]
 use std::borrow::Cow;
+use std::sync::OnceLock;
 
 use crate::parser::ast::{Program, Stmt, StmtKind};
 use crate::php_version::PhpVersion;
