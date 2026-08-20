@@ -83,11 +83,28 @@ pub(crate) fn positional_param_type(sig: &FunctionSig, index: usize) -> Option<P
         return sig.params.get(index).map(|(_, ty)| ty.clone());
     }
     sig.variadic.as_ref()?;
-    let (_, collector) = sig.params.get(regular)?;
+    sig.params.get(regular)?;
+    // MIXED, NOT THE ELEMENT TYPE. A caller materializing an overflow argument has to BOX it —
+    // that is the one slot codegen boxes rather than reinterpreting — because materializing it AS
+    // the declared element type performs no conversion: `new $c("x")` on `int ...$r` came back
+    // holding the string's ADDRESS read as an integer. What the collector actually declares is a
+    // separate question, answered by `variadic_element_type`, and it is the CALLEE's business:
+    // the padding thunk casts each boxed argument down to it, in PHP, where php's own coercion
+    // rules can be spelled out.
+    Some(PhpType::Mixed)
+}
+
+/// What ONE element of `sig`'s variadic collector is declared to be, or `None` when it collects
+/// anything.
+///
+/// The collector's own signature entry describes the COLLECTION — `int ...$r` is stored as one
+/// parameter of type `array<int>` — so the element is that array's inner type. Both spellings are
+/// tolerated on purpose: a path that stores the element type directly still answers correctly, so
+/// this cannot become the silent half of a disagreement.
+pub(crate) fn variadic_element_type(sig: &FunctionSig) -> Option<PhpType> {
+    sig.variadic.as_ref()?;
+    let (_, collector) = sig.params.get(regular_param_count(sig))?;
     Some(match collector {
-        // Tolerates BOTH shapes on purpose. The collector is stored as the collection today; a
-        // path that stores the element type instead still answers correctly here, so this cannot
-        // become the silent half of a disagreement.
         PhpType::Array(element) => (**element).clone(),
         other => other.clone(),
     })

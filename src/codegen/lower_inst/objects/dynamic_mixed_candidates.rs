@@ -87,40 +87,34 @@ pub(super) fn dynamic_new_without_constructor_mixed_candidates(
     Ok(candidates)
 }
 
-/// The first overflow argument whose site type the COLLECTOR cannot take, as `(index, expected)`.
+/// The collector type this site would have to fill and the thunk cannot convert to, if any.
 ///
 /// THE ONE JUDGE of that question. Two callers need the answer and must not disagree:
-/// `dynamic_factory::dynamic_new_candidate`, which refuses to build a candidate that would
-/// misrepresent the value, and `dynamic_new_mixed_refusals`, which turns the same condition into a
-/// ladder arm that REPORTS. A second copy would let a class be neither constructed nor refused.
+/// `dynamic_factory::dynamic_new_candidate`, which must not build a candidate whose thunk was
+/// never emitted, and `dynamic_new_mixed_refusals`, which turns the same condition into a ladder
+/// arm that REPORTS. A second copy would let a class be neither constructed nor refused.
 ///
-/// `index` is the site's argument position, zero-based; `expected` is the collector's element type.
+/// It asks about the DECLARATION, not about the site's argument types. Overflow arguments are
+/// materialized as `Mixed` and the padding thunk casts them down in PHP, spelling out php's own
+/// coercion rules, so a scalar collector takes whatever the site passes and raises a `TypeError`
+/// itself for a value php would refuse. What no cast can express is a collector of objects or
+/// arrays, and that is what this reports.
 ///
-/// A `Mixed` element takes anything: it is the one slot codegen BOXES into rather than
-/// reinterpreting, which is why an untyped `...$r` never reaches this at all.
-pub(super) fn dynamic_new_variadic_element_mismatch(
-    ctx: &FunctionContext<'_>,
+/// Answers `None` when nothing reaches the collector: the arity where the overflow is empty is
+/// constructible whatever the collector declares.
+pub(super) fn dynamic_new_uncastable_collector(
     constructor: &crate::types::FunctionSig,
-    param_types: &[PhpType],
-    inst: &Instruction,
-) -> Result<Option<(usize, PhpType)>> {
-    if constructor.variadic.is_none() {
-        return Ok(None);
-    }
+    arg_count: usize,
+) -> Option<PhpType> {
     let regular = crate::types::call_args::regular_param_count(constructor);
-    for index in regular..param_types.len() {
-        let expected = &param_types[index];
-        if *expected == PhpType::Mixed {
-            continue;
-        }
-        let Some(argument) = inst.operands.get(index + 1).copied() else {
-            break;
-        };
-        if ctx.value_php_type(argument)?.codegen_repr() != *expected {
-            return Ok(Some((index, expected.clone())));
-        }
+    if arg_count <= regular {
+        return None;
     }
-    Ok(None)
+    let element = crate::types::call_args::variadic_element_type(constructor)?;
+    match element.codegen_repr() {
+        PhpType::Mixed | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool => None,
+        _ => Some(element),
+    }
 }
 
 /// Classes a `new $c(...)` can NAME but cannot CONSTRUCT at this site's arity, with php's message.
@@ -152,8 +146,7 @@ pub(super) fn dynamic_new_mixed_refusals(
     arg_count: usize,
     line: u32,
     matched: &[String],
-    inst: &Instruction,
-) -> Result<Vec<DynamicNewRefusal>> {
+) -> Vec<DynamicNewRefusal> {
     let constructor_key = php_symbol_key("__construct");
     let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
     sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
@@ -195,31 +188,20 @@ pub(super) fn dynamic_new_mixed_refusals(
             });
             continue;
         }
-        // The arity is satisfiable, so the site can still be refused for what it PASSES. An
-        // overflow argument the collector cannot take used to drop the class from the ladder in
-        // SILENCE, and `new $c("x")` on `int ...$r` then answered with a constructor-less object
-        // built from its property defaults. It reports now.
-        let Some(param_types) = (0..arg_count)
-            .map(|index| crate::types::call_args::positional_param_type(constructor, index))
-            .collect::<Option<Vec<_>>>()
-        else {
-            continue;
-        };
-        if let Some((index, expected)) =
-            dynamic_new_variadic_element_mismatch(ctx, constructor, &param_types, inst)?
-        {
-            let given = match inst.operands.get(index + 1).copied() {
-                Some(argument) => ctx.value_php_type(argument)?.codegen_repr(),
-                None => continue,
-            };
+        // The arity is satisfiable, so the site can still be refused for what the collector
+        // DECLARES. A scalar one is handled by the thunk, which casts in PHP and raises its own
+        // `TypeError` for a value php would refuse; a collector of objects or arrays has no cast
+        // that means what php means, and used to drop the class from the ladder in SILENCE — the
+        // site then answered with a constructor-less object built from its property defaults.
+        if let Some(element) = dynamic_new_uncastable_collector(constructor, arg_count) {
             refusals.push(DynamicNewRefusal {
                 class_name: class_name.to_string(),
-                message: cannot_coerce_message(class_name, index + 1, &expected, &given),
+                message: cannot_coerce_message(class_name, regular + 1, &element),
                 argument_count: false,
             });
         }
     }
-    Ok(refusals)
+    refusals
 }
 
 /// One class a `new $c(...)` site NAMES but must refuse, and which throwable says why.
@@ -258,25 +240,17 @@ fn too_few_arguments_message(
     )
 }
 
-/// elephc's wording for an argument the collector cannot take.
+/// elephc's wording for a collector no cast can fill.
 ///
-/// DELIBERATELY NOT php's `must be of type int, string given`. php COERCES at this boundary —
-/// `new $c("7")` and `new $c(1.5)` both succeed there — and elephc coerces at NO typed parameter
-/// boundary anywhere: the same mismatch at a static call site is a compile error reading
-/// `expects Int, got Str — PHP coerces this at run time … add an explicit cast at the call site`.
-/// Borrowing php's wording would promise a semantics this compiler does not implement, so the
-/// runtime refusal says what the compile-time one says. Reporting beats the constructor-less
-/// object either way.
-fn cannot_coerce_message(
-    class_name: &str,
-    argument: usize,
-    expected: &PhpType,
-    given: &PhpType,
-) -> String {
+/// This is NOT the scalar case: `int ...$r` takes `"7"` and `1.5` here exactly as php does,
+/// because the padding thunk casts in PHP and raises php's own `TypeError` for a value php would
+/// refuse. What is left is a collector of objects or arrays, where no cast means what php means,
+/// so the site says so instead of building an object with its constructor skipped.
+fn cannot_coerce_message(class_name: &str, argument: usize, expected: &PhpType) -> String {
     format!(
-        "{}::__construct(): Argument #{} expects {:?}, got {:?} — PHP coerces this at run time, \
-         which elephc cannot do at a parameter boundary; add an explicit cast at the call site",
-        class_name, argument, expected, given
+        "{}::__construct(): Argument #{} collects {:?}, which elephc cannot convert an argument \
+         to at a parameter boundary; construct the value before passing it",
+        class_name, argument, expected
     )
 }
 

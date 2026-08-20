@@ -420,21 +420,23 @@ echo $none->s, "|", $two->s, "
     assert_eq!(out, "n=0 v0=rien|n=2 v0=7\n");
 }
 
-/// Verifies a TYPED collector REFUSES a mismatched argument instead of skipping the constructor.
+/// Verifies a TYPED collector COERCES what php coerces and refuses what php refuses.
 ///
-/// Codegen materializes each overflow argument AS the declared element type with no conversion, so
-/// `new $c("x")` on `int ...$r` first came back holding `4370954896` — the string's ADDRESS read as
-/// an integer. Dropping the class from the ladder stopped that, but left the site building an
-/// object from its property defaults with the constructor never run: silent, and wrong.
+/// Three answers were wrong here in turn. Materializing an overflow argument AS the declared
+/// element type performs no conversion, so `new $c("x")` on `int ...$r` came back holding
+/// `4370954896` — the string's ADDRESS read as an integer. Dropping the class from the ladder
+/// stopped that but left the site building an object from its property defaults with the
+/// constructor never run. Refusing every mismatch reported it, but also refused `new $c("7")` and
+/// `new $c(1.5)`, which php CONSTRUCTS.
 ///
-/// It raises a catchable `TypeError` now, which is the class php raises here too.
+/// The overflow now crosses as `Mixed` — the one slot codegen boxes rather than reinterprets — and
+/// the padding thunk casts it down in PHP, where php's coercion rules can be spelled out: anything
+/// numeric or boolean reaches an `int` collector, and a value php cannot read as a number raises a
+/// `TypeError`, the class php raises too.
 ///
-/// THE MESSAGE IS ELEPHC'S, NOT PHP'S, on purpose. php COERCES at this boundary — `new $c("7")`
-/// and `new $c(1.5)` both succeed there — and elephc coerces at NO typed parameter boundary: the
-/// same mismatch at a static call site is the compile error `expects Int, got Str — PHP coerces
-/// this at run time … add an explicit cast at the call site`. Borrowing php's
-/// `must be of type int, string given` would promise a semantics this compiler does not have, so
-/// the runtime refusal says what the compile-time one says.
+/// php also prints `Deprecated: Implicit conversion from float 1.5 to int loses precision` for the
+/// lossy cases. elephc emits no runtime deprecation notice ANYWHERE, so that is a gap of its own
+/// and not of this path; the constructed value matches.
 #[test]
 fn test_dynamic_new_typed_variadic_refuses_a_mismatched_argument() {
     // The arity where nothing reaches the collector is unaffected and still runs.
@@ -452,22 +454,37 @@ echo $safe->s, "
     );
     assert_eq!(out, "a=x n=0\n");
 
-    // An argument that DOES reach a typed collector, and cannot be taken as its element type.
+    // What php COERCES, this coerces: a numeric string, a lossy float, a bool. The values are
+    // php's own, checked against it rather than against what the cast happened to produce.
+    let coerced = compile_and_run(
+        r#"<?php
+class W { public $s = "JAMAIS"; function __construct(int ...$r) { $this->s = implode(",", $r); } }
+$c = "W";
+echo (new $c("7"))->s, "|", (new $c(1.5))->s, "|", (new $c(2.0))->s, "|", (new $c(true))->s, "|", (new $c(7, "8"))->s, "
+";
+"#,
+    );
+    assert_eq!(coerced, "7|1|2|1|7,8\n");
+
+    // What php REFUSES, this refuses, with the class php uses. A cast without the guard would have
+    // made this a silent `(int)"x" === 0`, which is the whole reason the guard exists.
     let caught = compile_and_run(
         r#"<?php
-class W { public $s = "SANS-CONSTRUCTEUR"; function __construct(int ...$r) { $this->s = "ran"; } }
-$c = "W";
-try {
-    $o = new $c("x");
-    echo $o->s, "
+class X { public $s = "SANS-CONSTRUCTEUR"; function __construct(int ...$r) { $this->s = "ran"; } }
+$c = "X";
+foreach (["x", null] as $bad) {
+    try {
+        $o = new $c($bad);
+        echo $o->s, "
 ";
-} catch (TypeError $e) {
-    echo get_class($e), ":", (strpos($e->getMessage(), "W::__construct(): Argument #1") === 0 ? "prefixe-php" : "autre"), "
+    } catch (TypeError $e) {
+        echo get_class($e), ":", (strpos($e->getMessage(), "X::__construct(): Argument #1") === 0 ? "prefixe-php" : "autre"), "
 ";
+    }
 }
 "#,
     );
-    assert_eq!(caught, "TypeError:prefixe-php\n");
+    assert_eq!(caught, "TypeError:prefixe-php\nTypeError:prefixe-php\n");
 }
 
 /// Verifies the arity refusal counts a VARIADIC signature the way the checker does.

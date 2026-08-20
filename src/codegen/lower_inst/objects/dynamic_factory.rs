@@ -168,8 +168,7 @@ pub(super) fn dynamic_new_candidate(
         // constructor call — the behaviour this class had before the thunk existed — rather than a
         // fabricated integer.
         if padding_thunk.is_some()
-            && dynamic_new_variadic_element_mismatch(ctx, constructor, &param_types, inst)?
-                .is_some()
+            && dynamic_new_uncastable_collector(constructor, materialized).is_some()
         {
             // NOT constructed, and NOT silently dropped either: `dynamic_new_mixed_refusals` asks
             // the same judge and emits a ladder arm that REPORTS. Leaving only this half in place

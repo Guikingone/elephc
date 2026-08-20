@@ -20,8 +20,10 @@ use crate::ir_lower::context::{
 use crate::ir_lower::effects_lookup;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    AttributeGroup, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr,
+    AttributeGroup, BinOp, CastType, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind,
+    TypeExpr,
 };
+use crate::names::Name;
 use crate::span::Span;
 use crate::types::{
     collect_attribute_args, collect_attribute_names, CheckResult, ClassInfo, FunctionSig,
@@ -682,6 +684,91 @@ pub(crate) fn lower_property_init_thunk(
 /// on a strict arity comparison and fell to the generic allocation path, which produces an object
 /// with no constructor run at all: `new $c(["a" => 1])` on `ArrayObject` answered
 /// `ArrayObject|0|` where PHP answers `ArrayObject|1|1`.
+/// Builds `if (<not coercible>) { throw new TypeError(...); }` for one overflow argument.
+///
+/// php COERCES a scalar into a typed variadic collector — `"7"` and `1.5` both reach an
+/// `int ...$r` — and raises a `TypeError` only for a value it cannot read as one. Casting without
+/// this guard would turn that TypeError into a silent `(int)"x" === 0`, which is the failure this
+/// whole path exists to stop.
+///
+/// The predicate is per target: a numeric target takes anything numeric, plus booleans, which php
+/// converts but `is_numeric()` reports false for. A string or bool target takes any scalar.
+///
+/// The message names the class and the argument position — both known while this is built — and
+/// asks `gettype()` for the part that is only known at run time. It does NOT carry php's
+/// `called in FILE on line N` clause: this thunk is shared by every site of the same arity, so it
+/// has no single call line to name, and inventing one would be worse than omitting it.
+fn coercible_or_throw_stmt(
+    class_name: &str,
+    variable: &Expr,
+    argument: usize,
+    target: CastType,
+    span: Span,
+) -> Stmt {
+    let predicate = |name: &str| {
+        Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified(name),
+                args: vec![variable.clone()],
+            },
+            span,
+        )
+    };
+    let accepted = match target {
+        CastType::Int | CastType::Float => Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(predicate("is_numeric")),
+                op: BinOp::Or,
+                right: Box::new(predicate("is_bool")),
+            },
+            span,
+        ),
+        _ => predicate("is_scalar"),
+    };
+    let expected = match target {
+        CastType::Int => "int",
+        CastType::Float => "float",
+        CastType::String => "string",
+        _ => "bool",
+    };
+    let concat = |left: Expr, right: Expr| {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(left),
+                op: BinOp::Concat,
+                right: Box::new(right),
+            },
+            span,
+        )
+    };
+    let literal = |text: String| Expr::new(ExprKind::StringLiteral(text), span);
+    let message = concat(
+        literal(format!(
+            "{}::__construct(): Argument #{} expects {}, ",
+            class_name, argument, expected
+        )),
+        concat(predicate("gettype"), literal(" given".to_string())),
+    );
+    Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(ExprKind::Not(Box::new(accepted)), span),
+            then_body: vec![Stmt::new(
+                StmtKind::Throw(Expr::new(
+                    ExprKind::NewObject {
+                        class_name: Name::unqualified("TypeError"),
+                        args: vec![message],
+                    },
+                    span,
+                )),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
 pub(crate) fn lower_dynamic_constructor_thunk(
     class_name: &str,
     class_info: &ClassInfo,
@@ -777,12 +864,52 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     if (0..provided_args).any(|index| slot_type(index).is_none()) {
         return;
     }
+    // What the collector declares one element to be. `None` means it collects anything, and the
+    // overflow is passed through untouched.
+    let element = crate::types::call_args::variadic_element_type(constructor);
+    let cast = match element.as_ref().map(PhpType::codegen_repr) {
+        None | Some(PhpType::Mixed) => None,
+        Some(PhpType::Int) => Some(CastType::Int),
+        Some(PhpType::Float) => Some(CastType::Float),
+        Some(PhpType::Str) => Some(CastType::String),
+        Some(PhpType::Bool) => Some(CastType::Bool),
+        // A collector of objects or arrays has no cast that means what php means, so the class
+        // stays out of the ladder and `dynamic_new_mixed_refusals` reports the site instead.
+        Some(_) => return,
+    };
 
     let span = Span::dummy();
     let this_type = PhpType::Object(class_name.to_string());
     let mut args = Vec::with_capacity(provided_args.max(constructor.params.len()));
+    let mut guards = Vec::new();
     for index in 0..provided_args {
-        args.push(Expr::new(ExprKind::Variable(slot_name(index)), span));
+        let variable = Expr::new(ExprKind::Variable(slot_name(index)), span);
+        let overflow = is_variadic && index >= regular;
+        match cast.clone().filter(|_| overflow) {
+            None => args.push(variable),
+            Some(target) => {
+                // php COERCES at this boundary, so the thunk does too — in PHP, where the rules
+                // can be spelled out, rather than in two architectures of hand-written assembly.
+                // `new $c("7")` and `new $c(1.5)` construct here exactly as they do in php.
+                //
+                // The guard is what keeps that from becoming a silent `(int)"x" === 0`: php raises
+                // a TypeError for a value it cannot read as a number, and so does this.
+                guards.push(coercible_or_throw_stmt(
+                    class_name,
+                    &variable,
+                    index + 1,
+                    target.clone(),
+                    span,
+                ));
+                args.push(Expr::new(
+                    ExprKind::Cast {
+                        target,
+                        expr: Box::new(variable),
+                    },
+                    span,
+                ));
+            }
+        }
     }
     // Pad only up to the last REGULAR parameter. For a collecting signature the entry beyond that
     // is the collector, which takes what is passed rather than a default.
@@ -796,7 +923,8 @@ pub(crate) fn lower_dynamic_constructor_thunk(
             args.push(default.clone().expect("padding requires a default"));
         }
     }
-    let body = vec![Stmt::new(
+    let mut body = guards;
+    body.push(Stmt::new(
         StmtKind::ExprStmt(Expr::new(
             ExprKind::MethodCall {
                 object: Box::new(Expr::new(ExprKind::This, span)),
@@ -806,7 +934,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
             span,
         )),
         span,
-    )];
+    ));
 
     let mut function = Function::new(function_name.clone(), IrType::Void, PhpType::Void);
     function.flags.is_synthetic = true;

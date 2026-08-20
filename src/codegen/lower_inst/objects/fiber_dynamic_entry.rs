@@ -203,8 +203,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
             constructor_args.len(),
             inst.span.map_or(0, |span| span.line),
             &matched,
-            inst,
-        )?
+        )
     };
     let refusal_labels = refusals
         .iter()
