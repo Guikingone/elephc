@@ -37,8 +37,9 @@ fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> 
     // resolution so a namespaced caller resolves to it. Without this the four
     // prelude-declared functions report `Undefined function` instead of their real
     // arity diagnostics. Injection is gated on usage, so no other test is affected.
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::dir_prelude::inject_if_used(ast);
-    let ast = elephc::hash_prelude::inject_if_used(ast, false);
+    let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::scanf_prelude::inject_if_used(ast);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
@@ -55,8 +56,9 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let tokens = tokenize(src).map_err(|e| elephc::errors::CompileError::new(e.span, &e.message))?;
     let ast = parse(&tokens)?;
     let ast = elephc::autoload::collect_aliases(ast);
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::dir_prelude::inject_if_used(ast);
-    let ast = elephc::hash_prelude::inject_if_used(ast, false);
+    let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::scanf_prelude::inject_if_used(ast);
     let ast = elephc::name_resolver::resolve(ast)?;
     let ast = elephc::func_args::desugar(ast)?;

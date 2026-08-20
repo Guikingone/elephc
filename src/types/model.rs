@@ -42,7 +42,7 @@ pub enum PhpType {
     /// allocation. The tag reuses the runtime value tag scheme (0 = int, 8 = null), so the
     /// pair is word-compatible with a boxed Mixed cell. The checker never produces this
     /// type; codegen funnels construct it from `int|null` unions only under
-    /// `NullRepr::Tagged`. Under the default sentinel representation it never exists.
+    /// `NullRepr::Tagged`. Under the legacy sentinel opt-out it never exists.
     TaggedScalar,
 }
 

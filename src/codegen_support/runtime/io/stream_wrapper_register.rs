@@ -21,6 +21,19 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
+/// Warning PHP emits when the protocol contains a byte outside `[A-Za-z0-9+.-]`.
+///
+/// Reference PHP appends the class name, the protocol and the script location; the
+/// runtime's other warnings (`fopen()`, `file_get_contents()`) are fixed strings
+/// without a location, and this follows that convention rather than inventing a
+/// half-interpolated one.
+pub(crate) const BAD_PROTOCOL_WARNING: &str =
+    "Warning: stream_wrapper_register(): Invalid protocol scheme specified.\n";
+/// Warning PHP emits when the protocol is already registered — including the builtin
+/// `file://`, which a program could otherwise shadow silently.
+pub(crate) const DUPLICATE_PROTOCOL_WARNING: &str =
+    "Warning: stream_wrapper_register(): Protocol is already defined.\n";
+
 /// Emits the `__rt_stream_wrapper_register` runtime helper.
 /// Input:  AArch64 x0 = proto ptr, x1 = proto len, x2 = class ptr, x3 = class len,
 ///         x4 = flags. x86_64 uses rdi/rsi/rdx/rcx/r8 for the same values.

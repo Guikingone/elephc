@@ -249,6 +249,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
+    /// Set while a container write BORROWS its value operand — the reference belongs to a
+    /// hidden temporary that outlives the write. See `with_borrowed_write_operand`.
+    write_operand_is_borrowed: bool,
     eval_barrier_active: bool,
     eval_executed: bool,
     eval_scope_read_param: Option<String>,
@@ -340,6 +343,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             pending_static_callable_result: None,
             closure_counter: 0,
             hidden_temp_counter: 0,
+            write_operand_is_borrowed: false,
             eval_barrier_active: false,
             eval_executed: false,
             eval_scope_read_param: None,
@@ -501,6 +505,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// to int instead of promoting the destination to a hash.
     pub(crate) fn is_foreach_int_key(&self, name: &str) -> bool {
         self.foreach_int_key_locals.contains(name)
+    }
+
+    /// Runs `f` with container-write value operands treated as BORROWED.
+    ///
+    /// The `??=` result temporary is written into the container AND handed to the expression's
+    /// consumer. The write therefore only borrows it: `array_set` takes its own reference by
+    /// retaining, and the slot keeps hers. Treating it as an owning temporary made the write
+    /// consume the slot's reference, and the consumer's release then took the cell to zero
+    /// while the container still pointed at it.
+    pub(crate) fn with_borrowed_write_operand<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let previous = self.write_operand_is_borrowed;
+        self.write_operand_is_borrowed = true;
+        let result = f(self);
+        self.write_operand_is_borrowed = previous;
+        result
     }
 
     /// Returns the storage type for a `global` alias name.
@@ -2014,10 +2033,31 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Returns whether a value producer owns storage duplicated by a retaining consumer.
     pub(crate) fn value_is_owning_temporary(&self, value: LoweredValue) -> bool {
+        // While a container write BORROWS its value operand, nothing in that write may treat
+        // the value as a temporary it owns — neither the release afterwards nor any coercion
+        // along the way. The `??=` result temp is the case: the slot keeps the reference and
+        // hands it to the expression's consumer, so a write that consumed it left the cell at
+        // zero while the container still pointed at it.
+        if self.write_operand_is_borrowed {
+            return false;
+        }
         let php_type = self.builder.value_php_type(value.value);
         if !value.ir_type.is_refcounted_storage()
             && !Ownership::php_type_needs_lifetime_tracking(&php_type)
         {
+            return false;
+        }
+        if matches!(
+            self.builder.value_defining_instruction(value.value)
+                .and_then(|inst| inst.immediate.as_ref()),
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::MixedCellPromoteToHash(_)
+                    | crate::ir::RuntimeCallTarget::MixedCellPromoteAttachedToHash(_),
+            ))
+        ) {
+            // This helper installs the hash in an owned Mixed cell and returns only a borrow of
+            // that cell's payload. Unlike ArrayFetchForWrite, the generic RuntimeCall fallback
+            // must not turn that borrow into a release obligation at the builtin call boundary.
             return false;
         }
         if self.value_is_owning_builtin_temporary(value.value) {
@@ -2030,6 +2070,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return true;
         }
         if self.value_is_owning_mixed_string_cast(value.value) {
+            return true;
+        }
+        if self.value_is_owning_array_cast(value.value) {
             return true;
         }
         if self.value_is_owning_container_read(value.value) {
@@ -2352,6 +2395,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.value_php_type(source).codegen_repr(),
             PhpType::Mixed | PhpType::Union(_)
         )
+    }
+
+    /// Returns whether an array cast produced fresh or freshly boxed owning storage.
+    fn value_is_owning_array_cast(&self, value: ValueId) -> bool {
+        let Some(inst) = self.builder.value_defining_instruction(value) else {
+            return false;
+        };
+        inst.op == Op::Cast
+            && matches!(
+                inst.immediate,
+                Some(Immediate::CastTarget(IrType::Heap(
+                    crate::ir::IrHeapKind::Hash | crate::ir::IrHeapKind::Mixed
+                )))
+            )
     }
 
     /// Returns whether a retained local/global store should release its source value.

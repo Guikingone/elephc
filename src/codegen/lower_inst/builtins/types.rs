@@ -464,6 +464,121 @@ pub(crate) fn lower_class_name_lookup(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `get_object_vars()` to a fresh public-property hash projection.
+pub(crate) fn lower_get_object_vars(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "get_object_vars", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let scope_class_id = lexical_object_vars_scope_class_id(ctx);
+    emit_object_hash_projection(ctx, value, false, scope_class_id)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers an explicit object-to-array cast to a fresh all-property hash projection.
+pub(crate) fn lower_object_array_cast(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    emit_object_hash_projection(ctx, value, true, -1)?;
+    store_if_result(ctx, inst)
+}
+
+/// Materializes an object pointer and invokes the shared target-aware projection helper.
+fn emit_object_hash_projection(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    cast_mode: bool,
+    scope_class_id: i64,
+) -> Result<()> {
+    let source_ty = ctx.raw_value_php_type(value)?.codegen_repr();
+    ctx.load_value_to_result(value)?;
+    match source_ty {
+        PhpType::Object(_) => {}
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    let object_label = ctx.next_label("object_hash_mixed_object");
+                    ctx.emitter.instruction("cmp x0, #6");                      // require the boxed Mixed object tag
+                    ctx.emitter
+                        .instruction(&format!("b.eq {}", object_label));         // branch to the object payload extraction path
+                    emit_dynamic_non_object_projection_fatal(ctx, cast_mode);
+                    ctx.emitter.label(&object_label);
+                    ctx.emitter.instruction("mov x0, x1");                      // move the unboxed object pointer into the helper input
+                }
+                Arch::X86_64 => {
+                    let object_label = ctx.next_label("object_hash_mixed_object_x");
+                    ctx.emitter.instruction("cmp rax, 6");                      // require the boxed Mixed object tag
+                    ctx.emitter
+                        .instruction(&format!("je {}", object_label));           // branch to the object payload extraction path
+                    emit_dynamic_non_object_projection_fatal(ctx, cast_mode);
+                    ctx.emitter.label(&object_label);
+                    ctx.emitter.instruction("mov rax, rdi");                    // move the unboxed object pointer into the helper input
+                }
+            }
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "object property projection from PHP type {:?}",
+                other
+            )))
+        }
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x1", i64::from(cast_mode));
+            abi::emit_load_int_immediate(ctx.emitter, "x2", scope_class_id);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", i64::from(cast_mode));
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", scope_class_id);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_object_to_hash");
+    Ok(())
+}
+
+/// Resolves the EIR function's lexical class id, using `-1` for global scopes.
+fn lexical_object_vars_scope_class_id(ctx: &FunctionContext<'_>) -> i64 {
+    let Some(class_name) = ctx.function.lexical_class.as_deref() else {
+        return -1;
+    };
+    ctx.module
+        .class_infos
+        .get(class_name)
+        .map_or(-1, |class| class.class_id as i64)
+}
+
+/// Emits an explicit fatal instead of silently projecting a runtime non-object as empty.
+fn emit_dynamic_non_object_projection_fatal(ctx: &mut FunctionContext<'_>, cast_mode: bool) {
+    let message = if cast_mode {
+        b"Fatal error: elephc cannot cast this runtime-typed non-object value to array\n".as_slice()
+    } else {
+        b"Fatal error: get_object_vars(): Argument #1 ($object) must be of type object\n".as_slice()
+    };
+    let (label, len) = ctx.data.add_string(message);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the dynamic projection fatal diagnostic
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);       // pass the exact dynamic projection diagnostic byte length
+            ctx.emitter.syscall(4);
+            abi::emit_exit(ctx.emitter, 1);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the dynamic projection fatal diagnostic
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);      // pass the exact dynamic projection diagnostic byte length
+            ctx.emitter.instruction("mov eax, 1");                              // select the Linux write syscall for the diagnostic
+            ctx.emitter.instruction("syscall");                                 // write the dynamic projection diagnostic before exiting
+            abi::emit_exit(ctx.emitter, 1);
+        }
+    }
+}
+
 /// Lowers `is_a()` and `is_subclass_of()` for object operands and literal targets.
 pub(crate) fn lower_is_a_relation(
     ctx: &mut FunctionContext<'_>,
@@ -915,6 +1030,26 @@ fn emit_dynamic_object_class_name_aarch64(
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.emitter.instruction(&format!("cbz x0, {}", empty_label));               // null object pointers produce an empty class name
     ctx.emitter.instruction("ldr x9, [x0]");                                    // load the object's concrete runtime class id
+    if name == "get_class" {
+        let incomplete_label = ctx.next_label("get_class_incomplete");
+        ctx.emitter.instruction("cmn x9, #2");                                  // reserved id -2 denotes an incomplete unserialized object
+        ctx.emitter.instruction(&format!("b.eq {}", incomplete_label));         // expose PHP's required incomplete-class name
+        // The ordinary class lookup below remains the only path for real ids.
+        abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_count");
+        ctx.emitter.instruction("ldr x10, [x10]");                              // load dense class-name lookup bound
+        ctx.emitter.instruction("cmp x9, x10");                                 // validate the object class id before indexing metadata
+        ctx.emitter.instruction(&format!("b.hs {}", empty_label));              // invalid ids produce an empty class name
+        abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_entries");
+        ctx.emitter.instruction("lsl x12, x9, #4");                             // scale class id by the 16-byte metadata row
+        ctx.emitter.instruction("add x11, x11, x12");                           // select the class-name metadata row
+        ctx.emitter.instruction(&format!("ldr {}, [x11]", ptr_reg));            // load the real class-name pointer
+        ctx.emitter.instruction(&format!("ldr {}, [x11, #8]", len_reg));        // load the real class-name length
+        ctx.emitter.instruction(&format!("b {}", done_label));                  // skip empty fallback after successful lookup
+        ctx.emitter.label(&incomplete_label);
+        abi::emit_symbol_address(ctx.emitter, ptr_reg, "_incomplete_class_name");
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, 22);
+        ctx.emitter.instruction(&format!("b {}", done_label));                  // incomplete class name is final
+    }
     abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_count");
     ctx.emitter.instruction("ldr x10, [x10]");                                  // load the number of dense class-name lookup rows
     if name == "get_parent_class" {
@@ -953,6 +1088,23 @@ fn emit_dynamic_object_class_name_x86_64(
     ctx.emitter.instruction("test rax, rax");                                   // test whether the object pointer is null
     ctx.emitter.instruction(&format!("je {}", empty_label));                    // null object pointers produce an empty class name
     ctx.emitter.instruction("mov r8, QWORD PTR [rax]");                         // load the object's concrete runtime class id
+    if name == "get_class" {
+        let incomplete_label = ctx.next_label("get_class_incomplete_x");
+        ctx.emitter.instruction("cmp r8, -2");                                  // reserved id -2 denotes an incomplete unserialized object
+        ctx.emitter.instruction(&format!("je {}", incomplete_label));           // expose PHP's required incomplete-class name
+        ctx.emitter.instruction("mov r9, QWORD PTR [rip + _class_name_count]"); // load dense class-name lookup bound
+        ctx.emitter.instruction("cmp r8, r9");                                  // validate the object class id before indexing metadata
+        ctx.emitter.instruction(&format!("jae {}", empty_label));               // invalid ids produce an empty class name
+        ctx.emitter.instruction("lea r10, [rip + _class_name_entries]");        // materialize class-name metadata table base
+        ctx.emitter.instruction("shl r8, 4");                                   // scale class id by 16-byte row size
+        ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r8]");               // load the real class-name pointer
+        ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + r8 + 8]");           // load the real class-name length
+        ctx.emitter.instruction(&format!("jmp {}", done_label));                // skip empty fallback after successful lookup
+        ctx.emitter.label(&incomplete_label);
+        ctx.emitter.instruction("lea rax, [rip + _incomplete_class_name]");     // return PHP incomplete-class name
+        ctx.emitter.instruction("mov rdx, 22");                                 // byte length of __PHP_Incomplete_Class
+        ctx.emitter.instruction(&format!("jmp {}", done_label));                // incomplete class name is final
+    }
     ctx.emitter.instruction("mov r9, QWORD PTR [rip + _class_name_count]");     // load the number of dense class-name lookup rows
     if name == "get_parent_class" {
         ctx.emitter.instruction("cmp r8, r9");                                  // validate the object class id before reading its parent id

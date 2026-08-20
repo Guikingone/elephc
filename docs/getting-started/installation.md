@@ -7,6 +7,8 @@ sidebar:
 
 ## Requirements
 
+- A POSIX shell, `curl`, `tar`, and either `shasum` or `sha256sum` to install
+  `elvm`
 - Rust toolchain (`cargo`) if building from source
 - A native assembler and linker for your host platform
 
@@ -33,13 +35,75 @@ the usual host tools. Cross-target artifacts require an explicit matching C
 compiler, archiver, and ranlib; see [Native
 dependencies](../compiling/native-dependencies.md#build-tools-and-cross-targets).
 
-## Homebrew (macOS)
+## elvm (recommended)
+
+[`elvm`](https://github.com/getelephc/elvm) is the recommended way to install
+elephc. It keeps compiler releases and their bridge static libraries together,
+supports multiple installed versions, and selects the active compiler through
+the `elephc` command.
+
+### Install elvm
 
 ```bash
-brew install illegalstudio/tap/elephc
+curl -fsSL https://get.elephc.dev | sh
 ```
 
-Verify the installation by compiling a small program:
+The installer downloads and verifies `elvm`, creates the `elephc` shim, and
+prompts to add `~/.elvm/bin` to your `PATH`. It does not install a compiler
+version. Start a new shell after accepting the prompt, then install and select
+the latest published elephc release:
+
+```bash
+elvm install latest
+elvm use latest --global
+elvm current
+```
+
+`elvm install` verifies the release checksum and installs the compiler together
+with its bridge static libraries. `elvm use latest --global` sets the highest
+installed release as the default, and `elvm current` shows the resolved version
+and where that selection came from.
+
+### Pin a project version
+
+Install a specific version, then run `elvm use` without `--global` in the
+project directory:
+
+```bash
+elvm ls-remote
+elvm install 0.26.4
+elvm use 0.26.4
+git add .elephc-version
+```
+
+Replace `0.26.4` with the release your project needs. Commit the generated
+`.elephc-version` file so every contributor and CI job selects the same
+compiler. In a checkout that already contains the file, install its requested
+version with:
+
+```bash
+elvm install
+```
+
+When `elephc` runs, the first available selection wins:
+
+1. `ELEPHC_VERSION`
+2. the nearest `.elephc-version`, searching upward from the current directory
+3. the global default set by `elvm use --global`
+
+`latest` has two deliberately different meanings: `elvm install latest`
+installs the newest published release, while `latest` in a version selection
+resolves to the highest version already installed. Running `elephc` never
+downloads a compiler automatically; if the selected version is missing, install
+it with `elvm install`.
+
+Use `elvm ls` to inspect installed versions, `elvm ls-remote` to inspect
+published releases, and `elvm doctor` to diagnose `PATH`, shim, or installation
+problems.
+
+## Verify the installation
+
+Compile a small program regardless of which installation method you used:
 
 ```bash
 echo '<?php echo "ok\n";' > check.php
@@ -48,7 +112,13 @@ elephc check.php && ./check
 
 This prints `ok` and confirms `elephc` can produce and run a native binary.
 
-## From source
+## Homebrew (alternative, macOS)
+
+```bash
+brew install illegalstudio/tap/elephc
+```
+
+## From source (alternative)
 
 If you prefer to build from source, you'll also need the Rust toolchain (`cargo`).
 
@@ -64,11 +134,26 @@ The binary is at `./target/release/elephc`. You can copy it to a directory in yo
 cp target/release/elephc /usr/local/bin/
 ```
 
-## From GitHub releases
+## From GitHub releases (alternative)
 
-Pre-built binaries may be available on the [releases page](https://github.com/illegalstudio/elephc/releases). Download the artifact for your platform, make it executable if needed, and move it to your `PATH`:
+Each release on the [releases page](https://github.com/illegalstudio/elephc/releases)
+ships a tarball per supported platform:
+
+- `elephc-<version>-aarch64-apple-darwin.tar.gz` — macOS ARM64
+- `elephc-<version>-x86_64-unknown-linux-gnu.tar.gz` — Linux x86_64
+- `elephc-<version>-aarch64-unknown-linux-gnu.tar.gz` — Linux ARM64
+
+Each tarball contains the `elephc` binary plus the bridge staticlibs
+(`libelephc_*.a`) that compiled programs link against. Install them in a layout
+elephc searches: the staticlibs either in the same directory as the binary, or
+in a `lib/` directory next to the `bin/` directory holding the binary — for
+example `/usr/local/bin` and `/usr/local/lib`:
 
 ```bash
-chmod +x elephc
-mv elephc /usr/local/bin/
+tar xzf elephc-<version>-<target>.tar.gz
+sudo install -m 755 elephc /usr/local/bin/
+sudo install -m 644 libelephc_*.a /usr/local/lib/
 ```
+
+The Linux tarballs are built against glibc 2.35 and run on any distribution
+with that glibc or newer (Ubuntu 22.04+, Debian 12+, RHEL 9+, ...).

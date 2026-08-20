@@ -382,7 +382,9 @@ pub(crate) fn lower_fprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     load_string_to_result(ctx, format, "fprintf format")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov x0, #{}", inst.operands.len() - 2)); // pass the number of packed fprintf operands
+            ctx.emitter.instruction(
+                &format!("mov x0, #{}", inst.operands.len() - 2)
+            );                                                                  // pass the number of packed fprintf operands
         }
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rdi", (inst.operands.len() - 2) as i64);

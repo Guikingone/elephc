@@ -66,6 +66,8 @@ pub struct Function {
     pub attribute_names: Vec<String>,
     pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>,
     pub generator_source: Option<GeneratorSource>,
+    /// PHP lexical class scope inherited by methods and closures declared inside them.
+    pub lexical_class: Option<String>,
     pub flags: FunctionFlags,
     /// Slots the epilogue must never release: values this frame BORROWS rather than owns.
     ///
@@ -97,6 +99,7 @@ impl Function {
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
             generator_source: None,
+            lexical_class: None,
             flags: FunctionFlags::default(),
             no_epilogue_cleanup_slots: std::collections::HashSet::new(),
         }

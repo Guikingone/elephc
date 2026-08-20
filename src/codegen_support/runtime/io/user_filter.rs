@@ -34,6 +34,11 @@ const USER_FILTER_REGISTRATIONS_CAP: u32 = 128;
 /// Input:  AArch64 x0=name_ptr x1=name_len x2=class_ptr x3=class_len.
 ///         x86_64  rdi=name_ptr rsi=name_len rdx=class_ptr rcx=class_len.
 /// Output: 1 = registered, 0 = table full.
+///
+/// Both strings are persisted with `__rt_str_persist` before being stored: the
+/// registration outlives the call, so keeping the caller's pointer means the
+/// registered filter name silently follows whatever that buffer holds later.
+/// A literal argument hides this — it lives in rodata and never moves.
 pub fn emit_stream_filter_register(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_stream_filter_register_linux_x86_64(emitter);
@@ -126,12 +131,16 @@ pub fn emit_stream_filter_register(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the frame
     emitter.instruction("mov x0, #1");                                          // return true for a successful registration
-    emitter.instruction("ret");                                                 // return to the caller
+    emitter.instruction("b __rt_sfr_ret");                                      // share the common epilogue
 
     emitter.label("__rt_sfr_full");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the frame
     emitter.instruction("mov x0, #0");                                          // return false when the registry is full
+
+    emitter.label("__rt_sfr_ret");
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return to the caller
 }
 
@@ -214,11 +223,15 @@ fn emit_stream_filter_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10 + 24], rcx");                       // class-name length
     emitter.instruction("leave");
     emitter.instruction("mov eax, 1");                                          // return true for a successful registration
-    emitter.instruction("ret");                                                 // return to the caller
+    emitter.instruction("jmp __rt_sfr_ret_x86");                                // share the common epilogue
 
     emitter.label("__rt_sfr_full_x86");
     emitter.instruction("leave");
     emitter.instruction("xor eax, eax");                                        // return false when the registry is full
+
+    emitter.label("__rt_sfr_ret_x86");
+    emitter.instruction("add rsp, 48");                                         // release the helper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller
 }
 

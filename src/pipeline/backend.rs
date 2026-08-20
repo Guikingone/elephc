@@ -17,6 +17,7 @@ pub(super) struct BackendInputs<'a> {
     pub(super) with_crates: &'a HashSet<String>,
     pub(super) ir_module: ir::Module,
     pub(super) web: bool,
+    pub(super) web_isolation: codegen::WebIsolation,
     pub(super) extra_link_libs: &'a [String],
     pub(super) extra_link_paths: &'a [String],
     pub(super) extra_frameworks: &'a [String],
@@ -29,6 +30,7 @@ pub(super) struct BackendInputs<'a> {
     pub(super) exported_functions: &'a HashMap<String, exports::ExportedFunction>,
     pub(super) regalloc_linear: bool,
     pub(super) emit_debug_info: bool,
+    pub(super) keep_symbols: bool,
     pub(super) output_paths: &'a OutputPaths,
     pub(super) emit_source_map: bool,
     pub(super) emit_asm: bool,
@@ -42,6 +44,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         with_crates,
         mut ir_module,
         web,
+        web_isolation,
         extra_link_libs,
         extra_link_paths,
         extra_frameworks,
@@ -54,6 +57,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         exported_functions,
         regalloc_linear,
         emit_debug_info,
+        keep_symbols,
         output_paths,
         emit_source_map,
         emit_asm,
@@ -146,6 +150,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         exported_functions,
         regalloc_linear,
         web,
+        web_isolation,
     ) {
         Ok(asm) => asm,
         Err(err) => {
@@ -288,6 +293,16 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // the binary's debug map to it.
     let keep_obj_for_debug =
         emit_debug_info && !linker::bake_debug_info(target, &output_paths.bin);
+
+    // Strip after the dSYM is baked, never before: `dsymutil` reads the binary's debug map, and
+    // a stripped binary has none. `--debug-info` and `--keep-symbols` both opt out — the first
+    // because stripping would undo what it was asked for, the second for profilers, which read
+    // the symbol table and have no other way to get names.
+    if !emit_debug_info && !keep_symbols {
+        if let Err(error) = linker::strip_symbols(target, emit, &output_paths.bin) {
+            eprintln!("Warning: could not strip symbols ({error}); keeping the larger binary");
+        }
+    }
     if !keep_obj_for_debug {
         let _ = fs::remove_file(&output_paths.obj);
     }

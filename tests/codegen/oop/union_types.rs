@@ -227,3 +227,36 @@ echo "|", $b->count;
     );
     assert_eq!(out, "F|7|1.5|42");
 }
+
+/// Verifies an ARRAY literal default in a `mixed`/union slot, instance and static.
+///
+/// `class T { public mixed $m = []; }` did not compile at all —
+/// `unsupported EIR backend feature: object_new for default value of property $m with PHP type
+/// Mixed` — and the same refusal on the dynamic allocation path is what made `ReflectionClass`,
+/// whose `$__constants` is exactly this shape, unusable through `new $c`. The scalar arms already
+/// boxed their payloads and the boxer already handled `Array` on both architectures; only the
+/// recognition and its emission were missing.
+///
+/// The elements are typed `Mixed` because the slot is, so a later write of a different type finds
+/// the right storage underneath rather than an `array<int>`. The reassignment and the non-empty
+/// literal are here for that reason, not for symmetry.
+#[test]
+fn test_array_literal_default_in_a_mixed_slot() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public mixed $empty = [];
+    public mixed $filled = [1, "b", 3];
+    public static mixed $shared = [];
+}
+$t = new T();
+var_dump($t->empty);
+echo count($t->filled), ":", $t->filled[1], "\n";
+$t->empty = [7];
+echo count($t->empty), ":", $t->empty[0], "\n";
+T::$shared = ["k" => 1];
+echo count(T::$shared), "\n";
+"#,
+    );
+    assert_eq!(out, "array(0) {\n}\n3:b\n1:7\n1\n");
+}

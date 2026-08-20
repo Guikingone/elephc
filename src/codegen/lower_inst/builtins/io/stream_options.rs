@@ -53,7 +53,9 @@ pub(crate) fn lower_stream_set_blocking(
             ctx.emitter.instruction(&format!("b {}", after));                   // skip wrapper dispatch after the native fd update
             ctx.emitter.label(&wrapper);
             ctx.emitter.instruction("mov x2, x1");                              // pass the blocking flag as wrapper option arg1
-            ctx.emitter.instruction(&format!("mov x1, #{}", STREAM_OPTION_BLOCKING)); // select STREAM_OPTION_BLOCKING
+            ctx.emitter.instruction(
+                &format!("mov x1, #{}", STREAM_OPTION_BLOCKING)
+            );                                                                  // select STREAM_OPTION_BLOCKING
             ctx.emitter.instruction("mov x3, #0");                              // pass zero as wrapper option arg2
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_set_option");
             ctx.emitter.label(&after);
@@ -68,7 +70,9 @@ pub(crate) fn lower_stream_set_blocking(
             ctx.emitter.instruction(&format!("jmp {}", after));                 // skip wrapper dispatch after the native fd update
             ctx.emitter.label(&wrapper);
             ctx.emitter.instruction("mov rdx, rsi");                            // pass the blocking flag as wrapper option arg1
-            ctx.emitter.instruction(&format!("mov rsi, {}", STREAM_OPTION_BLOCKING)); // select STREAM_OPTION_BLOCKING
+            ctx.emitter.instruction(
+                &format!("mov rsi, {}", STREAM_OPTION_BLOCKING)
+            );                                                                  // select STREAM_OPTION_BLOCKING
             ctx.emitter.instruction("xor ecx, ecx");                            // pass zero as wrapper option arg2
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_set_option");
             ctx.emitter.label(&after);

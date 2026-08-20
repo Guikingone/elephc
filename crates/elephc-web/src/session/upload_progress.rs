@@ -342,6 +342,22 @@ impl Tracker {
     }
 }
 
+/// Materializes lazy session configuration before Tokio starts concurrent tasks.
+pub(crate) fn initialize_config() {
+    unsafe {
+        let _ = super::state::elephc_web_session_get_name();
+        let _ = super::state::elephc_web_session_get_save_path();
+        let _ = super::state::elephc_web_session_get_upload_progress_prefix();
+        let _ = super::state::elephc_web_session_get_upload_progress_name();
+        let _ = super::state::elephc_web_session_get_upload_progress_freq();
+        let _ = super::state::elephc_web_session_get_upload_progress_min_freq();
+        let _ = super::state::elephc_web_session_get_serialize_handler();
+        let _ = super::state::elephc_web_session_get_upload_progress_enabled();
+        let _ = super::state::elephc_web_session_get_upload_progress_cleanup();
+        let _ = super::state::elephc_web_session_get_use_only_cookies();
+    }
+}
+
 /// Decides whether to track upload progress for the current request and, if so,
 /// builds a [`Tracker`]. Returns `None` (fast buffer-only drain, zero overhead)
 /// unless progress is enabled, the body is a `multipart/form-data` upload with a
@@ -354,7 +370,8 @@ pub(crate) fn begin(headers: &[(String, String)], query: &str) -> Option<Tracker
     let content_type = header_value(headers, "content-type")?;
     let boundary = extract_boundary(&content_type)?;
 
-    // SAFETY: single-threaded per worker; getters only read/lazy-init statics.
+    // SAFETY: `worker::serve` materializes lazy config before Tokio starts, so
+    // concurrent request tasks only read immutable process-static values here.
     let (name_cookie, save_path, prefix, name_field, freq, min_freq, handler_name) = unsafe {
         (
             getter_string(super::state::elephc_web_session_get_name()),

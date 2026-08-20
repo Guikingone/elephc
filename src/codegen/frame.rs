@@ -209,6 +209,17 @@ fn nested_call_reg_name(arch: Arch) -> &'static str {
 /// store and one load — so the receiver test errs toward inclusion.
 fn function_uses_nested_call_reg(function: &Function) -> bool {
     function.instructions.iter().any(|inst| {
+        // A boxed-Mixed STRING context holds its `__toString` receiver in the same register
+        // and is neither of the method-call opcodes below, so it used to slip through: a
+        // function whose only use was `echo $mixed` wrote `mov x19, x1` under a prologue that
+        // saved nothing. No caller shape was found that turns that into a wrong answer — the
+        // receiver is established AFTER argument lowering, which closes the obvious window —
+        // so this restores the callee-saved discipline rather than fixing a reproduced
+        // failure; per the note above, over-detection costs one store and one load.
+        if crate::codegen::shared_mixed_string::instruction_uses_mixed_string_ladder(function, inst)
+        {
+            return true;
+        }
         if !matches!(inst.op, Op::MethodCall | Op::NullsafeMethodCall) {
             return false;
         }
@@ -530,14 +541,19 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
 /// and exits the process with the bridge's integer return value. The handler
 /// address (arg 2) is materialized last so a destination-register page load on
 /// AArch64 cannot clobber the already-loaded argc/argv argument registers.
-pub(super) fn emit_web_entry_stub(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_web_entry_stub(
+    ctx: &mut FunctionContext<'_>,
+    isolation: super::WebIsolation,
+) {
     let target = ctx.emitter.target;
     if target.arch == Arch::AArch64 {
         ctx.emitter.raw(".align 2");
     }
     ctx.emitter.blank();
-    ctx.emitter
-        .comment("--web process entry: call elephc_web_run(argc, argv, &handler)");
+    ctx.emitter.comment(&format!(
+        "--web process entry: call {}(argc, argv, &handler)",
+        isolation.bridge_symbol()
+    ));
     ctx.emitter.entry_label();
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
     ctx.emitter
@@ -563,10 +579,10 @@ pub(super) fn emit_web_entry_stub(ctx: &mut FunctionContext<'_>) {
     abi::emit_load_symbol_to_reg(ctx.emitter, argc_reg, "_global_argc", 0);
     abi::emit_load_symbol_to_reg(ctx.emitter, argv_reg, "_global_argv", 0);
     abi::emit_symbol_address(ctx.emitter, handler_reg, WEB_HANDLER_SYMBOL);
-    // `elephc_web_run` is a `#[no_mangle] extern "C"` Rust symbol in the bridge
+    // The selected entry is a `#[no_mangle] extern "C"` Rust symbol in the bridge
     // staticlib, so it carries the platform's C-ABI underscore: resolve it through
     // `extern_symbol` (`_elephc_web_run` on macOS, `elephc_web_run` on Linux).
-    let bridge_entry = target.extern_symbol("elephc_web_run");
+    let bridge_entry = target.extern_symbol(isolation.bridge_symbol());
     abi::emit_call_label(ctx.emitter, &bridge_entry);
     abi::emit_exit_with_result_reg(ctx.emitter);
 }
@@ -1010,10 +1026,14 @@ pub(super) fn emit_owned_local_cleanup(
         abi::load_at_offset(ctx.emitter, state_reg, state_offset);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cbnz {}, {}", state_reg, done)); // skip raw cleanup while this slot stores a ref-cell pointer
+                ctx.emitter.instruction(
+                    &format!("cbnz {}, {}", state_reg, done)
+                );                                                              // skip raw cleanup while this slot stores a ref-cell pointer
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test whether this slot currently stores a ref-cell pointer
+                ctx.emitter.instruction(
+                    &format!("test {}, {}", state_reg, state_reg)
+                );                                                              // test whether this slot currently stores a ref-cell pointer
                 ctx.emitter
                     .instruction(&format!("jne {}", done));                      // skip raw cleanup for the ref-cell representation
             }

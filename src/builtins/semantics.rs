@@ -161,6 +161,8 @@ pub enum BuiltinArgumentLowering {
     PositionalRegex,
     /// Preserve by-reference array storage while lowering user-comparator sorts.
     UserValueSort,
+    /// Promote a packed by-reference array before reverse key sorting preserves its keys.
+    ReverseKeySort,
     /// Promote the by-reference OpenSSL tag target before ordinary argument planning.
     OpensslEncrypt,
     /// Promote a typed `array_splice()` receiver whose `$replacement` changes the element type.

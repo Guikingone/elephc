@@ -249,7 +249,7 @@ Directives cover `name`, `save_path`, `save_handler`, `cache_limiter`,
 `gc_divisor`, `gc_maxlifetime`, `sid_length`, `sid_bits_per_character`, plus:
 
 - **`session.auto_start`** — the `php.ini`-`PERDIR` analog. Because a compiled
-  binary has no `php.ini`, it is seeded once per worker process from the
+  binary has no `php.ini`, it is seeded before request handling from the
   `ELEPHC_SESSION_AUTO_START` environment variable (`1`/`on`/`true` → on). When
   on, the request bootstrap calls `session_start()` automatically before your
   handler body runs. Matching PHP's `PERDIR` semantics,
@@ -309,7 +309,8 @@ so the upload request's own handler never sees it — matching PHP, where only a
 concurrent poll request observes the intermediate states.
 
 Because elephc has no `php.ini`, the `enabled` and `cleanup` directives can be
-seeded per worker process from the `ELEPHC_SESSION_UPLOAD_PROGRESS_ENABLED` /
+seeded before the worker/broker/handler process tree is created from the
+`ELEPHC_SESSION_UPLOAD_PROGRESS_ENABLED` /
 `ELEPHC_SESSION_UPLOAD_PROGRESS_CLEANUP` environment variables (mirroring
 `session.auto_start`); otherwise they use the PHP defaults. Configuration needed
 before the body drain can also be supplied through `ELEPHC_SESSION_NAME`,
@@ -325,7 +326,7 @@ Notes and limitations specific to elephc:
   serialization.
 - `tmp_name` is always the empty string: uploads are buffered in memory rather
   than spooled to a temporary file, so there is no temp path to report.
-- The prefork server buffers a request's body before its own handler runs, so an
+- The web worker buffers a request's body before its handler runs, so an
   upload request cannot observe its **own** intermediate progress; a separate
   concurrent request must poll the session to read live progress.
 

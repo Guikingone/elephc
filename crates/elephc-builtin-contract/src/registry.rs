@@ -9,7 +9,7 @@
 //! - Duplicate names, duplicate IDs, non-canonical names, hash mismatches, and
 //!   unstable source ordering fail before the catalog is exposed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use crate::{BuiltinContract, BuiltinId};
@@ -95,6 +95,22 @@ fn build_registry() -> Registry {
             "builtin contract ID does not match canonical name: {}",
             contract.name
         );
+        let mut callback_names = HashSet::new();
+        for callback_name in contract.callback_parameter_names() {
+            assert!(
+                callback_names.insert(*callback_name),
+                "duplicate callback parameter metadata for {}::${callback_name}",
+                contract.name
+            );
+            assert!(
+                contract
+                    .params
+                    .iter()
+                    .any(|parameter| parameter.name == *callback_name),
+                "callback parameter metadata references unknown parameter {}::${callback_name}",
+                contract.name
+            );
+        }
         assert!(
             by_name.insert(contract.name, contract).is_none(),
             "duplicate builtin contract name: {}",

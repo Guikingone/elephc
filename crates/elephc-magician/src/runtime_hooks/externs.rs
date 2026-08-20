@@ -384,6 +384,11 @@ unsafe extern "C" {
         left: *mut RuntimeCell,
         right: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    /// Compares normalized array keys with the compiled runtime's regular ordering.
+    pub(super) fn __elephc_eval_value_regular_key_compare(
+        left: *mut RuntimeCell,
+        right: *mut RuntimeCell,
+    ) -> i64;
     pub(super) fn __elephc_eval_value_echo(value: *mut RuntimeCell);
     pub(super) fn __elephc_eval_value_string_bytes(
         value: *mut RuntimeCell,

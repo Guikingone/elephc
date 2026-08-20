@@ -298,8 +298,8 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `rsort()` | `rsort($arr): void` | Sort descending |
 | `asort()` | `asort($arr): void` | Sort by value, maintain keys |
 | `arsort()` | `arsort($arr): void` | Sort by value desc, maintain keys |
-| `ksort()` | `ksort($arr): void` | Sort by key ascending. On an indexed array this is a no-op, because its keys are already the ascending slot positions `0..n-1` |
-| `krsort()` | `krsort($arr): void` | Sort by key descending. Needs an associative array: an indexed array stores its keys as slot positions, so a descending key order is not representable and the call is refused at compile time |
+| `ksort()` | `ksort($arr): bool` | Sort by key ascending with `SORT_REGULAR`. On an indexed array this is a no-op, because its keys are already the ascending slot positions `0..n-1` |
+| `krsort()` | `krsort($arr): bool` | Sort by key descending with `SORT_REGULAR`. A non-empty indexed array is promoted to associative storage so its numeric keys can appear in descending iteration order |
 | `natsort()` | `natsort($arr): void` | Natural order sort |
 | `natcasesort()` | `natcasesort($arr): void` | Case-insensitive natural sort |
 | `shuffle()` | `shuffle($arr): void` | Randomly shuffle (in-place) |
@@ -334,7 +334,7 @@ Unannotated callback parameters are typed from the array in every array builtin 
 `ksort()`, `krsort()`, `asort()` and `arsort()` reorder an associative array by rewriting its
 iteration order only — every key stays attached to its own value, later key lookups and inserts
 keep working, and PHP's copy-on-write still applies, so a copy taken before the call keeps the
-original order:
+original order. All four return `true` after sorting:
 
 ```php
 $byName = ["b" => 2, "a" => 3, "c" => 1];
@@ -342,6 +342,22 @@ $snapshot = $byName;
 ksort($byName);
 echo implode(",", array_keys($byName));   // a,b,c
 echo implode(",", array_keys($snapshot)); // b,a,c
+```
+
+`ksort()` and `krsort()` currently accept exactly one argument and always use PHP's default
+`SORT_REGULAR` comparison. PHP's optional `$flags` argument (`SORT_NUMERIC`, `SORT_STRING`,
+`SORT_NATURAL`, `SORT_FLAG_CASE`, and related modes) is not implemented yet; passing it is a
+compile-time arity error. Full flag parity is tracked in
+[issue #699](https://github.com/illegalstudio/elephc/issues/699).
+
+For indexed storage, ascending `ksort()` leaves keys `0..n-1` in place. Descending `krsort()`
+promotes a non-empty indexed array to associative storage, preserving each numeric key/value pair:
+
+```php
+$values = ["zero", "one", "two"];
+krsort($values);
+echo implode(",", array_keys($values)); // 2,1,0
+echo $values[0];                        // zero
 ```
 
 Keys are ordered with PHP's standard comparison, not byte-wise, so numeric keys compare as

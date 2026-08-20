@@ -265,7 +265,9 @@ pub(crate) fn lower_pi(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
             ctx.emitter.ldr_lo12("d0", "x9", &label);                          // load the M_PI floating constant into the floating result register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movsd xmm0, QWORD PTR [rip + {}]", label)); // load the M_PI floating constant into the floating result register
+            ctx.emitter.instruction(
+                &format!("movsd xmm0, QWORD PTR [rip + {}]", label)
+            );                                                                  // load the M_PI floating constant into the floating result register
         }
     }
     store_if_result(ctx, inst)
@@ -674,14 +676,20 @@ fn emit_throw_value_error_x86_64(
     ctx.emitter.instruction("sub rsp, 16");                                     // keep the nested heap allocation call 16-byte aligned
     ctx.emitter.instruction("mov rax, 56");                                     // request Throwable payload storage for the clamp ValueError
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the ValueError object payload
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+    ctx.emitter.instruction(
+        &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
+    );                                                                          // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the allocation header as a runtime object
     ctx.emitter.instruction("call __rt_object_handle_acquire");                 // bind the new object to its PHP object handle
-    ctx.emitter.instruction("mov r10, QWORD PTR [rip + _spl_value_error_class_id]"); // load ValueError's runtime class id for this program
+    ctx.emitter.instruction(
+        "mov r10, QWORD PTR [rip + _spl_value_error_class_id]"
+    );                                                                          // load ValueError's runtime class id for this program
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store the ValueError class id in the Throwable header
     ctx.emitter.instruction(&format!("lea r10, [rip + {}]", message_symbol));   // materialize the static ValueError message pointer
     ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");                    // store the static ValueError message pointer
-    ctx.emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store the exception message length
+    ctx.emitter.instruction(
+        &format!("mov QWORD PTR [rax + 16], {}", message_len)
+    );                                                                          // store the exception message length
     ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");                     // store the default zero exception code
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
     ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");                     // previous defaults to null
@@ -701,7 +709,9 @@ fn load_float_literal_to_reg(ctx: &mut FunctionContext<'_>, reg: &str, value: f6
             ctx.emitter.instruction(&format!("ldr {}, [{}]", reg, scratch));    // load the floating-point comparison constant through the symbol scratch register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", reg, scratch)); // load the floating-point comparison constant through the symbol scratch register
+            ctx.emitter.instruction(
+                &format!("movsd {}, QWORD PTR [{}]", reg, scratch)
+            );                                                                  // load the floating-point comparison constant through the symbol scratch register
         }
     }
 }
@@ -722,7 +732,9 @@ fn lower_float_rounding_builtin(
             ctx.emitter.instruction(&format!("{} d0, d0", aarch64_op));         // round the floating-point argument with the builtin's direction
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("roundsd xmm0, xmm0, {}", x86_round_mode)); // round the floating-point argument with the builtin's direction
+            ctx.emitter.instruction(
+                &format!("roundsd xmm0, xmm0, {}", x86_round_mode)
+            );                                                                  // round the floating-point argument with the builtin's direction
         }
     }
     store_if_result(ctx, inst)
@@ -822,10 +834,14 @@ fn emit_int_abs_for_result(
     let done_label = ctx.next_label("abs_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("tbnz {}, #63, {}", result_reg, negative_label)); // negative inputs need the overflow-checked negation
+            ctx.emitter.instruction(
+                &format!("tbnz {}, #63, {}", result_reg, negative_label)
+            );                                                                  // negative inputs need the overflow-checked negation
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // inspect the sign of the integer operand
+            ctx.emitter.instruction(
+                &format!("test {}, {}", result_reg, result_reg)
+            );                                                                  // inspect the sign of the integer operand
             ctx.emitter.instruction(&format!("js {}", negative_label));         // negative inputs need the overflow-checked negation
         }
     }

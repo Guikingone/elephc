@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_offset.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_offset.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:549](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L549) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:551](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L551) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function ptr_offset(pointer $pointer, int $offset): mixed
+function ptr_offset(pointer $pointer, int $offset): pointer
 ```
 
 ## What the type checker enforces

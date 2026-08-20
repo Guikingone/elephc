@@ -9,6 +9,7 @@
 //! - Pass ordering is observable: magic constants and conditionals run before resolver/name resolution and type checking.
 //! - Check/EIR/assembly-only paths return before read-only native artifact resolution.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::process;
@@ -53,6 +54,7 @@ pub(crate) fn compile(config: CliConfig) {
         emit_timings,
         emit_source_map,
         emit_debug_info,
+        keep_symbols,
         regalloc_linear,
         ir_opt,
         target,
@@ -64,6 +66,7 @@ pub(crate) fn compile(config: CliConfig) {
         defines,
         strict_php,
         web,
+        web_isolation,
         with_crates,
         quiet,
         ini_overrides,
@@ -76,6 +79,7 @@ pub(crate) fn compile(config: CliConfig) {
     // `PHP_SAPI`, `phpversion()`), which is baked far below this function's parameter list — in
     // `codegen_support::prescan::collect_constants` and in the `phpversion()` const-fold.
     codegen::set_compile_profile(php_version, web);
+    crate::superglobals::set_compiling_for_web(web);
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let source_mode = SourceMode::from_path(Path::new(filename));
@@ -127,6 +131,16 @@ pub(crate) fn compile(config: CliConfig) {
         process::exit(1);
     }
 
+    let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
+    let forced_groups: HashSet<String> = [
+        (with_crates.contains("pdo"), "pdo"),
+        (with_crates.contains("tz"), "tz"),
+        (with_crates.contains("image"), "image"),
+    ]
+    .into_iter()
+    .filter_map(|(forced, group)| forced.then_some(group.to_string()))
+    .collect();
+
     // Snapshot the USER-declared function/class names for `opcache.preload`'s
     // `preload_statistics`, taken HERE — after include resolution but BEFORE any compiler prelude
     // is injected — so the reported lists can never contain `var_export`, the PDO surface, or the
@@ -143,12 +157,17 @@ pub(crate) fn compile(config: CliConfig) {
     crate::progress::phase("pdo-prelude");
     let phase_started = Instant::now();
     let ast = if php_version == crate::web_prelude::PhpVersion::default() {
-        pdo_prelude::inject_if_used(ast, with_crates.contains("pdo"))
+        pdo_prelude::inject_if_used(
+            ast,
+            with_crates.contains("pdo"),
+            &mut prelude_inventory,
+        )
     } else {
         pdo_prelude::inject_if_used_for_version(
             ast,
             with_crates.contains("pdo"),
             php_version,
+            &mut prelude_inventory,
         )
     };
     timings.record_since("pdo-prelude", phase_started);
@@ -160,7 +179,11 @@ pub(crate) fn compile(config: CliConfig) {
     // include resolution so usage inside includes is detected.
     crate::progress::phase("tz-prelude");
     let phase_started = Instant::now();
-    let ast = tz_prelude::inject_if_used(ast, with_crates.contains("tz"));
+    let ast = tz_prelude::inject_if_used(
+        ast,
+        with_crates.contains("tz"),
+        &mut prelude_inventory,
+    );
     timings.record_since("tz-prelude", phase_started);
 
     // Inject the listIdentifiers-filtering prelude (a pure elephc-PHP function over
@@ -170,7 +193,7 @@ pub(crate) fn compile(config: CliConfig) {
     // is detected, and before name resolution, which desugars both call forms to it.
     crate::progress::phase("list-id-prelude");
     let phase_started = Instant::now();
-    let ast = list_id_prelude::inject_if_used(ast);
+    let ast = list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
     timings.record_since("list-id-prelude", phase_started);
 
     // Inject the var_export prelude (a pure elephc-PHP function) only when the program
@@ -179,7 +202,7 @@ pub(crate) fn compile(config: CliConfig) {
     // before name resolution so the call resolves to the injected function.
     crate::progress::phase("var-export-prelude");
     let phase_started = Instant::now();
-    let ast = var_export_prelude::inject_if_used(ast);
+    let ast = var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
     timings.record_since("var-export-prelude", phase_started);
 
     // Inject the OPcache preludes (pure elephc-PHP functions): `opcache_get_configuration()`
@@ -246,6 +269,7 @@ pub(crate) fn compile(config: CliConfig) {
         &ini_overrides,
         opcache_preload_statistics.as_ref(),
         strict_opcache,
+        &mut prelude_inventory,
     );
     timings.record_since("opcache-prelude", phase_started);
 
@@ -256,7 +280,11 @@ pub(crate) fn compile(config: CliConfig) {
     // image usage inside includes is detected.
     crate::progress::phase("image-prelude");
     let phase_started = Instant::now();
-    let ast = crate::image_prelude::inject_if_used(ast, with_crates.contains("image"));
+    let ast = crate::image_prelude::inject_if_used(
+        ast,
+        with_crates.contains("image"),
+        &mut prelude_inventory,
+    );
     timings.record_since("image-prelude", phase_started);
 
     // Inject the incremental-hashing prelude (the `HashContext` class and the
@@ -267,7 +295,7 @@ pub(crate) fn compile(config: CliConfig) {
     // detected, and before name resolution so a namespaced caller resolves to it.
     crate::progress::phase("hash-prelude");
     let phase_started = Instant::now();
-    let ast = crate::hash_prelude::inject_if_used(ast, false);
+    let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
     // The `Directory` class and the `dir()` that mints one, injected only when the program
@@ -289,7 +317,13 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
-    let ast = web_prelude::inject_if_web(ast, web, php_version, &ini_overrides);
+    let ast = web_prelude::inject_if_web(
+        ast,
+        web,
+        php_version,
+        &ini_overrides,
+        &mut prelude_inventory,
+    );
     timings.record_since("web-prelude", phase_started);
 
     // Inject the PHP version-surface functions (`zend_version`, `php_sapi_name`,
@@ -298,7 +332,11 @@ pub(crate) fn compile(config: CliConfig) {
     // them, and before name resolution so a namespaced caller resolves to the injection.
     crate::progress::phase("version-prelude");
     let phase_started = Instant::now();
-    let ast = crate::version_prelude::inject_if_used(ast, php_version);
+    let ast = crate::version_prelude::inject_if_used(
+        ast,
+        php_version,
+        &mut prelude_inventory,
+    );
     timings.record_since("version-prelude", phase_started);
 
     crate::progress::phase("name-resolve");
@@ -401,7 +439,7 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("typecheck");
     let phase_started = Instant::now();
-    let check_result = match types::check_with_target(&ast, target) {
+    let mut check_result = match types::check_with_target(&ast, target) {
         Ok(result) => result,
         Err(e) => {
             crate::progress::clear();
@@ -413,12 +451,6 @@ pub(crate) fn compile(config: CliConfig) {
     for warning in &check_result.warnings {
         errors::report_warning(warning);
     }
-    codegen::prepare_declared_name_order(
-        &ast,
-        &check_result.classes,
-        &check_result.interfaces,
-    );
-
     if !target.supports_current_backend() {
         crate::progress::clear();
         eprintln!(
@@ -456,23 +488,44 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("opt-prop");
     let phase_started = Instant::now();
-    let ast = optimize::propagate_constants(ast);
+    let post_typecheck_optimizer = optimize::PostTypecheckOptimizer::new(&ast);
+    let ast = post_typecheck_optimizer.propagate(ast);
     timings.record_since("opt-prop", phase_started);
 
     crate::progress::phase("opt-post");
     let phase_started = Instant::now();
-    let ast = optimize::prune_constant_control_flow(ast);
+    let ast = post_typecheck_optimizer.prune(ast);
     timings.record_since("opt-post", phase_started);
 
     crate::progress::phase("opt-norm");
     let phase_started = Instant::now();
-    let ast = optimize::normalize_control_flow(ast);
+    let ast = post_typecheck_optimizer.normalize(ast);
     timings.record_since("opt-norm", phase_started);
 
     crate::progress::phase("dce");
     let phase_started = Instant::now();
-    let ast = optimize::eliminate_dead_code(ast);
+    let ast = post_typecheck_optimizer.eliminate_dead_code(ast);
     timings.record_since("dce", phase_started);
+
+    crate::progress::phase("decl-reach");
+    let phase_started = Instant::now();
+    let exported_function_names: HashSet<String> = exported_functions.keys().cloned().collect();
+    let ast = optimize::prune_unreachable_declarations(
+        ast,
+        &mut check_result,
+        optimize::reachability::PruneOptions {
+            inventory: &prelude_inventory,
+            forced_groups: &forced_groups,
+            exported_functions: &exported_function_names,
+            eval_forced: with_crates.contains("eval"),
+        },
+    );
+    timings.record_since("decl-reach", phase_started);
+    codegen::prepare_declared_name_order(
+        &ast,
+        &check_result.classes,
+        &check_result.interfaces,
+    );
 
     if emit_ir {
         eir_output::emit(
@@ -516,6 +569,7 @@ pub(crate) fn compile(config: CliConfig) {
         with_crates: &with_crates,
         ir_module,
         web,
+        web_isolation,
         extra_link_libs: &extra_link_libs,
         extra_link_paths: &extra_link_paths,
         extra_frameworks: &extra_frameworks,
@@ -528,6 +582,7 @@ pub(crate) fn compile(config: CliConfig) {
         exported_functions: &exported_functions,
         regalloc_linear,
         emit_debug_info,
+        keep_symbols,
         output_paths: &output_paths,
         emit_source_map,
         emit_asm,

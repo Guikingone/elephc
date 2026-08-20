@@ -158,6 +158,7 @@ pub(crate) fn phase_label(name: &str) -> &str {
         "opt-post" => "Pruning constant branches",
         "opt-norm" => "Normalizing control flow",
         "dce" => "Eliminating dead code",
+        "decl-reach" => "Pruning unreachable declarations",
         "ir-lower" => "Lowering program to EIR",
         "ir-opt" => "Optimizing EIR",
         "ir-print" => "Rendering EIR",

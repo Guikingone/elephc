@@ -8,6 +8,16 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
+/// Shortest scheme a `scheme://` path can name, and therefore the index every
+/// wrapper-dispatch scan starts its `://` search at.
+///
+/// PHP requires `n > 1` in `php_stream_locate_url_wrapper`: a single-letter scheme
+/// is a Windows drive letter, never a wrapper. Measured against reference PHP —
+/// `stream_wrapper_register("f", "W")` returns true and `f` appears in
+/// `stream_get_wrappers()`, but `f://x` never reaches the wrapper. Starting the scan
+/// here is what enforces it: a `://` at index 0 or 1 is simply never found.
+pub(crate) const MIN_WRAPPER_SCHEME_LEN: usize = 2;
+
 mod basename;
 mod cstr;
 mod disk_space;
@@ -73,6 +83,7 @@ mod scandir;
 mod stat;
 mod stat_array;
 mod stat_ext;
+mod stat_mode_access;
 mod socket_addr;
 pub(crate) mod socket_errno;
 mod resolve_host;
@@ -156,6 +167,7 @@ mod user_filter_close_flush;
 mod stash_connect_host;
 mod touch_meta_array;
 mod user_wrapper;
+mod user_wrapper_unbox;
 mod user_wrapper_cast;
 mod user_wrapper_dir;
 mod user_wrapper_path_op;
@@ -217,6 +229,7 @@ pub(crate) use scandir::emit_scandir;
 pub(crate) use stat::emit_stat;
 pub(crate) use stat_array::emit_stat_array;
 pub(crate) use stat_ext::emit_stat_ext;
+pub(crate) use stat_mode_access::emit_stat_mode_access;
 pub(crate) use socket_addr::emit_inet_addr_parse;
 pub(crate) use resolve_host::emit_resolve_host;
 pub(crate) use resolve_host_v6::emit_resolve_host_v6;
@@ -240,7 +253,9 @@ pub(crate) use fsockopen::emit_fsockopen;
 pub(crate) use ftp::emit_ftp;
 pub(crate) use http::emit_http;
 pub(crate) use https::emit_https;
-pub(crate) use stream_wrapper_register::emit_stream_wrapper_register;
+pub(crate) use stream_wrapper_register::{
+    emit_stream_wrapper_register, BAD_PROTOCOL_WARNING, DUPLICATE_PROTOCOL_WARNING,
+};
 pub(crate) use user_wrapper_table::{
     emit_load_flags_base, emit_load_handles_base, emit_load_handles_cap, emit_load_table_base,
     emit_load_table_cap,
@@ -355,6 +370,7 @@ pub(crate) use user_wrapper::{
     emit_user_wrapper_fseek, emit_user_wrapper_fstat, emit_user_wrapper_ftell,
     emit_user_wrapper_ftruncate, emit_user_wrapper_fwrite, emit_wrapper_missing_hook_warning,
 };
+pub(crate) use user_wrapper_unbox::emit_wrapper_unbox_int;
 pub(crate) use path_is_wrapper::emit_path_is_wrapper;
 pub(crate) use readfile_wrapper::emit_readfile_wrapper;
 pub(crate) use user_wrapper_cast::emit_user_wrapper_stream_cast;
@@ -367,7 +383,9 @@ pub(crate) use stash_connect_host::emit_stash_connect_host;
 pub(crate) use notification::emit_fire_notification;
 pub(crate) use touch_meta_array::emit_touch_meta_array;
 pub(crate) use user_wrapper_set_option::emit_user_wrapper_set_option;
-pub(crate) use user_wrapper_url_stat::emit_user_wrapper_url_stat;
+pub(crate) use user_wrapper_url_stat::{
+    emit_user_wrapper_url_stat, emit_user_wrapper_url_stat_field,
+};
 pub(crate) use user_wrapper_url_stat_fields::{
     emit_user_wrapper_url_stat_readers, STAT_FIELD_ATIME, STAT_FIELD_CTIME, STAT_FIELD_GID,
     STAT_FIELD_INO, STAT_FIELD_MODE, STAT_FIELD_MTIME, STAT_FIELD_SIZE, STAT_FIELD_UID,

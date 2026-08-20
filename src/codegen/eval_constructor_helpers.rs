@@ -333,7 +333,9 @@ fn emit_constructor_aarch64(
     let success_label = "__elephc_eval_value_construct_success";
     let fail_label = "__elephc_eval_value_construct_fail";
     let done_label = "__elephc_eval_value_construct_done";
-    emitter.instruction(&format!("sub sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)); //reserve helper frame plus a boundary exception handler
+    emitter.instruction(
+        &format!("sub sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)
+    );                                                                          //reserve helper frame plus a boundary exception handler
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
     emitter.instruction("str x2, [sp, #0]");                                    // save the active eval class-scope pointer
@@ -371,7 +373,9 @@ fn emit_constructor_aarch64(
     emitter.instruction("mov x0, #1");                                          // report successful construction or no-op
     emitter.label(done_label);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
-    emitter.instruction(&format!("add sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)); //release the constructor helper frame and boundary handler
+    emitter.instruction(
+        &format!("add sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)
+    );                                                                          //release the constructor helper frame and boundary handler
     emitter.instruction("ret");                                                 // return the constructor status flag to Rust
 }
 
@@ -389,7 +393,7 @@ fn emit_constructor_x86_64(
     let done_label = "__elephc_eval_value_construct_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction(&format!("sub rsp, {}", CONSTRUCTOR_HELPER_FRAME_SIZE)); //reserve aligned slots plus a boundary exception handler
+    emitter.instruction(&format!("sub rsp, {}", CONSTRUCTOR_HELPER_FRAME_SIZE));//reserve aligned slots plus a boundary exception handler
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the active eval class-scope pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the active eval class-scope length
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the boxed eval argument array
@@ -470,7 +474,9 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
     let handler_base = CONSTRUCTOR_HELPER_FRAME_SIZE;
     emitter.comment("push eval constructor exception boundary");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base)); //save the previous native exception-handler head
+    emitter.instruction(
+        &format!("mov QWORD PTR [rbp - {}], r10", handler_base)
+    );                                                                          //save the previous native exception-handler head
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)); //preserve the caller activation frame across constructor unwinding
     for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
@@ -485,7 +491,7 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
     emitter.instruction(&format!(
         "lea rdi, [rbp - {}]",
         handler_base - TRY_HANDLER_JMP_BUF_OFFSET
-    ));                                                                          // pass the boundary jmp_buf to setjmp
+    ));                                                                         // pass the boundary jmp_buf to setjmp
     emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native constructors
     emitter.instruction("test eax, eax");                                       // did control arrive through longjmp?
     emitter.instruction(&format!("jne {}", escape_label));                      // non-zero setjmp result means a constructor Throwable escaped
@@ -495,7 +501,9 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
 fn emit_x86_64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
     let handler_base = CONSTRUCTOR_HELPER_FRAME_SIZE;
     emitter.comment("pop eval constructor exception boundary");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", handler_base)); //reload the previous native exception-handler head
+    emitter.instruction(
+        &format!("mov r10, QWORD PTR [rbp - {}]", handler_base)
+    );                                                                          //reload the previous native exception-handler head
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
         emitter.instruction(&format!(

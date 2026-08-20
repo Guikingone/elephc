@@ -461,7 +461,7 @@ pub unsafe extern "C" fn elephc_tls_attach_fd_client_cert(
     let id = next_handle_id();
     handles()
         .lock()
-        .unwrap()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(id, Box::new(HandleEntry { sock, conn }));
     id
 }
@@ -532,7 +532,7 @@ unsafe fn tls_connect_inner_named(
     let id = next_handle_id();
     handles()
         .lock()
-        .unwrap()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(id, Box::new(HandleEntry { sock, conn }));
     id
 }
@@ -552,7 +552,7 @@ pub unsafe extern "C" fn elephc_tls_read(
     if buf_ptr.is_null() || max_len == 0 {
         return 0;
     }
-    let mut guard = handles().lock().unwrap();
+    let mut guard = handles().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(entry) = guard.get_mut(&handle_id) else {
         return -1;
     };
@@ -579,7 +579,7 @@ pub unsafe extern "C" fn elephc_tls_write(
     if buf_ptr.is_null() || len == 0 {
         return 0;
     }
-    let mut guard = handles().lock().unwrap();
+    let mut guard = handles().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(entry) = guard.get_mut(&handle_id) else {
         return -1;
     };
@@ -685,7 +685,7 @@ unsafe fn attach_fd_inner(
     let id = next_handle_id();
     handles()
         .lock()
-        .unwrap()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(id, Box::new(HandleEntry { sock, conn }));
     id
 }
@@ -777,7 +777,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 /// session from the handle table.
 #[no_mangle]
 pub extern "C" fn elephc_tls_close(handle_id: i64) {
-    let mut guard = handles().lock().unwrap();
+    let mut guard = handles().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(mut entry) = guard.remove(&handle_id) {
         entry.conn.send_close_notify();
         let mut stream = Stream::new(&mut entry.conn, &mut entry.sock);
@@ -788,6 +788,58 @@ pub extern "C" fn elephc_tls_close(handle_id: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies an earlier panic while holding the handle-table lock does not
+    /// turn every subsequent TLS ABI operation into a process abort.
+    #[test]
+    fn poisoned_handle_table_is_recovered_by_tls_operations() {
+        const TEST_NAME: &str = "poisoned_handle_table_is_recovered_by_tls_operations";
+        if std::env::var("ELEPHC_TLS_POISON_PROBE").as_deref() != Ok(TEST_NAME) {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([TEST_NAME, "--nocapture", "--test-threads=1"])
+                .env("ELEPHC_TLS_POISON_PROBE", TEST_NAME)
+                .output()
+                .expect("spawn isolated TLS poison probe");
+            assert!(
+                output.status.success(),
+                "isolated TLS poison probe failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let poisoned = std::panic::catch_unwind(|| {
+            let _guard = handles().lock().unwrap();
+            panic!("intentional TLS handle-table poison");
+        });
+        assert!(poisoned.is_err(), "the probe must poison the table first");
+
+        let mut buf = [0u8; 8];
+        let read = unsafe { elephc_tls_read(0xDEAD_BEEF, buf.as_mut_ptr(), buf.len()) };
+        assert_eq!(read, -1, "recovered lookup must preserve the unknown-handle sentinel");
+
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .expect("bind isolated TLS connect probe");
+        let port = listener.local_addr().expect("read TLS probe address").port();
+        let accept = std::thread::spawn(move || {
+            let _ = listener.accept().expect("accept isolated TLS connect probe");
+        });
+        let host = b"127.0.0.1";
+        let handle = unsafe {
+            tls_connect_inner(
+                host.as_ptr(),
+                host.len(),
+                port,
+                shared_client_config(),
+            )
+        };
+        assert!(
+            handle >= 0,
+            "plain TLS connect must recover the poisoned handle table before insertion"
+        );
+        elephc_tls_close(handle);
+        accept.join().expect("join isolated TLS connect probe");
+    }
 
     /// Verifies that the exported TLS ABI version remains at v1.
     #[test]

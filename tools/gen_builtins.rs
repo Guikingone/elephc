@@ -278,6 +278,11 @@ fn type_name(ty: TypeSpec) -> &'static str {
         TypeSpec::Bool => "bool",
         TypeSpec::Mixed => "mixed",
         TypeSpec::Void => "void",
+        // elephc extensions to the neutral spelling. Without these the generated pages would
+        // document `mixed` for a raw address — the same wrong answer the declaration itself
+        // used to give, moved one step downstream into the docs.
+        TypeSpec::Ptr => "pointer",
+        TypeSpec::Callable => "callable",
     }
 }
 

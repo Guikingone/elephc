@@ -16,12 +16,13 @@ exhaustive *what*.
 
 ```text
 elephc [OPTIONS] <source-file>
+elephc --version
 elephc native <COMMAND> [OPTIONS]
 ```
 
-Exactly one positional argument is required: the path to tagged `.php` or
-tagless `.lfc` source. The binary is written next to it, named after the source
-without its extension.
+Except for `--help` and `--version`, exactly one positional argument is required:
+the path to tagged `.php` or tagless `.lfc` source. The binary is written next
+to it, named after the source without its extension.
 Only an exact first argument of `native` selects the package command family. A
 source file literally named `native` must therefore be passed as `./native` or
 by another explicit path.
@@ -61,8 +62,10 @@ selection, toolchain overrides, and transactional behavior.
 | `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
+| `--keep-symbols` | — | off | Keep the symbol table in the linked executable. It is stripped by default; `--debug-info` also implies keeping it. See [Symbol stripping](#symbol-stripping). |
 | `--php-version VERSION` | `8.2`, `8.3`, `8.4`, `8.5` | detected, else `8.5` | Select the maintained PHP compatibility profile for version-dependent behavior. Sessions use it for PHP 8.4 deprecations/validation and PHP 8.5 CHIPS/option semantics. Usually unnecessary — see [Where the profile comes from](#where-the-profile-comes-from) and [Profile dependence](#profile-dependence). |
 | `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
+| `--web-isolation MODE` / `--web-isolation=MODE` | `worker`, `pool`, `request` | `worker` | Bake the web handler process model into the produced binary. Requires `--web`; plain `--web` is exactly `worker`. |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
 be combined with `--check`, `--emit cdylib`, `--emit-asm`, or `--emit-ir`. See
@@ -206,17 +209,31 @@ runtime arguments (not elephc compiler flags):
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of prefork worker processes. Minimum 1. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes (`0` = unlimited); oversized bodies get `413`. |
-| `--max-requests N` | No | `0` (never) | Recycle each worker after N requests (bounds memory growth). |
-| `--max-execution-time N` | No | `0` (no limit) | Kill and respawn a worker whose request handler runs longer than N seconds. |
+| `--max-requests N` | No | `0` (never) | Recycle each worker after N completed requests; stop accepting, drain active HTTP connections, then respawn it. |
+| `--max-execution-time N` | No | `0` (no limit) | Kill/respawn the web worker in `worker`; kill only the handler process in `pool`/`request`. |
+| `--handler-concurrency N` | No | `1` | Handler processes per web worker; `pool`/`request` only. |
+| `--max-handler-requests N` | No | `1000` | Replace a persistent handler after N requests (`0` = never); `pool` only. |
+| `--body-read-timeout N` | No | `30` | Request-body receive deadline in seconds (`0` = unlimited); `pool`/`request` only. |
+| `--response-write-timeout N` | No | `30` | Client-backpressure deadline in seconds (`0` = unlimited); `pool`/`request` only. |
 | `--gzip` | No | off | Compress responses when the client sends `Accept-Encoding: gzip`. |
 | `--access-log` | No | off | Log one line per request to stderr. |
 | `--help` (`-h`), `--version` (`-V`) | No | — | Print usage / version and exit. |
 
 ```bash
 elephc --web app.php
+elephc --web --web-isolation=pool app.php
+elephc --web --web-isolation=request app.php
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4 --max-body-size 1048576 --access-log
 ```
+
+The isolation choice is compile-time: the generated entry stub calls the
+selected bridge symbol directly. Mode-specific runtime flags are rejected by a
+binary compiled for another model rather than ignored. See [Choosing a web
+isolation model](../beyond-php/web.md#choosing-a-model) for concrete worker,
+pool, and request deployment examples, then [Concurrency
+model](../beyond-php/web.md#concurrency-model) for process trees, state lifetime,
+streaming, cancellation, and performance trade-offs.
 
 The served program also receives `$_COOKIE`, `$_REQUEST`, and `$_ENV`, and can
 emit cookies with `setcookie()`. The server shuts down cleanly on
@@ -399,9 +416,30 @@ The other 44 directives of the PHP 8.5 set are runtime-overridable.
 | `--quiet` / `-q` | — | off | Disable progress lines and colorized compiler output. |
 | `--gc-stats` | — | off | Print allocation/free counters at exit. |
 | `--heap-debug` | — | off | Enable runtime heap verification (double-free, bad refcount, free-list corruption). |
+| `--help` / `-h` | — | off | Print the compiler help, including the current elephc version, and exit successfully. |
+| `--version` / `-V` | — | off | Print the elephc compiler version and exit successfully. |
 | `--mascotte` | — | off | Print the embedded ASCII mascot and a randomly selected quote before normal output. |
 
 See [Output formats and diagnostics](output-and-diagnostics.md).
+
+## Symbol stripping
+
+A linked executable is stripped of its symbol table, which removes roughly a
+quarter of the file. Nothing in a compiled program reads those names, so this
+changes size only, never behavior.
+
+| Invocation | Symbol table | DWARF |
+|---|---|---|
+| `elephc app.php` | stripped | — |
+| `elephc --keep-symbols app.php` | kept | — |
+| `elephc --debug-info app.php` | kept | emitted |
+
+Use `--keep-symbols` when a profiler needs function names but the full DWARF of
+`--debug-info` is unwanted. Shared libraries built with `--emit cdylib` are
+never stripped, because their exported symbols are their interface.
+
+Details, including what happens when the `strip` tool is unavailable, are in
+[Symbol stripping](linking-and-conditional-compilation.md#symbol-stripping).
 
 ## Environment variables
 

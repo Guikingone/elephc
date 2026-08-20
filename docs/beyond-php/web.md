@@ -18,6 +18,19 @@ elephc --web app.php
 # app.php -> app  (a self-contained HTTP server binary)
 ```
 
+Plain `--web` selects the original high-throughput in-process worker model. The
+isolation model is a **compile-time** choice, not a runtime server switch:
+
+```bash
+elephc --web --web-isolation=worker app.php   # same as plain --web
+elephc --web --web-isolation=pool app.php     # persistent handler pool
+elephc --web --web-isolation=request app.php  # disposable child per request
+```
+
+The generated process entry calls a different bridge symbol for each model, so
+the default worker request path does not pay an isolation branch or IPC cost.
+`--web-isolation` without `--web` (or its `--with-web` alias) is an error.
+
 The produced binary has no PHP runtime dependency. Run it with `--listen`:
 
 ```bash
@@ -34,11 +47,20 @@ The produced binary accepts these arguments at runtime:
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of worker processes to prefork. Minimum 1. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes; `0` means unlimited. A request whose body exceeds the cap gets `413 Payload Too Large` and the PHP handler never runs. |
-| `--max-requests N` | No | `0` (never) | Recycle each worker after serving N requests (the master respawns it), bounding memory growth in long-running servers. |
+| `--max-requests N` | No | `0` (never) | Recycle each worker after N completed requests. It stops accepting, drains active HTTP connections, and exits after isolated handlers/brokers are reaped; the master then respawns it. |
 | `--access-log` | No | off | Log one line per request to stderr (`<ip> "<method> <path>" <status> <ms>`). |
+| `--max-execution-time N` | No | `0` (none) | In `worker`, terminate and respawn the worker. In `pool`/`request`, terminate only the timed-out handler process. |
+| `--handler-concurrency N` | No | `1` | Handler processes per web worker. Available only in `pool` and `request`. |
+| `--max-handler-requests N` | No | `1000` | Requests served by one persistent handler before replacement; `0` disables recycling. Available only in `pool`. |
+| `--body-read-timeout N` | No | `30` | Seconds allowed to receive a request body; `0` means unlimited. Available only in `pool` and `request`. |
+| `--response-write-timeout N` | No | `30` | Seconds an isolated response may remain blocked by client backpressure; `0` means unlimited. Available only in `pool` and `request`. |
+| `--gzip` | No | off | Compress responses when the client sends `Accept-Encoding: gzip`. |
 | `--help`, `--version` | No | — | Print usage / version and exit 0. |
 
-## Request model
+Mode-specific runtime flags are rejected by binaries that cannot implement
+them; they are never silently ignored.
+
+## HTTP request lifecycle
 
 The request model follows PHP-FPM / `php -S`: each incoming HTTP request
 re-runs the program's top-level code from a completely fresh state. Whatever
@@ -117,9 +139,11 @@ behaving as they do under PHP-FPM:
   httponly`). `setcookie()` percent-encodes the value; `setrawcookie()` does not.
   Multiple calls produce multiple `Set-Cookie` headers.
 
-Unlike PHP-FPM, calling `header()` (or `setcookie()`) **after** producing output
-is fine — elephc-web buffers the body and builds the response after the handler
-returns, so there is no "headers already sent" error.
+In the default `worker` model, calling `header()` (or `setcookie()`) **after**
+producing output is accepted because the whole response is buffered until the
+handler returns. In `pool` and `request`, output streams immediately: the first
+body byte commits status and headers, and later header/status mutations are
+ignored with PHP-style "headers already sent" diagnostics.
 
 ```php
 <?php
@@ -147,8 +171,8 @@ pieces fit together in a real-ish application.
 
 ## Per-request fresh state
 
-Between requests, the runtime resets all process-persistent state so request
-N+1 sees the same clean environment request N did:
+Between requests, the generated PHP runtime resets its request-visible state so
+request N+1 sees the same PHP environment request N did:
 
 - **Global variables** — reset to their uninitialized state.
 - **Function `static` variables** — released and zero-initialized; their
@@ -156,33 +180,82 @@ N+1 sees the same clean environment request N did:
 - **Static class properties** — released; their initializers re-run at the
   start of the handler body.
 
-This matches PHP-FPM's per-request isolation model. No data leaks from one
-request to the next.
+This matches PHP-FPM for PHP globals and statics in all three models. Native
+bridge state that intentionally lives outside the PHP heap follows the selected
+process lifetime; see [Concurrency model](#concurrency-model).
 
 ## Concurrency model
 
-The server uses a prefork model with `SO_REUSEPORT`: the master process forks N
-worker processes before any request arrives, and the kernel load-balances
-connections across workers.
+All models start with a prefork master and `--workers N` `SO_REUSEPORT` web
+workers. The compile-time isolation model decides where PHP executes:
 
-Each worker is a separate process with its own copy of the runtime. Within a
-single worker, requests are served **one at a time** — the PHP body runs to
-completion before the next request is accepted. Parallelism equals the worker
-count; a slow request occupies exactly one worker for its duration.
+| Model | PHP process lifetime | Maximum parallel handlers | Response | Operational trade-off |
+|---|---|---:|---|---|
+| `worker` (default) | The web worker itself | `workers` | Buffered | Original main performance and process-global persistence; a crash/timeout recycles the worker. |
+| `pool` | Persistent supervised handler children | `workers × handler-concurrency` | Streaming | No per-request fork; bridge/process state persists inside each pool child. A crashed, cancelled, timed-out, or quota-retired child is reaped and replaced. |
+| `request` | One disposable child per request | `workers × handler-concurrency` | Streaming | Strongest process-global isolation, with fork/COW/page-fault overhead on every request. |
+
+### Choosing a model
+
+If in doubt, start with `worker`. All three models reset PHP globals, function
+statics, and static properties between requests; selecting `request` is necessary
+only when state outside that PHP heap must also disappear after every response.
+
+- **Typical JSON API or dashboard — `worker`.** Use this for trusted application
+  code when throughput and latency matter most. Add web workers to increase PHP
+  parallelism. A handler crash or execution timeout replaces the whole web worker.
+- **PDO/FFI application needing containment — `pool`.** Persistent children avoid
+  the fork-per-request cost, a faulty handler is replaced without killing its web
+  worker, and `--handler-concurrency` allows several PHP handlers below each web
+  worker. PDO and other native caches are per pool child: they can be reused, but
+  requests have no affinity to a particular child.
+- **Fragile native integration or strict process reset — `request`.** Use this when
+  a request may leave unwanted state in a native library, allocator, FFI dependency,
+  or other process-global bridge and that state must never reach the next request.
+  Every request pays the fork/COW/page-fault cost, and persistent PDO connections
+  cannot survive, so this should not be the general-purpose performance choice.
+
+Example deployments:
+
+```bash
+# Fast stateless API: four independent in-process PHP workers.
+elephc --web api.php
+./api --listen 0.0.0.0:8080 --workers 4 --max-execution-time 30
+
+# Database-backed service: two web workers, four persistent handlers each
+# (at most eight concurrent PHP handlers), recycled after 1,000 requests.
+elephc --web --web-isolation=pool service.php
+./service --listen 0.0.0.0:8080 --workers 2 \
+  --handler-concurrency 4 --max-handler-requests 1000 --max-execution-time 30
+
+# Native/FFI endpoint: every completed request discards its handler process.
+elephc --web --web-isolation=request native-endpoint.php
+./native-endpoint --listen 127.0.0.1:8080 --workers 2 \
+  --handler-concurrency 2 --max-execution-time 10
+```
+
+`pool` and `request` add one threadless broker below each web worker. The broker
+owns every handler PID. Dispatches have unique IDs; client disconnects and
+response-write timeouts cancel the exact live or queued request, and shutdown
+terminates and reaps the complete descendant tree. Descriptor handoffs are
+acknowledged before the sender closes its copy. A broker failure exits its web
+worker so the master reconstructs a clean worker/broker pair.
 
 ## Robustness
 
 - **Graceful shutdown** — the master shuts down cleanly on `SIGINT` (Ctrl-C) and
   `SIGTERM`: it forwards termination to the workers, reaps them, and exits `0`. An
   in-flight request may be dropped when shutdown arrives.
-- **Worker respawn** — a worker that dies unexpectedly (a crash, or PHP calling
-  `exit()`) is replaced so the pool stays at `--workers` N.
+- **Process supervision** — the master replaces failed web workers. In isolated
+  modes, the broker separately tracks, reaps, and replaces handler children.
+- **Planned recycling** — `--max-requests` stops new accepts at the quota, asks
+  keep-alive connections to close after their current responses, drains in-flight
+  work, and reaps the isolated broker before the worker exits for replacement.
 - **Request body cap** — see `--max-body-size`; oversized bodies are rejected with
   `413` before the handler runs.
 - **Slow-connection bound** — HTTP/1.1 keep-alive is enabled, but a connection that
-  does not send the next request's headers within 30 s is closed. Because a worker
-  serves one connection at a time, a kept-alive connection holds a worker until it
-  closes or times out — size `--workers` accordingly.
+  does not send the next request's headers within 30 s is closed. Isolated modes
+  additionally bound body reads and stalled response writes by default.
 
 ## Sessions
 
@@ -236,12 +309,16 @@ available. The following are not yet available:
 
 - **`$argc` / `$argv` not populated** — the binary's own argv is consumed by the
   server and is not forwarded to the script body (PHP-FPM does not set them either).
-- **No intra-worker concurrency** — `handler()` runs synchronously, so one slow
-  request occupies its worker until it completes (idle keep-alive connections no
-  longer block the accept loop, but an in-flight handler does). Use `--workers`.
+- **Default worker mode has no intra-worker concurrency** — `handler()` runs
+  synchronously. Use more workers or compile with `pool`/`request` and set
+  `--handler-concurrency`.
 - **In-flight requests may drop on shutdown** — `SIGINT`/`SIGTERM` terminate
   workers promptly; there is no graceful connection drain yet.
-- **No response streaming** — the whole body is buffered before it is sent.
+- **Worker mode does not stream responses** — `pool` and `request` do.
+- **Execution is intentionally unbounded when `--max-execution-time 0`** — a
+  handler that never returns keeps its process slot while its client remains
+  connected. Client disconnect and response-write timeout cancellation still
+  reclaim isolated handlers.
 - **`--listen` is TCP only** — Unix-domain-socket listening is not yet supported.
 - **Not supported in this release:** static file serving, in-process
   TLS, HTTP/2–3 — front the server with a reverse proxy for these (below).

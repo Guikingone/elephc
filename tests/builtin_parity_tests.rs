@@ -51,7 +51,7 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     }
     assert_eq!(language_constructs, 5);
     assert_eq!(dedicated_syntax, 1);
-    assert_eq!(unsupported, 4);
+    assert_eq!(unsupported, 3);
     assert_eq!(
         preludes,
         BTreeSet::from(["dir", "hash_copy", "hash_final", "hash_init", "hash_update"])

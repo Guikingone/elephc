@@ -191,6 +191,13 @@ Whole-archive compression is supported on tar-based `PharData`: `compress(Phar::
 and `compress(Phar::BZ2)` write a sibling `.tar.gz` / `.tar.bz2` and return a fresh
 `PharData` for it, while `decompress()` writes the plain `.tar` back; the compressed
 archives are read transparently (and are interchangeable with the PHP interpreter).
+When reading a whole-archive gzip or bzip2 wrapper, Elephc limits decompressed output
+to the smaller of 1024x the compressed size and 64 MiB. The same 1024x ratio and
+64 MiB absolute ceiling apply independently to every compressed native PHAR or ZIP
+entry. Native PHAR, tar, and ZIP lookup scan and authenticate the container but materialize
+only the requested entry, so unrelated payloads are not copied or decompressed. These
+Elephc-specific safety ceilings intentionally diverge
+from PHP: PHP may accept a highly expanding or larger archive that Elephc rejects.
 Per-entry compression for native PHAR / zip stays on `compressFiles()` /
 `decompressFiles()`.
 
@@ -200,7 +207,14 @@ applies a hash signature, and `setSignatureAlgorithm(Phar::OPENSSL, $privateKey)
 with RSA-SHA1 using a PEM private key (PKCS#1 or PKCS#8). Native PHARs store the signature
 in their trailer; tar and zip phars store it in a `.phar/signature.bin` control entry. The
 resulting signature is verifiable by the PHP interpreter (for OpenSSL, place the matching
-public key in `<archive>.pubkey`). `getSignature()` returns `['hash' => <uppercase hex>,
+public key in `<archive>.pubkey`; signing does not create this sidecar). Elephc also
+requires that sidecar when opening an
+OpenSSL-signed archive: reads, entry listings, metadata access, mutations, compression,
+and `getSignature()` fail closed when the key is missing, malformed, or does not verify
+the archive. PEM public keys may use SubjectPublicKeyInfo (`BEGIN PUBLIC KEY`) or PKCS#1
+(`BEGIN RSA PUBLIC KEY`) encoding. APIs that receive archive bytes without a filesystem
+path cannot locate a sidecar and therefore reject OpenSSL-signed input.
+`getSignature()` returns `['hash' => <uppercase hex>,
 'hash_type' => 'MD5'|'SHA-1'|'SHA-256'|'SHA-512'|'OpenSSL']`.
 
 Metadata persistence covers the same scalar+array subset as

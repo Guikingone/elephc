@@ -17,7 +17,7 @@ pub(crate) mod out_params;
 pub(crate) mod spl;
 
 use crate::errors::CompileError;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::Checker;
@@ -119,6 +119,31 @@ impl Checker {
             // A by-reference output needs storage to write back into. Derived from the `ref(T)`
             // declaration so the rule holds for every such builtin without being restated.
             out_params::check_write_only_args(name, args)?;
+            // One authority for every builtin that declares a by-reference parameter. Several
+            // builtins used to hand-roll this check, which is a catalogue: the ones nobody
+            // wrote it for silently accepted a literal and ran, where PHP raises an Error.
+            for (index, arg) in args.iter().enumerate() {
+                if matches!(arg.kind, ExprKind::Spread(_))
+                    || !def.ref_params.get(index).copied().unwrap_or(false)
+                    || self.is_builtin_by_ref_argument_lvalue(arg)
+                {
+                    continue;
+                }
+                let param_name = def
+                    .params
+                    .get(index)
+                    .map(|(param_name, _)| param_name.as_str())
+                    .unwrap_or("arg");
+                return Err(CompileError::new(
+                    arg.span,
+                    &format!(
+                        "{}(): Argument #{} (${}) could not be passed by reference",
+                        name,
+                        index + 1,
+                        param_name
+                    ),
+                ));
+            }
             let requirement_input = crate::builtins::semantics::BuiltinRequirementInput {
                 args,
             };

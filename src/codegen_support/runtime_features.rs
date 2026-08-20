@@ -67,9 +67,70 @@ pub struct RuntimeFeatures {
     /// this bit keeps the address-of reference resolvable without pulling the body
     /// into non-PDO programs.
     pub pdo_udf: bool,
+    /// True when the program registers the builtin `Fiber` class, and therefore when a Fiber
+    /// object can exist to be collected.
+    ///
+    /// `__rt_object_free_deep` releases a fiber's 256 KB stack through `__rt_fiber_free_stack`,
+    /// which calls `munmap`. That arm was emitted unconditionally, so every binary imported
+    /// `munmap` to free a stack it could never have allocated. The condition is a fact, not an
+    /// analysis: a Fiber object cannot exist without the class, and `builtin_class_gate` decides
+    /// the class. When false the arm is absent and a receiver falls through to the ordinary
+    /// struct-free path, which is what a non-Fiber receiver already did.
+    pub fiber: bool,
+    /// True when the program registers the builtin `Generator` class.
+    ///
+    /// A Generator is a fiber-shaped coroutine and releases its stack through the SAME
+    /// `__rt_fiber_free_stack` helper, so gating the Fiber arm alone moved nothing — measured:
+    /// `_munmap` still imported, binary unchanged at 52 064 bytes. Both arms have to go for the
+    /// helper to become unreferenced and collectable.
+    pub generator: bool,
+    /// True when the program can hold a `popen()` pipe resource, i.e. when its EIR calls
+    /// `RuntimeFnId::Popen` — the only producer of resource kind 3.
+    ///
+    /// Scope cleanup reaps such a pipe through `__rt_pclose`, and that reference was the only
+    /// thing keeping `__rt_pclose` alive in every binary, which imported `pclose`.
+    pub popen_resource: bool,
+    /// True when the program can hold an `opendir()` directory resource, i.e. when its EIR calls
+    /// `RuntimeFnId::Opendir` — the only producer of resource kind 4.
+    ///
+    /// Scope cleanup releases such a handle through `__rt_closedir`, whose two paths (libc `DIR*`
+    /// and the `glob://` handle minted by `__rt_opendir_glob`) between them imported `closedir`,
+    /// `globfree` and `close`. Those three plus `pclose` were every libc import a trivial program
+    /// had apart from the `getrlimit` stack probe.
+    pub directory_resource: bool,
 }
 
 impl RuntimeFeatures {
+    /// Packs the feature set into the bits that identify one runtime object.
+    ///
+    /// The emitted runtime is a pure function of `(heap size, target, features, pic)`, so the
+    /// cache can be keyed on those inputs instead of on a hash of the OUTPUT. Hashing the output
+    /// meant generating 1.31 MB of assembly on every compile — cache hit included — only to look
+    /// up a file that was already on disk.
+    ///
+    /// `runtime_cache::identity` consumes this rather than re-packing the fields, so a feature
+    /// added here reaches the cache key by construction. A feature that gates emission but is
+    /// missing from the key names two different runtime objects with one key, and the compile
+    /// links a stale runtime with nothing to say so; `runtime_cache_key_covers_every_runtime_feature_and_pic_mode`
+    /// is the test that would go red.
+    ///
+    /// Bit positions are part of the on-disk cache key. Appending a feature is safe; reordering
+    /// them or reusing a retired bit is not, and would serve one feature set's object for another.
+    pub const fn cache_key_bits(&self) -> u64 {
+        (self.regex as u64)
+            | ((self.mb_strlen as u64) << 1)
+            | ((self.phar_archive as u64) << 2)
+            | ((self.descriptor_invoker as u64) << 3)
+            | ((self.eval_bridge as u64) << 4)
+            | ((self.eval_scope as u64) << 5)
+            | ((self.web as u64) << 6)
+            | ((self.pdo_udf as u64) << 7)
+            | ((self.fiber as u64) << 8)
+            | ((self.generator as u64) << 9)
+            | ((self.popen_resource as u64) << 10)
+            | ((self.directory_resource as u64) << 11)
+    }
+
     /// Returns an empty feature set for programs that need only the base runtime.
     pub const fn none() -> Self {
         Self {
@@ -81,6 +142,10 @@ impl RuntimeFeatures {
             eval_scope: false,
             web: false,
             pdo_udf: false,
+            fiber: false,
+            generator: false,
+            popen_resource: false,
+            directory_resource: false,
         }
     }
 
@@ -96,6 +161,10 @@ impl RuntimeFeatures {
             eval_scope: true,
             web: true,
             pdo_udf: true,
+            fiber: true,
+            generator: true,
+            popen_resource: true,
+            directory_resource: true,
         }
     }
 }
@@ -1205,6 +1274,10 @@ mod tests {
             eval_scope: false,
             web: false,
             pdo_udf: false,
+            fiber: false,
+            generator: false,
+            popen_resource: false,
+            directory_resource: false,
         })
         .iter()
         .any(|requirement| requirement == &LinkRequirement::Bridge("elephc_crypto")));

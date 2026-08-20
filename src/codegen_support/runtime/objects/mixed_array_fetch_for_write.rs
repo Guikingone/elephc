@@ -89,13 +89,13 @@ fn emit_mixed_new_empty_array_cell_aarch64(emitter: &mut Emitter) {
 
 /// Emits `__rt_mixed_cell_promote_to_hash` for ARM64.
 ///
-/// Input:  `x0` = boxed Mixed cell with a NON-NULL indexed-array payload (tag 4).
-/// Output: `x0` = the new hash payload installed into the cell (tag rewritten to 5).
+/// Input:  `x0` = boxed Mixed cell with an indexed (tag 4) or hash (tag 5) payload.
+/// Output: `x0` = the installed/borrowed hash payload, or zero for an invalid receiver.
 ///
-/// Builds a fresh hash from the indexed entries (`__rt_array_to_hash` retains
-/// payloads, `__rt_hash_to_mixed` boxes raw scalar entries), installs it into
-/// the cell, and releases the replaced indexed payload. Shared source arrays
-/// keep their other owners untouched (the fresh hash copies, COW-style).
+/// Tag 4 builds a fresh hash from the indexed entries (`__rt_array_to_hash`
+/// retains payloads, `__rt_hash_to_mixed` boxes raw scalar entries), installs
+/// it, and releases the replaced indexed payload once. Tag 5 ensures its hash
+/// is unique and republishes that result in the cell before returning its borrow.
 fn emit_mixed_cell_promote_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_cell_promote_to_hash ---");
@@ -104,8 +104,20 @@ fn emit_mixed_cell_promote_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #48");                                     // reserve frame for cell, source array, hash, and saved fp/lr
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
+    emitter.instruction("cbz x0, __rt_mixed_cell_promote_to_hash_invalid");     // reject a missing boxed cell before reading its tag
     emitter.instruction("str x0, [sp, #0]");                                    // save the boxed Mixed cell being promoted
-    emitter.instruction("ldr x0, [x0, #8]");                                    // load the indexed-array payload from the cell
+    emitter.instruction("ldr x9, [x0]");                                        // load the runtime payload tag before selecting its ownership path
+    emitter.instruction("cmp x9, #5");                                          // is the cell already an associative array?
+    emitter.instruction("b.eq __rt_mixed_cell_promote_to_hash_hash");           // ensure and republish an installed hash before returning its borrow
+    emitter.instruction("cmp x9, #4");                                          // is the cell an indexed array eligible for promotion?
+    emitter.instruction("b.ne __rt_mixed_cell_promote_to_hash_invalid");        // scalars and null cells are invalid key-sort receivers
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the indexed-array payload from the tag-4 cell
+    emit_branch_if_null_container(
+        emitter,
+        "x0",
+        "x9",
+        "__rt_mixed_cell_promote_to_hash_invalid",
+    );
     emitter.instruction("str x0, [sp, #8]");                                    // save the source array for the release after the copy
     emitter.instruction("bl __rt_array_to_hash");                               // build an owned hash from the indexed entries (payloads retained)
     emitter.instruction("bl __rt_hash_to_mixed");                               // box any raw scalar entries so the hash holds uniform Mixed cells
@@ -117,6 +129,25 @@ fn emit_mixed_cell_promote_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the replaced indexed payload
     emitter.instruction("bl __rt_decref_array");                                // release the cell's reference to the replaced indexed array
     emitter.instruction("ldr x0, [sp, #16]");                                   // return the promoted hash pointer
+    emitter.instruction("b __rt_mixed_cell_promote_to_hash_done");              // skip the idempotent and invalid return paths after promotion
+
+    emitter.label("__rt_mixed_cell_promote_to_hash_hash");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // borrow the already-installed hash payload from the tag-5 cell
+    emit_branch_if_null_container(
+        emitter,
+        "x0",
+        "x9",
+        "__rt_mixed_cell_promote_to_hash_invalid",
+    );
+    emitter.instruction("bl __rt_hash_ensure_unique");                          // split a shared child hash while consuming the cell's old owner reference
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the Mixed cell clobbered by the COW helper call
+    emitter.instruction("str x0, [x9, #8]");                                    // republish the unique-or-original hash into the child cell
+    emitter.instruction("b __rt_mixed_cell_promote_to_hash_done");              // return the borrow from the cell's current hash owner
+
+    emitter.label("__rt_mixed_cell_promote_to_hash_invalid");
+    emitter.instruction("mov x0, xzr");                                         // signal an invalid/missing Mixed array receiver to the EIR guard
+
+    emitter.label("__rt_mixed_cell_promote_to_hash_done");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the installed hash in x0
@@ -384,8 +415,8 @@ fn emit_mixed_new_empty_array_cell_x86_64(emitter: &mut Emitter) {
 
 /// Emits `__rt_mixed_cell_promote_to_hash` for x86_64.
 ///
-/// Input: `rdi` = boxed Mixed cell with a non-null indexed payload.
-/// Output: `rax` = the new hash payload installed into the cell (tag 5).
+/// Input: `rdi` = boxed Mixed cell with an indexed (tag 4) or hash (tag 5) payload.
+/// Output: `rax` = the installed/borrowed hash payload, or zero for an invalid receiver.
 fn emit_mixed_cell_promote_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_cell_promote_to_hash ---");
@@ -394,8 +425,21 @@ fn emit_mixed_cell_promote_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("sub rsp, 32");                                         // reserve slots for cell, source array, and promoted hash
+    emitter.instruction("test rdi, rdi");                                       // reject a missing boxed cell before reading its tag
+    emitter.instruction("jz __rt_mixed_cell_promote_to_hash_invalid");          // route null cells to the controlled EIR type-error guard
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the boxed Mixed cell being promoted
-    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // load the indexed-array payload from the cell
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the runtime payload tag before selecting its ownership path
+    emitter.instruction("cmp r10, 5");                                          // is the cell already an associative array?
+    emitter.instruction("je __rt_mixed_cell_promote_to_hash_hash");             // ensure and republish an installed hash before returning its borrow
+    emitter.instruction("cmp r10, 4");                                          // is the cell an indexed array eligible for promotion?
+    emitter.instruction("jne __rt_mixed_cell_promote_to_hash_invalid");         // scalars and null cells are invalid key-sort receivers
+    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // load the indexed-array payload from the tag-4 cell
+    emit_branch_if_null_container(
+        emitter,
+        "rdi",
+        "r10",
+        "__rt_mixed_cell_promote_to_hash_invalid",
+    );
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // save the source array for the release after the copy
     emitter.instruction("call __rt_array_to_hash");                             // build an owned hash from the indexed entries (payloads retained)
     emitter.instruction("mov rdi, rax");                                        // pass the fresh hash to the Mixed-entry conversion helper
@@ -407,6 +451,26 @@ fn emit_mixed_cell_promote_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the replaced indexed payload
     emitter.instruction("call __rt_decref_array");                              // release the cell's reference to the replaced indexed array
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the promoted hash pointer
+    emitter.instruction("jmp __rt_mixed_cell_promote_to_hash_done");            // skip the idempotent and invalid return paths after promotion
+
+    emitter.label("__rt_mixed_cell_promote_to_hash_hash");
+    emitter.instruction("mov rax, QWORD PTR [rdi + 8]");                        // borrow the already-installed hash payload from the tag-5 cell
+    emit_branch_if_null_container(
+        emitter,
+        "rax",
+        "r10",
+        "__rt_mixed_cell_promote_to_hash_invalid",
+    );
+    emitter.instruction("mov rdi, rax");                                        // pass the installed child hash to the SysV COW helper
+    emitter.instruction("call __rt_hash_ensure_unique");                        // split a shared child hash while consuming the cell's old owner reference
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the Mixed cell clobbered by the COW helper call
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // republish the unique-or-original hash into the child cell
+    emitter.instruction("jmp __rt_mixed_cell_promote_to_hash_done");            // return the borrow from the cell's current hash owner
+
+    emitter.label("__rt_mixed_cell_promote_to_hash_invalid");
+    emitter.instruction("xor rax, rax");                                        // signal an invalid/missing Mixed array receiver to the EIR guard
+
+    emitter.label("__rt_mixed_cell_promote_to_hash_done");
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return the installed hash in rax

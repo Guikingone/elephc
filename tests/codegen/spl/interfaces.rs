@@ -25,6 +25,229 @@ echo $c->count();
     assert_eq!(out, "7");
 }
 
+/// Verifies `count()` and `[]` reach a PHP `Countable`/`ArrayAccess` held in a MIXED slot.
+///
+/// Both operators go through a runtime helper when the static type is `mixed`, and each helper
+/// recognised only a hard-coded list of the runtime's OWN container classes by class id; every
+/// other object fell out of the ladder and answered `0` / null. So the same object answered
+/// correctly through `$m->count()` and wrongly through `count($m)` — two plausible, silent, wrong
+/// values. The synthetic builtins are affected identically, which is why a statically built
+/// `ArrayObject` failed this the moment it crossed a `mixed` boundary.
+///
+/// The parameters are declared `mixed` on purpose: an array literal of objects is typed
+/// `array<Real>` by the checker, the operators lower to a direct call, and the bug does not appear.
+#[test]
+fn test_count_and_offset_get_reach_a_php_interface_through_a_mixed_slot() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag implements Countable, ArrayAccess {
+    public array $d = ["k" => 42];
+    public function count(): int { return 7; }
+    public function offsetExists(mixed $o): bool { return isset($this->d[$o]); }
+    public function offsetGet(mixed $o): mixed { return $this->d[$o]; }
+    public function offsetSet(mixed $o, mixed $v): void { $this->d[$o] = $v; }
+    public function offsetUnset(mixed $o): void { $this->d[$o] = 0; }
+}
+class InheritedBag extends Bag {}
+
+function counted(mixed $m): int { return count($m); }
+function offset(mixed $m): mixed { return $m["k"]; }
+
+echo counted(new Bag()), ":", offset(new Bag()), "\n";
+echo counted(new InheritedBag()), ":", offset(new InheritedBag()), "\n";
+echo counted(new ArrayObject(["k" => 1, "j" => 2])), ":", offset(new ArrayObject(["k" => 5])), "\n";
+"#,
+    );
+    assert_eq!(out, "7:42\n7:42\n2:5\n");
+}
+
+/// Verifies a WRITE through a `mixed` slot reaches `ArrayAccess::offsetSet`.
+///
+/// The read was fixed first and the write was left behind, which is the worse half: `$m["b"] = 9`
+/// on an `ArrayObject` held in a `mixed` slot was DROPPED — the object came back unchanged and
+/// nothing was reported. A wrong read at least shows a wrong value; a dropped write shows nothing
+/// at all until something downstream reads what was never stored.
+///
+/// `isset` and `foreach` are checked alongside because they go through different helpers again,
+/// and both already answered correctly — pinning them here is what keeps a later change to the
+/// write path from being mistaken for a fix to theirs.
+#[test]
+fn test_offset_set_through_a_mixed_slot_reaches_array_access() {
+    let out = compile_and_run(
+        r#"<?php
+function iss(mixed $m): bool { return isset($m["a"]); }
+function wr(mixed $m, mixed $v): void { $m["b"] = $v; }
+function it(mixed $m): string { $s = ""; foreach ($m as $k => $v) { $s .= $k . "=" . $v . " "; } return $s; }
+
+$o = new ArrayObject(["a" => 1]);
+echo var_export(iss($o), true), "\n";
+wr($o, 9);
+echo $o->count(), ":", $o->offsetGet("b"), "\n";
+wr($o, "texte");
+echo $o->offsetGet("b"), "\n";
+echo it($o), "\n";
+"#,
+    );
+    assert_eq!(out, "true\n2:9\ntexte\na=1 b=texte \n");
+}
+
+/// Verifies writing into an object that is not `ArrayAccess` raises PHP's Error, naming the class.
+///
+/// Before, the write was silently discarded. Refusing is what PHP does, and it matters more here
+/// than on the read: a lost write leaves a program running on state it believes it stored.
+#[test]
+fn test_offset_set_on_a_non_array_access_object_raises_phps_error() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+function wr(mixed $m): void { $m["b"] = 9; }
+wr(new stdClass());
+echo "unreachable";
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: Uncaught Error: Cannot use object of type stdClass as array"),
+        "{err}"
+    );
+}
+
+/// Verifies indexing an object that is not `ArrayAccess` raises PHP's Error, naming the class.
+///
+/// `$o["k"]` used to answer null for an unrelated class, and to read the PROPERTY for a
+/// `stdClass` — a value PHP never produces, since it refuses the syntax outright. The refusal is
+/// unconditional: `isset`, `??` and `empty` raise it too, measured against 8.5, which is why this
+/// asserts on the quiet context rather than on a plain read. If those contexts were exempt, the
+/// helper's warning flag would have had to reach the decision, and it does not.
+#[test]
+fn test_indexing_a_non_array_access_object_raises_phps_error() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+function offset(mixed $m): bool { return isset($m["a"]); }
+$o = new stdClass();
+$o->a = 1;
+var_dump(offset($o));
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: Uncaught Error: Cannot use object of type stdClass as array"),
+        "{err}"
+    );
+}
+
+/// Verifies the same refusal names a USER class, not just `stdClass`.
+#[test]
+fn test_indexing_a_plain_user_object_raises_phps_error() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class Plain { public int $a = 1; }
+function offset(mixed $m): mixed { return $m["a"]; }
+echo offset(new Plain());
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: Uncaught Error: Cannot use object of type Plain as array"),
+        "{err}"
+    );
+}
+
+/// Verifies the runtime's OWN containers still count and index through a `mixed` slot.
+///
+/// These four are countable without appearing in the dense `Countable::count` table: their `count`
+/// is a runtime intrinsic, so no PHP method symbol exists to put there. A countability test built
+/// on the table alone would therefore refuse them — and since the refusal is now a fatal, that
+/// mistake would turn `count($stack)` from right into a stopped program. The class-id ladder that
+/// runs first is what keeps them working, and this pins it.
+#[test]
+fn test_runtime_containers_still_count_through_a_mixed_slot() {
+    let out = compile_and_run(
+        r#"<?php
+function counted(mixed $m): int { return count($m); }
+function offset(mixed $m): mixed { return $m[0]; }
+
+$stack = new SplStack();
+$stack->push(1);
+$stack->push(2);
+$fixed = new SplFixedArray(3);
+$fixed[0] = 9;
+$queue = new SplQueue();
+$queue->enqueue("a");
+$list = new SplDoublyLinkedList();
+$list->push(5);
+
+echo counted($stack), ":", counted($fixed), ":", offset($fixed), "\n";
+echo counted($queue), ":", counted($list), ":", offset($list), "\n";
+echo counted([1, 2, 3]), ":", counted(new ArrayIterator(["a" => 1, "b" => 2])), "\n";
+"#,
+    );
+    assert_eq!(out, "2:3:9\n1:1:5\n3:2\n");
+}
+
+/// Verifies a `count()` on a STATICALLY known non-`Countable` object refuses at RUN time.
+///
+/// It used to be a compile error, which looked like free strictness and was not: a program PHP
+/// runs to completion did not build. The call here sits in a function nothing calls, so PHP never
+/// reaches it and prints `ok` — while elephc refused the whole program over a line that never
+/// executes. Both halves are asserted, because fixing only the reachable one would leave the
+/// over-refusal in place.
+#[test]
+fn test_count_on_a_statically_known_non_countable_object_defers_to_run_time() {
+    let unreached = compile_and_run(
+        r#"<?php
+class Plain { public int $a = 1; }
+function never_called(): void {
+    $p = new Plain();
+    echo count($p);
+}
+echo "ok";
+"#,
+    );
+    assert_eq!(unreached, "ok");
+
+    let reached = compile_and_run_expect_failure(
+        r#"<?php
+class Plain { public int $a = 1; }
+$p = new Plain();
+echo count($p);
+"#,
+    );
+    assert!(
+        reached.contains(
+            "Fatal error: Uncaught TypeError: count(): Argument #1 ($value) \
+             must be of type Countable|array, Plain given"
+        ),
+        "{reached}"
+    );
+}
+
+/// Verifies counting a non-`Countable` object raises PHP's TypeError, naming the class.
+///
+/// Two ways to get this wrong, and the class here is built to catch both. Filling the dispatch
+/// table from the method NAME alone would make it answer `7`, a value PHP never produces. Leaving
+/// the old behaviour in place answers `0`, indistinguishable from an empty container and equally
+/// silent, where PHP stops the program.
+///
+/// The class name has to be resolved at run time — the value arrives as a boxed `Mixed`, so the
+/// class is not known while lowering — which is why the message is asserted whole rather than by
+/// prefix.
+#[test]
+fn test_count_through_a_mixed_slot_refuses_a_class_that_does_not_declare_countable() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class Impostor {
+    public function count(): int { return 7; }
+}
+function counted(mixed $m): int { return count($m); }
+echo counted(new Impostor());
+"#,
+    );
+    assert!(
+        err.contains(
+            "Fatal error: Uncaught TypeError: count(): Argument #1 ($value) \
+             must be of type Countable|array, Impostor given"
+        ),
+        "{err}"
+    );
+}
+
 /// Verifies `instanceof` returns `true` for a `Countable` implementer.
 #[test]
 fn test_countable_instanceof_succeeds() {

@@ -280,8 +280,12 @@ pub(super) fn lower_chmod_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Ins
             ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the boxed mode value
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // pass wrapper path pointer
             ctx.emitter.instruction("ldr x1, [sp, #8]");                        // pass wrapper path length
-            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_METADATA_SLOT)); // select stream_metadata vtable slot
-            ctx.emitter.instruction(&format!("mov x3, #{}", STREAM_META_ACCESS)); // select STREAM_META_ACCESS
+            ctx.emitter.instruction(
+                &format!("mov x2, #{}", STREAM_METADATA_SLOT)
+            );                                                                  // select stream_metadata vtable slot
+            ctx.emitter.instruction(
+                &format!("mov x3, #{}", STREAM_META_ACCESS)
+            );                                                                  // select STREAM_META_ACCESS
             ctx.emitter.instruction("ldr x4, [sp, #16]");                       // pass boxed mode as mixed value
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
             ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve stream_metadata result across value release
@@ -315,8 +319,12 @@ pub(super) fn lower_chmod_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Ins
             ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the boxed mode value
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // pass wrapper path pointer
             ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // pass wrapper path length
-            ctx.emitter.instruction(&format!("mov rdx, {}", STREAM_METADATA_SLOT)); // select stream_metadata vtable slot
-            ctx.emitter.instruction(&format!("mov rcx, {}", STREAM_META_ACCESS)); // select STREAM_META_ACCESS
+            ctx.emitter.instruction(
+                &format!("mov rdx, {}", STREAM_METADATA_SLOT)
+            );                                                                  // select stream_metadata vtable slot
+            ctx.emitter.instruction(
+                &format!("mov rcx, {}", STREAM_META_ACCESS)
+            );                                                                  // select STREAM_META_ACCESS
             ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 16]");            // pass boxed mode as mixed value
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve stream_metadata result across value release
@@ -361,7 +369,9 @@ pub(super) fn emit_owner_group_name_wrapper_dispatch(
             ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve the boxed principal value
             ctx.emitter.instruction("ldr x0, [sp, #16]");                       // pass wrapper path pointer
             ctx.emitter.instruction("ldr x1, [sp, #24]");                       // pass wrapper path length
-            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_METADATA_SLOT)); // select stream_metadata vtable slot
+            ctx.emitter.instruction(
+                &format!("mov x2, #{}", STREAM_METADATA_SLOT)
+            );                                                                  // select stream_metadata vtable slot
             ctx.emitter.instruction(&format!("mov x3, #{}", option));           // pass owner/group metadata option
             ctx.emitter.instruction("ldr x4, [sp, #0]");                        // pass boxed principal as mixed value
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
@@ -395,7 +405,9 @@ pub(super) fn emit_owner_group_name_wrapper_dispatch(
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the boxed principal value
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // pass wrapper path pointer
             ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");           // pass wrapper path length
-            ctx.emitter.instruction(&format!("mov rdx, {}", STREAM_METADATA_SLOT)); // select stream_metadata vtable slot
+            ctx.emitter.instruction(
+                &format!("mov rdx, {}", STREAM_METADATA_SLOT)
+            );                                                                  // select stream_metadata vtable slot
             ctx.emitter.instruction(&format!("mov rcx, {}", option));           // pass owner/group metadata option
             ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 0]");             // pass boxed principal as mixed value
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
@@ -444,7 +456,9 @@ pub(super) fn emit_owner_group_wrapper_dispatch(ctx: &mut FunctionContext<'_>, o
             ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the boxed principal value
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // pass wrapper path pointer
             ctx.emitter.instruction("ldr x1, [sp, #8]");                        // pass wrapper path length
-            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_METADATA_SLOT)); // select stream_metadata vtable slot
+            ctx.emitter.instruction(
+                &format!("mov x2, #{}", STREAM_METADATA_SLOT)
+            );                                                                  // select stream_metadata vtable slot
             ctx.emitter.instruction(&format!("mov x3, #{}", option));           // pass owner/group metadata option
             ctx.emitter.instruction("ldr x4, [sp, #16]");                       // pass boxed principal as mixed value
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
@@ -485,7 +499,9 @@ pub(super) fn emit_owner_group_wrapper_dispatch(ctx: &mut FunctionContext<'_>, o
             ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the boxed principal value
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // pass wrapper path pointer
             ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // pass wrapper path length
-            ctx.emitter.instruction(&format!("mov rdx, {}", STREAM_METADATA_SLOT)); // select stream_metadata vtable slot
+            ctx.emitter.instruction(
+                &format!("mov rdx, {}", STREAM_METADATA_SLOT)
+            );                                                                  // select stream_metadata vtable slot
             ctx.emitter.instruction(&format!("mov rcx, {}", option));           // pass owner/group metadata option
             ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 16]");            // pass boxed principal as mixed value
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");

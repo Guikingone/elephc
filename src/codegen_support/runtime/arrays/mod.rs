@@ -71,6 +71,7 @@ mod array_set_str;
 mod array_rand;
 mod random_u32;
 mod random_uniform;
+mod random_uniform64;
 mod array_reduce;
 mod array_reduce_str;
 mod array_replace;
@@ -94,11 +95,11 @@ mod array_sum;
 mod array_sum_mixed;
 mod array_to_hash;
 mod array_to_hash_reverse;
+mod array_to_hash_unique;
+mod hash_to_hash_unique;
 mod array_to_mixed;
 mod array_udiff_uintersect;
 mod array_union;
-mod array_unique;
-mod array_unique_refcounted;
 mod array_unshift;
 mod array_walk;
 mod array_walk_recursive;
@@ -132,6 +133,7 @@ mod hash_map;
 mod hash_iter;
 mod hash_new;
 mod hash_set;
+mod hash_key_compare;
 mod hash_sort;
 mod hash_spread;
 mod hash_sum_mixed;
@@ -158,14 +160,15 @@ mod nan_bool_coercion_warning;
 mod iterable_unsupported_kind;
 mod iterable_write_stdout;
 mod mixed_abs;
+mod mixed_cast_array;
 mod mixed_clone;
-mod mixed_from_value;
-mod mixed_instanceof;
 mod mixed_cast_bool;
 mod mixed_cast_float;
 mod mixed_cast_int;
 mod mixed_intval_base;
 mod mixed_cast_string;
+mod mixed_from_value;
+mod mixed_instanceof;
 mod mixed_free_deep;
 mod count_reject;
 mod mixed_count;
@@ -316,6 +319,7 @@ pub use array_rand::emit_array_rand;
 pub use random_u32::emit_random_u32;
 /// Emit 32-bit random unsigned integer helper.
 pub use random_uniform::emit_random_uniform;
+pub use random_uniform64::{emit_random_u64, emit_random_uniform64};
 /// Emit uniform random integer helper.
 pub use array_reduce::emit_array_reduce;
 /// Emit string-array reduce helper.
@@ -364,15 +368,16 @@ pub use array_to_hash::emit_array_to_hash;
 /// Emit indexed-array-to-hash converter helper (shared by hash-based set ops).
 pub use array_to_hash_reverse::emit_array_to_hash_reverse;
 /// Emit key-preserving reversed indexed-array-to-hash converter helper (array_reverse preserve_keys).
+pub use array_to_hash_unique::emit_array_to_hash_unique;
+pub use hash_to_hash_unique::emit_hash_to_hash_unique;
+/// Emit key-preserving deduplicating indexed-array-to-hash converter helper (array_unique).
 pub use array_to_mixed::emit_array_to_mixed;
 /// Emit array-to-Mixed conversion helper.
 pub use array_udiff_uintersect::emit_array_udiff_uintersect;
 /// Emit array udiff/uintersect comparator helper.
 pub use array_union::emit_array_union;
 /// Emit array union helper.
-pub use array_unique::emit_array_unique;
 /// Emit array unique helper.
-pub use array_unique_refcounted::emit_array_unique_refcounted;
 /// Emit refcounted array unique helper.
 pub use array_unshift::emit_array_unshift;
 /// Emit array unshift (prepend) helper.
@@ -475,12 +480,14 @@ pub use natsort::emit_natsort;
 pub use min_max_container::{emit_min_max_hash, emit_min_max_mixed, emit_min_max_str};
 /// Emit the single-array `min()` / `max()` reductions for Mixed, string, and hash containers.
 pub use mixed_abs::emit_mixed_abs;
+/// Emit boxed-Mixed-to-array cast helper.
+pub use mixed_cast_array::emit_mixed_cast_array;
 /// Emit a resource-aware owned Mixed value read.
 pub use mixed_clone::emit_mixed_clone;
-pub use mixed_from_value::emit_mixed_from_value;
 /// Emit Mixed from value conversion helper.
-pub use mixed_instanceof::emit_mixed_instanceof;
+pub use mixed_from_value::emit_mixed_from_value;
 /// Emit Mixed instanceof check helper.
+pub use mixed_instanceof::emit_mixed_instanceof;
 pub use mixed_cast_bool::emit_mixed_cast_bool;
 /// Emit Mixed-to-boolean cast helper.
 pub use mixed_cast_float::emit_mixed_cast_float;

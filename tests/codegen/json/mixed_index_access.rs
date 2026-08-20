@@ -77,18 +77,28 @@ fn test_mixed_chained_assoc_array_assignment() {
     assert_eq!(out, "{\"a\":[{\"b\":\"changed\"}]}");
 }
 
-/// stdClass receiver via array bracket access — PHP allows it for objects
-/// with public properties accessed by string key (e.g. ArrayAccess interface
-/// is the strict path; for stdClass elefant emulates the friendly idiom).
+/// Verifies a decoded `stdClass` REFUSES bracket access, the way PHP does.
+///
+/// This test used to assert `Bob`, on the stated belief that "PHP allows it for objects with
+/// public properties accessed by string key" and that bracket access on `stdClass` was a
+/// friendly idiom worth emulating. Measured against 8.5, that belief is wrong: the very program
+/// below stops with `Cannot use object of type stdClass as array`. The old expectation was read
+/// off the implementation, so it pinned the divergence in place instead of catching it.
+///
+/// `json_decode` without `true` is exactly where a program meets this, which is why the case
+/// lives here rather than with the other object tests.
 #[test]
-fn test_mixed_string_index_on_stdclass() {
-    let out = compile_and_run(
+fn test_mixed_string_index_on_stdclass_is_refused() {
+    let err = compile_and_run_expect_failure(
         r#"<?php
             $obj = json_decode("{\"name\":\"Bob\"}");
             echo $obj["name"];
         "#,
     );
-    assert_eq!(out, "Bob");
+    assert!(
+        err.contains("Fatal error: Uncaught Error: Cannot use object of type stdClass as array"),
+        "{err}"
+    );
 }
 
 /// Missing keys decode to Mixed(null) instead of erroring out — matches
@@ -161,6 +171,22 @@ try {
 } catch (\TypeError $e) {
     echo $e->getMessage();
 }"#,
+/// `count()` on a non-container Mixed payload raises PHP 8's TypeError.
+///
+/// This asserted `0` and passed — which is what a divergence looks like once a test
+/// records it. Reference PHP has thrown here since 8.0; the quiet answer dates from the
+/// 7.2 warning and was never revisited. The message is php-src's own, and it names a
+/// boolean by its VALUE (`false given`, never `bool given`), so the arm is per-tag.
+#[test]
+fn test_mixed_count_scalar_throws_php_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+        try {
+            echo count(json_decode("42"));
+        } catch (TypeError $e) {
+            echo $e->getMessage();
+        }
+        "#,
     );
     assert_eq!(
         out,

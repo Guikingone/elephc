@@ -1,6 +1,6 @@
 //! Purpose:
 //! Emits the `__rt_mixed_array_get` runtime helper for `$mixed[$key]` access.
-//! Routes boxed JSON-style values to indexed-array, hash, or stdClass lookup paths.
+//! Routes boxed JSON-style values to indexed-array, hash, stdClass, or `ArrayAccess` paths.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::objects::emit_mixed_array_get()`.
@@ -13,6 +13,10 @@
 //!   (`NULL_SENTINEL`, materialized by a missed read forwarded through a ternary merge)
 //!   is treated as an absent container and also returns `Mixed(null)` (issue #585).
 //! - Every successful return is an owned `Mixed*`; borrowed array/hash slots are retained first.
+//! - Objects resolve in two steps: the runtime's OWN containers by class id, then any PHP class
+//!   declaring `ArrayAccess`, through the dense `_class_offsetget_ptrs` table. Without the second
+//!   step a synthetic `ArrayObject` read as `$m["a"]` answered null while `$m->offsetGet("a")` on
+//!   the SAME object answered correctly.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -46,8 +50,9 @@ pub fn emit_mixed_array_get(emitter: &mut Emitter) {
 /// - All others → null (boxed `Mixed(null)`)
 ///
 /// For indexed arrays the key must be integer (`key_hi == -1` sentinel); string keys
-/// return null. For objects only `stdClass` with a string key is supported; int keys
-/// and non-stdClass objects return null. Missing keys return null. All paths that
+/// return null. For objects, `stdClass` supports string keys only, the runtime's own SPL
+/// containers dispatch by class id, and any other class reaches its `ArrayAccess::offsetGet`
+/// through `_class_offsetget_ptrs`; a class declaring no such interface returns null. Missing keys return null. All paths that
 /// produce a value box it through `__rt_mixed_from_value` except when storage already
 /// holds a boxed `Mixed` pointer (tag 7), which is retained before returning.
 fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
@@ -282,20 +287,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x12, [x12]");                                      // x12 = compile-time SplQueue class id
     emitter.instruction("cmp x11, x12");                                        // is the receiver a SplQueue instance?
     emitter.instruction("b.eq __rt_mixed_array_get_spl_dll");                   // SplQueue shares the list ArrayAccess helper
-    abi::emit_symbol_address(emitter, "x12", "_stdclass_class_id");
-    emitter.instruction("ldr x12, [x12]");                                      // x12 = compile-time stdClass class_id
-    emitter.instruction("cmp x11, x12");                                        // is the receiver a stdClass instance?
-    emitter.instruction("b.ne __rt_mixed_array_get_null");                      // unrelated class → null
-    emitter.instruction("ldr x11, [sp, #16]");                                  // load key_hi
-    emitter.instruction("cmn x11, #1");                                         // compare with -1 (int-key sentinel)
-    emitter.instruction("b.eq __rt_mixed_array_get_null");                      // int keys on objects → null
-    emitter.instruction("mov x0, x10");                                         // x0 = stdClass pointer
-    emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = key_lo (str ptr)
-    emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = key_hi (str len)
-    emitter.instruction("bl __rt_stdclass_get");                                // delegate to the dynamic-property reader
-    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the local frame
-    emitter.instruction("ret");                                                 // return Mixed* in x0
+    emitter.instruction("b __rt_mixed_array_get_php_offset_get");               // every other class goes through PHP ArrayAccess or raises
     emitter.label("__rt_mixed_array_get_spl_fixed");
     emitter.instruction("str x10, [sp, #0]");                                   // save unboxed SplFixedArray receiver while boxing the key
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
@@ -339,6 +331,60 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
 
+    // Classes above are the runtime's OWN containers, recognised by class id. Everything else is a
+    // PHP class, and its `ArrayAccess::offsetGet` is reachable only through the dense method table
+    // — without this a synthetic `ArrayObject` read as `$m["a"]` answered null while
+    // `$m->offsetGet("a")` on the SAME object answered correctly.
+    //
+    // The table is consulted TWICE on purpose: once here to decide whether to commit, and again
+    // after the key is boxed. Boxing allocates, so bailing out afterwards would strand a cell, and
+    // no register survives the call to hold the resolved pointer across it.
+    emitter.label("__rt_mixed_array_get_php_offset_get");
+    emitter.instruction("tbnz x11, #63, __rt_mixed_array_get_not_indexable");   // synthetic negative ids cannot index metadata
+    abi::emit_load_symbol_to_reg(emitter, "x12", "_class_iface_method_count", 0);
+    emitter.instruction("cmp x11, x12");                                        // is the id within the dense table?
+    emitter.instruction("b.hs __rt_mixed_array_get_not_indexable");             // out-of-range ids have no entry
+    abi::emit_symbol_address(emitter, "x12", "_class_offsetget_ptrs");
+    emitter.instruction("ldr x12, [x12, x11, lsl #3]");                         // resolve the concrete or inherited offsetGet
+    emitter.instruction("cbz x12, __rt_mixed_array_get_not_indexable");        // 0 means the class is not ArrayAccess at all
+    emitter.instruction("str x10, [sp, #0]");                                   // save unboxed receiver while boxing the key
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
+    emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?
+    emitter.instruction("b.eq __rt_mixed_array_get_php_int_key");               // integer keys box as Mixed int
+    emitter.instruction("mov x0, #1");                                          // tag = string for mixed_from_value
+    emitter.instruction("ldr x1, [sp, #8]");                                    // key string pointer
+    emitter.instruction("ldr x2, [sp, #16]");                                   // key string length
+    emitter.instruction("b __rt_mixed_array_get_php_box_key");                  // share the offsetGet call after key boxing
+    emitter.label("__rt_mixed_array_get_php_int_key");
+    emitter.instruction("mov x0, #0");                                          // tag = int for mixed_from_value
+    emitter.instruction("ldr x1, [sp, #8]");                                    // key integer payload
+    emitter.instruction("mov x2, #0");                                          // integer keys have no high payload
+    emitter.label("__rt_mixed_array_get_php_box_key");
+    emitter.instruction("bl __rt_mixed_from_value");                            // allocate the boxed ArrayAccess offset
+    emitter.instruction("str x0, [sp, #8]");                                    // stash the box; key_lo has served its purpose
+    emitter.instruction("mov x1, x0");                                          // pass boxed offset as argument 1
+    emitter.instruction("ldr x0, [sp, #0]");                                    // pass unboxed receiver as argument 0
+    emitter.instruction("ldr x11, [x0]");                                       // reload class id, clobbered across the boxing call
+    abi::emit_symbol_address(emitter, "x12", "_class_offsetget_ptrs");
+    emitter.instruction("ldr x12, [x12, x11, lsl #3]");                         // re-resolve offsetGet for the same class
+    emitter.instruction("blr x12");                                             // read through PHP's ArrayAccess::offsetGet
+    emitter.instruction("str x0, [sp, #0]");                                    // stash the owned result; the receiver is done
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the boxed offset
+    emitter.instruction("bl __rt_decref_mixed");                                // a PHP method BORROWS its argument, so this frame frees the box
+    emitter.instruction("ldr x0, [sp, #0]");                                    // recover the owned result
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
+
+    // PHP does not answer for an object it cannot index — not even quietly. `$o["k"]` on anything
+    // that is not ArrayAccess raises, in every context including `isset`, `??` and `empty`, so
+    // this leaves through the Error rather than through the shared null tail.
+    emitter.label("__rt_mixed_array_get_not_indexable");
+    emitter.instruction("mov x0, x10");                                         // pass the unboxed receiver to name its class
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame before the tail-call
+    emitter.instruction("b __rt_throw_object_not_array");                       // never returns
+
     emitter.label("__rt_mixed_array_get_null_container");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
     emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // quiet read contexts suppress the null-offset warning
@@ -360,7 +406,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
 /// Returns an owned pointer to a boxed `Mixed` cell in `rax`.
 ///
 /// Same dispatch and return semantics as `emit_mixed_array_get_aarch64`:
-/// - Tag 4 → indexed array, tag 5 → associative array, tag 6 → stdClass object
+/// - Tag 4 → indexed array, tag 5 → associative array, tag 6 → object (stdClass, an SPL
+///   container, or any PHP `ArrayAccess`)
 /// - Integer keys on indexed arrays required (`key_hi == -1`); string keys return null
 /// - Objects: only `stdClass` with string key supported; int keys return null
 /// - Missing keys and unsupported payloads return boxed `Mixed(null)`
@@ -591,19 +638,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r12", "_spl_queue_class_id", 0);
     emitter.instruction("cmp r11, r12");                                        // is the receiver a SplQueue instance?
     emitter.instruction("je __rt_mixed_array_get_spl_dll");                     // SplQueue shares the list ArrayAccess helper
-    abi::emit_load_symbol_to_reg(emitter, "r12", "_stdclass_class_id", 0);      // r12 = compile-time stdClass class_id
-    emitter.instruction("cmp r11, r12");                                        // is the receiver a stdClass instance?
-    emitter.instruction("jne __rt_mixed_array_get_null");                       // unrelated class → null
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // load key_hi
-    emitter.instruction("cmp r11, -1");                                         // int-key sentinel?
-    emitter.instruction("je __rt_mixed_array_get_null");                        // int key on object → null
-    emitter.instruction("mov rdi, r10");                                        // rdi = stdClass pointer
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // rsi = key_lo (str ptr)
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // rdx = key_hi (str len)
-    emitter.instruction("call __rt_stdclass_get");                              // delegate to the dynamic-property reader
-    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
-    emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("ret");                                                 // return Mixed* in rax
+    emitter.instruction("jmp __rt_mixed_array_get_php_offset_get");             // every other class goes through PHP ArrayAccess or raises
     emitter.label("__rt_mixed_array_get_spl_fixed");
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save unboxed SplFixedArray receiver while boxing the key
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload normalized key high word
@@ -646,6 +681,55 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
+
+    // See the ARM64 path: the ids above are the runtime's own containers, everything else is a PHP
+    // class whose `ArrayAccess::offsetGet` is only reachable through the dense method table, and
+    // the table is read twice so that no allocation happens before the decision to commit.
+    emitter.label("__rt_mixed_array_get_php_offset_get");
+    emitter.instruction("test r11, r11");                                       // reject negative synthetic class ids
+    emitter.instruction("js __rt_mixed_array_get_not_indexable");               // synthetic ids cannot index metadata
+    emitter.instruction("cmp r11, QWORD PTR [rip + _class_iface_method_count]"); // is the id within the dense table?
+    emitter.instruction("jae __rt_mixed_array_get_not_indexable");              // out-of-range ids have no entry
+    emitter.instruction("lea r12, [rip + _class_offsetget_ptrs]");              // dense ArrayAccess::offsetGet table
+    emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");                  // resolve the concrete or inherited offsetGet
+    emitter.instruction("test r12, r12");                                       // 0 means the class is not ArrayAccess
+    emitter.instruction("jz __rt_mixed_array_get_not_indexable");               // 0 means the class is not ArrayAccess at all
+    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save unboxed receiver while boxing the key
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload normalized key high word
+    emitter.instruction("cmp r11, -1");                                         // does key_hi carry the integer-key sentinel?
+    emitter.instruction("je __rt_mixed_array_get_php_int_key");                 // integer keys box as Mixed int
+    emitter.instruction("mov rax, 1");                                          // tag = string for mixed_from_value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // key string pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // key string length
+    emitter.instruction("jmp __rt_mixed_array_get_php_box_key");                // share the offsetGet call after key boxing
+    emitter.label("__rt_mixed_array_get_php_int_key");
+    emitter.instruction("mov rax, 0");                                          // tag = int for mixed_from_value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // key integer payload
+    emitter.instruction("xor esi, esi");                                        // integer keys have no high payload
+    emitter.label("__rt_mixed_array_get_php_box_key");
+    emitter.instruction("call __rt_mixed_from_value");                          // allocate the boxed ArrayAccess offset
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // stash the box; key_lo has served its purpose
+    emitter.instruction("mov rsi, rax");                                        // pass boxed offset as argument 1
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass unboxed receiver as argument 0
+    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // reload class id, clobbered across the boxing call
+    emitter.instruction("lea r12, [rip + _class_offsetget_ptrs]");              // dense ArrayAccess::offsetGet table
+    emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");                  // re-resolve offsetGet for the same class
+    emitter.instruction("call r12");                                            // read through PHP's ArrayAccess::offsetGet
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // stash the owned result; the receiver is done
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the boxed offset
+    emitter.instruction("call __rt_decref_mixed");                              // a PHP method BORROWS its argument, so this frame frees the box
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // recover the owned result
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
+
+    // See the ARM64 path: an object PHP cannot index raises, in every context, so this leaves
+    // through the Error rather than through the shared null tail.
+    emitter.label("__rt_mixed_array_get_not_indexable");
+    emitter.instruction("mov rdi, r10");                                        // pass the unboxed receiver to name its class
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer before the tail-call
+    emitter.instruction("jmp __rt_throw_object_not_array");                     // never returns
 
     emitter.label("__rt_mixed_array_get_null_container");
     emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read warnings enabled?

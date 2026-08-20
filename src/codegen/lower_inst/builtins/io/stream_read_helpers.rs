@@ -103,7 +103,9 @@ pub(super) fn lower_stream_get_contents_seek(
             if ctx.emitter.platform.needs_cmp_before_error_branch() {
                 ctx.emitter.instruction("cmp x0, #0");                          // Linux reports lseek failure as a negative result
             }
-            ctx.emitter.instruction(&ctx.emitter.platform.branch_on_syscall_success(skip_seek)); // continue only when lseek succeeded
+            ctx.emitter.instruction(
+                &ctx.emitter.platform.branch_on_syscall_success(skip_seek)
+            );                                                                  // continue only when lseek succeeded
             ctx.emitter.instruction(&format!("b {}", seek_failed));             // failed seek makes stream_get_contents return false
             ctx.emitter.label(wrap_seek);
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
@@ -185,13 +187,17 @@ pub(super) fn emit_branch_if_unlimited_length(
     abi::emit_load_int_immediate(ctx.emitter, scratch_reg, NULL_SENTINEL);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", length_reg, scratch_reg)); // test whether length is PHP null
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}", length_reg, scratch_reg)
+            );                                                                  // test whether length is PHP null
             ctx.emitter.instruction(&format!("b.eq {}", target_label));         // null length means read until EOF
             ctx.emitter.instruction(&format!("cmp {}, #0", length_reg));        // test whether length is negative
             ctx.emitter.instruction(&format!("b.lt {}", target_label));         // negative length means read until EOF
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", length_reg, scratch_reg)); // test whether length is PHP null
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}", length_reg, scratch_reg)
+            );                                                                  // test whether length is PHP null
             ctx.emitter.instruction(&format!("je {}", target_label));           // null length means read until EOF
             ctx.emitter.instruction(&format!("cmp {}, 0", length_reg));         // test whether length is negative
             ctx.emitter.instruction(&format!("jl {}", target_label));           // negative length means read until EOF
@@ -295,7 +301,9 @@ pub(super) fn lower_stream_copy_seek(
             if ctx.emitter.platform.needs_cmp_before_error_branch() {
                 ctx.emitter.instruction("cmp x0, #0");                          // Linux reports lseek failure as a negative result
             }
-            ctx.emitter.instruction(&ctx.emitter.platform.branch_on_syscall_success(skip_seek)); // continue only when lseek succeeded
+            ctx.emitter.instruction(
+                &ctx.emitter.platform.branch_on_syscall_success(skip_seek)
+            );                                                                  // continue only when lseek succeeded
             ctx.emitter.instruction(&format!("b {}", seek_failed));             // failed native seek returns PHP false
             ctx.emitter.label(wrap_seek);
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");

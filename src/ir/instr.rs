@@ -265,6 +265,7 @@ pub enum Op {
     InitStaticLocal,
     LoadStaticProperty,
     StoreStaticProperty,
+    StaticPropInitialized,
     LoadReflectionStaticProperty,
     StoreReflectionStaticProperty,
     ReflectionStaticPropertyInitialized,
@@ -629,6 +630,7 @@ impl Op {
             ReleaseLocalSlot => E::READS_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
             LoadGlobal
             | LoadStaticProperty
+            | StaticPropInitialized
             | LoadReflectionStaticProperty
             | ReflectionStaticPropertyInitialized
             | ScopedConstantGet
@@ -661,7 +663,9 @@ impl Op {
             // formatted, so no NaN can reach it, and `MAY_WARN` costs four stores at every site.
             FToStr | MixedCastString => E::ALLOC_CONCAT | E::MAY_WARN,
             ConcatReset => E::WRITES_GLOBAL,
-            Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL,
+            Cast => {
+                E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL
+            }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
@@ -864,6 +868,7 @@ impl Op {
             InitStaticLocal => "init_static_local",
             LoadStaticProperty => "load_static_property",
             StoreStaticProperty => "store_static_property",
+            StaticPropInitialized => "static_prop_initialized",
             LoadReflectionStaticProperty => "load_reflection_static_property",
             StoreReflectionStaticProperty => "store_reflection_static_property",
             ReflectionStaticPropertyInitialized => "reflection_static_property_initialized",

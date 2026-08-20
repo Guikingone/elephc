@@ -21,6 +21,7 @@ pub(crate) use user::emit_runtime_data_user;
 pub(crate) use user::{
     is_user_filter_contract_method, is_user_wrapper_contract_method, is_user_wrapper_marker_method,
 };
+pub(crate) use user::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 
 /// Fatal error message when `php_uname()` receives a `$mode` argument whose length is not exactly 1.
 pub(crate) const PHP_UNAME_MODE_LEN_MSG: &str =
@@ -510,6 +511,31 @@ pub(crate) const ALLOC_OVERFLOW_MSG: &str =
 /// Fatal error message when `str_repeat()` receives a `$times` argument less than 0.
 pub(crate) const STR_REPEAT_TIMES_MSG: &str =
     "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n";
+/// Prefix for a catchable TypeError naming a non-array `unserialize()` options argument.
+pub(crate) const UNSER_OPTIONS_TYPE_PREFIX: &str =
+    "unserialize(): Argument #2 ($options) must be of type array, ";
+/// Prefix for a catchable TypeError naming an invalid `allowed_classes` policy value.
+pub(crate) const UNSER_ALLOWED_CLASSES_POLICY_PREFIX: &str =
+    "unserialize(): Option \"allowed_classes\" must be of type array|bool, ";
+/// Prefix for a catchable TypeError naming an invalid `allowed_classes` list entry.
+pub(crate) const UNSER_ALLOWED_CLASSES_ENTRY_PREFIX: &str =
+    "unserialize(): Option \"allowed_classes\" must be an array of class names, ";
+/// Prefix for PHP's catchable Error when an object is indexed like an array.
+///
+/// `$o["k"]` on anything that is not `ArrayAccess` stops the program in PHP — including a plain
+/// `stdClass`, and including the quiet contexts `isset`, `??` and `empty`, all measured against
+/// 8.5. The class is only known at run time when the value arrives boxed, so the message is
+/// composed from these two fragments around the name.
+pub(crate) const OBJECT_NOT_ARRAY_PREFIX: &str = "Cannot use object of type ";
+/// Suffix for PHP's catchable Error when an object is indexed like an array.
+pub(crate) const OBJECT_NOT_ARRAY_SUFFIX: &str = " as array";
+/// Prefix for PHP's catchable object-to-string conversion Error in an allowed-class list.
+pub(crate) const UNSER_OBJECT_STRING_ERROR_PREFIX: &str = "Object of class ";
+/// Suffix for PHP's catchable object-to-string conversion Error in an allowed-class list.
+pub(crate) const UNSER_OBJECT_STRING_ERROR_SUFFIX: &str =
+    " could not be converted to string";
+/// Suffix shared by PHP's runtime unserialize TypeError diagnostics.
+pub(crate) const UNSER_TYPE_GIVEN_SUFFIX: &str = " given";
 /// Fatal error message when a `printf`-family conversion requests a field width outside
 /// PHP's accepted range. PHP raises `ValueError: Width must be between 0 and 2147483647`;
 /// elephc has no catchable-error path inside `__rt_sprintf`, so it reports the same text

@@ -16,51 +16,43 @@ use super::{
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
     OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
-    OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OB_WARN_BAD_CALLBACK_GENERIC,
+    OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
+    OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
     SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
     GAI_MSG_MIDDLE, GAI_MSG_PREFIX, SOCKET_GAI_MSG_CAPACITY,
     DIAG_NEWLINE, DISK_FREE_SPACE_WARNING, DISK_TOTAL_SPACE_WARNING,
-    FGC_FILTER_FAIL_TAIL,
-    PF_WARN_CREATE_END, PF_WARN_CREATE_MID, PF_WARN_HEAD, PF_WARN_LOCATE_END,
-    PF_WARN_LOCATE_MID, PF_WARN_OPEN_MID,
-    SCANDIR_ERRNO_WARNING_HEAD, SCANDIR_ERRNO_WARNING_MIDDLE,
-    SCANDIR_OPEN_WARNING_HEAD, SCANDIR_OPEN_WARNING_MIDDLE,
-    DYNAMIC_PROP_DEPRECATED_HEAD, DYNAMIC_PROP_DEPRECATED_TAIL,
-    FILTER_PARAM_CREATE_APPEND_HEAD, FILTER_PARAM_CREATE_PREPEND_HEAD, FILTER_PARAM_CREATE_TAIL,
-    FILTER_PARAM_INVALID_APPEND_HEAD, FILTER_PARAM_INVALID_PREPEND_HEAD,
-    FILTER_PARAM_INVALID_TAIL,
-    SELECT_CAST_UNREPRESENTABLE, SELECT_CAST_UNREPRESENTABLE_MEMORY,
+    FGC_FILTER_FAIL_TAIL, PF_WARN_CREATE_END, PF_WARN_CREATE_MID,
+    PF_WARN_HEAD, PF_WARN_LOCATE_END, PF_WARN_LOCATE_MID,
+    PF_WARN_OPEN_MID, SCANDIR_ERRNO_WARNING_HEAD, SCANDIR_ERRNO_WARNING_MIDDLE,
+    SCANDIR_OPEN_WARNING_HEAD, SCANDIR_OPEN_WARNING_MIDDLE, DYNAMIC_PROP_DEPRECATED_HEAD,
+    DYNAMIC_PROP_DEPRECATED_TAIL, FILTER_PARAM_CREATE_APPEND_HEAD, FILTER_PARAM_CREATE_PREPEND_HEAD,
+    FILTER_PARAM_CREATE_TAIL, FILTER_PARAM_INVALID_APPEND_HEAD, FILTER_PARAM_INVALID_PREPEND_HEAD,
+    FILTER_PARAM_INVALID_TAIL, SELECT_CAST_UNREPRESENTABLE, SELECT_CAST_UNREPRESENTABLE_MEMORY,
     SOCKET_FAILED_CLIENT_PREFIX, SOCKET_FAILED_FSOCKOPEN_PREFIX, SOCKET_FAILED_REASON_CLOSE,
     SOCKET_FAILED_REASON_OPEN, SOCKET_FAILED_REASON_UNKNOWN, SOCKET_FAILED_SERVER_PREFIX,
     UNKNOWN_WRAPPER_HEAD, UNKNOWN_WRAPPER_MIDDLE, UNKNOWN_WRAPPER_TAIL,
-    SOCKET_FAILED_UNABLE,
-    SWR_NEVER_CHANGED, SWR_NEVER_EXISTED, SWR_NTC_PREFIX, SWR_WRN_PREFIX,
-    STR_REPEAT_TIMES_MSG,
-    STAT_FAILED_TAIL, LSTAT_FAILED_TAIL, FILETYPE_UNKNOWN_HEAD, FILETYPE_UNKNOWN_TAIL,
-    WRAPPER_MISSING_HOOK_HEAD_CHGRP, WRAPPER_MISSING_HOOK_HEAD_CHMOD,
-    WRAPPER_MISSING_HOOK_HEAD_CHOWN, WRAPPER_MISSING_HOOK_HEAD_FILESIZE,
-    WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS, WRAPPER_MISSING_HOOK_HEAD_IS_FILE,
-    WRAPPER_MISSING_HOOK_HEAD_IS_DIR, WRAPPER_MISSING_HOOK_HEAD_IS_LINK,
-    WRAPPER_MISSING_HOOK_HEAD_IS_READABLE, WRAPPER_MISSING_HOOK_HEAD_IS_WRITABLE,
-    WRAPPER_MISSING_HOOK_HEAD_IS_WRITEABLE, WRAPPER_MISSING_HOOK_HEAD_IS_EXECUTABLE,
-    WRAPPER_MISSING_HOOK_HEAD_FILEMTIME, WRAPPER_MISSING_HOOK_HEAD_FILEATIME,
-    WRAPPER_MISSING_HOOK_HEAD_FILECTIME, WRAPPER_MISSING_HOOK_HEAD_FILETYPE,
-    WRAPPER_MISSING_HOOK_HEAD_FILEPERMS, WRAPPER_MISSING_HOOK_HEAD_FILEOWNER,
-    WRAPPER_MISSING_HOOK_HEAD_FILEGROUP, WRAPPER_MISSING_HOOK_HEAD_FILEINODE,
-    WRAPPER_MISSING_HOOK_HEAD_STAT, WRAPPER_MISSING_HOOK_HEAD_LSTAT,
-    WRAPPER_MISSING_HOOK_TAIL_URL_STAT, WRAPPER_MISSING_HOOK_HEAD_FEOF,
-    WRAPPER_MISSING_HOOK_HEAD_FLOCK, WRAPPER_MISSING_HOOK_HEAD_FSTAT,
-    WRAPPER_MISSING_HOOK_HEAD_FWRITE, WRAPPER_MISSING_HOOK_HEAD_MKDIR,
-    WRAPPER_MISSING_HOOK_HEAD_RENAME, WRAPPER_MISSING_HOOK_HEAD_RMDIR,
-    WRAPPER_MISSING_HOOK_HEAD_TOUCH, WRAPPER_MISSING_HOOK_HEAD_UNLINK,
-    WRAPPER_MISSING_HOOK_TAIL_EOF, WRAPPER_MISSING_HOOK_TAIL_LOCK,
-    WRAPPER_MISSING_HOOK_TAIL_METADATA, WRAPPER_MISSING_HOOK_TAIL_MKDIR,
-    WRAPPER_MISSING_HOOK_TAIL_RENAME, WRAPPER_MISSING_HOOK_TAIL_RMDIR,
-    WRAPPER_MISSING_HOOK_TAIL_STAT, WRAPPER_MISSING_HOOK_TAIL_UNLINK,
-    WRAPPER_MISSING_HOOK_HEAD_SELECT, WRAPPER_MISSING_HOOK_TAIL_CAST,
-    WRAPPER_MISSING_HOOK_TAIL_WRITE,
+    SOCKET_FAILED_UNABLE, SWR_NEVER_CHANGED, SWR_NEVER_EXISTED,
+    SWR_NTC_PREFIX, SWR_WRN_PREFIX, STR_REPEAT_TIMES_MSG,
+    STAT_FAILED_TAIL, LSTAT_FAILED_TAIL, FILETYPE_UNKNOWN_HEAD,
+    FILETYPE_UNKNOWN_TAIL, WRAPPER_MISSING_HOOK_HEAD_CHGRP, WRAPPER_MISSING_HOOK_HEAD_CHMOD,
+    WRAPPER_MISSING_HOOK_HEAD_CHOWN, WRAPPER_MISSING_HOOK_HEAD_FILESIZE, WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS,
+    WRAPPER_MISSING_HOOK_HEAD_IS_FILE, WRAPPER_MISSING_HOOK_HEAD_IS_DIR, WRAPPER_MISSING_HOOK_HEAD_IS_LINK,
+    WRAPPER_MISSING_HOOK_HEAD_IS_READABLE, WRAPPER_MISSING_HOOK_HEAD_IS_WRITABLE, WRAPPER_MISSING_HOOK_HEAD_IS_WRITEABLE,
+    WRAPPER_MISSING_HOOK_HEAD_IS_EXECUTABLE, WRAPPER_MISSING_HOOK_HEAD_FILEMTIME, WRAPPER_MISSING_HOOK_HEAD_FILEATIME,
+    WRAPPER_MISSING_HOOK_HEAD_FILECTIME, WRAPPER_MISSING_HOOK_HEAD_FILETYPE, WRAPPER_MISSING_HOOK_HEAD_FILEPERMS,
+    WRAPPER_MISSING_HOOK_HEAD_FILEOWNER, WRAPPER_MISSING_HOOK_HEAD_FILEGROUP, WRAPPER_MISSING_HOOK_HEAD_FILEINODE,
+    WRAPPER_MISSING_HOOK_HEAD_STAT, WRAPPER_MISSING_HOOK_HEAD_LSTAT, WRAPPER_MISSING_HOOK_TAIL_URL_STAT,
+    WRAPPER_MISSING_HOOK_HEAD_FEOF, WRAPPER_MISSING_HOOK_HEAD_FLOCK, WRAPPER_MISSING_HOOK_HEAD_FSTAT,
+    WRAPPER_MISSING_HOOK_HEAD_FWRITE, WRAPPER_MISSING_HOOK_HEAD_MKDIR, WRAPPER_MISSING_HOOK_HEAD_RENAME,
+    WRAPPER_MISSING_HOOK_HEAD_RMDIR, WRAPPER_MISSING_HOOK_HEAD_TOUCH, WRAPPER_MISSING_HOOK_HEAD_UNLINK,
+    WRAPPER_MISSING_HOOK_TAIL_EOF, WRAPPER_MISSING_HOOK_TAIL_LOCK, WRAPPER_MISSING_HOOK_TAIL_METADATA,
+    WRAPPER_MISSING_HOOK_TAIL_MKDIR, WRAPPER_MISSING_HOOK_TAIL_RENAME, WRAPPER_MISSING_HOOK_TAIL_RMDIR,
+    WRAPPER_MISSING_HOOK_TAIL_STAT, WRAPPER_MISSING_HOOK_TAIL_UNLINK, WRAPPER_MISSING_HOOK_HEAD_SELECT,
+    WRAPPER_MISSING_HOOK_TAIL_CAST, WRAPPER_MISSING_HOOK_TAIL_WRITE, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
+    UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX, UNSER_OBJECT_STRING_ERROR_SUFFIX,
+    UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX,
 };
 use super::super::system;
 use super::RT_DIAG_BUF_BYTES;
@@ -92,6 +84,55 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", 65536, target));
     out.push_str(&comm_directive("_concat_off", 8, target));
+    out.push_str(&comm_directive("_unser_depth", 8, target));
+    out.push_str(".globl _unser_depth_msg\n_unser_depth_msg:\n    .ascii \"Fatal error: maximum unserialize depth exceeded\\n\"\n");
+    out.push_str(&comm_directive("_unser_allowed_mode", 8, target));
+    out.push_str(&comm_directive("_unser_allowed_list", 8, target));
+    out.push_str(&comm_directive("_unser_allowed_list_mixed", 8, target));
+    out.push_str(&comm_directive("_unser_active", 8, target));
+    out.push_str(&comm_directive("_unser_context", 8, target));
+    out.push_str(".globl _unser_allowed_classes_key\n_unser_allowed_classes_key:\n    .ascii \"allowed_classes\"\n");
+    out.push_str(&format!(
+        ".globl _unser_options_type_prefix\n_unser_options_type_prefix:\n    .ascii {UNSER_OPTIONS_TYPE_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_allowed_classes_policy_prefix\n_unser_allowed_classes_policy_prefix:\n    .ascii {UNSER_ALLOWED_CLASSES_POLICY_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_allowed_classes_entry_prefix\n_unser_allowed_classes_entry_prefix:\n    .ascii {UNSER_ALLOWED_CLASSES_ENTRY_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _object_not_array_prefix\n_object_not_array_prefix:\n    .ascii {OBJECT_NOT_ARRAY_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _object_not_array_suffix\n_object_not_array_suffix:\n    .ascii {OBJECT_NOT_ARRAY_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_object_string_error_prefix\n_unser_object_string_error_prefix:\n    .ascii {UNSER_OBJECT_STRING_ERROR_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_object_string_error_suffix\n_unser_object_string_error_suffix:\n    .ascii {UNSER_OBJECT_STRING_ERROR_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_type_given_suffix\n_unser_type_given_suffix:\n    .ascii {UNSER_TYPE_GIVEN_SUFFIX:?}\n"
+    ));
+    for (label, name) in [
+        ("_unser_type_int", "int"),
+        ("_unser_type_string", "string"),
+        ("_unser_type_float", "float"),
+        ("_unser_type_bool", "bool"),
+        ("_unser_type_array", "array"),
+        ("_unser_type_object", "object"),
+        ("_unser_type_null", "null"),
+        ("_unser_type_resource", "resource"),
+        ("_unser_type_unknown", "unknown"),
+    ] {
+        out.push_str(&format!(
+            ".globl {label}\n{label}:\n    .ascii {name:?}\n"
+        ));
+    }
+    out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
+    out.push_str(".globl _incomplete_class_property_name\n_incomplete_class_property_name:\n    .ascii \"__PHP_Incomplete_Class_Name\"\n");
     // print_r($value, true) return-mode capture state. _print_r_mode is a flag
     // (0 = write to stdout, 1 = append to _print_r_buf) consulted by
     // __rt_stdout_write and __rt_pr_write; _print_r_off tracks the accumulated
@@ -284,8 +325,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // index, keys excluded) plus a pointer->index map of already-serialized objects
     // (parallel arrays, linear scan) so a repeated object emits r:<index>. unserialize:
     // a registry of created value boxes indexed by the same pre-order counter so r:<N>
-    // resolves to the existing value. Capacity bounds the per-call object/value count;
-    // overflow degrades gracefully (serialize stops deduping, unserialize fails the ref).
+    // resolves to the existing value. Reentrant calls snapshot the used prefix plus their
+    // policy/depth fields through _unser_context. Capacity bounds the per-call object/value
+    // count; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref).
     out.push_str(&comm_directive("_ser_value_counter", 8, target));
     out.push_str(&comm_directive("_ser_obj_count", 8, target));
     out.push_str(&comm_directive("_ser_obj_ptrs", 524288, target));
@@ -378,6 +420,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_heap_small_bins", 32, target));
     out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
     out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
+    // Generation-safe buffer descriptor registry. Public Buffer values are
+    // scalar `(generation << 32) | index` handles, never heap pointers: slot
+    // reuse increments generation so stale aliases cannot access a new payload.
+    // Index zero is reserved as the invalid/null handle; the descriptor free
+    // list is static metadata and therefore does not consume user heap space.
+    out.push_str(&comm_directive(
+        "_buffer_registry",
+        (crate::codegen_support::runtime::buffers::BUFFER_REGISTRY_CAPACITY + 1)
+            * crate::codegen_support::runtime::buffers::BUFFER_DESCRIPTOR_SIZE,
+        target,
+    ));
+    out.push_str(&comm_directive("_buffer_registry_free", 8, target));
+    out.push_str(".globl _buffer_registry_next\n_buffer_registry_next:\n    .quad 1\n");
     // PHP object-handle pool. `_obj_handle_index` is a DIRECT-MAPPED side table
     // holding one u32 handle per 16-byte granule of `_heap_buf`: two live heap
     // blocks can never share a granule because the smallest block is 16 header
@@ -501,6 +556,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     ));
     out.push_str(".globl _buffer_bounds_msg\n_buffer_bounds_msg:\n    .ascii \"Fatal error: buffer index out of bounds\\n\"\n");
     out.push_str(".globl _buffer_uaf_msg\n_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
+    out.push_str(".globl _buffer_registry_exhausted_msg\n_buffer_registry_exhausted_msg:\n    .ascii \"Fatal error: buffer registry exhausted\\n\"\n");
     out.push_str(".globl _closure_bind_unsupported_msg\n_closure_bind_unsupported_msg:\n    .ascii \"Fatal error: Closure::bind requires a closure that captures only $this\\n\"\n");
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
     out.push_str(".globl _iterable_array_str\n_iterable_array_str:\n    .ascii \"Array\"\n");
@@ -649,11 +705,21 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
     out.push_str(".globl _uncaught_exc_msg\n_uncaught_exc_msg:\n    .ascii \"Fatal error: uncaught exception\\n\"\n");
-    out.push_str(".globl _uncaught_exc_prefix\n_uncaught_exc_prefix:\n    .ascii \"Fatal error: Uncaught \"\n");
+    // PHP prefixes the report with a newline UNCONDITIONALLY — measured against 8.5 on a script
+    // that writes nothing at all before throwing, where the output still begins with "\n".
+    out.push_str(".globl _uncaught_exc_prefix\n_uncaught_exc_prefix:\n    .ascii \"\\nFatal error: Uncaught \"\n");
     out.push_str(".globl _uncaught_exc_sep\n_uncaught_exc_sep:\n    .ascii \": \"\n");
     out.push_str(".globl _uncaught_exc_in\n_uncaught_exc_in:\n    .ascii \" in \"\n");
     out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");
     out.push_str(".globl _uncaught_exc_nl\n_uncaught_exc_nl:\n    .ascii \"\\n\"\n");
+    // Printed only when `__rt_exception_matches` walks into the "metadata never emitted"
+    // sentinel, which no correct build should reach — see that helper for why it aborts there
+    // instead of answering "no match".
+    out.push_str(&format!(
+        ".globl {symbol}\n{symbol}:\n    .ascii {message:?}\n",
+        symbol = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE_SYMBOL,
+        message = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE,
+    ));
     out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Fatal error: Class name must be a valid object or a string\\n\"\n");
     // The composer copies exactly `STRING_OFFSET_PREFIX.len()` bytes from here, so the text
     // and the length it copies come from the same constant and cannot drift apart.
@@ -661,6 +727,20 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ".globl _str_offset_warn_prefix\n_str_offset_warn_prefix:\n    .ascii \"{}\"\n",
         crate::codegen_support::runtime::objects::STRING_OFFSET_PREFIX
     ));
+    out.push_str(".globl _diag_file_get_contents_failed_msg\n_diag_file_get_contents_failed_msg:\n    .ascii \"Warning: file_get_contents(): Failed to open stream\\n\"\n");
+    out.push_str(".globl _diag_fopen_failed_msg\n_diag_fopen_failed_msg:\n    .ascii \"Warning: fopen(): Failed to open stream\\n\"\n");
+    // Emitted FROM the constants that document them, not from a second copy of the text: the
+    // wording and the reason for it live next to the helper that raises the warning, and a
+    // literal here would drift from that the first time either is edited.
+    for (symbol, message) in [
+        ("_swr_bad_proto_msg", crate::codegen_support::runtime::io::BAD_PROTOCOL_WARNING),
+        ("_swr_dup_proto_msg", crate::codegen_support::runtime::io::DUPLICATE_PROTOCOL_WARNING),
+    ] {
+        out.push_str(&format!(
+            ".globl {symbol}\n{symbol}:\n    .ascii \"{}\"\n",
+            message.replace('\n', "\\n")
+        ));
+    }
     // -- php-src's unreachable-seek warning fragments, shared with `__rt_file_get_contents_range` --
     // The helper derives its `__rt_concat` length immediates from the same table, so the bytes
     // here and the immediates there can never drift apart.
@@ -774,6 +854,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _fiber_msg_throw_not_suspended\n_fiber_msg_throw_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");
     out.push_str(".globl _fiber_msg_not_terminated\n_fiber_msg_not_terminated:\n    .ascii \"Cannot get fiber return value: The fiber has not returned\"\n");
     out.push_str(".globl _fiber_msg_suspend_outside\n_fiber_msg_suspend_outside:\n    .ascii \"Cannot suspend outside of a fiber\"\n");
+    out.push_str(".globl _fiber_msg_suspend_unserialize\n_fiber_msg_suspend_unserialize:\n    .ascii \"Cannot suspend a fiber while unserialize() is active\"\n");
     out.push_str(".globl _fiber_msg_unsupported_callable\n_fiber_msg_unsupported_callable:\n    .ascii \"Fiber callable is not supported by this compiler\"\n");
     out.push_str(".globl _fiber_msg_stack_alloc_failed\n_fiber_msg_stack_alloc_failed:\n    .ascii \"Cannot allocate fiber stack\"\n");
     out.push_str(&emit_builtin_callable_data(target));

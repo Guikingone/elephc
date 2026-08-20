@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/elephc_normalize_callable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/elephc_normalize_callable.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:549](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L549) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:551](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L551) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -37,7 +37,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function __elephc_normalize_callable(mixed $value): mixed
+function __elephc_normalize_callable(mixed $value): callable
 ```
 
 ## What the type checker enforces

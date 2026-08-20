@@ -133,13 +133,13 @@ pub(super) fn emit_value_error_unless(
         }
         (Arch::AArch64, ValueGuard::SignedAtMost(reg, maximum)) => {
             abi::emit_load_int_immediate(ctx.emitter, "x9", *maximum);
-            ctx.emitter.instruction(&format!("cmp {}, x9", reg));                // compare the materialized argument against its PHP maximum
-            ctx.emitter.instruction(&format!("b.le {}", ok_label));              // an argument at or below the maximum is in range
+            ctx.emitter.instruction(&format!("cmp {}, x9", reg));               // compare the materialized argument against its PHP maximum
+            ctx.emitter.instruction(&format!("b.le {}", ok_label));             // an argument at or below the maximum is in range
         }
         (Arch::X86_64, ValueGuard::SignedAtMost(reg, maximum)) => {
             abi::emit_load_int_immediate(ctx.emitter, "r10", *maximum);
-            ctx.emitter.instruction(&format!("cmp {}, r10", reg));               // compare the materialized argument against its PHP maximum
-            ctx.emitter.instruction(&format!("jle {}", ok_label));               // an argument at or below the maximum is in range
+            ctx.emitter.instruction(&format!("cmp {}, r10", reg));              // compare the materialized argument against its PHP maximum
+            ctx.emitter.instruction(&format!("jle {}", ok_label));              // an argument at or below the maximum is in range
         }
         (Arch::AArch64, ValueGuard::SignedMagnitudeAtMost(reg, maximum)) => {
             let fail_label = ctx.next_label("value_guard_fail");
@@ -197,8 +197,10 @@ pub(super) fn emit_value_error_unless(
         (Arch::AArch64, ValueGuard::MagnitudeWithinSpan(reg, low, high)) => {
             ctx.emitter.instruction(&format!("cmp {}, {}", low, high));         // is the interval degenerate?
             ctx.emitter.instruction(&format!("b.eq {}", ok_label));             // a single-point interval accepts any step magnitude
-            ctx.emitter.instruction(&format!("csel x9, {}, {}, le", low, high)); // x9 = the smaller of the two endpoints
-            ctx.emitter.instruction(&format!("csel x10, {}, {}, le", high, low)); // x10 = the larger of the two endpoints
+            ctx.emitter.instruction(&format!("csel x9, {}, {}, le", low, high));// x9 = the smaller of the two endpoints
+            ctx.emitter.instruction(
+                &format!("csel x10, {}, {}, le", high, low)
+            );                                                                  // x10 = the larger of the two endpoints
             ctx.emitter.instruction("sub x9, x10, x9");                         // x9 = high - low, the spanned interval as an unsigned width
             ctx.emitter.instruction(&format!("cmp {}, #0", reg));               // is the guarded argument negative?
             ctx.emitter.instruction(&format!("cneg x10, {}, lt", reg));         // x10 = |argument|, its unsigned magnitude
@@ -255,6 +257,43 @@ pub(super) fn emit_arithmetic_error(ctx: &mut FunctionContext<'_>, message: &str
     );
 }
 
+/// Throws a catchable PHP `ArgumentCountError` carrying a static message.
+///
+/// Reference PHP raises this `TypeError` subclass when a call passes fewer arguments than the
+/// callee requires, so `catch (ArgumentCountError $e)`, `catch (TypeError $e)`, `catch (Error $e)`
+/// and `catch (Throwable $e)` all match.
+///
+/// THE MESSAGE IS STATIC EVEN THOUGH THE CLASS IS NOT. `new $c(...)` picks its class at run time,
+/// but each ladder arm is emitted for ONE class, and the argument count is the site's, so the
+/// wording is fully known while lowering that arm. Callers use php-src's two shapes — see
+/// `objects::dynamic_mixed_candidates::dynamic_new_mixed_arity_refusals`.
+pub(super) fn emit_argument_count_error(
+    ctx: &mut FunctionContext<'_>,
+    message: &str,
+    location: Option<(String, u32)>,
+) {
+    emit_static_exception_at(
+        ctx,
+        "ArgumentCountError",
+        "_spl_argument_count_error_class_id",
+        message,
+        location,
+    );
+}
+
+/// Throws a catchable PHP `TypeError` carrying a static message and a source location.
+///
+/// The located sibling of `emit_type_error`, for the same reason
+/// `emit_argument_count_error` takes one: a `new $c(...)` refusal belongs to a `new` expression the
+/// user wrote, so the report ends in ` in FILE:LINE` and `getLine()` answers when it is caught.
+pub(super) fn emit_type_error_at(
+    ctx: &mut FunctionContext<'_>,
+    message: &str,
+    location: Option<(String, u32)>,
+) {
+    emit_static_exception_at(ctx, "TypeError", "_spl_type_error_class_id", message, location);
+}
+
 /// Throws a catchable PHP `Error` whose message is a runtime string value.
 pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) -> Result<()> {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
@@ -281,6 +320,12 @@ pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) 
 /// spelling, `false` rather than `bool` — so the text is picked at run time from a table and
 /// handed over as a pointer/length pair. Emitting the seven wordings as static throws instead
 /// would inline seven throwable constructions at every `count()` call site.
+/// Throws a catchable PHP `TypeError` whose message already sits in the string-result registers.
+///
+/// The static `emit_type_error()` covers the guards whose wording is fixed. PHP's `count()`
+/// refusal names the offending class — `must be of type Countable|array, Foo given` — and that
+/// class is only known at run time when the value arrives as a boxed `Mixed`, so the caller
+/// composes the message and hands it over as a persisted pointer/length pair.
 pub(super) fn emit_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
@@ -295,6 +340,7 @@ pub(super) fn emit_value_error_from_string_result(ctx: &mut FunctionContext<'_>)
     emit_dynamic_throwable_object(ctx, "_spl_value_error_class_id");
 }
 
+
 /// Allocates one built-in throwable and transfers control to the standard unwinder.
 fn emit_static_exception(
     ctx: &mut FunctionContext<'_>,
@@ -302,7 +348,36 @@ fn emit_static_exception(
     class_id_symbol: &str,
     message: &str,
 ) {
-    let fatal_message = format!("Fatal error: Uncaught {}: {}\n", class_name, message);
+    emit_static_exception_at(ctx, class_name, class_id_symbol, message, None);
+}
+
+/// Same, for an emitter that KNOWS the source location the throwable belongs to.
+///
+/// Most codegen-raised throwables have no user `new` behind them — an `ArithmeticError` from a
+/// division, a `TypeError` from an argument check — so they carry no location, and PHP would name
+/// the internal call site anyway. `new $c(...)` is different: the refusal belongs to a `new`
+/// expression the user WROTE, and php reports it, so a caller holding the span passes it and gets
+/// both halves php prints — the ` in FILE:LINE` suffix on the uncaught report, and a `getLine()`
+/// that answers when the error is CAUGHT.
+///
+/// A `None` location keeps the previous bytes exactly: the creation-line slot is still cleared to
+/// zero, which is what `sentinels::emit_throwable_creation_line_unknown` wrote there.
+fn emit_static_exception_at(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    class_id_symbol: &str,
+    message: &str,
+    location: Option<(String, u32)>,
+) {
+    let suffix = match &location {
+        Some((file, line)) => format!(" in {}:{}", file, line),
+        None => String::new(),
+    };
+    let creation_line = location.as_ref().map_or(0, |(_, line)| *line);
+    let fatal_message = format!(
+        "\nFatal error: Uncaught {}: {}{}\n",
+        class_name, message, suffix
+    );
     let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
     emit_uncaught_exception_fatal_if_no_handler(ctx, &fatal_label, fatal_len);
 
@@ -321,7 +396,12 @@ fn emit_static_exception(
             abi::emit_load_int_immediate(ctx.emitter, "x9", message_len as i64);
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store the exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
+            super::objects::throwable_new::emit_throwable_creation_line_aarch64(
+                ctx,
+                "x0",
+                "x9",
+                creation_line,
+            );
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
@@ -329,7 +409,9 @@ fn emit_static_exception(
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+            ctx.emitter.instruction(
+                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
+            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);
@@ -339,7 +421,11 @@ fn emit_static_exception(
             abi::emit_load_int_immediate(ctx.emitter, "r10", message_len as i64);
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
+            super::objects::throwable_new::emit_throwable_creation_line_x86_64(
+                ctx,
+                "rax",
+                creation_line,
+            );
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
@@ -358,9 +444,13 @@ fn emit_uncaught_exception_fatal_if_no_handler(
         Arch::AArch64 => {
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_exc_handler_top", 0);
             ctx.emitter.instruction(&format!("cbnz x9, {}", throw_label));      // use the standard unwinder when a catch handler is active
+            // Drain buffered output first: PHP emits it before the report, and this path used to
+            // exit without flushing, discarding everything a program had buffered. `bl` leaves sp
+            // untouched, so the message slots read below are unaffected.
+            ctx.emitter.instruction("bl __rt_ob_flush_all");
             abi::emit_symbol_address(ctx.emitter, "x1", fatal_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", fatal_len as i64);
-            ctx.emitter.instruction("mov x0, #2");                              // write the uncaught PHP diagnostic to stderr
+            ctx.emitter.instruction("mov x0, #1");                              // fd = stdout, where PHP writes this report
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
         }
@@ -368,9 +458,17 @@ fn emit_uncaught_exception_fatal_if_no_handler(
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_exc_handler_top", 0);
             ctx.emitter.instruction("test r10, r10");                           // check whether a catch handler is active
             ctx.emitter.instruction(&format!("jnz {}", throw_label));           // use the standard unwinder when a handler can receive the error
+            // See the ARM64 path. rsp is SAVED and restored rather than simply aligned: the
+            // dynamic form reads its message from temporary stack slots, which `and rsp, -16`
+            // alone would move out from under it. r15 is callee-saved and the flush helper
+            // touches no callee-saved register.
+            ctx.emitter.instruction("mov r15, rsp");
+            ctx.emitter.instruction("and rsp, -16");
+            ctx.emitter.instruction("call __rt_ob_flush_all");
+            ctx.emitter.instruction("mov rsp, r15");
             abi::emit_symbol_address(ctx.emitter, "rsi", fatal_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", fatal_len as i64);
-            ctx.emitter.instruction("mov edi, 2");                              // write the uncaught PHP diagnostic to stderr
+            ctx.emitter.instruction("mov edi, 1");                              // fd = stdout, where PHP writes this report
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the specific fatal message
             abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
@@ -389,22 +487,26 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
     class_name: &str,
 ) {
     let throw_label = ctx.next_label("dynamic_error_throw");
-    let prefix = format!("Fatal error: Uncaught {}: ", class_name);
+    let prefix = format!("\nFatal error: Uncaught {}: ", class_name);
     let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
     let (suffix_label, suffix_len) = ctx.data.add_string(b"\n");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_exc_handler_top", 0);
             ctx.emitter.instruction(&format!("cbnz x9, {}", throw_label));      // use the standard unwinder when a catch handler is active
-            ctx.emitter.instruction("mov x0, #2");                              // write the uncaught dynamic-error prefix to stderr
+            // Drain buffered output first: PHP emits it before the report, and this path used to
+            // exit without flushing, discarding everything a program had buffered. `bl` leaves sp
+            // untouched, so the message slots read below are unaffected.
+            ctx.emitter.instruction("bl __rt_ob_flush_all");
+            ctx.emitter.instruction("mov x0, #1");                              // fd = stdout for the dynamic-error prefix
             abi::emit_symbol_address(ctx.emitter, "x1", &prefix_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", prefix_len as i64);
             ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, #2");                              // write the runtime error message to stderr
+            ctx.emitter.instruction("mov x0, #1");                              // fd = stdout for the runtime error message
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
             ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, #2");                              // terminate the uncaught diagnostic with a newline
+            ctx.emitter.instruction("mov x0, #1");                              // fd = stdout to terminate the diagnostic
             abi::emit_symbol_address(ctx.emitter, "x1", &suffix_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", suffix_len as i64);
             ctx.emitter.syscall(4);
@@ -414,19 +516,27 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_exc_handler_top", 0);
             ctx.emitter.instruction("test r10, r10");                           // check whether a catch handler is active
             ctx.emitter.instruction(&format!("jnz {}", throw_label));           // use the standard unwinder when a handler can receive the error
+            // See the ARM64 path. rsp is SAVED and restored rather than simply aligned: the
+            // dynamic form reads its message from temporary stack slots, which `and rsp, -16`
+            // alone would move out from under it. r15 is callee-saved and the flush helper
+            // touches no callee-saved register.
+            ctx.emitter.instruction("mov r15, rsp");
+            ctx.emitter.instruction("and rsp, -16");
+            ctx.emitter.instruction("call __rt_ob_flush_all");
+            ctx.emitter.instruction("mov rsp, r15");
             abi::emit_symbol_address(ctx.emitter, "rsi", &prefix_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", prefix_len as i64);
-            ctx.emitter.instruction("mov edi, 2");                              // write the uncaught dynamic-error prefix to stderr
+            ctx.emitter.instruction("mov edi, 1");                              // fd = stdout for the dynamic-error prefix
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the dynamic-error prefix
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 0);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", 8);
-            ctx.emitter.instruction("mov edi, 2");                              // write the runtime error message to stderr
+            ctx.emitter.instruction("mov edi, 1");                              // fd = stdout for the runtime error message
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the runtime error message
             abi::emit_symbol_address(ctx.emitter, "rsi", &suffix_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", suffix_len as i64);
-            ctx.emitter.instruction("mov edi, 2");                              // terminate the uncaught diagnostic with a newline
+            ctx.emitter.instruction("mov edi, 1");                              // fd = stdout to terminate the diagnostic
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the dynamic-error suffix
             abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
@@ -464,7 +574,9 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+            ctx.emitter.instruction(
+                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
+            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);

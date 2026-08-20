@@ -10,6 +10,34 @@
 
 use crate::support::*;
 
+/// Verifies both compiler version flags print the Cargo package version and exit successfully.
+#[test]
+fn test_cli_version_flags_report_package_version() {
+    let dir = make_cli_test_dir("elephc_cli_version");
+    let expected = format!("elephc {}\n", env!("CARGO_PKG_VERSION"));
+
+    for flag in ["--version", "-V"] {
+        let output = elephc_cli_command(&dir)
+            .arg(flag)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run elephc {flag}: {error}"));
+        assert!(output.status.success(), "elephc {flag} should succeed");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+        assert!(output.stderr.is_empty(), "elephc {flag} should not write stderr");
+    }
+
+    let help = elephc_cli_command(&dir)
+        .arg("--help")
+        .output()
+        .expect("failed to run elephc --help");
+    assert!(help.status.success(), "elephc --help should succeed");
+    let stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(stdout.contains(&format!("Version: {}", env!("CARGO_PKG_VERSION"))));
+    assert!(stdout.contains("-V, --version"));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies native help is handled before project discovery and bare native is a usage error.
 #[test]
 fn test_cli_native_help_and_bare_usage() {
@@ -321,6 +349,175 @@ fn test_cli_web_prunes_unused_session_surface_from_assembly() {
     assert!(
         !asm.contains("__ElephcCallableSessionHandler"),
         "plain web assembly must not emit legacy callable-handler dispatch"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies compile-time web isolation selects one bridge symbol and leaves the default
+/// assembly byte-identical to an explicit `worker` selection.
+#[test]
+fn test_cli_web_isolation_selects_entry_symbol_at_compile_time() {
+    let dir = make_cli_test_dir("elephc_cli_web_isolation_symbols");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let compile = |flags: &[&str]| {
+        let output = elephc_cli_command(&dir)
+            .args(flags)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile web-isolation fixture");
+        assert!(
+            output.status.success(),
+            "web-isolation compile failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::read_to_string(dir.join("main.s")).expect("failed to read web-isolation assembly")
+    };
+
+    let default_worker = compile(&["--web"]);
+    let explicit_worker = compile(&["--web", "--web-isolation=worker"]);
+    assert_eq!(
+        default_worker, explicit_worker,
+        "plain --web must emit exactly the explicit worker entry path"
+    );
+    assert!(default_worker.contains("elephc_web_run"));
+    assert!(!default_worker.contains("elephc_web_run_pool"));
+    assert!(!default_worker.contains("elephc_web_run_request"));
+
+    let pool = compile(&["--web", "--web-isolation=pool"]);
+    assert!(pool.contains("elephc_web_run_pool"));
+    assert!(!pool.contains("elephc_web_run_request"));
+
+    let request = compile(&["--web", "--web-isolation=request"]);
+    assert!(request.contains("elephc_web_run_request"));
+    assert!(!request.contains("elephc_web_run_pool"));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies web-isolation is rejected without web mode and reports invalid model names.
+#[test]
+fn test_cli_web_isolation_validation_errors_are_focused() {
+    let dir = make_cli_test_dir("elephc_cli_web_isolation_errors");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let without_web = elephc_cli_command(&dir)
+        .arg("--web-isolation=pool")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run web-isolation validation fixture");
+    assert!(!without_web.status.success());
+    assert!(
+        String::from_utf8_lossy(&without_web.stderr).contains("--web-isolation requires --web"),
+        "unexpected missing-web diagnostic: {}",
+        String::from_utf8_lossy(&without_web.stderr)
+    );
+
+    let invalid = elephc_cli_command(&dir)
+        .args(["--web", "--web-isolation=banana"])
+        .arg(&php_path)
+        .output()
+        .expect("failed to run invalid web-isolation fixture");
+    assert!(!invalid.status.success());
+    assert!(
+        String::from_utf8_lossy(&invalid.stderr)
+            .contains("expected worker|pool|request"),
+        "unexpected invalid-mode diagnostic: {}",
+        String::from_utf8_lossy(&invalid.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--with-pdo` roots the complete injected PDO group even without source-level PDO use.
+#[test]
+fn test_with_pdo_keeps_unreferenced_pdo_function() {
+    let dir = make_cli_test_dir("elephc_cli_with_pdo_reachability");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-pdo")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile forced PDO assembly");
+    assert!(
+        output.status.success(),
+        "elephc --with-pdo --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read PDO assembly");
+    let symbol = elephc::names::function_symbol("pdo_drivers");
+    assert!(
+        asm.contains(&format!(".globl {symbol}\n")),
+        "--with-pdo must keep unreferenced PDO declarations"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--with-crypto` force-links the bridge without force-injecting the hash prelude.
+#[test]
+fn test_with_crypto_does_not_force_hash_prelude() {
+    let dir = make_cli_test_dir("elephc_cli_with_crypto_reachability");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-crypto")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile forced crypto assembly");
+    assert!(
+        output.status.success(),
+        "elephc --with-crypto --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read crypto assembly");
+    let hash_init = elephc::names::function_symbol("hash_init");
+    assert!(
+        !asm.contains(&format!(".globl {hash_init}\n")),
+        "--with-crypto must not inject the source-level hash prelude"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--with-eval` keeps user declarations available to opaque runtime source.
+#[test]
+fn test_with_eval_keeps_unreferenced_user_declaration() {
+    let dir = make_cli_test_dir("elephc_cli_with_eval_reachability");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php function runtime_only(): string { return 'eval'; } echo 'ok';",
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-eval")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile forced eval assembly");
+    assert!(
+        output.status.success(),
+        "elephc --with-eval --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read eval assembly");
+    let symbol = elephc::names::function_symbol("runtime_only");
+    assert!(
+        asm.contains(&format!(".globl {symbol}\n")),
+        "--with-eval must keep unreferenced user declarations"
     );
 
     let _ = fs::remove_dir_all(&dir);

@@ -197,7 +197,6 @@ fn is_eval_only_reflection(id: BuiltinId) -> bool {
         "get_called_class",
         "get_class_methods",
         "get_class_vars",
-        "get_object_vars",
     ]
     .into_iter()
     .any(|name| id == BuiltinId::from_canonical_name(name))
@@ -290,9 +289,12 @@ mod tests {
         assert_eq!(eval_registry, 484);
         assert_eq!(eval_internal, 40);
         assert_eq!(eval_pending, 34);
-        assert_eq!(aot_registry, 543);
+        // 544 on the merged catalogue: this branch counted 543 and main 531, and main also
+        // PROMOTES get_object_vars out of the external surface into the registry. Neither
+        // branch's number survives the merge; this one is measured on the result.
+        assert_eq!(aot_registry, 544);
         assert_eq!(aot_external, 11);
-        assert_eq!(aot_unsupported, 4);
+        assert_eq!(aot_unsupported, 3);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -304,7 +306,7 @@ mod tests {
         );
         assert_eq!(
             aot_support(lookup("get_object_vars").expect("get_object_vars contract")),
-            BackendSupport::Unsupported(UnsupportedReason::EvalOnlyReflection)
+            BackendSupport::Implemented(BackendImplementation::Registry)
         );
         assert_eq!(
             eval_support(lookup("array_all").expect("array_all contract")),

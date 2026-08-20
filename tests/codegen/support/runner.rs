@@ -561,7 +561,7 @@ pub(crate) fn link_binary(
             ld_cmd.arg(bin_path);
             ld_cmd.arg(obj_path);
             ld_cmd.arg(runtime_obj);
-            // Resolve FreeTDS's `dbopen` before libSystem's Berkeley DB symbol.
+            // Link FreeTDS with the other native dependencies before libSystem.
             if needs_dblib {
                 for path in ["/opt/homebrew/opt/freetds/lib", "/usr/local/opt/freetds/lib"] {
                     if Path::new(path).exists() {
@@ -725,23 +725,7 @@ fn test_link_plan(
     for framework in extra_frameworks {
         plan.push(LinkItem::Framework(framework.clone()));
     }
-    // The eval bridge's archive already CONTAINS elephc-crypto's objects, so naming both here
-    // presents every `elephc_crypto_*` symbol twice and the link fails with four duplicate
-    // symbols. `src/link_planning.rs` drops it for the same reason; this plan is a hand-rolled
-    // mirror of that one, so the rule has to exist in both places until they are unified — a
-    // program that needs eval() and hashing at once is the only shape that reaches it.
-    if named.contains("elephc_magician") {
-        let kept: Vec<LinkItem> = plan
-            .items()
-            .iter()
-            .filter(|item| {
-                !matches!(item, LinkItem::NamedLibrary { name, .. } if name == "elephc_crypto")
-            })
-            .cloned()
-            .collect();
-        return LinkPlan::from_items(kept);
-    }
-    plan
+    plan.without_redundant_embedded_bridges()
 }
 
 /// Appends every typed search path before archive and named-library inputs.
@@ -1205,9 +1189,11 @@ pub(crate) fn assemble_and_run_expect_failure(
     let output = run_binary(&bin_path, dir);
     assert!(!output.status.success(), "binary unexpectedly succeeded");
 
-    let raw_stdout = String::from_utf8(output.stdout).unwrap();
-    let script_path = dir.join("test.php").to_string_lossy().into_owned();
-    let (_program, diagnostics, _located) = split_php_diagnostics(&raw_stdout, &script_path);
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    format!("{diagnostics}{stderr}")
+    // BOTH streams. PHP writes its uncaught-exception report to STDOUT — measured against 8.5 with
+    // the two streams captured to separate files — and elephc now does the same, so a helper that
+    // read only stderr would hand every failure assertion an empty string. Compiler diagnostics
+    // still arrive on stderr, so both are returned rather than either one.
+    let mut combined = String::from_utf8(output.stdout).unwrap();
+    combined.push_str(&String::from_utf8(output.stderr).unwrap());
+    combined
 }

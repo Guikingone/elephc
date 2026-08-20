@@ -94,12 +94,16 @@ pub(super) fn emit_phar_write_open_for_literal(ctx: &mut FunctionContext<'_>, ur
             abi::emit_symbol_address(ctx.emitter, "r10", "_phar_write_path_ptr");
             ctx.emitter.instruction("mov QWORD PTR [r10], r9");                 // record the archive path pointer for finalize
             abi::emit_symbol_address(ctx.emitter, "r10", "_phar_write_path_len");
-            ctx.emitter.instruction(&format!("mov QWORD PTR [r10], {}", path_len)); // record the archive path length for finalize
+            ctx.emitter.instruction(
+                &format!("mov QWORD PTR [r10], {}", path_len)
+            );                                                                  // record the archive path length for finalize
             abi::emit_symbol_address(ctx.emitter, "r9", &entry_label);
             abi::emit_symbol_address(ctx.emitter, "r10", "_phar_write_entry_ptr");
             ctx.emitter.instruction("mov QWORD PTR [r10], r9");                 // record the archive entry name pointer for finalize
             abi::emit_symbol_address(ctx.emitter, "r10", "_phar_write_entry_len");
-            ctx.emitter.instruction(&format!("mov QWORD PTR [r10], {}", entry_len)); // record the archive entry name length for finalize
+            ctx.emitter.instruction(
+                &format!("mov QWORD PTR [r10], {}", entry_len)
+            );                                                                  // record the archive entry name length for finalize
             abi::emit_symbol_address(ctx.emitter, "rdi", &template_label);
             ctx.emitter.instruction(&format!("mov rsi, {}", template_len));     // pass the single-entry PHAR template length
             abi::emit_call_label(ctx.emitter, "__rt_phar_write_open");

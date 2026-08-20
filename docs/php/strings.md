@@ -160,7 +160,7 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 |---|---|---|
 | `strlen()` | `strlen($str): int` | Returns string length |
 | `mb_strlen()` | `mb_strlen($str, $encoding = null): int` | Character count in the given encoding. An omitted or `null` encoding counts UTF-8, grouping malformed sequences like mbstring; `8bit`/`binary`/`7bit` return the byte length; other encodings are decoded through the system `iconv`. An unknown encoding name throws `\ValueError` |
-| `substr()` | `substr($str, $start [, $len]): string` | Extract substring |
+| `substr()` | `substr($str, $start [, $len]): string` | Extract a substring. Negative `$start` counts from the end; a negative `$len` omits that many trailing bytes from the selected suffix, matching PHP |
 | `strpos()` | `strpos($haystack, $needle, $offset = 0): int\|false` | Find first occurrence at or after `$offset`. A negative `$offset` counts from the end; one outside the haystack raises `ValueError`. Returns `false` if not found |
 | `strrpos()` | `strrpos($haystack, $needle, $offset = 0): int\|false` | Find last occurrence. A non-negative `$offset` starts the search there; a negative one stops it that many bytes before the end. Returns `false` if not found |
 | `stripos()` | `stripos($haystack, $needle, $offset = 0): int\|false` | Case-insensitive `strpos()`. Folding is ASCII-only (`A`-`Z`), so non-ASCII bytes are matched verbatim. `$offset` behaves exactly as in `strpos()` |
@@ -168,7 +168,7 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `strstr()` | `strstr($hay, $needle, $before_needle = false): string\|false` | Find first occurrence and return the rest, or the part before it when `$before_needle` is truthy. Returns `false` if not found |
 | `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
 | `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace |
-| `substr_replace()` | `substr_replace($str, $repl, $start [, $len]): string` | Replace substring |
+| `substr_replace()` | `substr_replace($str, $repl, $start [, $len]): string` | Replace a substring. Negative `$start` counts from the end; a negative `$len` preserves that many trailing bytes after the replacement, matching PHP |
 | `strtolower()` | `strtolower($str): string` | Convert to lowercase |
 | `strtoupper()` | `strtoupper($str): string` | Convert to uppercase |
 | `ucfirst()` | `ucfirst($str): string` | Uppercase first character |
@@ -339,10 +339,11 @@ Known divergences:
   a reduced string that would look like a serialized context without being one.
 - **HMAC streaming is unsupported.** `hash_init($algo, HASH_HMAC, $key)` is rejected at
   compile time (`Function 'hash_init' expects 1 arguments, got 3`). Use
-  [`hash_hmac()`](#) instead, which is fully supported.
-- **`print_r()` and `var_export()`** do not render objects yet — that is a general
-  elephc limitation, not specific to `HashContext`. `print_r()` on any object is a
-  compile-time "unsupported" error and `var_export()` prints nothing.
+  [`hash_hmac()`](builtins/string/hash_hmac.md) instead, which is fully supported.
+- **Object rendering omits undeclared dynamic properties.** `print_r()` and
+  `var_export()` render declared object properties, including a `HashContext`'s
+  class-shaped output, but properties created dynamically at runtime are not yet
+  included by the renderer.
 - **Inside `eval()`**, `hash_init()` still returns a resource: the eval interpreter has
   its own hashing implementation that has not been moved to the object model.
 

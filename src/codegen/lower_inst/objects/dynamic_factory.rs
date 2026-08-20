@@ -97,9 +97,34 @@ pub(super) fn dynamic_new_candidate(
         return Ok(None);
     }
     let constructor_key = php_symbol_key("__construct");
+    let mut padding_thunk = None;
     let constructor_impl = if let Some(constructor) = class_info.methods.get(&constructor_key) {
-        if arg_count.is_some_and(|arg_count| constructor.params.len() != arg_count) {
-            return Ok(None);
+        // A site that passes FEWER arguments than the constructor declares is still a candidate
+        // when every omitted parameter has a default and `ir_lower` emitted the padding thunk for
+        // this (class, argc) pair. `new $c(…)` cannot be padded by the checker — it does not know
+        // which constructor it is — so without this every builtin with an optional parameter fell
+        // to the generic allocation path and came back with no constructor run at all.
+        if let Some(arg_count) = arg_count {
+            // A VARIADIC constructor needs the thunk at EVERY arity, its declared one included:
+            // the site passes N separate arguments and the lowered callee takes the collector as
+            // ONE array, so no site arity ever matches the callee's frame. Calling it directly
+            // handed a scalar where the array belongs and produced EMPTY OUTPUT rather than a
+            // diagnostic — the worst row of the measured matrix.
+            if constructor.params.len() != arg_count || constructor.variadic.is_some() {
+                let thunk = crate::ir_lower::dynamic_constructor_thunk_name(
+                    class_info.class_id,
+                    arg_count,
+                );
+                let emitted = ctx
+                    .module
+                    .functions
+                    .iter()
+                    .any(|function| function.name == thunk);
+                if !emitted {
+                    return Ok(None);
+                }
+                padding_thunk = Some(thunk);
+            }
         }
         let impl_class = class_info
             .method_impl_classes
@@ -109,16 +134,53 @@ pub(super) fn dynamic_new_candidate(
         if !class_method_already_emitted(ctx, &impl_class, &constructor_key, false) {
             return Ok(None);
         }
-        let param_types = constructor
-            .params
-            .iter()
-            .map(|(_, ty)| ty.codegen_repr())
+        // When a thunk pads the call, the SITE's arity is what gets materialized — the thunk
+        // itself supplies the rest — so the parameter list is truncated to what is passed.
+        let materialized = padding_thunk
+            .as_ref()
+            .and_then(|_| arg_count)
+            .unwrap_or(constructor.params.len());
+        // SHARED WITH `ir_lower::lower_dynamic_constructor_thunk`, which declares the thunk's
+        // parameters from the same `positional_param_type`. Reading `params[index]` directly here
+        // would describe a different frame past the regular parameters, where the declared entry
+        // is the COLLECTION and each argument materialized at the site is one ELEMENT.
+        let Some(param_types) = (0..materialized)
+            .map(|index| {
+                crate::types::call_args::positional_param_type(constructor, index)
+                    .map(|ty| ty.codegen_repr())
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
+        let ref_params = (0..materialized)
+            .map(|index| constructor.ref_params.get(index).copied().unwrap_or(false))
             .collect::<Vec<_>>();
+        // An overflow argument lands in the COLLECTOR, which is materialized AS the declared
+        // element type with no conversion, so a site value of another representation is
+        // REINTERPRETED rather than rejected: `new $c("x")` on `int ...$r` came back holding
+        // `4370954896` — the string's ADDRESS read as an integer — and `"7"` did the same, so it
+        // was never limited to values php refuses.
+        //
+        // Passing the overflow as `Mixed` is not an alternative: the checker refuses a `mixed`
+        // argument to a typed variadic outright, even for a value php accepts. So a site that
+        // cannot supply the element type as-is drops the class from the ladder, which is a MISSING
+        // constructor call — the behaviour this class had before the thunk existed — rather than a
+        // fabricated integer.
+        if padding_thunk.is_some()
+            && dynamic_new_uncastable_collector(constructor, materialized).is_some()
+        {
+            // NOT constructed, and NOT silently dropped either: `dynamic_new_mixed_refusals` asks
+            // the same judge and emits a ladder arm that REPORTS. Leaving only this half in place
+            // is what made `new $c("x")` on `int ...$r` answer with a constructor-less object.
+            return Ok(None);
+        }
         Some(ConstructorCallTarget {
             impl_class,
             param_types,
-            ref_params: constructor.ref_params.clone(),
+            ref_params,
             sig: constructor.clone(),
+            padding_thunk: padding_thunk.clone(),
         })
     } else if arg_count.is_none_or(|arg_count| arg_count == 0) {
         None
@@ -319,6 +381,7 @@ pub(super) fn emit_dynamic_new_candidate(
             &php_symbol_key("__construct"),
             &constructor.param_types,
             &constructor.ref_params,
+            constructor.padding_thunk.as_deref(),
         )?;
     }
     Ok(())

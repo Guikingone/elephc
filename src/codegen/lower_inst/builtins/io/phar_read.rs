@@ -99,6 +99,19 @@ fn emit_file_get_contents_bytes(
             return Ok(false);
         }
     }
+    // A literal with no `://` cannot name a stream wrapper: PHP's wrapper grammar requires the
+    // separator, including for wrappers a program registers itself. Entering at the phar level
+    // therefore skips only tests that provably cannot succeed — and takes the URL reader out of
+    // the call graph, so a program whose reads are all constant local paths stops carrying
+    // `socket`, `connect`, `bind` and the resolver. Measured on `file_get_contents("/etc/hosts")`:
+    // 11 distinct syscalls before, against 3 for `<?php echo 1;`.
+    //
+    // The test is "contains no `://`", never a list of known schemes. A list would silently open
+    // a file literally named `compress.zlib://x` on the day a scheme is missing from it; this way
+    // an unrecognised scheme still reaches the multiplexer and behaves as it does today.
+    let literal_cannot_be_a_wrapper = path_literal
+        .as_deref()
+        .is_some_and(|literal| !literal.contains("://"));
     // A literal `zip://` URL reads its archive at RUN time (see the fopen lowering), so it needs
     // the bridge published exactly like a filename that is only known then — but only the one
     // entry point a zip read reaches.
@@ -137,7 +150,14 @@ fn emit_file_get_contents_bytes(
     } else {
         None
     };
-    abi::emit_call_label(ctx.emitter, "__rt_file_get_contents_maybe_url");
+    abi::emit_call_label(
+        ctx.emitter,
+        if literal_cannot_be_a_wrapper {
+            "__rt_file_get_contents_maybe_phar"
+        } else {
+            "__rt_file_get_contents_maybe_url"
+        },
+    );
     if let Some(done) = data_done {
         ctx.emitter.label(&done);
     }

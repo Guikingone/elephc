@@ -79,7 +79,8 @@ pub fn emit_fiber_resume(emitter: &mut Emitter) {
 
 /// Yields control from the running fiber back to its caller (the resumer of
 /// `start()` or `resume()`). Validates that this is called from within a
-/// Fiber context; otherwise raises FiberError via `__rt_fiber_throw_state_error`.
+/// Fiber context and outside an active `unserialize()` parser; otherwise raises
+/// FiberError via `__rt_fiber_throw_state_error` before any state transition.
 /// Checks for a pending Throwable scheduled by `Fiber::throw()` and re-raises
 /// it before returning the resumer's delivered value.
 ///

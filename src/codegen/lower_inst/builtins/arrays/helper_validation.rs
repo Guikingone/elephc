@@ -18,6 +18,13 @@ pub(super) fn set_op_indexed_array_element_type(
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
+            if matches!(elem, PhpType::Mixed | PhpType::Union(_)) {
+                return Err(CodegenIrError::unsupported(format!(
+                    "{} compares boxed elements by identity, not by value, for indexed-array \
+                     element PHP type {:?}",
+                    name, elem
+                )));
+            }
             if matches!(
                 elem,
                 PhpType::Int

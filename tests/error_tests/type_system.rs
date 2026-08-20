@@ -417,6 +417,16 @@ fn test_error_is_kind_predicates_arity() {
     );
 }
 
+/// Verifies `get_object_vars()` rejects scalar inputs instead of treating their
+/// storage representation as an object property table.
+#[test]
+fn test_error_get_object_vars_requires_object() {
+    expect_error(
+        "<?php get_object_vars(42);",
+        "get_object_vars() argument must be an object",
+    );
+}
+
 // --- Error positions ---
 
 /// Verifies that `??` merges two DIFFERENT arm types to `mixed` rather than letting one arm

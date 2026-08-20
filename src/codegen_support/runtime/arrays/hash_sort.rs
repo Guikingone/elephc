@@ -6,11 +6,8 @@
 //! `__rt_hash_natcasecmp` adapters that give the engine php's natural order.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via
+//! - `crate::codegen_support::runtime::emitters::emit_runtime()` through
 //!   `crate::codegen_support::runtime::arrays`.
-//! - Generated code, through
-//!   `crate::codegen::lower_inst::builtins::arrays::lower_array_key_sort` and
-//!   `lower_asort` / `lower_arsort`.
 //!
 //! Key details:
 //! - A hash table's iteration order lives ONLY in the insertion-order doubly-linked list
@@ -39,16 +36,16 @@ use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::NULL_SENTINEL;
 
 /// Mode word selecting an ascending key sort (`ksort`).
-const MODE_KEY_ASCENDING: i64 = 0;
+pub(super) const MODE_KEY_ASCENDING: i64 = 0;
 
 /// Mode word selecting a descending key sort (`krsort`).
-const MODE_KEY_DESCENDING: i64 = 1;
+pub(super) const MODE_KEY_DESCENDING: i64 = 1;
 
 /// Mode word selecting an ascending value sort (`asort`).
-const MODE_VALUE_ASCENDING: i64 = 2;
+pub(super) const MODE_VALUE_ASCENDING: i64 = 2;
 
 /// Mode word selecting a descending value sort (`arsort`).
-const MODE_VALUE_DESCENDING: i64 = 3;
+pub(super) const MODE_VALUE_DESCENDING: i64 = 3;
 
 /// The comparator behind every non-natural sort: PHP 8's own comparison table.
 const CMP_PHP: &str = "__rt_php_compare";
@@ -68,6 +65,11 @@ const CMP_NATURAL_CASE: &str = "__rt_hash_natcasecmp";
 /// pointer in the first integer argument register and returns nothing; the table is
 /// mutated in place by relinking its insertion-order chain.
 pub fn emit_hash_sort(emitter: &mut Emitter) {
+    // `__rt_key_compare_regular` and its siblings are emitted here rather than from an emitter
+    // list because the eval bridge CALLS them: `__elephc_eval_value_regular_key_compare` branches
+    // straight to `__rt_key_compare_regular`, so a binary that omits them fails to LINK — a
+    // failure no type-check can show, which is why the merge nearly shipped without it.
+    super::hash_key_compare::emit_hash_key_compare(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_sort_entry_points_x86_64(emitter);
         emit_hash_sort_links_x86_64(emitter);
