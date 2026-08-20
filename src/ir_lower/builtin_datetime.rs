@@ -149,12 +149,32 @@ fn eval_date_alias_builtin_datetime_methods(module: &Module) -> Vec<(String, Str
 
 /// The `DateTime`/`DateTimeImmutable` methods an eval alias can dispatch to.
 ///
-/// A CONSTANT rather than a literal inside the emitter because two passes read it: the emitter
-/// below, and `eval_fragments_may_reach_dates`, which decides whether to run the emitter at all.
-/// A second copy would be free to drift, and the drift would be silent in the expensive
-/// direction — a name missing from the predicate's copy makes a fragment look harmless.
+/// A CONSTANT rather than a literal inside the emitter so the set has ONE home. It is read by
+/// `eval_date_alias_builtin_datetime_methods` alone; `eval_fragments_may_reach_dates` gates the
+/// whole emitter on whether the module contains a non-literal `eval` at all and does not consult
+/// the names, so widening this list cannot make a fragment look harmless.
+///
+/// MISSING A NAME IS SILENT AND WRONG. The checker still declares the method, so the call type
+/// checks and the failure lands at run time as `Cannot call abstract method` — there is no
+/// diagnostic pointing back here.
 const EVAL_DATE_ALIAS_METHOD_NAMES: &[&str] = &[
     "createFromFormat",
+    // The other three static factories. `createFromFormat` was here alone, so a computed name
+    // reaching any of these answered `Cannot call abstract method` — the declaration is visible to
+    // the checker, and only the BODY was missing from the eval alias set:
+    //
+    //     $m = "createFrom" . "Timestamp";
+    //     eval("return DateTime::" . $m . "(0);")
+    //     php    : 1970          elephc : Fatal error: Cannot call abstract method
+    //
+    // Each name is pushed for BOTH DateTime and DateTimeImmutable, and a class that does not
+    // declare one is skipped by `lower_builtin_datetime_method`, so the pairs that do not exist
+    // (`createFromImmutable` on the immutable class, `createFromMutable` on the mutable one) cost
+    // nothing and keep this list about the FAMILY rather than one class.
+    "createFromTimestamp",
+    "createFromInterface",
+    "createFromImmutable",
+    "createFromMutable",
     "getLastErrors",
         "__elephc_date_parse_from_format",
         "__elephc_date_parse",

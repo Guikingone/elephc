@@ -7351,6 +7351,59 @@ eval('$r = array_map("date_create", ["2024-01-02"]); echo $r[0]->format("Y-m-d")
     assert_eq!(out, "2024-01-02");
 }
 
+/// Verifies a COMPUTED eval fragment reaches EVERY `DateTime` static factory, not just one.
+///
+/// `EVAL_DATE_ALIAS_METHOD_NAMES` listed `createFromFormat` alone, so the other three factories
+/// had their declaration visible to the checker and no BODY in the eval alias set. The call type
+/// checked and then died at run time with `Cannot call abstract method`, with nothing pointing
+/// back at the list:
+///
+///     $m = "createFrom" . "Timestamp";
+///     eval("return DateTime::" . $m . "(0);")
+///     php    : 1970
+///     elephc : Fatal error: Uncaught Error: Cannot call abstract method
+///
+/// Each name is exercised through a CONCATENATED method name on purpose: a literal would let the
+/// ordinary static-call path resolve it and the alias set would never be consulted.
+#[test]
+fn test_eval_reaches_every_datetime_static_factory_through_a_computed_name() {
+    let out = compile_and_run(
+        r#"<?php
+$ts = "createFrom" . "Timestamp";
+$iface = "createFrom" . "Interface";
+$immut = "createFrom" . "Immutable";
+$fmt = "createFrom" . "Format";
+$a = eval('return DateTime::' . $ts . '(0);');
+$b = eval('return DateTime::' . $iface . '(new DateTimeImmutable("2020-05-06"));');
+$c = eval('return DateTime::' . $immut . '(new DateTimeImmutable("2020-05-06"));');
+$d = eval('return DateTime::' . $fmt . '("Y-m-d", "2020-03-04");');
+echo $a->format("Y"), ":", $b->format("Y-m-d"), ":", $c->format("Y-m-d"), ":", $d->format("Y-m-d");
+"#,
+    );
+    assert_eq!(out, "1970:2020-05-06:2020-05-06:2020-03-04");
+}
+
+/// The immutable half of the same set, including the peer only IT declares.
+///
+/// The alias list is pushed for both classes and a class that does not declare a name is skipped,
+/// so `createFromMutable` — which exists only here — and `createFromImmutable` — which exists only
+/// on the mutable class — both cost nothing and keep the list about the FAMILY.
+#[test]
+fn test_eval_reaches_every_datetime_immutable_static_factory() {
+    let out = compile_and_run(
+        r#"<?php
+$ts = "createFrom" . "Timestamp";
+$mut = "createFrom" . "Mutable";
+$iface = "createFrom" . "Interface";
+$a = eval('return DateTimeImmutable::' . $ts . '(0);');
+$b = eval('return DateTimeImmutable::' . $mut . '(new DateTime("2021-07-08"));');
+$c = eval('return DateTimeImmutable::' . $iface . '(new DateTime("2021-07-08"));');
+echo get_class($a), ":", $a->format("Y"), ":", $b->format("Y-m-d"), ":", $c->format("Y-m-d");
+"#,
+    );
+    assert_eq!(out, "DateTimeImmutable:1970:2021-07-08:2021-07-08");
+}
+
 /// A `Class::method` string callable, whose class and method are inside ONE literal.
 ///
 /// See `test_eval_reaches_datetime_through_a_literal_callable` for why these four channels are
