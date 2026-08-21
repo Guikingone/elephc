@@ -175,6 +175,54 @@ fn test_fpassthru_from_the_start_is_unchanged() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Verifies `stream_get_line()` reads one delimited record from a wrapper.
+#[test]
+fn test_stream_get_line_reads_one_record_from_a_wrapper() {
+    let (out, dir) = run_with_wrapper(
+        r#"$h = fopen("src://x", "r"); var_dump(stream_get_line($h, 100, "\n")); fclose($h);"#,
+    );
+    assert_eq!(out, "string(10) \"abcdefghij\"\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stream_get_line()` after an UNBOUNDED `fgets()` reads the NEXT record.
+///
+/// This answered the right byte COUNT over the wrong buffer, including uninitialised bytes: the
+/// entry drain wrote the held bytes into the reserved window, and the wrapper entry then replaced
+/// that window with `_user_wrapper_drain_buf` while the running total kept counting them. The
+/// unbounded spelling is the one that proves the defect predates the length-bound fix.
+#[test]
+fn test_stream_get_line_after_an_unbounded_fgets_reads_the_next_record() {
+    let (out, dir) = run_with_wrapper(
+        r#"$h = fopen("src://x", "r"); fgets($h); var_dump(stream_get_line($h, 100, "\n")); fclose($h);"#,
+    );
+    assert_eq!(out, "string(10) \"klmnopqrst\"\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stream_get_line()` after a BOUNDED `fgets()` starts from the buffered bytes.
+///
+/// The bytes it takes now pass the delimiter scan one at a time, so the record stops where php's
+/// does instead of swallowing the delimiter and everything after it.
+#[test]
+fn test_stream_get_line_after_a_bounded_fgets_starts_from_the_buffer() {
+    let (out, dir) = run_with_wrapper(
+        r#"$h = fopen("src://x", "r"); fgets($h, 6); var_dump(stream_get_line($h, 100, "\n")); fclose($h);"#,
+    );
+    assert_eq!(out, "string(5) \"fghij\"\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Verifies two consecutive `stream_get_line()` calls walk consecutive records.
+#[test]
+fn test_two_stream_get_line_calls_walk_consecutive_records() {
+    let (out, dir) = run_with_wrapper(
+        r#"$h = fopen("src://x", "r"); var_dump(stream_get_line($h, 100, "\n")); var_dump(stream_get_line($h, 100, "\n")); fclose($h);"#,
+    );
+    assert_eq!(out, "string(10) \"abcdefghij\"\nstring(10) \"klmnopqrst\"\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Verifies three unbounded `fgets` calls walk the whole stream, line by line.
 #[test]
 fn test_unbounded_fgets_walks_every_line() {

@@ -81,6 +81,19 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     // -- take back what a previous refusal held on this stream --
     // Those bytes carried no delimiter — that is why they were refused — so they need no scan of
     // their own: the tail comparison below runs as each further byte arrives.
+    // NOT for a wrapper backend. Its loop below replaces the result window with
+    // `_user_wrapper_drain_buf`, so bytes drained here would be counted and then dropped — and it
+    // takes its own bytes one at a time through `__rt_fread`, where each meets the delimiter scan.
+    emitter.instruction("ldr x0, [sp, #64]");                                   // the resolved backend descriptor
+    emitter.instruction("mov w9, #0x4000");                                     // high half of USER_WRAPPER_FD_BASE
+    emitter.instruction("lsl w9, w9, #16");                                     // form 0x40000000 in w9
+    emitter.instruction("cmp x0, x9");                                          // below the wrapper range?
+    emitter.instruction("b.lo __rt_sgl_drain_entry");                           // native: the bulk drain applies
+    super::emit_load_handles_cap(emitter, "x10");
+    emitter.instruction("add x10, x9, x10");                                    // wrapper range end
+    emitter.instruction("cmp x0, x10");                                         // above the wrapper range?
+    emitter.instruction("b.lo __rt_sgl_no_pending");                            // a wrapper drains per byte in its loop
+    emitter.label("__rt_sgl_drain_entry");
     emitter.instruction("ldr x0, [sp, #16]");                                   // the opaque stream handle
     emitter.instruction("ldr x1, [sp, #48]");                                   // the reserved result window
     emitter.instruction("ldr x2, [sp, #88]");                                   // for at most the clamped budget
@@ -222,10 +235,12 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #24]");                                  // maximum length
     emitter.instruction("cmp x10, x11");                                        // reached the byte budget?
     emitter.instruction("b.ge __rt_stream_get_line_done");                      // stop at the maximum length
-    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the wrapper fd
+    // The opaque HANDLE, not the fd: both helpers resolve the descriptor themselves, and only the
+    // handle resolves the STATE where the stream's buffered bytes live.
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the opaque stream handle
     emitter.instruction("bl __rt_feof");                                        // check stream_eof FIRST (x0 = 1 at EOF)
     emitter.instruction("cbnz x0, __rt_stream_get_line_done");                  // at EOF: return the bytes gathered so far
-    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the wrapper fd
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the opaque stream handle
     emitter.instruction("mov x1, #1");                                          // read exactly one byte
     emitter.instruction("bl __rt_fread");                                       // x1 = chunk ptr, x2 = len
     emitter.instruction("cbz x2, __rt_stream_get_line_done");                   // defensive: empty read also ends the line
@@ -327,6 +342,16 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     // -- take back what a previous refusal held on this stream --
     // See the AArch64 counterpart: those bytes carried no delimiter, so they need no scan of
     // their own; the tail comparison runs as each further byte arrives.
+    // See the AArch64 counterpart: a wrapper backend drains per byte in its own loop instead.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // the resolved backend descriptor
+    emitter.instruction("mov r9d, 0x40000000");                                 // USER_WRAPPER_FD_BASE
+    emitter.instruction("cmp rax, r9");                                         // below the wrapper range?
+    emitter.instruction("jb __rt_sgl_drain_entry_x86");                         // native: the bulk drain applies
+    super::emit_load_handles_cap(emitter, "r10");
+    emitter.instruction("add r10, r9");                                         // wrapper range end
+    emitter.instruction("cmp rax, r10");                                        // above the wrapper range?
+    emitter.instruction("jb __rt_sgl_no_pending_x86");                          // a wrapper drains per byte in its loop
+    emitter.label("__rt_sgl_drain_entry_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // the reserved result window
     emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // for at most the clamped budget
@@ -456,11 +481,11 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // running total
     emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // reached the byte budget?
     emitter.instruction("jge __rt_stream_get_line_done_x86");                   // stop at the maximum length
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the wrapper fd
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
     emitter.instruction("call __rt_feof");                                      // check stream_eof FIRST (rax = 1 at EOF)
     emitter.instruction("test rax, rax");                                       // at EOF?
     emitter.instruction("jnz __rt_stream_get_line_done_x86");                   // at EOF: return the bytes gathered so far
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the wrapper fd
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
     emitter.instruction("mov rsi, 1");                                          // read exactly one byte
     emitter.instruction("call __rt_fread");                                     // rax = chunk ptr, rdx = len
     emitter.instruction("test rdx, rdx");                                       // zero-length read?
