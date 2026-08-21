@@ -254,8 +254,13 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     //      [sp, #40] handle slot index
     //      [sp, #48] stream_open ptr (saved across blr)
     //      [sp, #56] stream_open boxed-result flag
+    //      [sp, #64] the caller's filter-suppression depth, parked across the wrapper's PHP
+    //
+    // The parked depth has its OWN slot: it used to share #56 with the boxed-result flag, which
+    // is stored before the handle-slot scan and read after the stand-down, so the dispatch read
+    // the depth as the flag. A filtered open (depth 1) then unboxed a raw boolean and faulted.
     emitter.label("__rt_fopen_uw_match");
-    emitter.instruction("sub sp, sp, #64");                                     // reserve wrapper-dispatch scratch below the fopen frame
+    emitter.instruction("sub sp, sp, #80");                                     // reserve wrapper-dispatch scratch below the fopen frame
     emitter.instruction("stp x1, x2, [sp, #0]");                                // save path ptr/len across __rt_new_by_name and stream_open
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save mode ptr/len across __rt_new_by_name and stream_open
     emitter.instruction("str xzr, [sp, #32]");                                  // pre-initialise the obj slot to 0 so the fail path can tell whether an object was allocated
@@ -335,7 +340,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     // throughout — including here.
     abi::emit_symbol_address(emitter, "x9", "_php_filter_suppression");
     emitter.instruction("ldr x10, [x9]");                                       // the filter scope this open is holding
-    emitter.instruction("str x10, [sp, #56]");                                  // park it in the dispatch scratch's spare slot
+    emitter.instruction("str x10, [sp, #64]");                                  // park it in the slot that belongs to it
     emitter.instruction("str xzr, [x9]");                                       // the wrapper's PHP warns in php's own words
 
     // -- call stream_open(obj, path, mode, options=0) --
@@ -362,7 +367,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     // it BEFORE the fail branch, whose silent -1 the filter's own failed-open line replaces.
     // x9/x10 only, so the boolean `stream_open` returned survives in x0.
     abi::emit_symbol_address(emitter, "x9", "_php_filter_suppression");
-    emitter.instruction("ldr x10, [sp, #56]");                                  // the parked filter scope
+    emitter.instruction("ldr x10, [sp, #64]");                                  // the parked filter scope
     emitter.instruction("str x10, [x9]");                                       // republish it for the rest of the open
     emitter.instruction("cbz x0, __rt_fopen_uw_fail");                          // stream_open returned false → silent fail (obj is freed on the shared fail path)
 
@@ -374,7 +379,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0x4000");                                     // low 16 bits of USER_WRAPPER_FD_BASE = 0x40000000
     emitter.instruction("lsl x0, x0, #16");                                     // shift into bits 30..16 to form 0x40000000
     emitter.instruction("orr x0, x0, x12");                                     // synthetic fd = USER_WRAPPER_FD_BASE | slot index
-    emitter.instruction("add sp, sp, #64");                                     // release the wrapper-dispatch scratch
+    emitter.instruction("add sp, sp, #80");                                     // release the wrapper-dispatch scratch
     emitter.instruction("b __rt_fopen_return");                                 // share the common return path
 
     emitter.label("__rt_fopen_uw_fail");
@@ -382,7 +387,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_fopen_uw_fail_release");                  // no object to release — skip the deep-free
     emitter.instruction("bl __rt_object_free_deep");                            // free the wrapper object so failed dispatches do not leak
     emitter.label("__rt_fopen_uw_fail_release");
-    emitter.instruction("add sp, sp, #64");                                     // release the wrapper-dispatch scratch before falling into the shared silent-fail path
+    emitter.instruction("add sp, sp, #80");                                     // release the wrapper-dispatch scratch before falling into the shared silent-fail path
     emitter.instruction("b __rt_fopen_silent_fail");                            // share the existing -1 return
 
     // -- restore frame and return fd in x0 --
@@ -603,8 +608,11 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     //      [rsp + 40] handle slot index
     //      [rsp + 48] stream_open ptr (saved across call rax)
     //      [rsp + 56] stream_open boxed-result flag
+    //      [rsp + 64] the caller's filter-suppression depth, parked across the wrapper's PHP
+    //
+    // See the AArch64 twin: the parked depth needs its own slot, not #56's.
     emitter.label("__rt_fopen_uw_match_x86");
-    emitter.instruction("sub rsp, 64");                                         // reserve wrapper-dispatch scratch below the fopen frame
+    emitter.instruction("sub rsp, 80");                                         // reserve wrapper-dispatch scratch below the fopen frame
     emitter.instruction("mov QWORD PTR [rsp + 0], rax");                        // save path ptr across __rt_new_by_name and stream_open
     emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                        // save path len across __rt_new_by_name and stream_open
     emitter.instruction("mov QWORD PTR [rsp + 16], rdi");                       // save mode ptr across __rt_new_by_name and stream_open
@@ -695,7 +703,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     // the slot is addressed the same way on both sides of the call.
     abi::emit_symbol_address(emitter, "r10", "_php_filter_suppression");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // the filter scope this open is holding
-    emitter.instruction("mov QWORD PTR [rsp + 56], r11");                       // park it in the dispatch scratch's spare slot
+    emitter.instruction("mov QWORD PTR [rsp + 64], r11");                       // park it in the slot that belongs to it
     emitter.instruction("mov QWORD PTR [r10], 0");                              // the wrapper's PHP warns in php's own words
 
     emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // $this = wrapper object
@@ -720,7 +728,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     // See the AArch64 counterpart: republish the parked scope BEFORE the fail branch. r10/r11
     // only, so the boolean `stream_open` returned survives in rax.
     abi::emit_symbol_address(emitter, "r10", "_php_filter_suppression");
-    emitter.instruction("mov r11, QWORD PTR [rsp + 56]");                       // the parked filter scope
+    emitter.instruction("mov r11, QWORD PTR [rsp + 64]");                       // the parked filter scope
     emitter.instruction("mov QWORD PTR [r10], r11");                            // republish it for the rest of the open
     emitter.instruction("test rax, rax");                                       // did stream_open return false?
     emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // stream_open returned false → silent fail (obj is freed on the shared fail path)
@@ -732,7 +740,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10 + r12 * 8], r13");                  // _user_wrapper_handles[slot] = obj
     emitter.instruction("mov rax, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("or rax, r12");                                         // synthetic fd = USER_WRAPPER_FD_BASE | slot index
-    emitter.instruction("add rsp, 64");                                         // release the wrapper-dispatch scratch
+    emitter.instruction("add rsp, 80");                                         // release the wrapper-dispatch scratch
     emitter.instruction("jmp __rt_fopen_return_x86");                           // share the common return path
 
     emitter.label("__rt_fopen_uw_fail_x86");
@@ -741,7 +749,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_fopen_uw_fail_release_x86");                   // no object to release — skip the deep-free
     emitter.instruction("call __rt_object_free_deep");                          // free the wrapper object so failed dispatches do not leak
     emitter.label("__rt_fopen_uw_fail_release_x86");
-    emitter.instruction("add rsp, 64");                                         // release the wrapper-dispatch scratch before falling into the shared silent-fail path
+    emitter.instruction("add rsp, 80");                                         // release the wrapper-dispatch scratch before falling into the shared silent-fail path
     emitter.instruction("jmp __rt_fopen_silent_fail_x86");                      // share the existing -1 return
 
     emitter.label("__rt_fopen_opened_x86");
