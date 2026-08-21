@@ -10368,6 +10368,13 @@ echo gettype($why), "=", $why;
 }
 
 /// Pins that a by-ref output still refuses an argument with nowhere to write back into.
+///
+/// The wording is php's, MEASURED under `php -n` 8.5.6: a literal in a by-reference slot is
+/// `Error: stream_socket_client(): Argument #2 ($error_code) could not be passed by reference`,
+/// and php refuses an explicit `null` there in exactly the same words. That is the half this
+/// pins; the other half — that a parameter the call OMITS is accepted — is
+/// `test_named_out_parameter_binds_the_parameter_it_names`, and the two together are the line
+/// php draws.
 #[test]
 fn test_out_parameter_rejects_an_argument_without_storage() {
     let error = compile_expect_type_error(
@@ -10376,8 +10383,10 @@ $c = @stream_socket_client("tcp://127.0.0.1:1", 0, $errstr, 1);
 "#,
     );
     assert!(
-        error.contains("parameter $error_code must be passed a variable"),
-        "expected the by-reference storage diagnostic, got: {error}"
+        error.contains(
+            "stream_socket_client(): Argument #2 ($error_code) could not be passed by reference"
+        ),
+        "expected php's by-reference diagnostic, got: {error}"
     );
 }
 

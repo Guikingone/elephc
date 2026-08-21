@@ -52,19 +52,23 @@ pub(super) fn lower_unary_stream_bool_runtime(
 }
 
 /// Stores `__rt_flock`'s would-block output into a local slot while preserving the return value.
+///
+/// The write goes through [`store_int_output_to_local`] rather than straight to the slot's offset.
+/// An UNDECLARED `$would_block` — which php allows, and `flock($h, LOCK_SH, $would)` is how it is
+/// normally written — gets a `mixed` slot holding a boxed null, and a raw word stored over that
+/// box pointer reads back as NULL where php answers `int(0)`. The socket builtins already write
+/// their by-reference integers this way; `flock` was the last one doing it by hand, and so kept
+/// its own copy of a bug the others no longer had.
 pub(super) fn store_flock_would_block(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
-    let offset = ctx.local_offset(slot)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_push_reg(ctx.emitter, "x0");
-            ctx.emitter.instruction("mov x0, x1");                              // move would_block into the canonical integer register for local storage
-            abi::store_at_offset(ctx.emitter, "x0", offset);
+            abi::emit_push_reg(ctx.emitter, "x0");                              // hold flock's verdict across the boxing call
+            super::stream_dispatch_helpers::store_int_output_to_local(ctx, slot, "x1")?;
             abi::emit_pop_reg(ctx.emitter, "x0");
         }
         Arch::X86_64 => {
-            abi::emit_push_reg(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov rax, rdx");                            // move would_block into the canonical integer register for local storage
-            abi::store_at_offset(ctx.emitter, "rax", offset);
+            abi::emit_push_reg(ctx.emitter, "rax");                             // hold flock's verdict across the boxing call
+            super::stream_dispatch_helpers::store_int_output_to_local(ctx, slot, "rdx")?;
             abi::emit_pop_reg(ctx.emitter, "rax");
         }
     }

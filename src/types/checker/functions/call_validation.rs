@@ -259,6 +259,33 @@ impl Checker {
         self.normalize_call_args(sig, args, span, callee_desc, true, false, env)
     }
 
+    /// Normalizes a builtin call and reports which slots the NORMALIZER filled.
+    ///
+    /// The by-reference check needs to tell an omitted parameter from a literal the program wrote
+    /// in that position: php accepts the first and raises an Error for the second, and after
+    /// normalization both are the same expression.
+    pub(crate) fn normalize_builtin_call_args_with_defaults(
+        &self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        callee_desc: &str,
+        env: &TypeEnv,
+    ) -> Result<(Vec<Expr>, Vec<bool>), CompileError> {
+        let assoc_spread_sources = assoc_spread_sources(args, env);
+        let plan = call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+            sig,
+            args,
+            span,
+            call_args::regular_param_count(sig),
+            true,
+            false,
+            &assoc_spread_sources,
+        )
+        .map_err(|err| call_arg_plan_error(sig, callee_desc, err))?;
+        Ok((plan.normalized_args(), plan.slots_filled_by_default()))
+    }
+
     /// Shared argument normalization for both user-defined and builtin calls. Delegates to the
     /// shared call-argument planner and converts planner errors to `CompileError`.
     fn normalize_call_args(

@@ -82,18 +82,25 @@ impl Checker {
         }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
         let normalized_args;
+        // Which slots the NORMALIZER filled rather than the program. Empty when nothing was
+        // normalized, which reads as "the program wrote all of them" — the safe direction, since
+        // an unmarked slot is CHECKED rather than skipped.
+        let defaulted_slots;
         let args = if let Some(sig) =
             (!is_lazy_construct).then(|| crate::types::builtin_call_sig(name)).flatten()
         {
-            normalized_args = self.normalize_builtin_call_args(
+            let (normalized, defaulted) = self.normalize_builtin_call_args_with_defaults(
                 &sig,
                 args,
                 span,
                 &format!("Builtin '{}'", name),
                 env,
             )?;
+            normalized_args = normalized;
+            defaulted_slots = defaulted;
             normalized_args.as_slice()
         } else {
+            defaulted_slots = Vec::new();
             args
         };
 
@@ -120,7 +127,12 @@ impl Checker {
             // builtins used to hand-roll this check, which is a catalogue: the ones nobody
             // wrote it for silently accepted a literal and ran, where PHP raises an Error.
             for (index, arg) in args.iter().enumerate() {
-                if matches!(arg.kind, ExprKind::Spread(_))
+                // A slot normalization filled is a parameter the call OMITTED, which php accepts
+                // — `f(error_message: $why)` skips `$error_code` and is not an error. Only what
+                // the program actually wrote is checked, so an explicit `null` there is still
+                // refused, exactly as php refuses it.
+                if defaulted_slots.get(index).copied().unwrap_or(false)
+                    || matches!(arg.kind, ExprKind::Spread(_))
                     || !def.ref_params.get(index).copied().unwrap_or(false)
                     || self.is_builtin_by_ref_argument_lvalue(arg)
                 {
