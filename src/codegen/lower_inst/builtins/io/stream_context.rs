@@ -1065,10 +1065,7 @@ pub(crate) fn lower_stream_get_contents(
         }
     }
     let length = expect_operand(inst, 1)?;
-    require_optional_int(
-        ctx.load_value_to_result(length)?.codegen_repr(),
-        "stream_get_contents length",
-    )?;
+    load_optional_int_to_result(ctx, length, "stream_get_contents length", NULL_SENTINEL)?;
     // php-src accepts exactly one negative `$length`: `-1`, its documented "read to EOF"
     // sentinel. Anything below that is a catchable ValueError raised BEFORE a byte is read,
     // where this used to silently fall into the read-all path and answer the whole stream.

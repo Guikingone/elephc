@@ -350,16 +350,60 @@ fn coerce_null_operands_to_builtin_params(
     ctx: &mut LoweringContext<'_, '_>,
     canonical: &str,
     args: &[Expr],
-    values: &mut [crate::ir::ValueId],
+    values: &mut Vec<crate::ir::ValueId>,
 ) {
     let Some(def) = crate::builtins::registry::lookup(canonical) else {
         return;
     };
+    // A TRAILING null on a `?T $x = null` parameter is php's OMITTED argument, not a coerced
+    // scalar: `substr("hello", 1, null)` answers `"ello"` and `umask(null)` reads the mask,
+    // exactly as the shorter call does. Dropping the operand routes each builtin to the
+    // omitted-argument branch its own lowering already has, instead of asking 33 lowerings to
+    // learn a null case. MEASURED against `php -n` 8.5.6: coercing instead answered `""` for that
+    // `substr`, `""` for `stream_get_contents($h, null)`, and copied nothing for
+    // `stream_copy_to_stream($a, $b, null)`.
+    //
+    // Only from the END: a null in a middle position — `stream_copy_to_stream($a, $b, null, 4)` —
+    // still has to reach the builtin, where the site's own "no bound" word is materialised.
+    //
+    // Only for a DECLARED SCALAR, which is where php's own two spellings coincide. For a `mixed`
+    // parameter they do not: `stream_filter_append($h, "convert.base64-encode",
+    // STREAM_FILTER_WRITE, null)` answers `false` while the same call with the argument OMITTED
+    // answers a resource, because php's `convert.*` filters test the zval POINTER and it is null
+    // only when nothing was supplied. ZPP gives a `?int $x = null` parameter a value plus an
+    // `is_null` flag instead, and every builtin here reads that flag as "take the default".
+    //
+    // The dropped operand's INSTRUCTION stays in the IR and still runs, which is what keeps a
+    // `warned_null` argument raising its `Warning: Undefined variable` before the call.
+    while let Some(last) = values.len().checked_sub(1) {
+        let Some(param) = def.spec.params.get(last) else {
+            break;
+        };
+        if param.by_ref
+            || !matches!(param.default, Some(crate::builtins::spec::DefaultSpec::Null))
+            || !matches!(
+                crate::builtins::convert::type_spec_to_php(&param.ty),
+                PhpType::Int | PhpType::Str | PhpType::Float | PhpType::Bool
+            )
+        {
+            break;
+        }
+        if !matches!(ctx.builder.value_php_type(values[last]), PhpType::Void) {
+            break;
+        }
+        values.pop();
+    }
     for (index, value) in values.iter_mut().enumerate() {
         let Some(param) = def.spec.params.get(index) else {
             break;
         };
         if param.by_ref {
+            continue;
+        }
+        // A parameter php spells `?T $x = null` accepts null as a VALUE; only a non-nullable
+        // scalar gets the coercion this function is named for. Reaching here means the null is
+        // not trailing, so it could not be dropped above and the builtin's own lowering sees it.
+        if matches!(param.default, Some(crate::builtins::spec::DefaultSpec::Null)) {
             continue;
         }
         if !matches!(ctx.builder.value_php_type(*value), PhpType::Void) {

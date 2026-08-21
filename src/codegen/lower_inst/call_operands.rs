@@ -104,6 +104,20 @@ pub(in crate::codegen) fn resolve_nullable_int_operand_to_result(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int_nullable");
             Ok(())
         }
+        // A STATICALLY null argument — `fgets($h, null)`, or a `$n = null` the checker narrowed —
+        // carries no integer to load, so it answers the sentinel here. Without this arm it reached
+        // `resolve_int_operand_to_result`, whose exhaustive `ty` arm refused `Void` outright: the
+        // program did not run at all, on a spelling php's own `?int $length = null` signature
+        // invites. Only the boxed case needs the runtime peek, which is what the doc above claims
+        // and this arm makes true.
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                crate::codegen::NULL_SENTINEL,
+            );
+            Ok(())
+        }
         _ => resolve_int_operand_to_result(ctx, value, context),
     }
 }

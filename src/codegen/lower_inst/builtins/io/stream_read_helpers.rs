@@ -250,10 +250,9 @@ pub(super) fn materialize_stream_copy_length(
 ) -> Result<()> {
     if inst.operands.len() >= 3 {
         let length = expect_operand(inst, 2)?;
-        require_optional_int(
-            ctx.load_value_to_result(length)?.codegen_repr(),
-            "stream_copy_to_stream length",
-        )?;
+        // `-1`, not the null sentinel: this site's copier reads the SAME word the omitted-argument
+        // branch below writes, and that word is `-1`.
+        load_optional_int_to_result(ctx, length, "stream_copy_to_stream length", -1)?;
     } else {
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), -1);
     }

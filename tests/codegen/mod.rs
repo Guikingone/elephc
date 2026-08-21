@@ -21,6 +21,7 @@ mod benchmarks;
 mod echo_vars;
 mod null_receivers;
 mod undefined_variables;
+mod nullable_builtin_arguments;
 mod php_tags;
 mod eval;
 mod eval_builtin_parity;
