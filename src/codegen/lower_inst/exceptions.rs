@@ -33,6 +33,10 @@ use crate::ir::ValueId;
 use super::super::context::FunctionContext;
 use super::super::Result;
 
+const NATIVE_EXCEPTION_OBJECT_STACK_OFFSET: usize = 144;
+const NATIVE_EXCEPTION_MESSAGE_PTR_STACK_OFFSET: usize = 160;
+const NATIVE_EXCEPTION_MESSAGE_LEN_STACK_OFFSET: usize = 168;
+
 /// Throws a catchable PHP `Error` carrying a static message.
 pub(super) fn emit_error(ctx: &mut FunctionContext<'_>, message: &str) {
     emit_static_exception(ctx, "Error", "_spl_error_class_id", message);
@@ -350,7 +354,7 @@ pub(super) fn emit_dom_exception_from_result(
     message_ptr_offset: usize,
     message_len_offset: usize,
     code_offset: usize,
-) {
+) -> Result<()> {
     emit_native_exception_from_result(
         ctx,
         "DOMException",
@@ -358,7 +362,7 @@ pub(super) fn emit_dom_exception_from_result(
         message_ptr_offset,
         message_len_offset,
         Some(code_offset),
-    );
+    )
 }
 
 /// Throws a catchable `ValueError` from one message field in a native result frame.
@@ -366,7 +370,7 @@ pub(super) fn emit_value_error_from_result(
     ctx: &mut FunctionContext<'_>,
     message_ptr_offset: usize,
     message_len_offset: usize,
-) {
+) -> Result<()> {
     emit_native_exception_from_result(
         ctx,
         "ValueError",
@@ -374,7 +378,7 @@ pub(super) fn emit_value_error_from_result(
         message_ptr_offset,
         message_len_offset,
         None,
-    );
+    )
 }
 
 /// Throws a catchable `TypeError` from one message field in a native result frame.
@@ -382,7 +386,7 @@ pub(super) fn emit_type_error_from_result(
     ctx: &mut FunctionContext<'_>,
     message_ptr_offset: usize,
     message_len_offset: usize,
-) {
+) -> Result<()> {
     emit_native_exception_from_result(
         ctx,
         "TypeError",
@@ -390,7 +394,7 @@ pub(super) fn emit_type_error_from_result(
         message_ptr_offset,
         message_len_offset,
         None,
-    );
+    )
 }
 
 /// Throws a catchable base `Error` from one message field in a native result frame.
@@ -398,7 +402,7 @@ pub(super) fn emit_error_from_result(
     ctx: &mut FunctionContext<'_>,
     message_ptr_offset: usize,
     message_len_offset: usize,
-) {
+) -> Result<()> {
     emit_native_exception_from_result(
         ctx,
         "Error",
@@ -406,7 +410,7 @@ pub(super) fn emit_error_from_result(
         message_ptr_offset,
         message_len_offset,
         None,
-    );
+    )
 }
 
 /// Throws a catchable base `Exception` from one message field in a native result frame.
@@ -414,7 +418,7 @@ pub(super) fn emit_exception_from_result(
     ctx: &mut FunctionContext<'_>,
     message_ptr_offset: usize,
     message_len_offset: usize,
-) {
+) -> Result<()> {
     emit_native_exception_from_result(
         ctx,
         "Exception",
@@ -422,7 +426,7 @@ pub(super) fn emit_exception_from_result(
         message_ptr_offset,
         message_len_offset,
         None,
-    );
+    )
 }
 
 /// Materializes one native message and optional code as a built-in throwable.
@@ -433,26 +437,44 @@ fn emit_native_exception_from_result(
     message_ptr_offset: usize,
     message_len_offset: usize,
     code_offset: Option<usize>,
-) {
-    emit_uncaught_native_exception_fatal_if_no_handler(
-        ctx,
-        class_name,
-        message_ptr_offset,
-        message_len_offset,
-    );
+) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", message_ptr_offset);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", message_len_offset);
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 56);
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_store_to_sp(
+                ctx.emitter,
+                "x1",
+                NATIVE_EXCEPTION_MESSAGE_PTR_STACK_OFFSET,
+            );
+            abi::emit_store_to_sp(
+                ctx.emitter,
+                "x2",
+                NATIVE_EXCEPTION_MESSAGE_LEN_STACK_OFFSET,
+            );
+            abi::emit_store_to_sp(ctx.emitter, "x0", NATIVE_EXCEPTION_OBJECT_STACK_OFFSET);
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
             ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the native throwable to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", class_id_symbol, 0);
             ctx.emitter.instruction("str x9, [x0]");                            // store the built-in throwable's runtime class id
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", message_ptr_offset);
-            ctx.emitter.instruction("str x9, [x0, #8]");                        // retain the native result message pointer for this request
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", message_len_offset);
-            ctx.emitter.instruction("str x9, [x0, #16]");                       // store the native result message byte length
+            abi::emit_load_temporary_stack_slot(
+                ctx.emitter,
+                "x9",
+                NATIVE_EXCEPTION_MESSAGE_PTR_STACK_OFFSET,
+            );
+            ctx.emitter.instruction("str x9, [x0, #8]");                        // retain the refcounted message string in the Throwable
+            abi::emit_load_temporary_stack_slot(
+                ctx.emitter,
+                "x9",
+                NATIVE_EXCEPTION_MESSAGE_LEN_STACK_OFFSET,
+            );
+            ctx.emitter.instruction("str x9, [x0, #16]");                       // store the owned message byte length
             if let Some(code_offset) = code_offset {
                 ctx.emitter
                     .instruction(&format!("ldrsw x9, [sp, #{}]", code_offset));  // sign-extend the native DOM exception code
@@ -462,21 +484,48 @@ fn emit_native_exception_from_result(
             }
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            super::internal_extensions::emit_release_native_call_state(ctx)?;
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", NATIVE_EXCEPTION_OBJECT_STACK_OFFSET);
+            emit_uncaught_native_exception_fatal_if_no_handler_from_object(ctx, class_name);
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", message_ptr_offset);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", message_len_offset);
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            abi::emit_load_int_immediate(ctx.emitter, "rax", 56);
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            abi::emit_pop_reg_pair(ctx.emitter, "r10", "r11");
+            abi::emit_store_to_sp(
+                ctx.emitter,
+                "r10",
+                NATIVE_EXCEPTION_MESSAGE_PTR_STACK_OFFSET,
+            );
+            abi::emit_store_to_sp(
+                ctx.emitter,
+                "r11",
+                NATIVE_EXCEPTION_MESSAGE_LEN_STACK_OFFSET,
+            );
+            abi::emit_store_to_sp(ctx.emitter, "rax", NATIVE_EXCEPTION_OBJECT_STACK_OFFSET);
             ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the native throwable to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the built-in throwable's runtime class id
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", message_ptr_offset);
-            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // retain the native result message pointer for this request
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", message_len_offset);
-            ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the native result message byte length
+            abi::emit_load_temporary_stack_slot(
+                ctx.emitter,
+                "r10",
+                NATIVE_EXCEPTION_MESSAGE_PTR_STACK_OFFSET,
+            );
+            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // retain the refcounted message string in the Throwable
+            abi::emit_load_temporary_stack_slot(
+                ctx.emitter,
+                "r10",
+                NATIVE_EXCEPTION_MESSAGE_LEN_STACK_OFFSET,
+            );
+            ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the owned message byte length
             if let Some(code_offset) = code_offset {
                 ctx.emitter
                     .instruction(&format!("movsxd r10, DWORD PTR [rsp + {}]", code_offset)); // sign-extend the native DOM exception code
@@ -486,18 +535,20 @@ fn emit_native_exception_from_result(
             }
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            super::internal_extensions::emit_release_native_call_state(ctx)?;
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", NATIVE_EXCEPTION_OBJECT_STACK_OFFSET);
+            emit_uncaught_native_exception_fatal_if_no_handler_from_object(ctx, class_name);
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
     }
+    Ok(())
 }
 
-/// Emits one uncaught native throwable diagnostic when no PHP handler is active.
-fn emit_uncaught_native_exception_fatal_if_no_handler(
+/// Emits one uncaught native throwable diagnostic from the copied message when no handler is active.
+fn emit_uncaught_native_exception_fatal_if_no_handler_from_object(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
-    message_ptr_offset: usize,
-    message_len_offset: usize,
 ) {
     let throw_label = ctx.next_label("native_exception_throw");
     let prefix = format!("Fatal error: Uncaught {class_name}: ");
@@ -512,8 +563,13 @@ fn emit_uncaught_native_exception_fatal_if_no_handler(
             abi::emit_load_int_immediate(ctx.emitter, "x2", prefix_len as i64);
             ctx.emitter.syscall(4);
             ctx.emitter.instruction("mov x0, #2");                              // write the native throwable message to stderr
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", message_ptr_offset);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", message_len_offset);
+            abi::emit_load_temporary_stack_slot(
+                ctx.emitter,
+                "x9",
+                NATIVE_EXCEPTION_OBJECT_STACK_OFFSET,
+            );
+            ctx.emitter.instruction("ldr x1, [x9, #8]");                        // load the copied Throwable message pointer
+            ctx.emitter.instruction("ldr x2, [x9, #16]");                       // load the copied Throwable message length
             ctx.emitter.syscall(4);
             ctx.emitter.instruction("mov x0, #2");                              // terminate the uncaught diagnostic with a newline
             abi::emit_symbol_address(ctx.emitter, "x1", &suffix_label);
@@ -530,8 +586,13 @@ fn emit_uncaught_native_exception_fatal_if_no_handler(
             ctx.emitter.instruction("mov edi, 2");                              // write the uncaught throwable prefix to stderr
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the uncaught throwable prefix
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", message_ptr_offset);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", message_len_offset);
+            abi::emit_load_temporary_stack_slot(
+                ctx.emitter,
+                "r10",
+                NATIVE_EXCEPTION_OBJECT_STACK_OFFSET,
+            );
+            ctx.emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");            // load the copied Throwable message pointer
+            ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");           // load the copied Throwable message length
             ctx.emitter.instruction("mov edi, 2");                              // write the native throwable message to stderr
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the native throwable message

@@ -243,8 +243,15 @@ impl Checker {
             CastType::String => PhpType::Str,
             CastType::Bool => PhpType::Bool,
             CastType::Array => PhpType::Array(Box::new(PhpType::Int)),
-            CastType::Object if simplexml_object_cast_preserves_type(self, &source_type) => {
+            CastType::Object
+                if simplexml_object_cast_preserves_type(self, &source_type)
+                    || matches!(source_type.codegen_repr(), PhpType::Object(_)) => {
                 source_type
+            }
+            CastType::Object
+                if matches!(source_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) =>
+            {
+                PhpType::Mixed
             }
             CastType::Object => PhpType::Object("stdClass".to_string()),
         })

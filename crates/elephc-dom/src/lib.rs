@@ -45,3 +45,15 @@ mod tests;
 mod simplexml_foundation_tests;
 #[cfg(test)]
 mod route_coverage_tests;
+
+#[cfg(test)]
+pub(crate) use exports::{test_inject_panic, TestExportEntryPoint};
+#[cfg(test)]
+pub(crate) use exports::HostLoaderResult as TestHostLoaderResult;
+#[cfg(test)]
+pub(crate) use exports::{
+    elephc_dom_host_external_entity_load, elephc_dom_host_loader_bytes_free,
+    elephc_dom_host_resource_open, elephc_dom_host_result_release,
+    elephc_dom_host_stream_close, elephc_dom_host_stream_read,
+    elephc_dom_host_xpath_invoke,
+};

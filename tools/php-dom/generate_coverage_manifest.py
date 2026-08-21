@@ -18,6 +18,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from phpt_paths import PhptPathError, canonical_phpt_key
+
 
 def sha256_file(path: Path) -> str:
     """Return the SHA-256 digest of one source artifact."""
@@ -41,7 +43,7 @@ class UnsafePathError(ValueError):
 
 
 def repo_path(repo_root: Path, value: Path | str, subject: str) -> Path:
-    """Resolve a relative path and reject absolute, traversal, and escaping links."""
+    """Resolve a path and reject traversal and locations outside the repository."""
     raw = Path(value)
     if not raw.is_absolute() and ".." in raw.parts:
         raise UnsafePathError(f"UNSAFE_PATH:{subject}")
@@ -51,6 +53,13 @@ def repo_path(repo_root: Path, value: Path | str, subject: str) -> Path:
     except ValueError as error:
         raise UnsafePathError(f"UNSAFE_PATH:{subject}") from error
     return resolved
+
+
+def source_root_path(repo_root: Path, value: str) -> Path:
+    """Resolve a portable source-root path and reject machine-specific absolutes."""
+    if Path(value).is_absolute():
+        raise UnsafePathError("UNSAFE_PATH:php_src_root")
+    return repo_path(repo_root, value, "php_src_root")
 
 
 def component_paths(source_root: Path, components: dict[str, Any]) -> list[tuple[str, Path]]:
@@ -73,7 +82,7 @@ def generate(repo_root: Path, source: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(relative_source_root, str) or not isinstance(components, dict):
         raise ValueError("input requires php_src_root and components")
 
-    source_root = repo_path(repo_root, relative_source_root, "php_src_root")
+    source_root = source_root_path(repo_root, relative_source_root)
     phpt_paths = component_paths(source_root, components)
     actual_components = {
         component: sum(1 for found_component, _ in phpt_paths if found_component == component)
@@ -91,15 +100,20 @@ def generate(repo_root: Path, source: dict[str, Any]) -> dict[str, Any]:
     routes = source.get("routes", [])
     if not isinstance(requirements, list) or not isinstance(routes, list):
         raise ValueError("requirements and routes must be arrays")
-    phpts = [
-        {
-            "path": path.relative_to(repo_root).as_posix(),
-            "sha256": sha256_file(path),
-            "status": "pending",
-            "component": component,
-        }
-        for component, path in phpt_paths
-    ]
+    phpts = []
+    for component, path in phpt_paths:
+        try:
+            key = canonical_phpt_key(path.relative_to(source_root).as_posix())
+        except (ValueError, PhptPathError) as error:
+            raise ValueError(f"invalid PHPT path: {error}") from error
+        phpts.append(
+            {
+                "path": key,
+                "sha256": sha256_file(path),
+                "status": "pending",
+                "component": component,
+            }
+        )
     return {
         "schema": 1,
         "source": {"php_src_root": relative_source_root},

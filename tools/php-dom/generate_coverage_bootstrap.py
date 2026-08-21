@@ -18,6 +18,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from phpt_paths import PhptPathError, canonical_phpt_key
+
 
 COMPONENTS = ("dom", "libxml", "simplexml")
 TARGETS = ("macos-aarch64", "linux-aarch64", "linux-x86_64")
@@ -151,7 +153,10 @@ def phpt_rows(ledgers: dict[str, dict[str, Any]]) -> tuple[list[dict[str, str]],
             status = entry.get("status") if isinstance(entry, dict) else None
             if not isinstance(path, str) or not isinstance(digest, str) or status != "pending":
                 raise BootstrapError(f"AUTHORITY_INVALID:ledger:{component}")
-            manifest_path = f"php-src/{path}"
+            try:
+                manifest_path = canonical_phpt_key(path)
+            except PhptPathError as error:
+                raise BootstrapError(f"AUTHORITY_INVALID:ledger:{component}:{error}") from error
             phpts.append({"path": manifest_path, "sha256": digest, "status": "pending"})
             holes.append(
                 {

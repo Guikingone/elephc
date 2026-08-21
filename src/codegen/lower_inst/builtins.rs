@@ -72,6 +72,8 @@ pub(crate) mod strings;
 pub(crate) mod types;
 
 pub(in crate::codegen::lower_inst) use eval_facade::*;
+pub(in crate::codegen) use count_empty::emit_count_countable_guard_from_result;
+pub(in crate::codegen::lower_inst) use count_empty::{lower_closure_bind, lower_empty};
 pub(crate) use function_queries::*;
 pub(crate) use member_queries::*;
 pub(crate) use scalar_metadata::*;

@@ -352,15 +352,19 @@ pub(super) fn load_legacy_html(
     })
 }
 
-/// Serializes one complete document or one same-document node using its format flag.
+/// Serializes one complete document or same-document node for its exact PHP API family.
 pub(super) fn serialize_xml(
     context: &Context,
     request: &Request,
+    expected_family: DocumentFamily,
 ) -> Result<DispatchResult, ()> {
     if request.values.len() > 2 {
         return Err(());
     }
     let document = document(context, request.header.receiver)?;
+    if document.family() != expected_family {
+        return Err(());
+    }
     let options = if request.values.len() == 2 {
         request.integer(1)? as i32
     } else {

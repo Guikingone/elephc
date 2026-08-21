@@ -223,6 +223,32 @@ fn build_lexbor(
     build.compile("elephc_dom_native");
 }
 
+/// Builds the test-only allocator seam without publishing Cargo link metadata.
+fn build_test_instrumentation(
+    libxml_install: &Path,
+    manifest: &Path,
+    output: &Path,
+    target: &str,
+) {
+    let mut build = cc::Build::new();
+    build
+        .cargo_metadata(false)
+        .include(libxml_install.join("include/libxml2"))
+        .warnings(false)
+        .flag_if_supported("-std=c11")
+        .file(manifest.join("native/test_instrumentation.c"));
+    if target.contains("apple") {
+        let deployment = env::var("MACOSX_DEPLOYMENT_TARGET")
+            .unwrap_or_else(|_| "11.0".to_owned());
+        build.flag(&format!("-mmacosx-version-min={deployment}"));
+    }
+    build.compile("elephc_dom_native_test");
+    assert!(
+        output.join("libelephc_dom_native_test.a").is_file(),
+        "test native archive was not emitted in OUT_DIR"
+    );
+}
+
 /// Emits platform system-library requirements used by the pinned static libxml2 build.
 fn emit_platform_links(target: &str) {
     if target.contains("apple") {
@@ -251,6 +277,10 @@ fn main() {
     println!(
         "cargo:rerun-if-changed={}",
         manifest.join("native/engine.c").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest.join("native/test_instrumentation.c").display()
     );
     println!(
         "cargo:rerun-if-changed={}",
@@ -302,10 +332,15 @@ fn main() {
         &manifest,
         &target,
     );
+    build_test_instrumentation(&libxml_install, &manifest, &output, &target);
 
     println!(
         "cargo:rustc-link-search=native={}",
         libxml_install.join("lib").display()
+    );
+    println!(
+        "cargo:rustc-link-search=native={}",
+        output.display()
     );
     println!("cargo:rustc-link-lib=static=xml2");
     emit_platform_links(&target);

@@ -207,10 +207,11 @@ pub(super) fn lower_internal_extension_args(
             let Some(signature) = sig else {
                 return lower_args(ctx, args);
             };
+            let operands = lower_named_args_with_signature(ctx, signature, args);
             return coerce_operands_to_params(
                 ctx,
                 signature,
-                lower_named_args_with_signature(ctx, signature, args),
+                operands,
             );
         }
         let operands = args

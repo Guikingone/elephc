@@ -127,6 +127,10 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
 }
 
 /// Lowers indexed-array promotion to associative hash storage.
+///
+/// A physical indexed array consumes one owned source reference after copying
+/// its entries; an already-promoted hash is forwarded as the result. Callers
+/// transfer the operand to this operation and must not release it separately.
 pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 1 {
         return Err(CodegenIrError::invalid_module(format!(
@@ -230,6 +234,51 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
                 ctx.emitter.instruction("mov rdi, rax");                        // pass the promoted hash to the Mixed-entry conversion helper
                 abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
             }
+            ctx.emitter.label(&done);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers an indexed-array shallow clone through the shared ownership-aware runtime helper.
+pub(super) fn lower_array_clone_shallow(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    require_indexed_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
+    require_indexed_array(inst.result_php_type.codegen_repr(), inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let hash_path = ctx.next_label("array_clone_shallow_hash");
+            let done = ctx.next_label("array_clone_shallow_done");
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // preserve a runtime-promoted array as hash storage
+            ctx.emitter.instruction(&format!("b.eq {}", hash_path));            // dispatch promoted storage to the matching clone helper
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&hash_path);
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            let hash_path = ctx.next_label("array_clone_shallow_hash");
+            let done = ctx.next_label("array_clone_shallow_done");
+            ctx.load_value_to_reg(array, "rax")?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // preserve a runtime-promoted array as hash storage
+            ctx.emitter.instruction(&format!("je {}", hash_path));              // dispatch promoted storage to the matching clone helper
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&hash_path);
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");
             ctx.emitter.label(&done);
         }
     }

@@ -13,7 +13,7 @@ use std::ffi::c_void;
 
 use crate::abi::{
     HostVTable, RequestHeader, ResultHeader, Value, ABI_VERSION, OPCODE_ABI_PING,
-    STATUS_ABI_ERROR, STATUS_MALFORMED_REQUEST, STATUS_OK, VALUE_ARRAY,
+    STATUS_ABI_ERROR, STATUS_INTERNAL_PANIC, STATUS_MALFORMED_REQUEST, STATUS_OK, VALUE_ARRAY,
     VALUE_BRIDGE_HANDLE, VALUE_BYTES, VALUE_MAP,
 };
 
@@ -280,10 +280,24 @@ fn assert_rejected_without_native_mutation(
     expected_status: u32,
 ) {
     let before = native_state(context);
+    let results_before = crate::context::context(context)
+        .expect("live test context")
+        .borrow()
+        .results
+        .len();
     let (status, result) = call(context, request);
     assert_eq!(status, expected_status, "{case_id}: return status");
     assert_owned_pointer_free_error(&result, expected_status, case_id);
     release_result(context, &result);
+    let results_after = crate::context::context(context)
+        .expect("live test context")
+        .borrow()
+        .results
+        .len();
+    assert_eq!(
+        results_after, results_before,
+        "{case_id}: result registry leak after release"
+    );
     assert_eq!(native_state(context), before, "{case_id}: native mutation");
 }
 
@@ -743,23 +757,217 @@ fn abi_invalid_result_releases_do_not_destroy_live_context_or_results() {
     crate::elephc_dom_result_release(owner.id(), first_id);
     crate::elephc_dom_result_release(owner.id(), u64::MAX);
     crate::elephc_dom_result_release(foreign.id(), first_id);
+    assert_eq!(
+        crate::context::test_release_violation_count(owner.id()),
+        Some(2),
+        "double and unknown releases are counted on the owning context"
+    );
+    assert_eq!(
+        crate::context::test_release_violation_count(foreign.id()),
+        Some(1),
+        "foreign release is counted on the receiving context"
+    );
     let (status, second) = call(owner.id(), &ping);
     assert_eq!(status, STATUS_OK, "owner remains callable after invalid releases");
     assert_ne!(second.result_id, 0, "new live result ownership");
     release_result(owner.id(), &second);
+    assert_eq!(crate::elephc_dom_context_reset(owner.id()), STATUS_OK);
+    assert_eq!(
+        crate::context::test_release_violation_count(owner.id()),
+        Some(0),
+        "context reset isolates invalid-release instrumentation"
+    );
 }
 
-/// Documents test-only hooks still required to execute panic and allocation containment cases.
+/// Verifies panic containment, native allocation-failure cleanup, and release instrumentation.
 ///
-/// No production hook is added here: section 5.8 requires an explicit controlled injection
-/// surface owned by the bridge implementation, and none is currently exposed to this module.
+/// Every panic is injected only inside the corresponding protected closure, so this test proves
+/// that no Rust unwind crosses the C ABI. The native seam exercises both pinned libxml input
+/// allocation failures through the same host callback protocol used by production parsing.
 #[test]
-#[ignore = "blocked by missing test-only panic/allocation injection and invalid-release counter accessors"]
 fn abi_panic_allocation_and_invalid_release_instrumentation_contract() {
-    let required_hooks = [
-        "panic injection at each exported entry point",
-        "recoverable native allocation-failure injection",
-        "structured invalid-release event counter by context",
+    let panic_entry_points = [
+        crate::TestExportEntryPoint::ContextNew,
+        crate::TestExportEntryPoint::ContextReset,
+        crate::TestExportEntryPoint::ContextSetClassMetadata,
+        crate::TestExportEntryPoint::ContextFree,
+        crate::TestExportEntryPoint::DomCall,
+        crate::TestExportEntryPoint::ResultRelease,
+        crate::TestExportEntryPoint::HostExternalEntityLoad,
+        crate::TestExportEntryPoint::HostResourceOpen,
+        crate::TestExportEntryPoint::HostXPathInvoke,
+        crate::TestExportEntryPoint::HostResultRelease,
+        crate::TestExportEntryPoint::HostLoaderBytesFree,
+        crate::TestExportEntryPoint::HostStreamRead,
+        crate::TestExportEntryPoint::HostStreamClose,
     ];
-    assert!(required_hooks.is_empty(), "implement the listed test-only bridge hooks");
+    assert_eq!(
+        panic_entry_points.len(),
+        13,
+        "all exported bridge wrappers must have a panic injection case"
+    );
+    assert!(
+        panic_entry_points.contains(&crate::TestExportEntryPoint::ContextFree),
+        "context destruction must be part of the panic matrix"
+    );
+    let host = HostVTable {
+        abi_version: ABI_VERSION,
+        struct_size: std::mem::size_of::<HostVTable>() as u32,
+        user_data: std::ptr::null_mut::<c_void>(),
+        call: None,
+    };
+    let mut context = u64::MAX;
+    crate::test_inject_panic(crate::TestExportEntryPoint::ContextNew);
+    assert_eq!(
+        unsafe { crate::elephc_dom_context_new(&host, &mut context) },
+        STATUS_INTERNAL_PANIC,
+        "context construction panic is contained"
+    );
+    assert_eq!(context, 0, "panic leaves the output context uninitialized");
+
+    let owner = TestContext::new();
+    let before = native_state(owner.id());
+    crate::test_inject_panic(crate::TestExportEntryPoint::ContextReset);
+    assert_eq!(
+        crate::elephc_dom_context_reset(owner.id()),
+        STATUS_INTERNAL_PANIC,
+        "context reset panic is contained"
+    );
+    assert_eq!(native_state(owner.id()), before, "reset panic does not mutate state");
+
+    crate::test_inject_panic(crate::TestExportEntryPoint::ContextSetClassMetadata);
+    assert_eq!(
+        unsafe {
+            crate::elephc_dom_context_set_class_metadata(owner.id(), std::ptr::null(), 0)
+        },
+        STATUS_INTERNAL_PANIC,
+        "metadata panic is contained"
+    );
+
+    let ping = request_bytes(ping_header(), &[], &[]);
+    crate::test_inject_panic(crate::TestExportEntryPoint::DomCall);
+    let (status, panic_result) = call(owner.id(), &ping);
+    assert_eq!(status, STATUS_INTERNAL_PANIC, "DOM call panic status");
+    assert_owned_pointer_free_error(&panic_result, STATUS_INTERNAL_PANIC, "dom-call-panic");
+    release_result(owner.id(), &panic_result);
+    assert_eq!(native_state(owner.id()), before, "call panic does not mutate state");
+
+    let (status, live_result) = call(owner.id(), &ping);
+    assert_eq!(status, STATUS_OK);
+    crate::test_inject_panic(crate::TestExportEntryPoint::ResultRelease);
+    crate::elephc_dom_result_release(owner.id(), live_result.result_id);
+    assert_eq!(
+        crate::context::context(owner.id())
+            .expect("owner context")
+            .borrow()
+            .results
+            .len(),
+        1,
+        "release panic preserves the owned result frame"
+    );
+    assert_eq!(crate::context::test_release_violation_count(owner.id()), Some(0));
+    release_result(owner.id(), &live_result);
+
+    let mut loader_result = unsafe {
+        std::mem::MaybeUninit::<crate::TestHostLoaderResult>::zeroed().assume_init()
+    };
+    crate::test_inject_panic(crate::TestExportEntryPoint::HostExternalEntityLoad);
+    assert_eq!(
+        unsafe {
+            crate::elephc_dom_host_external_entity_load(
+                owner.id(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                &mut loader_result,
+            )
+        },
+        STATUS_INTERNAL_PANIC
+    );
+    crate::test_inject_panic(crate::TestExportEntryPoint::HostResourceOpen);
+    assert_eq!(
+        unsafe {
+            crate::elephc_dom_host_resource_open(
+                owner.id(),
+                std::ptr::null(),
+                0,
+                &mut loader_result,
+            )
+        },
+        STATUS_INTERNAL_PANIC
+    );
+    crate::test_inject_panic(crate::TestExportEntryPoint::HostXPathInvoke);
+    assert_eq!(
+        unsafe {
+            crate::elephc_dom_host_xpath_invoke(
+                owner.id(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                &mut loader_result,
+            )
+        },
+        STATUS_INTERNAL_PANIC
+    );
+    crate::test_inject_panic(crate::TestExportEntryPoint::HostResultRelease);
+    assert_eq!(
+        crate::elephc_dom_host_result_release(owner.id(), 1),
+        STATUS_INTERNAL_PANIC
+    );
+    let mut bytes = vec![1_u8, 2].into_boxed_slice();
+    let bytes_pointer = bytes.as_mut_ptr();
+    let bytes_length = bytes.len();
+    std::mem::forget(bytes);
+    crate::test_inject_panic(crate::TestExportEntryPoint::HostLoaderBytesFree);
+    unsafe { crate::elephc_dom_host_loader_bytes_free(bytes_pointer, bytes_length) };
+    unsafe {
+        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+            bytes_pointer,
+            bytes_length,
+        )));
+    }
+    let mut output_length = usize::MAX;
+    let mut buffer = [0_u8; 1];
+    crate::test_inject_panic(crate::TestExportEntryPoint::HostStreamRead);
+    assert_eq!(
+        unsafe {
+            crate::elephc_dom_host_stream_read(
+                1,
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                &mut output_length,
+            )
+        },
+        STATUS_INTERNAL_PANIC
+    );
+    assert_eq!(output_length, 0, "stream panic keeps output length initialized");
+    crate::test_inject_panic(crate::TestExportEntryPoint::HostStreamClose);
+    assert_eq!(
+        crate::elephc_dom_host_stream_close(1),
+        STATUS_INTERNAL_PANIC
+    );
+    crate::test_inject_panic(crate::TestExportEntryPoint::ContextFree);
+    crate::elephc_dom_context_free(owner.id());
+    assert!(
+        crate::context::context(owner.id()).is_some(),
+        "context-free panic leaves context state available for cleanup"
+    );
+    crate::elephc_dom_context_free(owner.id());
+    assert!(
+        crate::context::context(owner.id()).is_none(),
+        "one-shot context-free panic is consumed before the real free"
+    );
 }

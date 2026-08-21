@@ -10,21 +10,24 @@
 //! - Result bytes are copied only while the matching result ID remains retained.
 
 use std::ffi::c_void;
+use std::process::Command;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::abi::{
     DomClassMetadataEntry, HostVTable, RequestHeader, ResultHeader, Value,
     ABI_VERSION, DOM_CLASS_NO_PARENT,
-    HOST_OPCODE_OPEN_STREAM, HOST_OPCODE_RELEASE_CALLABLE,
-    HOST_OPCODE_RELEASE_RESULT, HOST_OPCODE_RETAIN_CALLABLE, OPCODE_ABI_PING,
+    HOST_OPCODE_OPEN_STREAM, HOST_OPCODE_READ_STREAM,
+    HOST_OPCODE_RELEASE_CALLABLE, HOST_OPCODE_RELEASE_RESULT,
+    HOST_OPCODE_RETAIN_CALLABLE, OPCODE_ABI_PING,
     PHP_ERROR_KIND_DOM_EXCEPTION, PHP_ERROR_KIND_ERROR,
     PHP_ERROR_KIND_EXCEPTION, PHP_ERROR_KIND_PENDING_HOST_THROWABLE,
     PHP_ERROR_KIND_TYPE_ERROR, PHP_ERROR_KIND_VALUE_ERROR,
     REQUEST_FLAG_ARGUMENT_COUNT, STATUS_ABI_ERROR, STATUS_MALFORMED_REQUEST,
     STATUS_OK, STATUS_THROW,
     VALUE_ARRAY, VALUE_BOOL, VALUE_BRIDGE_HANDLE, VALUE_BYTES, VALUE_FLOAT,
-    VALUE_INT, VALUE_MAP, VALUE_NULL, VALUE_OBJECT, VALUE_RESOURCE,
+    VALUE_HOST_HANDLE, VALUE_INT, VALUE_MAP, VALUE_NULL, VALUE_OBJECT,
+    VALUE_RESOURCE,
 };
 
 static HOST_RETAINS: AtomicU32 = AtomicU32::new(0);
@@ -33,7 +36,21 @@ static HOST_THROW_OPCODE: AtomicU32 = AtomicU32::new(0);
 static HOST_REENTRANT_CONTEXT: AtomicU64 = AtomicU64::new(0);
 static HOST_TEST_LOCK: Mutex<()> = Mutex::new(());
 static FILE_TEST_ID: AtomicU32 = AtomicU32::new(0);
+static INPUT_FROM_IO_FAILURE_OPENS: AtomicU32 = AtomicU32::new(0);
+static INPUT_FROM_IO_FAILURE_READS: AtomicU32 = AtomicU32::new(0);
 static INPUT_FROM_IO_FAILURE_CLOSES: AtomicU32 = AtomicU32::new(0);
+static INPUT_FROM_IO_FAILURE_FIRST_CLOSES: AtomicU32 = AtomicU32::new(0);
+static INPUT_FROM_IO_FAILURE_FOURTH_CLOSES: AtomicU32 = AtomicU32::new(0);
+static INPUT_FROM_IO_FAILURE_PROTOCOL_ERRORS: AtomicU32 = AtomicU32::new(0);
+static INPUT_FROM_IO_FAILURE_STAGE: AtomicU32 = AtomicU32::new(0);
+const INPUT_FROM_IO_FAILURE_PATH: &[u8] = b"elephc-test-resource";
+const INPUT_FROM_IO_FAILURE_MODE: &[u8] = b"rb";
+const INPUT_FROM_IO_FAILURE_REQUEST_HEADER_SIZE: usize = 48;
+
+/// Acquires the serialized host-test lock, recovering its guard after a prior test panic.
+fn host_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    HOST_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
 
 /// Host callback probe that rejects every callback request.
 unsafe extern "C" fn rejecting_host_call(
@@ -45,30 +62,173 @@ unsafe extern "C" fn rejecting_host_call(
     STATUS_ABI_ERROR
 }
 
-/// Opens a leased stream and records its release from the native input-allocation failure path.
+/// Models the stream lifecycle used by the native libxml allocation-failure seam.
 unsafe extern "C" fn input_from_io_failure_host_call(
     _user_data: *mut c_void,
     request_ptr: *const u8,
-    _request_len: u64,
+    request_len: u64,
     out_result: *mut ResultHeader,
 ) -> u32 {
+    if request_ptr.is_null()
+        || out_result.is_null()
+        || request_len < INPUT_FROM_IO_FAILURE_REQUEST_HEADER_SIZE as u64
+    {
+        INPUT_FROM_IO_FAILURE_PROTOCOL_ERRORS.fetch_add(1, Ordering::Relaxed);
+        return STATUS_ABI_ERROR;
+    }
     let header = std::ptr::read_unaligned(request_ptr.cast::<RequestHeader>());
     match header.opcode {
         HOST_OPCODE_OPEN_STREAM => {
+            let expected_request_len = INPUT_FROM_IO_FAILURE_REQUEST_HEADER_SIZE
+                + 3 * std::mem::size_of::<Value>()
+                + INPUT_FROM_IO_FAILURE_PATH.len()
+                + INPUT_FROM_IO_FAILURE_MODE.len();
+            if header.abi_version != ABI_VERSION
+                || header.header_size != INPUT_FROM_IO_FAILURE_REQUEST_HEADER_SIZE as u32
+                || header.flags != 1
+                || header.receiver != 0
+                || header.value_count != 3
+                || header.byte_count
+                    != (INPUT_FROM_IO_FAILURE_PATH.len() + INPUT_FROM_IO_FAILURE_MODE.len())
+                        as u64
+                || request_len != expected_request_len as u64
+            {
+                INPUT_FROM_IO_FAILURE_PROTOCOL_ERRORS.fetch_add(1, Ordering::Relaxed);
+                return STATUS_ABI_ERROR;
+            }
+            let values = request_ptr
+                .add(INPUT_FROM_IO_FAILURE_REQUEST_HEADER_SIZE)
+                .cast::<Value>();
+            let path = std::ptr::read_unaligned(values);
+            let mode = std::ptr::read_unaligned(values.add(1));
+            let stream_context = std::ptr::read_unaligned(values.add(2));
+            if path
+                != (Value {
+                    tag: VALUE_BYTES,
+                    flags: 0,
+                    payload0: 0,
+                    payload1: INPUT_FROM_IO_FAILURE_PATH.len() as u64,
+                })
+                || mode
+                    != (Value {
+                        tag: VALUE_BYTES,
+                        flags: 0,
+                        payload0: INPUT_FROM_IO_FAILURE_PATH.len() as u64,
+                        payload1: INPUT_FROM_IO_FAILURE_MODE.len() as u64,
+                    })
+                || stream_context
+                    != (Value {
+                        tag: VALUE_NULL,
+                        flags: 0,
+                        payload0: 0,
+                        payload1: 0,
+                    })
+            {
+                INPUT_FROM_IO_FAILURE_PROTOCOL_ERRORS.fetch_add(1, Ordering::Relaxed);
+                return STATUS_ABI_ERROR;
+            }
+            let bytes = std::slice::from_raw_parts(
+                request_ptr.add(
+                    INPUT_FROM_IO_FAILURE_REQUEST_HEADER_SIZE + 3 * std::mem::size_of::<Value>(),
+                ),
+                header.byte_count as usize,
+            );
+            let (path_bytes, mode_bytes) = bytes.split_at(INPUT_FROM_IO_FAILURE_PATH.len());
+            if path_bytes != INPUT_FROM_IO_FAILURE_PATH || mode_bytes != INPUT_FROM_IO_FAILURE_MODE {
+                INPUT_FROM_IO_FAILURE_PROTOCOL_ERRORS.fetch_add(1, Ordering::Relaxed);
+                return STATUS_ABI_ERROR;
+            }
+            let open = INPUT_FROM_IO_FAILURE_OPENS.fetch_add(1, Ordering::Relaxed);
+            let (result_id, resource) = match (INPUT_FROM_IO_FAILURE_STAGE.load(Ordering::Relaxed), open) {
+                (1, 0) => (0x711, 0x822),
+                (4, 0) => (0x712, 0x823),
+                _ => {
+                    INPUT_FROM_IO_FAILURE_PROTOCOL_ERRORS.fetch_add(1, Ordering::Relaxed);
+                    return STATUS_ABI_ERROR;
+                }
+            };
             *out_result = ResultHeader {
                 value_tag: VALUE_RESOURCE,
-                result_id: 0x711,
-                payload0: 0x822,
+                result_id,
+                payload0: resource,
                 payload1: 3,
                 ..ResultHeader::abi_error()
             };
             (*out_result).status = STATUS_OK;
         }
+        HOST_OPCODE_READ_STREAM => {
+            let expected_request_len = INPUT_FROM_IO_FAILURE_REQUEST_HEADER_SIZE
+                + 2 * std::mem::size_of::<Value>();
+            if header.abi_version != ABI_VERSION
+                || header.header_size != INPUT_FROM_IO_FAILURE_REQUEST_HEADER_SIZE as u32
+                || header.flags != 0
+                || header.receiver != 0
+                || header.value_count != 2
+                || header.byte_count != 0
+                || request_len != expected_request_len as u64
+            {
+                INPUT_FROM_IO_FAILURE_PROTOCOL_ERRORS.fetch_add(1, Ordering::Relaxed);
+                return STATUS_ABI_ERROR;
+            }
+            let values = request_ptr
+                .add(INPUT_FROM_IO_FAILURE_REQUEST_HEADER_SIZE)
+                .cast::<Value>();
+            let resource = std::ptr::read_unaligned(values);
+            let maximum = std::ptr::read_unaligned(values.add(1));
+            if resource.tag != VALUE_RESOURCE
+                || resource.flags != 0
+                || !matches!(resource.payload0, 0x822 | 0x823)
+                || resource.payload1 != 3
+                || maximum.tag != VALUE_INT
+                || maximum.flags != 0
+                || maximum.payload0 == 0
+                || maximum.payload1 != 0
+            {
+                INPUT_FROM_IO_FAILURE_PROTOCOL_ERRORS.fetch_add(1, Ordering::Relaxed);
+                return STATUS_ABI_ERROR;
+            }
+            INPUT_FROM_IO_FAILURE_READS.fetch_add(1, Ordering::Relaxed);
+            *out_result = ResultHeader {
+                status: STATUS_OK,
+                value_tag: VALUE_BYTES,
+                ..ResultHeader::abi_error()
+            };
+        }
         HOST_OPCODE_RELEASE_RESULT => {
+            if header.abi_version != ABI_VERSION
+                || header.header_size != INPUT_FROM_IO_FAILURE_REQUEST_HEADER_SIZE as u32
+                || header.flags != 0
+                || header.receiver != 0
+                || header.value_count != 1
+                || header.byte_count != 0
+                || request_len
+                    != (INPUT_FROM_IO_FAILURE_REQUEST_HEADER_SIZE + std::mem::size_of::<Value>())
+                        as u64
+            {
+                INPUT_FROM_IO_FAILURE_PROTOCOL_ERRORS.fetch_add(1, Ordering::Relaxed);
+                return STATUS_ABI_ERROR;
+            }
             let value = std::ptr::read_unaligned(
-                request_ptr.add(std::mem::size_of::<RequestHeader>()).cast::<Value>(),
+                request_ptr
+                    .add(INPUT_FROM_IO_FAILURE_REQUEST_HEADER_SIZE)
+                    .cast::<Value>(),
             );
-            assert_eq!(value.payload0, 0x711);
+            if value.tag != VALUE_HOST_HANDLE || value.flags != 0 || value.payload1 != 0 {
+                INPUT_FROM_IO_FAILURE_PROTOCOL_ERRORS.fetch_add(1, Ordering::Relaxed);
+                return STATUS_ABI_ERROR;
+            }
+            match value.payload0 {
+                0x711 => {
+                    INPUT_FROM_IO_FAILURE_FIRST_CLOSES.fetch_add(1, Ordering::Relaxed);
+                }
+                0x712 => {
+                    INPUT_FROM_IO_FAILURE_FOURTH_CLOSES.fetch_add(1, Ordering::Relaxed);
+                }
+                _ => {
+                    INPUT_FROM_IO_FAILURE_PROTOCOL_ERRORS.fetch_add(1, Ordering::Relaxed);
+                    return STATUS_ABI_ERROR;
+                }
+            }
             INPUT_FROM_IO_FAILURE_CLOSES.fetch_add(1, Ordering::Relaxed);
             *out_result = ResultHeader {
                 status: STATUS_OK,
@@ -76,7 +236,10 @@ unsafe extern "C" fn input_from_io_failure_host_call(
                 ..ResultHeader::abi_error()
             };
         }
-        opcode => panic!("unexpected input-allocation failure host opcode {opcode}"),
+        _ => {
+            INPUT_FROM_IO_FAILURE_PROTOCOL_ERRORS.fetch_add(1, Ordering::Relaxed);
+            return STATUS_ABI_ERROR;
+        }
     }
     STATUS_OK
 }
@@ -343,9 +506,9 @@ fn reentrant_result_frames_have_independent_lifetimes() {
     crate::elephc_dom_context_free(context);
 }
 
-/// Verifies truncated and version-mismatched messages are rejected without a result frame.
+/// Verifies malformed and incompatible requests publish owned status frames with their exact ABI statuses.
 #[test]
-fn malformed_requests_return_abi_error_without_mutation() {
+fn malformed_requests_publish_owned_status_frames() {
     let context = new_context();
     let request = ping_request();
     let mut result = ResultHeader::abi_error();
@@ -353,9 +516,16 @@ fn malformed_requests_return_abi_error_without_mutation() {
         unsafe {
             crate::elephc_dom_call(context, request.as_ptr(), 3, &mut result)
         },
-        STATUS_ABI_ERROR
+        STATUS_MALFORMED_REQUEST
     );
-    assert_eq!(result.result_id, 0);
+    assert_eq!(result.status, STATUS_MALFORMED_REQUEST);
+    assert_ne!(result.result_id, 0);
+    crate::elephc_dom_result_release(context, result.result_id);
+    assert!(crate::context::context(context)
+        .expect("context remains registered")
+        .borrow()
+        .results
+        .is_empty());
 
     let mut bad_version = ping_request();
     bad_version[0] = 0xff;
@@ -370,7 +540,14 @@ fn malformed_requests_return_abi_error_without_mutation() {
         },
         STATUS_ABI_ERROR
     );
-    assert_eq!(result.result_id, 0);
+    assert_eq!(result.status, STATUS_ABI_ERROR);
+    assert_ne!(result.result_id, 0);
+    crate::elephc_dom_result_release(context, result.result_id);
+    assert!(crate::context::context(context)
+        .expect("context remains registered")
+        .borrow()
+        .results
+        .is_empty());
     crate::elephc_dom_context_free(context);
 }
 
@@ -476,18 +653,78 @@ fn malformed_class_metadata_returns_malformed_request_without_mutation() {
     crate::elephc_dom_context_free(context);
 }
 
-/// Balances a callback stream lease when libxml refuses the newly allocated input object.
-#[test]
-fn native_resource_loader_closes_stream_when_input_creation_fails() {
-    let context = new_context_with_host(Some(input_from_io_failure_host_call));
-    INPUT_FROM_IO_FAILURE_CLOSES.store(0, Ordering::Relaxed);
-
+/// Runs one allocation-failure stage in a fresh process before libxml2 is initialized.
+fn run_native_resource_loader_input_allocation_failure_stage(stage: usize) {
     assert_eq!(
-        crate::native::test_resource_loader_input_from_io_failure(context),
-        crate::native::TEST_RESOURCE_LOADER_INPUT_CREATION_FAILED,
+        crate::native::install_test_resource_loader_allocator(),
+        1,
+        "the isolated child must install its libxml allocator before context creation"
     );
+    let _guard = host_test_lock();
+    INPUT_FROM_IO_FAILURE_STAGE.store(stage as u32, Ordering::Relaxed);
+    let context = new_context_with_host(Some(input_from_io_failure_host_call));
+    INPUT_FROM_IO_FAILURE_OPENS.store(0, Ordering::Relaxed);
+    INPUT_FROM_IO_FAILURE_READS.store(0, Ordering::Relaxed);
+    INPUT_FROM_IO_FAILURE_CLOSES.store(0, Ordering::Relaxed);
+    INPUT_FROM_IO_FAILURE_FIRST_CLOSES.store(0, Ordering::Relaxed);
+    INPUT_FROM_IO_FAILURE_FOURTH_CLOSES.store(0, Ordering::Relaxed);
+    INPUT_FROM_IO_FAILURE_PROTOCOL_ERRORS.store(0, Ordering::Relaxed);
+
+    let native_status = crate::native::test_resource_loader_input_from_io_failure(context, stage);
+    assert_eq!(
+        native_status,
+        crate::native::TEST_RESOURCE_LOADER_INPUT_CREATION_FAILURE_CLOSED,
+        "stage {stage} must reach the real libxml allocation failure and close successfully"
+    );
+    assert_eq!(INPUT_FROM_IO_FAILURE_OPENS.load(Ordering::Relaxed), 1);
+    assert_eq!(INPUT_FROM_IO_FAILURE_READS.load(Ordering::Relaxed), 0);
     assert_eq!(INPUT_FROM_IO_FAILURE_CLOSES.load(Ordering::Relaxed), 1);
+    assert_eq!(INPUT_FROM_IO_FAILURE_PROTOCOL_ERRORS.load(Ordering::Relaxed), 0);
+    match stage {
+        1 => assert_eq!(INPUT_FROM_IO_FAILURE_FIRST_CLOSES.load(Ordering::Relaxed), 1),
+        4 => assert_eq!(INPUT_FROM_IO_FAILURE_FOURTH_CLOSES.load(Ordering::Relaxed), 1),
+        _ => panic!("unsupported input-allocation failure stage {stage}"),
+    }
     crate::elephc_dom_context_free(context);
+}
+
+/// Runs the first pinned libxml allocation failure only under parent-launched isolation.
+#[test]
+#[ignore = "launched only by the parent allocation-failure orchestration test"]
+fn native_resource_loader_input_allocation_failure_stage_one_child() {
+    run_native_resource_loader_input_allocation_failure_stage(1);
+}
+
+/// Runs the fourth pinned libxml allocation failure only under parent-launched isolation.
+#[test]
+#[ignore = "launched only by the parent allocation-failure orchestration test"]
+fn native_resource_loader_input_allocation_failure_stage_four_child() {
+    run_native_resource_loader_input_allocation_failure_stage(4);
+}
+
+/// Balances callback stream leases for both real libxml input-allocation failures.
+#[test]
+fn native_resource_loader_closes_stream_once_for_each_input_allocation_failure() {
+    let test_binary = std::env::current_exe().expect("current test binary path");
+    for (stage, child_test) in [
+        (1, "tests::native_resource_loader_input_allocation_failure_stage_one_child"),
+        (4, "tests::native_resource_loader_input_allocation_failure_stage_four_child"),
+    ] {
+        let output = Command::new(&test_binary)
+            .arg(child_test)
+            .arg("--exact")
+            .arg("--ignored")
+            .arg("--nocapture")
+            .env("RUST_TEST_THREADS", "1")
+            .output()
+            .expect("spawn isolated libxml allocation-failure test");
+        assert!(
+            output.status.success(),
+            "isolated allocation stage {stage} failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
 }
 
 /// Verifies byte ranges and map value counts reject overflow and out-of-bounds slices.
@@ -523,7 +760,7 @@ fn flat_value_ranges_are_bounds_checked() {
                 &mut result,
             )
         },
-        STATUS_ABI_ERROR
+        STATUS_MALFORMED_REQUEST
     );
     crate::elephc_dom_context_free(context);
 }
@@ -3951,7 +4188,7 @@ fn libxml_error_mode_and_empty_result_state_match_php() {
 /// Verifies external-loader retain/get/clear and stream-context overwrite state.
 #[test]
 fn libxml_host_values_have_balanced_context_ownership() {
-    let _guard = HOST_TEST_LOCK.lock().expect("host test lock");
+    let _guard = host_test_lock();
     HOST_RETAINS.store(0, Ordering::Relaxed);
     HOST_RELEASES.store(0, Ordering::Relaxed);
     HOST_THROW_OPCODE.store(0, Ordering::Relaxed);
@@ -4556,7 +4793,7 @@ fn native_document_xinclude_reports_destroyed_subtrees() {
 /// Verifies a throwing host release is returned as the original pending Throwable signal.
 #[test]
 fn libxml_host_release_throw_preserves_new_loader_state() {
-    let _guard = HOST_TEST_LOCK.lock().expect("host test lock");
+    let _guard = host_test_lock();
     HOST_RETAINS.store(0, Ordering::Relaxed);
     HOST_RELEASES.store(0, Ordering::Relaxed);
     HOST_THROW_OPCODE.store(0, Ordering::Relaxed);
@@ -4929,7 +5166,7 @@ fn xpath_round_trips_through_public_bridge_operations() {
 /// Verifies custom XPath callback replacement, cloning, and release balance host ownership.
 #[test]
 fn xpath_custom_callback_ownership_is_balanced() {
-    let _guard = HOST_TEST_LOCK.lock().expect("host test lock");
+    let _guard = host_test_lock();
     HOST_RETAINS.store(0, Ordering::Relaxed);
     HOST_RELEASES.store(0, Ordering::Relaxed);
     HOST_THROW_OPCODE.store(0, Ordering::Relaxed);

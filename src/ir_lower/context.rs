@@ -43,7 +43,7 @@ pub(crate) struct LoopFrame {
     /// so the loop keeps iterating live storage even if the body drops the parent that owned it
     /// (issues #580 and #642). Released on every exit that skips the loop's own exit block,
     /// exactly like `cleanup`.
-    pub source_pin: Option<LoopCleanup>,
+    pub source_pin: Option<LoopSourcePin>,
 }
 
 /// Cleanup that must run when control leaves a loop without visiting its exit block.
@@ -53,6 +53,13 @@ pub(crate) struct LoopCleanup {
     pub iterator: LoweredValue,
     /// Fresh owning source expression released after the iterator drops its retain.
     pub source: Option<LoweredValue>,
+    pub span: Span,
+}
+
+/// Lifetime pin held by a by-reference foreach over borrowed storage.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LoopSourcePin {
+    pub value: LoweredValue,
     pub span: Span,
 }
 
@@ -2494,6 +2501,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ICheckedMul
                     | Op::ICheckedPow
                     | Op::MixedCastString
+                    | Op::MixedCastObject
                     | Op::StrConcat
                     | Op::StrPersist
                     | Op::StrCharAt
@@ -2508,6 +2516,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashArrayUnion
                     | Op::ArrayToHash
                     | Op::ObjectNew
+                    | Op::StdClassFromHash
                     | Op::ObjectCloneShallow
                     | Op::DynamicObjectNew
                     | Op::DynamicObjectNewMixed

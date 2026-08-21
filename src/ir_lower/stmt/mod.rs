@@ -16,7 +16,7 @@ use crate::ir::{
     RuntimeCallTarget, Terminator,
 };
 use crate::ir_lower::context::{
-    FinallyFrame, LoopCleanup, LoopFrame, LoweredValue, LoweringContext,
+    FinallyFrame, LoopCleanup, LoopFrame, LoopSourcePin, LoweredValue, LoweringContext,
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{

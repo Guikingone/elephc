@@ -273,6 +273,50 @@ echo (string) $values["s"];
     );
 }
 
+/// Verifies concrete array-to-object casts lower clone operations and transfer
+/// the indexed clone to `array_to_hash` without emitting a second EIR release.
+#[test]
+fn object_cast_array_projection_uses_owned_clone_transfer() {
+    let module = super::lower_source(
+        r#"<?php
+$indexed = [1, 2];
+$indexed_object = (object) $indexed;
+$assoc = ["name" => "Ada"];
+$assoc_object = (object) $assoc;
+"#,
+    );
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("expected lowered main function");
+    let indexed_clone = main
+        .instructions
+        .iter()
+        .find(|instruction| instruction.op == Op::ArrayCloneShallow)
+        .expect("expected indexed array shallow clone");
+    let indexed_clone_value = indexed_clone.result.expect("clone should produce a value");
+    assert!(
+        main.instructions.iter().any(|instruction| {
+            instruction.op == Op::ArrayToHash
+                && instruction.operands == vec![indexed_clone_value]
+        }),
+        "array-to-hash must consume the exact clone owner"
+    );
+    assert!(
+        !main.instructions.iter().any(|instruction| {
+            instruction.op == Op::Release && instruction.operands == vec![indexed_clone_value]
+        }),
+        "array-to-hash consumes the clone, so a second release would double-decref"
+    );
+    assert!(
+        main.instructions
+            .iter()
+            .any(|instruction| instruction.op == Op::HashCloneShallow),
+        "expected associative array shallow clone"
+    );
+}
+
 /// Verifies a user-call result that aliases a borrowed Mixed argument is not released.
 #[test]
 fn borrowed_user_call_result_is_not_treated_as_an_owning_temporary() {

@@ -201,36 +201,47 @@ pub(crate) fn decode(
     pointer: *const u8,
     length: u64,
 ) -> Result<Request, DecodeError> {
-    let length = usize::try_from(length).map_err(|_| ())?;
+    let length = usize::try_from(length).map_err(|_| DecodeError::MalformedRequest)?;
     if pointer.is_null() || length < std::mem::size_of::<RequestHeader>() {
-        return Err(());
+        return Err(DecodeError::MalformedRequest);
     }
     let input = unsafe { std::slice::from_raw_parts(pointer, length) };
-    let header = read_header(input)?;
+    let header = read_header(input).map_err(|_| DecodeError::MalformedRequest)?;
     if header.abi_version != crate::abi::ABI_VERSION {
         return Err(DecodeError::IncompatibleAbiVersion);
     }
-    let header_size = usize::try_from(header.header_size).map_err(|_| ())?;
+    let header_size = usize::try_from(header.header_size)
+        .map_err(|_| DecodeError::MalformedRequest)?;
     if header_size < std::mem::size_of::<RequestHeader>() || header_size > input.len() {
-        return Err(());
+        return Err(DecodeError::MalformedRequest);
     }
-    let value_count = usize::try_from(header.value_count).map_err(|_| ())?;
+    let value_count = usize::try_from(header.value_count)
+        .map_err(|_| DecodeError::MalformedRequest)?;
     let values_size = value_count
         .checked_mul(std::mem::size_of::<Value>())
-        .ok_or(())?;
-    let values_end = header_size.checked_add(values_size).ok_or(())?;
-    let byte_count = usize::try_from(header.byte_count).map_err(|_| ())?;
-    let bytes_end = values_end.checked_add(byte_count).ok_or(())?;
+        .ok_or(DecodeError::MalformedRequest)?;
+    let values_end = header_size
+        .checked_add(values_size)
+        .ok_or(DecodeError::MalformedRequest)?;
+    let byte_count = usize::try_from(header.byte_count)
+        .map_err(|_| DecodeError::MalformedRequest)?;
+    let bytes_end = values_end
+        .checked_add(byte_count)
+        .ok_or(DecodeError::MalformedRequest)?;
     if bytes_end != input.len() {
-        return Err(());
+        return Err(DecodeError::MalformedRequest);
     }
 
-    let flat_values = read_values(&input[header_size..values_end], value_count)?;
+    let flat_values = read_values(&input[header_size..values_end], value_count)
+        .map_err(|_| DecodeError::MalformedRequest)?;
     for value in &flat_values {
-        validate_value(value, value_count, byte_count)?;
+        validate_value(value, value_count, byte_count)
+            .map_err(|_| DecodeError::MalformedRequest)?;
     }
-    let argument_count = request_argument_count(header.flags, value_count)?;
-    validate_value_tree(&flat_values, argument_count)?;
+    let argument_count = request_argument_count(header.flags, value_count)
+        .map_err(|_| DecodeError::MalformedRequest)?;
+    validate_value_tree(&flat_values, argument_count)
+        .map_err(|_| DecodeError::MalformedRequest)?;
     Ok(Request {
         header,
         values: flat_values[..argument_count].to_vec(),

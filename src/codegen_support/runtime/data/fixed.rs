@@ -62,6 +62,7 @@ pub(crate) fn emit_runtime_data_fixed(
 ) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
+    out.push_str(".globl _object_cast_scalar_key\n_object_cast_scalar_key:\n    .ascii \"scalar\"\n");
     out.push_str(&comm_directive("_concat_buf", 65536, target));
     out.push_str(&comm_directive("_concat_off", 8, target));
     out.push_str(&comm_directive("_unser_depth", 8, target));

@@ -2917,6 +2917,18 @@ fn emit_store_simplexml_iterator_current_owner(ctx: &mut FunctionContext<'_>) {
     );
 }
 
+/// Releases the owned request/result frame before containing a native-call failure.
+///
+/// Error statuses from `elephc_dom_call` can still publish a nonzero result ID.
+/// The cleanup is deliberately shared by both target-specific failure paths so a
+/// pointer-free frame remains a no-op while every owned frame is released once.
+fn emit_native_call_failure(ctx: &mut FunctionContext<'_>, code: i64) -> Result<()> {
+    emit_release_native_call_state(ctx)?;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), code);
+    abi::emit_jump(ctx.emitter, "__rt_dom_bridge_failure_code");
+    Ok(())
+}
+
 /// Invokes `elephc_dom_call` after zero-initializing the fixed result header.
 fn emit_native_call(
     ctx: &mut FunctionContext<'_>,
@@ -2962,11 +2974,9 @@ fn emit_native_call(
             ctx.emitter.instruction("cmp w0, #4");                              // did the native boundary contain an internal panic?
             ctx.emitter
                 .instruction(&format!("b.eq {}", call_panicked));               // classify contained panics independently from malformed ABI requests
-            ctx.emitter.instruction("mov x0, #71");                             // classify a failed native entry-point status
-            ctx.emitter.instruction("b __rt_dom_bridge_failure_code");          // contain the native entry-point failure
+            emit_native_call_failure(ctx, 71)?;
             ctx.emitter.label(&call_panicked);
-            ctx.emitter.instruction("mov x0, #74");                             // classify a contained native panic
-            ctx.emitter.instruction("b __rt_dom_bridge_failure_code");          // terminate without unwinding across the ABI
+            emit_native_call_failure(ctx, 74)?;
             ctx.emitter.label(&call_status_ok);
             let result_header_invalid = ctx.next_label("dom_result_header_invalid");
             let result_header_ready = ctx.next_label("dom_result_header_ready");
@@ -2980,8 +2990,7 @@ fn emit_native_call(
             ctx.emitter
                 .instruction(&format!("b.eq {}", result_header_ready));         // continue only for the exact frozen header layout
             ctx.emitter.label(&result_header_invalid);
-            ctx.emitter.instruction("mov x0, #75");                             // classify an incompatible result header
-            ctx.emitter.instruction("b __rt_dom_bridge_failure_code");          // reject stale or truncated results before reading pointers
+            emit_native_call_failure(ctx, 75)?;
             ctx.emitter.label(&result_header_ready);
             ctx.emitter.instruction("ldr w9, [sp, #56]");                       // load the primary bridge result status
             ctx.emitter
@@ -2989,10 +2998,9 @@ fn emit_native_call(
             ctx.emitter.instruction("cmp w9, #1");                              // is the primary result a catchable PHP exception?
             ctx.emitter
                 .instruction(&format!("b.eq {}", result_status_valid));         // accept a structured PHP exception result
-            ctx.emitter.instruction("mov x0, #72");                             // classify a non-success primary result status
-            ctx.emitter.instruction("b __rt_dom_bridge_failure_code");          // structured translation is required before continuing
+            emit_native_call_failure(ctx, 72)?;
             ctx.emitter.label(&result_status_valid);
-            emit_result_diagnostics(ctx, instruction, opcode);
+            emit_result_diagnostics(ctx, instruction, opcode)?;
             ctx.emitter.instruction("ldr w9, [sp, #56]");                       // reload the validated primary result status
             ctx.emitter
                 .instruction(&format!("cbz w9, {}", result_status_ok));          // materialize ordinary successful results after diagnostics
@@ -3017,18 +3025,17 @@ fn emit_native_call(
                 "b.eq {}",
                 result_pending_host_throwable
             ));                                                                 // rethrow the exact pending host object after native cleanup
-            ctx.emitter.instruction("mov x0, #72");                             // classify an unknown structured exception kind
-            ctx.emitter.instruction("b __rt_dom_bridge_failure_code");          // reject a result outside the bridge exception contract
+            emit_native_call_failure(ctx, 72)?;
             ctx.emitter.label(&result_dom_exception);
-            super::exceptions::emit_dom_exception_from_result(ctx, 96, 88, 68);
+            super::exceptions::emit_dom_exception_from_result(ctx, 96, 88, 68)?;
             ctx.emitter.label(&result_value_error);
-            super::exceptions::emit_value_error_from_result(ctx, 96, 88);
+            super::exceptions::emit_value_error_from_result(ctx, 96, 88)?;
             ctx.emitter.label(&result_type_error);
-            super::exceptions::emit_type_error_from_result(ctx, 96, 88);
+            super::exceptions::emit_type_error_from_result(ctx, 96, 88)?;
             ctx.emitter.label(&result_error);
-            super::exceptions::emit_error_from_result(ctx, 96, 88);
+            super::exceptions::emit_error_from_result(ctx, 96, 88)?;
             ctx.emitter.label(&result_exception);
-            super::exceptions::emit_exception_from_result(ctx, 96, 88);
+            super::exceptions::emit_exception_from_result(ctx, 96, 88)?;
             ctx.emitter.label(&result_pending_host_throwable);
             emit_pending_host_throwable(ctx)?;
             ctx.emitter.label(&result_status_ok);
@@ -3042,11 +3049,9 @@ fn emit_native_call(
             ctx.emitter.instruction("cmp eax, 4");                              // did the native boundary contain an internal panic?
             ctx.emitter
                 .instruction(&format!("je {}", call_panicked));                 // classify contained panics independently from malformed ABI requests
-            ctx.emitter.instruction("mov eax, 71");                             // classify a failed native entry-point status
-            ctx.emitter.instruction("jmp __rt_dom_bridge_failure_code");        // contain the native entry-point failure
+            emit_native_call_failure(ctx, 71)?;
             ctx.emitter.label(&call_panicked);
-            ctx.emitter.instruction("mov eax, 74");                             // classify a contained native panic
-            ctx.emitter.instruction("jmp __rt_dom_bridge_failure_code");        // terminate without unwinding across the ABI
+            emit_native_call_failure(ctx, 74)?;
             ctx.emitter.label(&call_status_ok);
             let result_header_invalid = ctx.next_label("dom_result_header_invalid");
             let result_header_ready = ctx.next_label("dom_result_header_ready");
@@ -3061,8 +3066,7 @@ fn emit_native_call(
             ctx.emitter
                 .instruction(&format!("je {}", result_header_ready));           // continue only for the exact frozen header size
             ctx.emitter.label(&result_header_invalid);
-            ctx.emitter.instruction("mov eax, 75");                             // classify an incompatible result header
-            ctx.emitter.instruction("jmp __rt_dom_bridge_failure_code");        // reject stale or truncated results before reading pointers
+            emit_native_call_failure(ctx, 75)?;
             ctx.emitter.label(&result_header_ready);
             ctx.emitter.instruction("cmp DWORD PTR [rsp + 56], 0");             // did the primary result report a PHP/native failure?
             let result_status_valid = ctx.next_label("dom_result_status_valid");
@@ -3079,10 +3083,9 @@ fn emit_native_call(
             ctx.emitter.instruction("cmp DWORD PTR [rsp + 56], 1");             // is the primary result a catchable PHP exception?
             ctx.emitter
                 .instruction(&format!("je {}", result_status_valid));           // accept a structured PHP exception result
-            ctx.emitter.instruction("mov eax, 72");                             // classify a non-success primary result status
-            ctx.emitter.instruction("jmp __rt_dom_bridge_failure_code");        // structured failures never masquerade as successful values
+            emit_native_call_failure(ctx, 72)?;
             ctx.emitter.label(&result_status_valid);
-            emit_result_diagnostics(ctx, instruction, opcode);
+            emit_result_diagnostics(ctx, instruction, opcode)?;
             ctx.emitter.instruction("cmp DWORD PTR [rsp + 56], 0");             // reload the validated primary result status
             ctx.emitter
                 .instruction(&format!("je {}", result_status_ok));              // materialize ordinary successful results after diagnostics
@@ -3106,18 +3109,17 @@ fn emit_native_call(
                 "je {}",
                 result_pending_host_throwable
             ));                                                                 // rethrow the exact pending host object after native cleanup
-            ctx.emitter.instruction("mov eax, 72");                             // classify an unknown structured exception kind
-            ctx.emitter.instruction("jmp __rt_dom_bridge_failure_code");        // reject a result outside the bridge exception contract
+            emit_native_call_failure(ctx, 72)?;
             ctx.emitter.label(&result_dom_exception);
-            super::exceptions::emit_dom_exception_from_result(ctx, 96, 88, 68);
+            super::exceptions::emit_dom_exception_from_result(ctx, 96, 88, 68)?;
             ctx.emitter.label(&result_value_error);
-            super::exceptions::emit_value_error_from_result(ctx, 96, 88);
+            super::exceptions::emit_value_error_from_result(ctx, 96, 88)?;
             ctx.emitter.label(&result_type_error);
-            super::exceptions::emit_type_error_from_result(ctx, 96, 88);
+            super::exceptions::emit_type_error_from_result(ctx, 96, 88)?;
             ctx.emitter.label(&result_error);
-            super::exceptions::emit_error_from_result(ctx, 96, 88);
+            super::exceptions::emit_error_from_result(ctx, 96, 88)?;
             ctx.emitter.label(&result_exception);
-            super::exceptions::emit_exception_from_result(ctx, 96, 88);
+            super::exceptions::emit_exception_from_result(ctx, 96, 88)?;
             ctx.emitter.label(&result_pending_host_throwable);
             emit_pending_host_throwable(ctx)?;
             ctx.emitter.label(&result_status_ok);
@@ -3157,7 +3159,7 @@ fn emit_result_diagnostics(
     ctx: &mut FunctionContext<'_>,
     instruction: &Instruction,
     opcode: u32,
-) {
+) -> Result<()> {
     let loop_label = ctx.next_label("dom_result_diagnostic_loop");
     let done = ctx.next_label("dom_result_diagnostic_done");
     let invalid = ctx.next_label("dom_result_diagnostic_invalid");
@@ -3270,8 +3272,7 @@ fn emit_result_diagnostics(
             ctx.emitter
                 .instruction(&format!("b {}", done));                           // skip the malformed-result containment path
             ctx.emitter.label(&invalid);
-            ctx.emitter.instruction("mov x0, #72");                             // classify a malformed native diagnostic range
-            ctx.emitter.instruction("b __rt_dom_bridge_failure_code");          // contain the malformed native result
+            emit_native_call_failure(ctx, 72)?;
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 136]");          // load the retained diagnostic record count
@@ -3357,11 +3358,11 @@ fn emit_result_diagnostics(
             ctx.emitter
                 .instruction(&format!("jmp {}", done));                         // skip the malformed-result containment path
             ctx.emitter.label(&invalid);
-            ctx.emitter.instruction("mov eax, 72");                             // classify a malformed native diagnostic range
-            ctx.emitter.instruction("jmp __rt_dom_bridge_failure_code");        // contain the malformed native result
+            emit_native_call_failure(ctx, 72)?;
         }
     }
     ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Materializes one ABI result into the EIR result representation and releases native frames.
@@ -3600,36 +3601,36 @@ fn materialize_xpath_nodeset_members(ctx: &mut FunctionContext<'_>) -> Result<()
     store_stack_immediate(ctx, TEMP_RESULT_LO_OFFSET, 0);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x0, [sp, #120]");                    // load the eager wrapper descriptor count
-            ctx.emitter.instruction("ldr x9, [sp, #112]");                    // load the retained descriptor-vector pointer
+            ctx.emitter.instruction("ldr x0, [sp, #120]");                      // load the eager wrapper descriptor count
+            ctx.emitter.instruction("ldr x9, [sp, #112]");                      // load the retained descriptor-vector pointer
             ctx.emitter
                 .instruction(&format!("cbz x0, {}", pointer_ready));          // an empty nodeset permits a null descriptor pointer
             ctx.emitter
                 .instruction(&format!("cbz x9, {}", failure));                // non-empty nodesets require retained descriptors
             ctx.emitter.label(&pointer_ready);
-            ctx.emitter.instruction("cmp x0, #4");                             // enforce the runtime minimum indexed-array capacity
+            ctx.emitter.instruction("cmp x0, #4");                              // enforce the runtime minimum indexed-array capacity
             ctx.emitter
                 .instruction(&format!("b.hs {}", capacity_ready));            // retain a sufficiently large descriptor count
-            ctx.emitter.instruction("mov x0, #4");                             // raise small nodesets to minimum capacity
+            ctx.emitter.instruction("mov x0, #4");                              // raise small nodesets to minimum capacity
             ctx.emitter.label(&capacity_ready);
-            ctx.emitter.instruction("mov x1, #8");                             // eager member arrays store object pointers
+            ctx.emitter.instruction("mov x1, #8");                              // eager member arrays store object pointers
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 120]");         // load the eager wrapper descriptor count
-            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 112]");        // load the retained descriptor-vector pointer
-            ctx.emitter.instruction("test rdi, rdi");                          // does the result contain eager descriptors?
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 120]");          // load the eager wrapper descriptor count
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 112]");          // load the retained descriptor-vector pointer
+            ctx.emitter.instruction("test rdi, rdi");                           // does the result contain eager descriptors?
             ctx.emitter
                 .instruction(&format!("jz {}", pointer_ready));               // an empty nodeset permits a null descriptor pointer
-            ctx.emitter.instruction("test r10, r10");                          // non-empty nodesets require retained descriptors
+            ctx.emitter.instruction("test r10, r10");                           // non-empty nodesets require retained descriptors
             ctx.emitter
                 .instruction(&format!("jz {}", failure));                     // contain a malformed retained vector
             ctx.emitter.label(&pointer_ready);
-            ctx.emitter.instruction("cmp rdi, 4");                             // enforce the runtime minimum indexed-array capacity
+            ctx.emitter.instruction("cmp rdi, 4");                              // enforce the runtime minimum indexed-array capacity
             ctx.emitter
                 .instruction(&format!("jae {}", capacity_ready));             // retain a sufficiently large descriptor count
-            ctx.emitter.instruction("mov rdi, 4");                             // raise small nodesets to minimum capacity
+            ctx.emitter.instruction("mov rdi, 4");                              // raise small nodesets to minimum capacity
             ctx.emitter.label(&capacity_ready);
-            ctx.emitter.instruction("mov rsi, 8");                             // eager member arrays store object pointers
+            ctx.emitter.instruction("mov rsi, 8");                              // eager member arrays store object pointers
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
@@ -3647,58 +3648,58 @@ fn materialize_xpath_nodeset_members(ctx: &mut FunctionContext<'_>) -> Result<()
     ctx.emitter.label(&loop_head);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [sp, #168]");                    // load the next eager descriptor index
-            ctx.emitter.instruction("ldr x10, [sp, #176]");                   // load the descriptor count
-            ctx.emitter.instruction("cmp x9, x10");                            // have all wrappers been materialized?
+            ctx.emitter.instruction("ldr x9, [sp, #168]");                      // load the next eager descriptor index
+            ctx.emitter.instruction("ldr x10, [sp, #176]");                     // load the descriptor count
+            ctx.emitter.instruction("cmp x9, x10");                             // have all wrappers been materialized?
             ctx.emitter
                 .instruction(&format!("b.hs {}", loop_done));                 // finish after the last descriptor
-            ctx.emitter.instruction("ldr x11, [sp, #112]");                   // reload the retained descriptor-vector pointer
-            ctx.emitter.instruction("add x10, x9, x9, lsl #1");               // multiply the index by three words
-            ctx.emitter.instruction("add x11, x11, x10, lsl #3");             // address the 24-byte descriptor
-            ctx.emitter.instruction("ldr w10, [x11]");                         // load the nested ABI value tag
-            ctx.emitter.instruction("cmp w10, #8");                            // every eager descriptor must be a bridge handle
+            ctx.emitter.instruction("ldr x11, [sp, #112]");                     // reload the retained descriptor-vector pointer
+            ctx.emitter.instruction("add x10, x9, x9, lsl #1");                 // multiply the index by three words
+            ctx.emitter.instruction("add x11, x11, x10, lsl #3");               // address the 24-byte descriptor
+            ctx.emitter.instruction("ldr w10, [x11]");                          // load the nested ABI value tag
+            ctx.emitter.instruction("cmp w10, #8");                             // every eager descriptor must be a bridge handle
             ctx.emitter
                 .instruction(&format!("b.ne {}", failure));                   // reject malformed nested values
-            ctx.emitter.instruction("ldr w10, [x11, #4]");                     // load the parent/member role flag
-            ctx.emitter.instruction("cmp w10, #1");                            // only zero and one are valid roles
+            ctx.emitter.instruction("ldr w10, [x11, #4]");                      // load the parent/member role flag
+            ctx.emitter.instruction("cmp w10, #1");                             // only zero and one are valid roles
             ctx.emitter
                 .instruction(&format!("b.hi {}", failure));                   // reject unknown role bits
-            ctx.emitter.instruction("str x10, [sp, #152]");                   // preserve the role across wrapper allocation
-            ctx.emitter.instruction("ldr x10, [x11, #8]");                     // load the canonical native wrapper handle
+            ctx.emitter.instruction("str x10, [sp, #152]");                     // preserve the role across wrapper allocation
+            ctx.emitter.instruction("ldr x10, [x11, #8]");                      // load the canonical native wrapper handle
             ctx.emitter
                 .instruction(&format!("cbz x10, {}", failure));               // canonical handles are always nonzero
-            ctx.emitter.instruction("str x10, [sp, #200]");                   // stage the handle across kind dispatch
-            ctx.emitter.instruction("ldr x10, [x11, #16]");                    // load the stable concrete wrapper kind
+            ctx.emitter.instruction("str x10, [sp, #200]");                     // stage the handle across kind dispatch
+            ctx.emitter.instruction("ldr x10, [x11, #16]");                     // load the stable concrete wrapper kind
             ctx.emitter
                 .instruction(&format!("cbz x10, {}", failure));               // eager members always require a concrete class
-            ctx.emitter.instruction("str x10, [sp, #88]");                    // expose the kind to wrapper materialization
+            ctx.emitter.instruction("str x10, [sp, #88]");                      // expose the kind to wrapper materialization
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 168]");          // load the next eager descriptor index
-            ctx.emitter.instruction("cmp r9, QWORD PTR [rsp + 176]");         // have all wrappers been materialized?
+            ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 168]");           // load the next eager descriptor index
+            ctx.emitter.instruction("cmp r9, QWORD PTR [rsp + 176]");           // have all wrappers been materialized?
             ctx.emitter
                 .instruction(&format!("jae {}", loop_done));                  // finish after the last descriptor
-            ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 112]");        // reload the retained descriptor-vector pointer
-            ctx.emitter.instruction("lea r10, [r9 + r9 * 2]");                // multiply the index by three words
-            ctx.emitter.instruction("lea r11, [r11 + r10 * 8]");              // address the 24-byte descriptor
-            ctx.emitter.instruction("cmp DWORD PTR [r11], 8");                // every eager descriptor must be a bridge handle
+            ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 112]");          // reload the retained descriptor-vector pointer
+            ctx.emitter.instruction("lea r10, [r9 + r9 * 2]");                  // multiply the index by three words
+            ctx.emitter.instruction("lea r11, [r11 + r10 * 8]");                // address the 24-byte descriptor
+            ctx.emitter.instruction("cmp DWORD PTR [r11], 8");                  // every eager descriptor must be a bridge handle
             ctx.emitter
                 .instruction(&format!("jne {}", failure));                    // reject malformed nested values
-            ctx.emitter.instruction("mov r10d, DWORD PTR [r11 + 4]");         // load the parent/member role flag
-            ctx.emitter.instruction("cmp r10d, 1");                            // only zero and one are valid roles
+            ctx.emitter.instruction("mov r10d, DWORD PTR [r11 + 4]");           // load the parent/member role flag
+            ctx.emitter.instruction("cmp r10d, 1");                             // only zero and one are valid roles
             ctx.emitter
                 .instruction(&format!("ja {}", failure));                     // reject unknown role bits
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 152], r10");        // preserve the role across wrapper allocation
-            ctx.emitter.instruction("mov r10, QWORD PTR [r11 + 8]");          // load the canonical native wrapper handle
-            ctx.emitter.instruction("test r10, r10");                          // canonical handles are always nonzero
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 152], r10");          // preserve the role across wrapper allocation
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11 + 8]");            // load the canonical native wrapper handle
+            ctx.emitter.instruction("test r10, r10");                           // canonical handles are always nonzero
             ctx.emitter
                 .instruction(&format!("jz {}", failure));                     // reject a null handle
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 200], r10");        // stage the handle across kind dispatch
-            ctx.emitter.instruction("mov r10, QWORD PTR [r11 + 16]");         // load the stable concrete wrapper kind
-            ctx.emitter.instruction("test r10, r10");                          // eager members always require a concrete class
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 200], r10");          // stage the handle across kind dispatch
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11 + 16]");           // load the stable concrete wrapper kind
+            ctx.emitter.instruction("test r10, r10");                           // eager members always require a concrete class
             ctx.emitter
                 .instruction(&format!("jz {}", failure));                     // reject a missing wrapper kind
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 88], r10");         // expose the kind to wrapper materialization
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 88], r10");           // expose the kind to wrapper materialization
         }
     }
     let context_reg = abi::secondary_scratch_reg(ctx.emitter).to_string();
@@ -3720,26 +3721,26 @@ fn materialize_xpath_nodeset_members(ctx: &mut FunctionContext<'_>) -> Result<()
     );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [sp, #152]");                    // reload the parent/member role
+            ctx.emitter.instruction("ldr x9, [sp, #152]");                      // reload the parent/member role
             ctx.emitter
                 .instruction(&format!("cbz x9, {}", member));                 // zero denotes a visible nodeset member
-            ctx.emitter.instruction("ldr x10, [sp, #144]");                   // inspect an unmatched namespace parent
+            ctx.emitter.instruction("ldr x10, [sp, #144]");                     // inspect an unmatched namespace parent
             ctx.emitter
                 .instruction(&format!("cbnz x10, {}", failure));              // parent descriptors must pair one-to-one
-            ctx.emitter.instruction("ldr x10, [sp, #184]");                   // load the newly materialized parent wrapper
-            ctx.emitter.instruction("str x10, [sp, #144]");                   // retain it until the following namespace wrapper
+            ctx.emitter.instruction("ldr x10, [sp, #184]");                     // load the newly materialized parent wrapper
+            ctx.emitter.instruction("str x10, [sp, #144]");                     // retain it until the following namespace wrapper
             ctx.emitter
                 .instruction(&format!("b {}", advance));                      // parent wrappers are not visible list members
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp QWORD PTR [rsp + 152], 0");          // reload the parent/member role
+            ctx.emitter.instruction("cmp QWORD PTR [rsp + 152], 0");            // reload the parent/member role
             ctx.emitter
                 .instruction(&format!("je {}", member));                      // zero denotes a visible nodeset member
-            ctx.emitter.instruction("cmp QWORD PTR [rsp + 144], 0");          // inspect an unmatched namespace parent
+            ctx.emitter.instruction("cmp QWORD PTR [rsp + 144], 0");            // inspect an unmatched namespace parent
             ctx.emitter
                 .instruction(&format!("jne {}", failure));                    // parent descriptors must pair one-to-one
-            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 184]");        // load the newly materialized parent wrapper
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 144], r10");        // retain it until the following namespace wrapper
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 184]");          // load the newly materialized parent wrapper
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 144], r10");          // retain it until the following namespace wrapper
             ctx.emitter
                 .instruction(&format!("jmp {}", advance));                    // parent wrappers are not visible list members
         }
@@ -3748,12 +3749,12 @@ fn materialize_xpath_nodeset_members(ctx: &mut FunctionContext<'_>) -> Result<()
     ctx.emitter.label(&member);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [sp, #144]");                    // load an optional namespace parent wrapper
+            ctx.emitter.instruction("ldr x9, [sp, #144]");                      // load an optional namespace parent wrapper
             ctx.emitter
                 .instruction(&format!("cbz x9, {}", member_without_parent));  // ordinary nodes have no strong parent owner
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp QWORD PTR [rsp + 144], 0");          // load an optional namespace parent wrapper
+            ctx.emitter.instruction("cmp QWORD PTR [rsp + 144], 0");            // load an optional namespace parent wrapper
             ctx.emitter
                 .instruction(&format!("je {}", member_without_parent));       // ordinary nodes have no strong parent owner
         }
@@ -3774,33 +3775,33 @@ fn materialize_xpath_nodeset_members(ctx: &mut FunctionContext<'_>) -> Result<()
     ctx.emitter.label(&member_without_parent);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x0, [sp, #160]");                    // load the eager member-array owner
-            ctx.emitter.instruction("ldr x1, [sp, #184]");                    // pass the visible member wrapper
+            ctx.emitter.instruction("ldr x0, [sp, #160]");                      // load the eager member-array owner
+            ctx.emitter.instruction("ldr x1, [sp, #184]");                      // pass the visible member wrapper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
-            ctx.emitter.instruction("str x0, [sp, #160]");                    // preserve a COW replacement array
-            ctx.emitter.instruction("ldr x0, [sp, #184]");                    // drop the materializer's temporary wrapper owner
+            ctx.emitter.instruction("str x0, [sp, #160]");                      // preserve a COW replacement array
+            ctx.emitter.instruction("ldr x0, [sp, #184]");                      // drop the materializer's temporary wrapper owner
             abi::emit_call_label(ctx.emitter, "__rt_decref_object");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 160]");         // load the eager member-array owner
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 184]");        // pass the visible member wrapper
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 160]");          // load the eager member-array owner
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 184]");          // pass the visible member wrapper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 160], rax");        // preserve a COW replacement array
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 184]");        // drop the materializer's temporary wrapper owner
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 160], rax");          // preserve a COW replacement array
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 184]");          // drop the materializer's temporary wrapper owner
             abi::emit_call_label(ctx.emitter, "__rt_decref_object");
         }
     }
     ctx.emitter.label(&advance);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [sp, #168]");                    // reload the completed descriptor index
-            ctx.emitter.instruction("add x9, x9, #1");                         // advance to the next eager descriptor
-            ctx.emitter.instruction("str x9, [sp, #168]");                    // persist the next descriptor index
+            ctx.emitter.instruction("ldr x9, [sp, #168]");                      // reload the completed descriptor index
+            ctx.emitter.instruction("add x9, x9, #1");                          // advance to the next eager descriptor
+            ctx.emitter.instruction("str x9, [sp, #168]");                      // persist the next descriptor index
             ctx.emitter
                 .instruction(&format!("b {}", loop_head));                    // materialize the remaining wrappers
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("add QWORD PTR [rsp + 168], 1");          // advance to the next eager descriptor
+            ctx.emitter.instruction("add QWORD PTR [rsp + 168], 1");            // advance to the next eager descriptor
             ctx.emitter
                 .instruction(&format!("jmp {}", loop_head));                  // materialize the remaining wrappers
         }
@@ -3808,27 +3809,27 @@ fn materialize_xpath_nodeset_members(ctx: &mut FunctionContext<'_>) -> Result<()
     ctx.emitter.label(&loop_done);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [sp, #144]");                    // ensure no namespace parent is left unmatched
+            ctx.emitter.instruction("ldr x9, [sp, #144]");                      // ensure no namespace parent is left unmatched
             ctx.emitter
                 .instruction(&format!("cbnz x9, {}", failure));               // reject a truncated parent/member pair
-            ctx.emitter.instruction("str xzr, [sp, #88]");                    // restore the top-level static NodeList kind
+            ctx.emitter.instruction("str xzr, [sp, #88]");                      // restore the top-level static NodeList kind
             let complete = ctx.next_label("dom_xpath_eager_complete");
             ctx.emitter
                 .instruction(&format!("b {}", complete));                     // skip malformed-result containment
             ctx.emitter.label(&failure);
-            ctx.emitter.instruction("b __rt_dom_bridge_failure");             // contain malformed eager XPath descriptors
+            emit_bridge_failure_jump(ctx);
             ctx.emitter.label(&complete);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp QWORD PTR [rsp + 144], 0");          // ensure no namespace parent is left unmatched
+            ctx.emitter.instruction("cmp QWORD PTR [rsp + 144], 0");            // ensure no namespace parent is left unmatched
             ctx.emitter
                 .instruction(&format!("jne {}", failure));                    // reject a truncated parent/member pair
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 88], 0");          // restore the top-level static NodeList kind
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 88], 0");             // restore the top-level static NodeList kind
             let complete = ctx.next_label("dom_xpath_eager_complete");
             ctx.emitter
                 .instruction(&format!("jmp {}", complete));                   // skip malformed-result containment
             ctx.emitter.label(&failure);
-            ctx.emitter.instruction("jmp __rt_dom_bridge_failure");           // contain malformed eager XPath descriptors
+            emit_bridge_failure_jump(ctx);
             ctx.emitter.label(&complete);
         }
     }
@@ -3867,8 +3868,7 @@ fn materialize_simplexml_iterator_move_result(
                 .instruction(&format!("b.eq {}", wrapper));                    // adopt the returned wrapper as the parent's strong owner
             ctx.emitter
                 .instruction(&format!("cbz w9, {}", done));                    // an exhausted iterator returns the private null tag
-            ctx.emitter.instruction("mov x0, #73");                             // classify an undeclared private iterator result tag
-            ctx.emitter.instruction("b __rt_dom_bridge_failure_code");          // contain the result-contract mismatch
+            emit_native_call_failure(ctx, 73)?;
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp DWORD PTR [rsp + 60], 8");             // did the move eagerly materialize a current wrapper?
@@ -3877,8 +3877,7 @@ fn materialize_simplexml_iterator_move_result(
             ctx.emitter.instruction("cmp DWORD PTR [rsp + 60], 0");             // did the iterator reach its end?
             ctx.emitter
                 .instruction(&format!("je {}", done));                         // retain no hidden current wrapper at end
-            ctx.emitter.instruction("mov eax, 73");                             // classify an undeclared private iterator result tag
-            ctx.emitter.instruction("jmp __rt_dom_bridge_failure_code");        // contain the result-contract mismatch
+            emit_native_call_failure(ctx, 73)?;
         }
     }
     ctx.emitter.label(&wrapper);
@@ -3917,7 +3916,7 @@ fn materialize_tagged_scalar_result(ctx: &mut FunctionContext<'_>) -> Result<()>
                 .instruction(&format!("b.eq {}", integer));                     // materialize the integer tagged-scalar member
             ctx.emitter
                 .instruction(&format!("cbz w9, {}", null));                     // materialize the canonical tagged null for ABI tag zero
-            ctx.emitter.instruction("b __rt_dom_bridge_failure");               // reject a native result outside int|null
+            emit_bridge_failure_jump(ctx);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp DWORD PTR [rsp + 60], 2");             // does the result carry the ABI integer tag?
@@ -3926,7 +3925,7 @@ fn materialize_tagged_scalar_result(ctx: &mut FunctionContext<'_>) -> Result<()>
             ctx.emitter.instruction("cmp DWORD PTR [rsp + 60], 0");             // does the result carry the ABI null tag?
             ctx.emitter
                 .instruction(&format!("je {}", null));                          // materialize the canonical tagged null
-            ctx.emitter.instruction("jmp __rt_dom_bridge_failure");             // reject a native result outside int|null
+            emit_bridge_failure_jump(ctx);
         }
     }
 
@@ -4265,10 +4264,7 @@ fn materialize_result_array(
     );
     abi::emit_jump(ctx.emitter, &complete);
     ctx.emitter.label(&failure);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction("b __rt_dom_bridge_failure"),  // contain a malformed nested native result
-        Arch::X86_64 => ctx.emitter.instruction("jmp __rt_dom_bridge_failure"), // contain a malformed nested native result
-    }
+    emit_bridge_failure_jump(ctx);
     ctx.emitter.label(&complete);
     Ok(())
 }
@@ -5177,10 +5173,7 @@ fn materialize_libxml_error_value_object(ctx: &mut FunctionContext<'_>) -> Resul
     );
     abi::emit_jump(ctx.emitter, &complete);
     ctx.emitter.label(&failure);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction("b __rt_dom_bridge_failure"),  // contain a malformed native value-object descriptor
-        Arch::X86_64 => ctx.emitter.instruction("jmp __rt_dom_bridge_failure"), // contain a malformed native value-object descriptor
-    }
+    emit_bridge_failure_jump(ctx);
     ctx.emitter.label(&complete);
     Ok(())
 }
@@ -5351,8 +5344,7 @@ fn require_result_tag(ctx: &mut FunctionContext<'_>, tag: i64) -> Result<()> {
                 .instruction(&format!("cmp w9, #{}", tag));                     // compare the result against the statically required ABI tag
             ctx.emitter
                 .instruction(&format!("b.eq {}", tag_ok));                      // continue only when the native result matches its EIR type
-            ctx.emitter.instruction("mov x0, #73");                             // classify a native/compiler result-tag mismatch
-            ctx.emitter.instruction("b __rt_dom_bridge_failure_code");          // reject the result-contract mismatch
+            emit_native_call_failure(ctx, 73)?;
             ctx.emitter.label(&tag_ok);
         }
         Arch::X86_64 => {
@@ -5361,8 +5353,7 @@ fn require_result_tag(ctx: &mut FunctionContext<'_>, tag: i64) -> Result<()> {
             let tag_ok = ctx.next_label("dom_result_tag_ok");
             ctx.emitter
                 .instruction(&format!("je {}", tag_ok));                        // continue only when the native result matches its EIR type
-            ctx.emitter.instruction("mov eax, 73");                             // classify a native/compiler result-tag mismatch
-            ctx.emitter.instruction("jmp __rt_dom_bridge_failure_code");        // reject the result-contract mismatch
+            emit_native_call_failure(ctx, 73)?;
             ctx.emitter.label(&tag_ok);
         }
     }
@@ -5457,7 +5448,7 @@ fn materialize_mixed_result(
                 ctx.emitter
                     .instruction(&format!("b.eq {}", label));                   // materialize the matching union member
             }
-            ctx.emitter.instruction("b __rt_dom_bridge_failure");               // reject a result outside the statically declared union
+            emit_bridge_failure_jump(ctx);
         }
         Arch::X86_64 => {
             let mut alternatives = vec![
@@ -5482,7 +5473,7 @@ fn materialize_mixed_result(
                 ctx.emitter
                     .instruction(&format!("je {}", label));                     // materialize the matching union member
             }
-            ctx.emitter.instruction("jmp __rt_dom_bridge_failure");             // reject a result outside the statically declared union
+            emit_bridge_failure_jump(ctx);
         }
     }
 
@@ -5797,7 +5788,7 @@ fn emit_typed_wrapper_result(
                 ctx.emitter
                     .instruction(&format!("b.eq {}", label));                   // allocate the matching concrete PHP DOM wrapper
             }
-            ctx.emitter.instruction("b __rt_dom_bridge_failure");               // reject an unknown native wrapper discriminator
+            emit_bridge_failure_jump(ctx);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("test {}, {}", kind_reg, kind_reg)); // inspect the mapped-class high bit before native kind dispatch
@@ -5813,7 +5804,7 @@ fn emit_typed_wrapper_result(
                 ctx.emitter
                     .instruction(&format!("je {}", label));                     // allocate the matching concrete PHP DOM wrapper
             }
-            ctx.emitter.instruction("jmp __rt_dom_bridge_failure");             // reject an unknown native wrapper discriminator
+            emit_bridge_failure_jump(ctx);
         }
     }
 
@@ -5882,8 +5873,10 @@ fn emit_typed_wrapper_result(
     Ok(())
 }
 
-/// Transfers a malformed native union member to the shared fatal containment helper.
+/// Releases the active native result frame before shared fatal containment.
 fn emit_bridge_failure_jump(ctx: &mut FunctionContext<'_>) {
+    emit_release_native_call_state(ctx)
+        .expect("native result cleanup emission must not fail");
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.emitter.instruction("b __rt_dom_bridge_failure"),  // contain an undeclared native union member
         Arch::X86_64 => ctx.emitter.instruction("jmp __rt_dom_bridge_failure"), // contain an undeclared native union member
@@ -5891,7 +5884,7 @@ fn emit_bridge_failure_jump(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Releases the independent native result frame and the temporary flat request.
-fn emit_release_native_call_state(ctx: &mut FunctionContext<'_>) -> Result<()> {
+pub(super) fn emit_release_native_call_state(ctx: &mut FunctionContext<'_>) -> Result<()> {
     emit_release_prepared_xpath_callback_value(ctx);
     emit_release_temporary_callable_descriptor(ctx);
     let skip_release = ctx.next_label("dom_result_release_skip");
@@ -5931,6 +5924,40 @@ fn emit_release_native_call_state(ctx: &mut FunctionContext<'_>) -> Result<()> {
     );
     abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
     Ok(())
+}
+
+/// Releases only the result ID owned by an outer call frame held by a nested materializer.
+pub(super) fn emit_release_native_result_id_from_frame(
+    ctx: &mut FunctionContext<'_>,
+    frame_reg: &str,
+) {
+    let skip = ctx.next_label("dom_result_nested_release_skip");
+    let release = ctx
+        .emitter
+        .target
+        .extern_symbol("elephc_dom_result_release");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("ldr x1, [{frame_reg}, #72]"));        // load the outer owned result ID
+            ctx.emitter
+                .instruction(&format!("cbz x1, {skip}"));                    // pointer-free frames need no release call
+            ctx.emitter
+                .instruction(&format!("ldr x0, [{frame_reg}, #16]"));        // load the outer DOM context ID
+            abi::emit_call_label(ctx.emitter, &release);
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("mov rsi, QWORD PTR [{frame_reg} + 72]")); // load the outer owned result ID
+            ctx.emitter.instruction("test rsi, rsi");                           // did the bridge retain a result frame?
+            ctx.emitter
+                .instruction(&format!("jz {skip}"));                         // pointer-free frames need no release call
+            ctx.emitter
+                .instruction(&format!("mov rdi, QWORD PTR [{frame_reg} + 16]")); // load the outer DOM context ID
+            abi::emit_call_label(ctx.emitter, &release);
+        }
+    }
+    ctx.emitter.label(&skip);
 }
 
 /// Releases a fully encoded request when re-entry makes its pending iterator move stale.

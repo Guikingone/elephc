@@ -23,7 +23,7 @@ pub const STATUS_OK: u32 = 0;
 pub const STATUS_THROW: u32 = 1;
 /// Uncatchable PHP fatal status.
 pub const STATUS_FATAL: u32 = 2;
-/// Malformed request, stale handle, or ABI-contract violation status.
+/// Readable ABI input that violates a version, opcode, handle, or host contract.
 pub const STATUS_ABI_ERROR: u32 = 3;
 /// Contained Rust/native panic status.
 pub const STATUS_INTERNAL_PANIC: u32 = 4;

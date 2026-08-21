@@ -77,8 +77,8 @@ pub(crate) use data::{
 /// Emit fixed runtime data section (symbols, constants, type metadata).
 pub(crate) use data::emit_runtime_data_user;
 pub(crate) use data::{
-    is_user_filter_contract_method, user_wrapper_adapter_symbol, user_wrapper_default_thunk_name,
-    USER_WRAPPER_METHOD_NAMES,
+    is_user_filter_contract_method, is_user_wrapper_contract_method, user_wrapper_adapter_symbol,
+    user_wrapper_default_thunk_name, USER_WRAPPER_METHOD_NAMES,
 };
 /// Emit user-program-specific runtime data section.
 pub(crate) use emitters::emit_runtime;

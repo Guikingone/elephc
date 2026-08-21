@@ -854,7 +854,17 @@ pub(super) fn dispatch(
         "method:domdocument::savexml"
         | "method:dom\\xmldocument::savexml"
         | "method:dom\\htmldocument::savexml" => {
-            document::serialize_xml(context, request)
+            let family = match key {
+                "method:domdocument::savexml" => crate::objects::DocumentFamily::Legacy,
+                "method:dom\\xmldocument::savexml" => {
+                    crate::objects::DocumentFamily::ModernXml
+                }
+                "method:dom\\htmldocument::savexml" => {
+                    crate::objects::DocumentFamily::ModernHtml
+                }
+                _ => unreachable!("guarded saveXml route"),
+            };
+            document::serialize_xml(context, request, family)
         }
         "method:domdocument::savehtml" => {
             document::serialize_legacy_html(context, request)

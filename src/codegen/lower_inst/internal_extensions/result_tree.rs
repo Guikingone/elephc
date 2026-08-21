@@ -104,6 +104,11 @@ fn emit_value_object_callback(ctx: &mut FunctionContext<'_>) -> Result<()> {
                 .instruction(&format!("stp x29, x30, [sp, #{}]", CALL_FRAME_SIZE)); // preserve the caller frame and local-helper return address
             ctx.emitter
                 .instruction(&format!("add x29, sp, #{}", CALL_FRAME_SIZE));    // establish the value-object callback frame pointer
+            ctx.emitter.instruction("str xzr, [sp]");                           // nested callbacks do not own a request allocation
+            ctx.emitter.instruction("ldr x9, [x0, #72]");                       // copy the outer result ownership ID into the callback frame
+            ctx.emitter.instruction("str x9, [sp, #72]");                       // make shared fatal cleanup release the outer result exactly once
+            ctx.emitter.instruction("str xzr, [sp, #216]");                     // nested callbacks have no temporary callable descriptor
+            ctx.emitter.instruction("str xzr, [sp, #360]");                     // nested callbacks have no prepared XPath plan
             for offset in [16, 96, 104, 112, 120] {
                 ctx.emitter
                     .instruction(&format!("ldr x9, [x0, #{}]", offset));        // copy retained flat-result storage into the callback frame
@@ -127,6 +132,11 @@ fn emit_value_object_callback(ctx: &mut FunctionContext<'_>) -> Result<()> {
             ctx.emitter.instruction("mov rbp, rsp");                            // establish a stable callback frame base
             ctx.emitter
                 .instruction(&format!("sub rsp, {}", CALL_FRAME_SIZE));        // reserve the outer-compatible value-object frame
+            ctx.emitter.instruction("mov QWORD PTR [rsp], 0");                  // nested callbacks do not own a request allocation
+            ctx.emitter.instruction("mov r10, QWORD PTR [rdi + 72]");           // copy the outer result ownership ID into the callback frame
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 72], r10");           // make shared fatal cleanup release the outer result exactly once
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 216], 0");            // nested callbacks have no temporary callable descriptor
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 360], 0");            // nested callbacks have no prepared XPath plan
             for offset in [16, 96, 104, 112, 120] {
                 ctx.emitter
                     .instruction(&format!("mov r10, QWORD PTR [rdi + {}]", offset)); // copy retained flat-result storage into the callback frame
@@ -182,6 +192,11 @@ fn emit_wrapper_callback(ctx: &mut FunctionContext<'_>) -> Result<()> {
                 .instruction(&format!("stp x29, x30, [sp, #{}]", CALL_FRAME_SIZE)); // preserve the caller frame and local-helper return address
             ctx.emitter
                 .instruction(&format!("add x29, sp, #{}", CALL_FRAME_SIZE));    // establish the wrapper callback frame pointer
+            ctx.emitter.instruction("str xzr, [sp]");                           // nested callbacks do not own a request allocation
+            ctx.emitter.instruction("ldr x9, [x0, #72]");                       // copy the outer result ownership ID into the callback frame
+            ctx.emitter.instruction("str x9, [sp, #72]");                       // make shared fatal cleanup release the outer result exactly once
+            ctx.emitter.instruction("str xzr, [sp, #216]");                     // nested callbacks have no temporary callable descriptor
+            ctx.emitter.instruction("str xzr, [sp, #360]");                     // nested callbacks have no prepared XPath plan
             ctx.emitter.instruction("str x2, [sp, #88]");                       // stage the stable native wrapper discriminator
             ctx.emitter
                 .instruction(&format!("ldr {}, [x0, #16]", context_reg));      // load the retained native DOM context from the outer call frame
@@ -193,6 +208,11 @@ fn emit_wrapper_callback(ctx: &mut FunctionContext<'_>) -> Result<()> {
             ctx.emitter.instruction("mov rbp, rsp");                            // establish a stable callback frame base
             ctx.emitter
                 .instruction(&format!("sub rsp, {}", CALL_FRAME_SIZE));        // reserve the outer-compatible bridge frame
+            ctx.emitter.instruction("mov QWORD PTR [rsp], 0");                  // nested callbacks do not own a request allocation
+            ctx.emitter.instruction("mov r10, QWORD PTR [rdi + 72]");           // copy the outer result ownership ID into the callback frame
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 72], r10");           // make shared fatal cleanup release the outer result exactly once
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 216], 0");            // nested callbacks have no temporary callable descriptor
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 360], 0");            // nested callbacks have no prepared XPath plan
             ctx.emitter.instruction("mov QWORD PTR [rsp + 88], rdx");           // stage the stable native wrapper discriminator
             ctx.emitter
                 .instruction(&format!("mov {}, QWORD PTR [rdi + 16]", context_reg)); // load the retained native DOM context from the outer call frame
@@ -634,7 +654,25 @@ fn emit_value_helper_aarch64(
         .instruction(&format!("add sp, sp, #{}", MATERIALIZER_FRAME_SIZE));    // release recursive materializer locals
     ctx.emitter.instruction("ret");                                             // return one owned boxed Mixed value
     ctx.emitter.label(&failure);
-    emit_bridge_failure_jump(ctx);
+    emit_recursive_bridge_failure_jump(ctx);
+}
+
+/// Releases the outer native result ID from a recursive materializer before fatal containment.
+fn emit_recursive_bridge_failure_jump(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // load the stable outer native call frame
+            super::emit_release_native_result_id_from_frame(ctx, "x9");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, QWORD PTR [rbp - 16]");           // load the stable outer native call frame
+            super::emit_release_native_result_id_from_frame(ctx, "r10");
+        }
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("b __rt_dom_bridge_failure"),  // contain malformed recursive native results
+        Arch::X86_64 => ctx.emitter.instruction("jmp __rt_dom_bridge_failure"), // contain malformed recursive native results
+    }
 }
 
 /// Emits recursive indexed-array materialization inside the AArch64 helper.
@@ -1010,7 +1048,7 @@ fn emit_value_helper_x86_64(
     ctx.emitter.instruction("pop rbp");                                         // restore the caller frame pointer
     ctx.emitter.instruction("ret");                                             // return one owned boxed Mixed value
     ctx.emitter.label(&failure);
-    emit_bridge_failure_jump(ctx);
+    emit_recursive_bridge_failure_jump(ctx);
 }
 
 /// Emits recursive indexed-array materialization inside the x86_64 helper.

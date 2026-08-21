@@ -18,6 +18,8 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from phpt_paths import PhptPathError, canonical_phpt_key
+
 
 ANCHOR_PATTERN = re.compile(r"coverage-anchor:\s*([^\s]+)")
 RUST_TEST_PATTERN = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
@@ -49,9 +51,10 @@ def repo_path(repo_root: Path, value: str, subject: str) -> Path:
     raw = Path(value)
     if raw.is_absolute() or ".." in raw.parts:
         raise UnsafePathError(f"UNSAFE_PATH:{subject}")
-    resolved = (repo_root / raw).resolve()
+    resolved_root = repo_root.resolve()
+    resolved = (resolved_root / raw).resolve()
     try:
-        resolved.relative_to(repo_root)
+        resolved.relative_to(resolved_root)
     except ValueError as error:
         raise UnsafePathError(f"UNSAFE_PATH:{subject}") from error
     return resolved
@@ -195,10 +198,19 @@ def validate_authorities(repo_root: Path, document: dict[str, Any], errors: list
             for entry in entries:
                 path = entry.get("path") if isinstance(entry, dict) else None
                 sha256 = entry.get("sha256") if isinstance(entry, dict) else None
-                if not isinstance(path, str) or not isinstance(sha256, str) or path in expected:
+                try:
+                    canonical = canonical_phpt_key(path)
+                except PhptPathError:
                     errors.append(f"LEDGER_INVALID:{component}")
                     break
-                expected[path] = sha256
+                if (
+                    not isinstance(sha256, str)
+                    or path != canonical
+                    or canonical in expected
+                ):
+                    errors.append(f"LEDGER_INVALID:{component}")
+                    break
+                expected[canonical] = sha256
         except (OSError, TypeError, ValueError, json.JSONDecodeError, KeyError):
             errors.append(f"LEDGER_INVALID:{component}")
     return expected
@@ -250,11 +262,24 @@ def duplicate_ids(rows_to_check: Iterable[dict[str, Any]]) -> set[str]:
 def source_phpts(repo_root: Path) -> set[str]:
     """Discover the authoritative DOM/libxml/SimpleXML PHPT paths in this tree."""
     paths: set[str] = set()
+    source_root = repo_root / "php-src"
     for component in COMPONENTS:
-        test_root = repo_root / "php-src" / "ext" / component / "tests"
+        test_root = source_root / "ext" / component / "tests"
         if test_root.is_dir():
-            paths.update(path.relative_to(repo_root).as_posix() for path in test_root.rglob("*.phpt"))
+            paths.update(
+                canonical_phpt_key(path.relative_to(source_root).as_posix())
+                for path in test_root.rglob("*.phpt")
+            )
     return paths
+
+
+def phpt_path(repo_root: Path, value: object, subject: str) -> tuple[str, Path]:
+    """Validate one canonical PHPT key and resolve it below the pinned source tree."""
+    try:
+        key = canonical_phpt_key(value)
+    except PhptPathError as error:
+        raise UnsafePathError(f"{error.code}:{subject}:{error.value}") from error
+    return key, repo_path(repo_root, f"php-src/{key}", subject)
 
 
 def dispatcher_anchors(repo_root: Path) -> set[str]:
@@ -402,11 +427,14 @@ def validate_phpts(
     for row in phpts:
         path = identifier(row)
         try:
-            repo_path(repo_root, path, f"phpt:{path}")
+            canonical, _ = phpt_path(repo_root, path, f"phpt:{path}")
         except UnsafePathError as error:
             errors.append(str(error))
             continue
-        rows_by_path.setdefault(path, []).append(row)
+        if path != canonical:
+            errors.append(f"AMBIGUOUS_PHPT_PATH:{path}")
+            continue
+        rows_by_path.setdefault(canonical, []).append(row)
     expected_paths = ledger_phpts or {path: "" for path in source_phpts(repo_root)}
     for path in sorted(expected_paths):
         matching = rows_by_path.get(path, [])
@@ -417,7 +445,7 @@ def validate_phpts(
             errors.append(f"PHPT_DUPLICATE:{path}")
         row = matching[0]
         try:
-            source_path = repo_path(repo_root, path, f"phpt:{path}")
+            _, source_path = phpt_path(repo_root, path, f"phpt:{path}")
         except UnsafePathError as error:
             errors.append(str(error))
             continue
@@ -436,7 +464,18 @@ def validate_phpts(
         if row.get("fixture_kind") == "translated":
             mapping = row.get("mapping")
             original = row.get("original_phpt")
-            mapped = isinstance(mapping, dict) and isinstance(mapping.get("original_phpt"), str)
+            mapped_original = mapping.get("original_phpt") if isinstance(mapping, dict) else None
+            for original_key in (original, mapped_original):
+                if original_key is None:
+                    continue
+                try:
+                    canonical_original = canonical_phpt_key(original_key)
+                except PhptPathError as error:
+                    errors.append(f"{error.code}:original_phpt:{original_key}")
+                    continue
+                if original_key != canonical_original:
+                    errors.append(f"AMBIGUOUS_PHPT_PATH:{original_key}")
+            mapped = isinstance(mapped_original, str)
             if not (isinstance(original, str) and original) and not mapped:
                 errors.append(f"TRANSLATED_FIXTURE_UNMAPPED:{path}")
 

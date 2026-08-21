@@ -797,6 +797,12 @@ pub(crate) fn context(context_id: u64) -> Option<Rc<RefCell<Context>>> {
     CONTEXTS.with(|contexts| contexts.borrow().get(&context_id).cloned())
 }
 
+/// Returns the test-only count of invalid result releases recorded by one context.
+#[cfg(test)]
+pub(crate) fn test_release_violation_count(context_id: u64) -> Option<u64> {
+    context(context_id).map(|context| context.borrow().release_violations)
+}
+
 /// Removes one context from the current thread and drops it when no call retains it.
 pub(crate) fn remove_context(context_id: u64) {
     CONTEXTS.with(|contexts| {

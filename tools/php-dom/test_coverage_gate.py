@@ -31,7 +31,6 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-
 TOOLS_ROOT = Path(__file__).resolve().parent
 FIXTURE_ROOT = TOOLS_ROOT / "testdata" / "coverage"
 GENERATOR = TOOLS_ROOT / "generate_coverage_manifest.py"
@@ -39,7 +38,13 @@ CHECKER = TOOLS_ROOT / "check_coverage.py"
 PHP_COMMIT = "26b97507444c4fbda072f57dda1820f7b7d5e467"
 BUILD_COMMIT = "50347ae2eeb1b77e386c114ca00daab2c6c2e5d7"
 TARGETS = ("macos-aarch64", "linux-aarch64", "linux-x86_64")
-ALPHA_PHPT = "php-src/ext/dom/tests/alpha.phpt"
+ALPHA_PHPT = "ext/dom/tests/alpha.phpt"
+
+if str(TOOLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TOOLS_ROOT))
+
+from check_coverage import UnsafePathError, phpt_path, validate_phpts
+from phpt_paths import PhptPathError, canonical_phpt_key
 
 
 def sha256_file(path: Path) -> str:
@@ -66,7 +71,7 @@ class CoverageFixture(unittest.TestCase):
 
     def manifest(self) -> dict[str, Any]:
         """Return one complete schema-1 manifest that the future gate accepts."""
-        phpt_sha = sha256_file(self.repo_root / ALPHA_PHPT)
+        phpt_sha = sha256_file(self.repo_root / "php-src" / ALPHA_PHPT)
         reports = []
         for target in TARGETS:
             binary_path = Path("target") / target / "elephc-dom"
@@ -268,6 +273,7 @@ class CoverageManifestContractTests(CoverageFixture):
             generated["inventory"]["components"],
             {"dom": 868, "libxml": 32, "simplexml": 156},
         )
+        self.assertTrue(all(row["path"].startswith("ext/") for row in generated["phpts"]))
 
     def test_generator_rejects_source_roots_that_escape_the_repository(self) -> None:
         """Refuse a symlinked php-src root whose resolved location is outside the repo."""
@@ -291,6 +297,50 @@ class CoverageManifestContractTests(CoverageFixture):
         result = self.run_generator(source, self.repo_root / "escaped-output.json")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("UNSAFE_PATH:php_src_root", result.stderr)
+
+    def test_generator_rejects_absolute_source_roots_inside_the_repository(self) -> None:
+        """Keep generated manifests portable by rejecting absolute source-root inputs."""
+        source = self.repo_root / "absolute-input.json"
+        source.write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "php_src_root": str((self.repo_root / "php-src").resolve()),
+                    "requirements": [],
+                    "routes": [],
+                    "components": {"dom": 1},
+                }
+            )
+        )
+        result = self.run_generator(source, self.repo_root / "absolute-output.json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("UNSAFE_PATH:php_src_root", result.stderr)
+
+    def test_closed_ledger_matches_canonical_ext_key_without_missing_phpt(self) -> None:
+        """Match a passed synthetic closed-ledger row to its php-src file exactly once."""
+        path = self.repo_root / "php-src" / ALPHA_PHPT
+        errors: list[str] = []
+        validate_phpts(
+            self.repo_root,
+            [{"path": ALPHA_PHPT, "sha256": sha256_file(path), "status": "passed"}],
+            {ALPHA_PHPT: sha256_file(path)},
+            errors,
+        )
+        self.assertEqual(errors, [])
+
+    def test_phpt_keys_reject_traversal_and_ambiguous_prefixes(self) -> None:
+        """Keep storage prefixes and traversal spellings out of canonical ledger keys."""
+        self.assertEqual(canonical_phpt_key(ALPHA_PHPT), ALPHA_PHPT)
+        for value in ("../ext/dom/tests/alpha.phpt", "ext/dom/tests/../alpha.phpt"):
+            with self.subTest(value=value), self.assertRaisesRegex(PhptPathError, "UNSAFE_PATH"):
+                canonical_phpt_key(value)
+        for value in ("php-src/ext/dom/tests/alpha.phpt", "./ext/dom/tests/alpha.phpt"):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                PhptPathError, "AMBIGUOUS_PHPT_PATH"
+            ):
+                canonical_phpt_key(value)
+        with self.assertRaisesRegex(UnsafePathError, "AMBIGUOUS_PHPT_PATH"):
+            phpt_path(self.repo_root, "php-src/ext/dom/tests/alpha.phpt", "phpt:key")
 
     def test_generator_uses_atomic_output_replacement(self) -> None:
         """Require a temp-file replacement rather than a truncating direct output write."""
@@ -529,7 +579,7 @@ class CoverageManifestContractTests(CoverageFixture):
         self.assert_gate_fails(duplicate, f"PHPT_DUPLICATE:{ALPHA_PHPT}")
 
         stale = self.manifest()
-        (self.repo_root / ALPHA_PHPT).write_bytes(b"--TEST--\nstale\n")
+        (self.repo_root / "php-src" / ALPHA_PHPT).write_bytes(b"--TEST--\nstale\n")
         self.assert_gate_fails(stale, f"PHPT_SHA_MISMATCH:{ALPHA_PHPT}")
 
     def test_strict_rejects_pending_ledger_entries(self) -> None:

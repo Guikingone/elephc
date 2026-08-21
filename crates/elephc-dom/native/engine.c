@@ -30,10 +30,17 @@
 #include <libxml/relaxng.h>
 #include <libxml/xmlsave.h>
 #include <libxml/xmlschemas.h>
+#include <libxml/xmlmemory.h>
 #include <libxml/xmlversion.h>
 
 #include "lexbor/core/base.h"
 #include "lexbor/html/interfaces/document.h"
+
+#if defined(__GNUC__) || defined(__clang__)
+#define ELEPHC_DOM_INTERNAL __attribute__((visibility("hidden")))
+#else
+#define ELEPHC_DOM_INTERNAL
+#endif
 
 /*
  * glibc hides PATH_MAX from <limits.h> under strict C11 unless a feature-test
@@ -289,8 +296,6 @@ static const xmlChar elephc_dom_xmlns_namespace[] =
 static const xmlChar elephc_dom_html_namespace[] =
     "http://www.w3.org/1999/xhtml";
 static const uint8_t elephc_dom_modern_xml_marker = 0;
-static _Thread_local int elephc_dom_test_fail_xml_new_input_from_io = 0;
-
 static xmlNodePtr elephc_dom_next_descendant(
     xmlNodePtr node,
     xmlNodePtr root
@@ -366,7 +371,7 @@ static int elephc_dom_stream_io_close(void *opaque)
     return status == 0 ? 0 : -1;
 }
 
-static xmlParserErrors elephc_dom_resource_loader(
+ELEPHC_DOM_INTERNAL xmlParserErrors elephc_dom_resource_loader(
     void *opaque,
     const char *url,
     const char *public_id,
@@ -463,17 +468,20 @@ static xmlParserErrors elephc_dom_resource_loader(
         }
         stream->lease_id = result.resource;
         stream->loader = loader;
-        input = elephc_dom_test_fail_xml_new_input_from_io != 0
-            ? NULL
-            : xmlNewInputFromIO(
-                url,
-                elephc_dom_stream_io_read,
-                elephc_dom_stream_io_close,
-                stream,
-                flags
-            );
+        /*
+         * Ownership transfers to libxml2 at this call. In the pinned 2.15.3
+         * parserInternals.c, xmlNewInputFromIO calls ioClose when its buffer
+         * allocation fails, and xmlNewInputInternal frees that buffer (and
+         * therefore calls ioClose) when its input allocation fails.
+         */
+        input = xmlNewInputFromIO(
+            url,
+            elephc_dom_stream_io_read,
+            elephc_dom_stream_io_close,
+            stream,
+            flags
+        );
         if (input == NULL) {
-            (void) elephc_dom_stream_io_close(stream);
             return XML_ERR_NO_MEMORY;
         }
         *out = input;
@@ -484,35 +492,6 @@ static xmlParserErrors elephc_dom_resource_loader(
     }
     loader->host_status = 3;
     return XML_ERR_INTERNAL_ERROR;
-}
-
-int elephc_dom_native_test_resource_loader_input_from_io_failure(
-    uint64_t host_context
-)
-{
-    elephc_dom_resource_loader_context loader = {
-        host_context,
-        NULL,
-        0
-    };
-    xmlParserInput *input = NULL;
-    xmlParserErrors status;
-
-    elephc_dom_test_fail_xml_new_input_from_io = 1;
-    status = elephc_dom_resource_loader(
-        &loader,
-        "elephc-test-resource",
-        NULL,
-        (xmlResourceType) 0,
-        0,
-        &input
-    );
-    elephc_dom_test_fail_xml_new_input_from_io = 0;
-    if (input != NULL) {
-        xmlFreeInputStream(input);
-        return 0;
-    }
-    return status == XML_ERR_NO_MEMORY ? 1 : 0;
 }
 
 static void elephc_dom_set_memory_document_url(xmlDocPtr document)

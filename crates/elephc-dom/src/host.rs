@@ -1186,6 +1186,11 @@ mod tests {
     static BUFFERED_STREAM_BYTES: &[u8] = b"abcdefghijkl";
     static STREAM_OPEN_FAILURE_CLASS: &[u8] = b"FailureWrapper";
 
+    /// Acquires the serialized host-test lock, recovering its guard after a prior test panic.
+    fn host_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        HOST_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     /// Accepts one ownership host call while recording its opcode and descriptor payload.
     unsafe extern "C" fn accepting_host_call(
         _user_data: *mut c_void,
@@ -1844,7 +1849,7 @@ mod tests {
     /// Verifies callable ownership requests use the locked padded message layout.
     #[test]
     fn callable_ownership_uses_flat_host_messages() {
-        let _guard = HOST_TEST_LOCK.lock().expect("host test lock");
+        let _guard = host_test_lock();
         let host = Host {
             user_data: 0,
             call: Some(accepting_host_call),
@@ -1866,7 +1871,7 @@ mod tests {
     /// Verifies callable-name resolution accepts only pointer-free callable or null results.
     #[test]
     fn xpath_callable_resolution_uses_one_flat_byte_root() {
-        let _guard = HOST_TEST_LOCK.lock().expect("host test lock");
+        let _guard = host_test_lock();
         let host = Host {
             user_data: 0,
             call: Some(resolving_host_call),
@@ -1889,7 +1894,7 @@ mod tests {
     /// Verifies a contained PHP Throwable remains distinct from malformed host traffic.
     #[test]
     fn callable_ownership_preserves_pending_host_throwable() {
-        let _guard = HOST_TEST_LOCK.lock().expect("host test lock");
+        let _guard = host_test_lock();
         let host = Host {
             user_data: 0,
             call: Some(pending_throwable_host_call),
@@ -1903,7 +1908,7 @@ mod tests {
     /// Verifies stream-open null results preserve every locked PHP warning discriminator.
     #[test]
     fn document_stream_open_marshalling_preserves_failure_details() {
-        let _guard = HOST_TEST_LOCK.lock().expect("host test lock");
+        let _guard = host_test_lock();
         let host = Host {
             user_data: 0,
             call: Some(failed_stream_open_host_call),
@@ -1945,7 +1950,7 @@ mod tests {
     /// Verifies external-loader arguments and leased string results use the locked flat ABI.
     #[test]
     fn external_loader_marshalling_and_result_release_are_balanced() {
-        let _guard = HOST_TEST_LOCK.lock().expect("host test lock");
+        let _guard = host_test_lock();
         RELEASED_RESULT.store(0, Ordering::Relaxed);
         let host = Host {
             user_data: 0,
@@ -1976,7 +1981,7 @@ mod tests {
     /// Verifies XPath scalar arguments preserve order, types, bytes, and result ownership.
     #[test]
     fn xpath_callback_marshalling_and_result_release_are_balanced() {
-        let _guard = HOST_TEST_LOCK.lock().expect("host test lock");
+        let _guard = host_test_lock();
         RELEASED_RESULT.store(0, Ordering::Relaxed);
         let host = Host {
             user_data: 0,
@@ -2003,7 +2008,7 @@ mod tests {
     /// Verifies nested node handles and callback-result leases remain ownership-balanced.
     #[test]
     fn xpath_callback_node_sets_and_dom_results_are_balanced() {
-        let _guard = HOST_TEST_LOCK.lock().expect("host test lock");
+        let _guard = host_test_lock();
         RELEASED_XPATH_NODE_RESULT.store(0, Ordering::Relaxed);
         let host = Host {
             user_data: 0,
@@ -2042,7 +2047,7 @@ mod tests {
     /// Verifies an escaped resolver Throwable stays distinct from malformed host traffic.
     #[test]
     fn external_loader_preserves_pending_host_throwable() {
-        let _guard = HOST_TEST_LOCK.lock().expect("host test lock");
+        let _guard = host_test_lock();
         let host = Host {
             user_data: 0,
             call: Some(pending_throwable_host_call),
@@ -2067,7 +2072,7 @@ mod tests {
     /// Verifies a callback-returned stream remains leased through reads and closes exactly once.
     #[test]
     fn external_loader_stream_reads_and_releases_are_balanced() {
-        let _guard = HOST_TEST_LOCK.lock().expect("host test lock");
+        let _guard = host_test_lock();
         RELEASED_STREAM_RESULT.store(0, Ordering::Relaxed);
         RELEASED_STREAM_CHUNK.store(0, Ordering::Relaxed);
         let host = Host {
@@ -2108,7 +2113,7 @@ mod tests {
     /// Verifies userspace-wrapper reads use PHP's 8192-byte buffer without a second host call.
     #[test]
     fn external_loader_userspace_wrapper_reads_are_buffered_like_php() {
-        let _guard = HOST_TEST_LOCK.lock().expect("host test lock");
+        let _guard = host_test_lock();
         BUFFERED_STREAM_READS.store(0, Ordering::Relaxed);
         RELEASED_BUFFERED_STREAM.store(0, Ordering::Relaxed);
         let host = Host {
@@ -2140,7 +2145,7 @@ mod tests {
     /// Verifies stream writes preserve partial counts, exact false, zero, flush, and release.
     #[test]
     fn document_stream_write_marshalling_preserves_php_results() {
-        let _guard = HOST_TEST_LOCK.lock().expect("host test lock");
+        let _guard = host_test_lock();
         STREAM_WRITE_CALLS.store(0, Ordering::Relaxed);
         STREAM_FLUSH_CALLS.store(0, Ordering::Relaxed);
         STREAM_WARNING_CALLS.store(0, Ordering::Relaxed);

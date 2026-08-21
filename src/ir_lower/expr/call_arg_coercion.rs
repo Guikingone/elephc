@@ -93,7 +93,9 @@ fn apply_scalar_param_cast(
         CastType::String => coerce_to_string_at_span(ctx, value, span),
         CastType::Bool => lower_truthy_bool(ctx, value, span),
         // `param_binding::scalar_param_cast` only ever reports the two total scalar casts.
-        CastType::Int | CastType::Float | CastType::Array => value,
+        // Object casts are not scalar parameter bindings; keep this arm explicit so a
+        // future binding rule cannot accidentally turn an object into a temporary scalar.
+        CastType::Int | CastType::Float | CastType::Array | CastType::Object => value,
     }
 }
 

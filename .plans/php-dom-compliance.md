@@ -193,6 +193,26 @@ Legend:
   loader, and uncovered-route tests has now been replayed byte-for-byte against
   that exact oracle. Elephc Cargo/heap-debug execution remains pending while
   unrelated Cargo work is consuming memory after two earlier OOMs.
+  Post-rebase validation on 2026-08-21 now builds the `elephc-dom` crate and a
+  fresh complete bridge run passes 175 tests with zero failures. One-shot
+  panic/allocation injection covers all 13 ABI wrappers, invalid-release
+  counters are context-isolated, and the real libxml2 allocation failures run
+  in fresh re-executed child tests before any libxml initialization. The two
+  child helpers remain `#[ignore]` only because the non-ignored parent test
+  invokes both exact stage names and validates their exits; they are not
+  unsupported behavior. The test instrumentation is built into a separate
+  archive linked only under `cfg(test)`; the fresh `nm` gate proves its symbols
+  absent from the production archive and present in the test archive. The
+  focused Python coverage/PHPT-runner suite now passes 55 tests. Subsequent
+  static reviews returned
+  `GO` for XPath direct indexing, coverage bootstrap/gate, native ABI/error
+  ownership, loader subprocess isolation, and multi-target `(object)` cast
+  ownership after iterative corrections. The compiler-wide `cargo check`
+  exposed rebase migrations in backend facades, AST walkers/casts, and loop
+  cleanup; Terra/Luna corrected those paths, but the full check and bridge suite
+  must be rerun on the final combined worktree once unrelated high-memory Cargo
+  jobs release the machine. No green compiler-wide or target-matrix claim is
+  made yet.
 - [ ] Add final examples plus public and internals documentation.
 - [ ] Validate the complete supported target matrix.
 - [ ] Obtain absolute implementation consensus from GLM 5.2, Kimi K2.7, and

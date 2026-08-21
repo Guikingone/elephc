@@ -64,6 +64,9 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     if let Some(result) = lower_simplexml_scalar_cast(ctx, target, value, expr) {
         return result;
     }
+    if matches!(target, CastType::Object) {
+        return lower_object_cast(ctx, value, expr);
+    }
     // Keep the original producer visible for a no-op string cast. Wrapping an
     // owned string temporary in `Cast(Str)` would hide its ownership from the
     // retaining store/call cleanup and leak the detached string allocation.
@@ -88,6 +91,140 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     }
     result
+}
+
+/// Lowers PHP's source-type-sensitive `(object)` conversion without routing an
+/// object through the generic scalar `Cast` backend.
+///
+/// Existing objects keep their concrete class and identity. Concrete arrays
+/// first become an owned hash with boxed entries, then transfer that hash into
+/// `stdClass`; scalar values become `stdClass { scalar: value }`, while null is
+/// an empty `stdClass`.
+fn lower_object_cast(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let source_type = ctx.builder.value_php_type(value.value).codegen_repr();
+    if matches!(source_type, PhpType::Object(_)) {
+        return value;
+    }
+    match &source_type {
+        PhpType::Array(_) => {
+            let cloned = ctx.emit_value(
+                Op::ArrayCloneShallow,
+                vec![value.value],
+                None,
+                source_type.clone(),
+                Op::ArrayCloneShallow.default_effects(),
+                Some(expr.span),
+            );
+            let hash_type = PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            };
+            // `Op::ArrayToHash` lowers through the EIR promotion wrapper,
+            // which consumes this owned clone after the raw helper copies it.
+            // Do not release `cloned` here: the wrapper owns that decrement.
+            let hash = ctx.emit_value(
+                Op::ArrayToHash,
+                vec![cloned.value],
+                None,
+                hash_type.clone(),
+                Op::ArrayToHash.default_effects(),
+                Some(expr.span),
+            );
+            release_cast_source_if_owned(ctx, value, expr.span);
+            ctx.emit_value(
+                Op::StdClassFromHash,
+                vec![hash.value],
+                None,
+                PhpType::Object("stdClass".to_string()),
+                Op::StdClassFromHash.default_effects(),
+                Some(expr.span),
+            )
+        }
+        PhpType::AssocArray { .. } => {
+            let cloned = ctx.emit_value(
+                Op::HashCloneShallow,
+                vec![value.value],
+                None,
+                source_type.clone(),
+                Op::HashCloneShallow.default_effects(),
+                Some(expr.span),
+            );
+            let hash_type = PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            };
+            let hash = coerce_container_to_mixed_payload(
+                ctx,
+                cloned,
+                &source_type,
+                &hash_type,
+                expr.span,
+            );
+            release_cast_source_if_owned(ctx, value, expr.span);
+            ctx.emit_value(
+                Op::StdClassFromHash,
+                vec![hash.value],
+                None,
+                PhpType::Object("stdClass".to_string()),
+                Op::StdClassFromHash.default_effects(),
+                Some(expr.span),
+            )
+        }
+        PhpType::Void | PhpType::Never => emit_fixed_object_new(
+            ctx,
+            "stdClass",
+            Vec::new(),
+            PhpType::Object("stdClass".to_string()),
+            expr.span,
+        ),
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable | PhpType::TaggedScalar => {
+            let mixed = if value.ir_type == IrType::Heap(IrHeapKind::Mixed) {
+                value
+            } else {
+                ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span))
+            };
+            let result = ctx.emit_value(
+                Op::MixedCastObject,
+                vec![mixed.value],
+                None,
+                PhpType::Mixed,
+                Op::MixedCastObject.default_effects(),
+                Some(expr.span),
+            );
+            release_cast_source_if_owned(ctx, mixed, expr.span);
+            result
+        }
+        _ => {
+            let object = emit_fixed_object_new(
+                ctx,
+                "stdClass",
+                Vec::new(),
+                PhpType::Object("stdClass".to_string()),
+                expr.span,
+            );
+            let property = ctx.intern_string("scalar");
+            ctx.emit_void(
+                Op::PropSet,
+                vec![object.value, value.value],
+                Some(Immediate::Data(property)),
+                Op::PropSet.default_effects(),
+                Some(expr.span),
+            );
+            release_cast_source_if_owned(ctx, value, expr.span);
+            object
+        }
+    }
+}
+
+/// Releases a consumed source only when it was an owned temporary.
+fn release_cast_source_if_owned(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) {
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
 }
 
 /// Routes SimpleXML scalar casts through the native object handler.
@@ -234,5 +371,9 @@ pub(super) fn cast_php_type(target: &CastType, source_type: &PhpType) -> PhpType
                 PhpType::Mixed | PhpType::Union(_)
             ) => PhpType::Mixed,
         CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+        CastType::Object if matches!(source_type.codegen_repr(), PhpType::Object(_)) => {
+            source_type.clone()
+        }
+        CastType::Object => PhpType::Object("stdClass".to_string()),
     }
 }

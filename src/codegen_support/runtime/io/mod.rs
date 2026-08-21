@@ -289,7 +289,7 @@ pub(crate) use ob_handler::{
     emit_ob_notice_named, emit_ob_result_to_bytes,
 };
 pub(crate) use ob_status::{emit_ob_get_status, emit_ob_list_handlers, emit_ob_status_entry};
-pub(crate) use object_debug_info::{emit_object_debug_info, emit_print_r_object};
+pub(crate) use object_debug_info::emit_object_debug_info;
 pub(crate) use var_dump_object::{
     emit_var_dump_emit_object_key, emit_var_dump_emit_recursion_line,
     emit_var_dump_emit_uninit_line, emit_var_dump_object, emit_var_dump_open_object,

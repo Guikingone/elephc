@@ -200,21 +200,17 @@ pub(super) fn lower_foreach(
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(body_block);
-    let cleanup = ctx
-        .value_is_owning_temporary(source)
-        .then_some(LoopCleanup {
-            value: source,
-            span: array.span,
-        });
-    let cleanup = if release_dom_source_after_iter_start {
-        None
-    } else {
-        cleanup
+    let cleanup = LoopCleanup {
+        iterator,
+        source: (!release_dom_source_after_iter_start
+            && ctx.value_is_owning_temporary(source))
+            .then_some(source),
+        span: array.span,
     };
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: header,
-        cleanup,
+        cleanup: Some(cleanup),
         source_pin,
     });
     if let Some(key_var) = key_var {
@@ -257,14 +253,9 @@ pub(super) fn lower_foreach(
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
-    // Release the source when it is a fresh owning temporary (e.g. `foreach
-    // (explode(...) as $p)` or a literal array): the iterator borrows it for the
-    // duration of the loop, so nothing else frees it once iteration ends. (For an
-    // array the iterator aliases the source, so it must NOT be released separately
-    // — that would double-free.)
-    if ctx.value_is_owning_temporary(source) && !release_dom_source_after_iter_start {
-        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(array.span));
-    }
+    // `IterEnd` releases the iterator state before the separate temporary source. This is the
+    // normal-exit counterpart to the cleanup emitted for `break N`, `return`, and `throw`.
+    emit_loop_cleanup(ctx, cleanup);
     // Normal termination is the exit this block IS, so the pin is dropped here. Every other way
     // out — `break`, `break N`, `return`, `throw` — skips this block and is covered by
     // `emit_innermost_loop_cleanups` through the loop frame instead.
@@ -328,7 +319,7 @@ fn pin_by_ref_foreach_borrowed_source(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
     span: Span,
-) -> Option<LoopCleanup> {
+) -> Option<LoopSourcePin> {
     let pin =
         crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, source, Some(span));
     if pin.value == source.value {
@@ -338,7 +329,7 @@ fn pin_by_ref_foreach_borrowed_source(
     // leaving it at the `MaybeOwned` default: the cleanup paths below release through
     // `release_if_owned`, which the backend filters on this very state.
     ctx.builder.set_value_ownership(pin.value, Ownership::Owned);
-    Some(LoopCleanup { value: pin, span })
+    Some(LoopSourcePin { value: pin, span })
 }
 
 /// Returns the by-value foreach local type when Phase 04 can keep a concrete element.

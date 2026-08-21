@@ -29,6 +29,61 @@ use crate::host::{
     resolve_xpath_callable, XPathCallbackArgument, XPathCallbackResult,
 };
 
+/// Identifies one exported bridge entry point where a test panic is injected.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TestExportEntryPoint {
+    /// Context construction entry point.
+    ContextNew,
+    /// Context reset entry point.
+    ContextReset,
+    /// Class metadata installation entry point.
+    ContextSetClassMetadata,
+    /// Context destruction entry point.
+    ContextFree,
+    /// DOM request entry point.
+    DomCall,
+    /// DOM result release entry point.
+    ResultRelease,
+    /// External-entity callback entry point.
+    HostExternalEntityLoad,
+    /// Resource-open callback entry point.
+    HostResourceOpen,
+    /// XPath callback entry point.
+    HostXPathInvoke,
+    /// Host result-release entry point.
+    HostResultRelease,
+    /// Native loader byte-buffer release entry point.
+    HostLoaderBytesFree,
+    /// Stream-read callback entry point.
+    HostStreamRead,
+    /// Stream-close callback entry point.
+    HostStreamClose,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PANIC_ENTRY_POINT: std::cell::Cell<Option<TestExportEntryPoint>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Arms a one-shot panic at one exported bridge entry point for ABI containment tests.
+#[cfg(test)]
+pub(crate) fn test_inject_panic(entry_point: TestExportEntryPoint) {
+    TEST_PANIC_ENTRY_POINT.with(|entry| entry.set(Some(entry_point)));
+}
+
+/// Panics once when the selected exported entry point reaches its protected closure.
+#[cfg(test)]
+fn maybe_inject_test_panic(entry_point: TestExportEntryPoint) {
+    TEST_PANIC_ENTRY_POINT.with(|entry| {
+        if entry.get() == Some(entry_point) {
+            entry.set(None);
+            panic!("test-only bridge panic injection");
+        }
+    });
+}
+
 /// Native resource-loader response consumed synchronously by the pinned libxml2 adapter.
 #[repr(C)]
 pub(crate) struct HostLoaderResult {
@@ -80,7 +135,13 @@ pub unsafe extern "C" fn elephc_dom_context_new(
     host_vtable: *const HostVTable,
     out_context: *mut u64,
 ) -> u32 {
+    if out_context.is_null() {
+        return STATUS_ABI_ERROR;
+    }
+    out_context.write(0);
     match catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        maybe_inject_test_panic(TestExportEntryPoint::ContextNew);
         context_new_impl(host_vtable, out_context)
     })) {
         Ok(status) => status,
@@ -119,6 +180,8 @@ unsafe fn context_new_impl(host_vtable: *const HostVTable, out_context: *mut u64
 #[no_mangle]
 pub extern "C" fn elephc_dom_context_reset(context: u64) -> u32 {
     match catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        maybe_inject_test_panic(TestExportEntryPoint::ContextReset);
         let Some(context) = find_context(context) else {
             return STATUS_ABI_ERROR;
         };
@@ -141,6 +204,8 @@ pub unsafe extern "C" fn elephc_dom_context_set_class_metadata(
     count: u64,
 ) -> u32 {
     match catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        maybe_inject_test_panic(TestExportEntryPoint::ContextSetClassMetadata);
         let Some(context) = find_context(context) else {
             return STATUS_ABI_ERROR;
         };
@@ -175,6 +240,8 @@ pub unsafe extern "C" fn elephc_dom_context_set_class_metadata(
 #[no_mangle]
 pub extern "C" fn elephc_dom_context_free(context: u64) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        maybe_inject_test_panic(TestExportEntryPoint::ContextFree);
         remove_context(context);
     }));
 }
@@ -192,11 +259,20 @@ pub unsafe extern "C" fn elephc_dom_call(
     }
     out_result.write(ResultHeader::abi_error());
     match catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        maybe_inject_test_panic(TestExportEntryPoint::DomCall);
         call_impl(context, request_ptr, request_len, out_result)
     })) {
         Ok(status) => status,
         Err(_) => {
             out_result.write(ResultHeader::internal_panic());
+            if let Some(context_cell) = find_context(context) {
+                let _ = publish_context_status(
+                    &context_cell,
+                    STATUS_INTERNAL_PANIC,
+                    out_result,
+                );
+            }
             STATUS_INTERNAL_PANIC
         }
     }
@@ -225,7 +301,11 @@ unsafe fn call_impl(
                 || !request.values.is_empty()
                 || !request.bytes.is_empty()
             {
-                return STATUS_ABI_ERROR;
+                return publish_context_status(
+                    &context_cell,
+                    STATUS_ABI_ERROR,
+                    out_result,
+                );
             }
             let Ok(mut context) = context_cell.try_borrow_mut() else {
                 return STATUS_ABI_ERROR;
@@ -250,15 +330,42 @@ unsafe fn call_impl(
                     };
                     match crate::dispatch::dispatch(&mut context, &request) {
                         Ok(result) => result,
-                        Err(()) => return STATUS_ABI_ERROR,
+                        Err(()) => {
+                            drop(context);
+                            return publish_context_status(
+                                &context_cell,
+                                STATUS_ABI_ERROR,
+                                out_result,
+                            );
+                        }
                     }
                 }
-                Err(()) => return STATUS_ABI_ERROR,
+                Err(()) => {
+                    return publish_context_status(
+                        &context_cell,
+                        STATUS_ABI_ERROR,
+                        out_result,
+                    );
+                }
             };
             publish_dispatch_result(&context_cell, result, out_result)
         }
-        _ => STATUS_ABI_ERROR,
+        _ => publish_context_status(&context_cell, STATUS_ABI_ERROR, out_result),
     }
+}
+
+/// Registers one pointer-free ABI status while the context is available.
+unsafe fn publish_context_status(
+    context_cell: &std::rc::Rc<std::cell::RefCell<Context>>,
+    status: u32,
+    out_result: *mut ResultHeader,
+) -> u32 {
+    let Ok(mut context) = context_cell.try_borrow_mut() else {
+        return status;
+    };
+    let result = register_result(&mut context, ResultFrame::abi_status(status), VALUE_NULL);
+    out_result.write(result);
+    status
 }
 
 /// Registers one pointer-free result for a rejected ABI request after decoding fails.
@@ -300,7 +407,8 @@ unsafe fn publish_dispatch_result(
                 break;
             }
             Err(crate::host::HostCallError::Abi) => {
-                return STATUS_ABI_ERROR;
+                drop(result);
+                return publish_context_status(context_cell, STATUS_ABI_ERROR, out_result);
             }
         }
     }
@@ -316,6 +424,8 @@ unsafe fn publish_dispatch_result(
 #[no_mangle]
 pub extern "C" fn elephc_dom_result_release(context: u64, result_id: u64) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        maybe_inject_test_panic(TestExportEntryPoint::ResultRelease);
         let Some(context) = find_context(context) else {
             return;
         };
@@ -351,6 +461,8 @@ pub unsafe extern "C" fn elephc_dom_host_external_entity_load(
     }
     out_result.write(HostLoaderResult::default_loader());
     match catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        maybe_inject_test_panic(TestExportEntryPoint::HostExternalEntityLoad);
         host_external_entity_load_impl(
             context_id,
             optional_foreign_bytes(public_id, public_id_length)?,
@@ -381,6 +493,8 @@ pub unsafe extern "C" fn elephc_dom_host_resource_open(
     }
     out_result.write(HostLoaderResult::default_loader());
     match catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        maybe_inject_test_panic(TestExportEntryPoint::HostResourceOpen);
         let url = optional_foreign_bytes(url, url_length)?
             .ok_or(())?;
         let context_cell = find_context(context_id).ok_or(())?;
@@ -521,6 +635,8 @@ pub unsafe extern "C" fn elephc_dom_host_xpath_invoke(
     }
     out_result.write(HostLoaderResult::default_loader());
     match catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        maybe_inject_test_panic(TestExportEntryPoint::HostXPathInvoke);
         host_xpath_invoke_impl(
             context_id,
             xpath_handle,
@@ -544,6 +660,8 @@ pub extern "C" fn elephc_dom_host_result_release(
     result_id: u64,
 ) -> u32 {
     match catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        maybe_inject_test_panic(TestExportEntryPoint::HostResultRelease);
         if result_id == 0 {
             return STATUS_ABI_ERROR;
         }
@@ -883,6 +1001,8 @@ pub unsafe extern "C" fn elephc_dom_host_loader_bytes_free(
     length: usize,
 ) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        maybe_inject_test_panic(TestExportEntryPoint::HostLoaderBytesFree);
         if bytes.is_null() {
             return;
         }
@@ -904,6 +1024,8 @@ pub unsafe extern "C" fn elephc_dom_host_stream_read(
     }
     out_length.write(0);
     match catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        maybe_inject_test_panic(TestExportEntryPoint::HostStreamRead);
         let bytes = read_stream_lease(lease_id, capacity)?;
         if bytes.len() > capacity {
             return Err(HostCallError::Abi);
@@ -924,6 +1046,8 @@ pub unsafe extern "C" fn elephc_dom_host_stream_read(
 #[no_mangle]
 pub extern "C" fn elephc_dom_host_stream_close(lease_id: u64) -> u32 {
     match catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        maybe_inject_test_panic(TestExportEntryPoint::HostStreamClose);
         release_stream_lease(lease_id)
     })) {
         Ok(Ok(())) => STATUS_OK,

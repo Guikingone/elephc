@@ -13,6 +13,10 @@ use std::ffi::{c_char, c_void, CStr};
 
 use crate::objects::LibxmlErrorObject;
 
+#[cfg(test)]
+#[link(name = "elephc_dom_native_test", kind = "static")]
+unsafe extern "C" {}
+
 /// Native pointer-plus-length record returned by engine-owned byte buffers.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -56,9 +60,9 @@ struct NativeError {
     file_length: usize,
 }
 
-/// Signals that the native fault-injection bridge reached the allocation-failure branch.
+/// Signals that one isolated native libxml input-allocation failure closed its stream lease.
 #[cfg(test)]
-pub(crate) const TEST_RESOURCE_LOADER_INPUT_CREATION_FAILED: i32 = 1;
+pub(crate) const TEST_RESOURCE_LOADER_INPUT_CREATION_FAILURE_CLOSED: i32 = 0x494F_434C;
 
 /// Native XML parse outcome with independently freed structured errors.
 #[repr(C)]
@@ -333,11 +337,15 @@ unsafe extern "C" {
         input_name_length: usize,
         host_context: u64,
     ) -> NativeParseResult;
-    /// Forces the stream-backed resource-loader input allocation to fail for one test call.
+    /// Exercises one pinned libxml stream-input allocation failure in an isolated test process.
     #[cfg(test)]
     fn elephc_dom_native_test_resource_loader_input_from_io_failure(
         host_context: u64,
+        failing_allocation: usize,
     ) -> i32;
+    /// Installs the test-only libxml allocator before the isolated child creates any context.
+    #[cfg(test)]
+    fn elephc_dom_native_test_install_resource_loader_allocator() -> i32;
     /// Parses one named legacy HTML byte stream through libxml2's HTML4 parser.
     fn elephc_dom_native_document_parse_html4(
         bytes: *const u8,
@@ -1364,14 +1372,24 @@ pub(crate) fn document_parse_xml_with_host(
     })
 }
 
-/// Exercises the native resource-loader cleanup path after input allocation failure.
+/// Exercises one native resource-loader cleanup path after libxml input allocation failure.
 #[cfg(test)]
 pub(crate) fn test_resource_loader_input_from_io_failure(
     host_context: u64,
+    failing_allocation: usize,
 ) -> i32 {
     unsafe {
-        elephc_dom_native_test_resource_loader_input_from_io_failure(host_context)
+        elephc_dom_native_test_resource_loader_input_from_io_failure(
+            host_context,
+            failing_allocation,
+        )
     }
+}
+
+/// Installs the test-only allocator in a fresh process before libxml2 can initialize.
+#[cfg(test)]
+pub(crate) fn install_test_resource_loader_allocator() -> i32 {
+    unsafe { elephc_dom_native_test_install_resource_loader_allocator() }
 }
 
 /// Parses one legacy HTML byte sequence through libxml2's HTML4 parser.
@@ -1893,9 +1911,20 @@ fn copy_and_free_native_errors(
     pointer: *mut NativeError,
     count: usize,
 ) -> Result<Vec<LibxmlErrorObject>, NativeResultAbiError> {
-    let errors = copy_native_errors(pointer, count)?;
-    unsafe {
+    copy_and_release_native_errors(pointer, count, |pointer, count| unsafe {
         elephc_dom_native_parse_result_free(pointer, count);
+    })
+}
+
+/// Copies one validated native structured-error allocation before releasing it exactly once.
+fn copy_and_release_native_errors(
+    pointer: *mut NativeError,
+    count: usize,
+    release: impl FnOnce(*mut NativeError, usize),
+) -> Result<Vec<LibxmlErrorObject>, NativeResultAbiError> {
+    let errors = copy_native_errors(pointer, count)?;
+    if !pointer.is_null() {
+        release(pointer, count);
     }
     Ok(errors)
 }
@@ -1905,17 +1934,20 @@ fn copy_native_errors(
     pointer: *const NativeError,
     count: usize,
 ) -> Result<Vec<LibxmlErrorObject>, NativeResultAbiError> {
-    if pointer.is_null() {
-        return if count == 0 {
-            Ok(Vec::new())
-        } else {
-            Err(NativeResultAbiError::MalformedRequest)
-        };
+    if !native_error_array_is_valid(pointer, count) {
+        return Err(NativeResultAbiError::MalformedRequest);
     }
     if count == 0 {
         return Ok(Vec::new());
     }
-    Ok(unsafe { std::slice::from_raw_parts(pointer, count) }
+    let native_errors = unsafe { std::slice::from_raw_parts(pointer, count) };
+    if native_errors.iter().any(|error| {
+        !native_byte_range_is_valid(error.message, error.message_length)
+            || !native_byte_range_is_valid(error.file, error.file_length)
+    }) {
+        return Err(NativeResultAbiError::MalformedRequest);
+    }
+    Ok(native_errors
         .iter()
         .map(|error| LibxmlErrorObject {
             level: i64::from(error.level),
@@ -1927,6 +1959,17 @@ fn copy_native_errors(
             file: copy_native_bytes(error.file, error.file_length),
         })
         .collect())
+}
+
+/// Checks the outer native error-array pointer/count pair before forming a Rust slice.
+fn native_error_array_is_valid(pointer: *const NativeError, count: usize) -> bool {
+    count <= isize::MAX as usize / std::mem::size_of::<NativeError>()
+        && (count == 0 || !pointer.is_null())
+}
+
+/// Checks one native byte pointer/length pair before copying its bytes into Rust storage.
+fn native_byte_range_is_valid(pointer: *const u8, length: usize) -> bool {
+    length <= isize::MAX as usize && (length == 0 || !pointer.is_null())
 }
 
 /// Copies one native pointer array before its C allocation is released.
@@ -3822,10 +3865,11 @@ fn copy_simplexml_namespace_result(
 #[cfg(test)]
 mod tests {
     use super::{
-        copy_and_free_native_errors, copy_native_errors, NativeError,
-        NativeResultAbiError,
+        copy_and_free_native_errors, copy_and_release_native_errors,
+        NativeError, NativeResultAbiError,
     };
     use crate::objects::LibxmlErrorObject;
+    use std::cell::Cell;
 
     /// Rejects a nonzero native error count without an owned error-array pointer.
     #[test]
@@ -3834,6 +3878,143 @@ mod tests {
             copy_and_free_native_errors(std::ptr::null_mut(), 1),
             Err(NativeResultAbiError::MalformedRequest)
         );
+    }
+
+    /// Rejects a native error whose nonempty message range has no pointer before cleanup.
+    #[test]
+    fn native_error_with_null_message_and_nonzero_length_is_rejected_without_cleanup() {
+        let error = NativeError {
+            level: 0,
+            domain: 0,
+            code: 0,
+            line: 0,
+            column: 0,
+            reserved: 0,
+            message: std::ptr::null_mut(),
+            message_length: 1,
+            file: std::ptr::null_mut(),
+            file_length: 0,
+        };
+        let releases = Cell::new(0);
+
+        assert_eq!(
+            copy_and_release_native_errors(
+                std::ptr::from_ref(&error).cast_mut(),
+                1,
+                |_, _| releases.set(releases.get() + 1),
+            ),
+            Err(NativeResultAbiError::MalformedRequest)
+        );
+        assert_eq!(releases.get(), 0);
+    }
+
+    /// Rejects a native error whose nonempty file range has no pointer before cleanup.
+    #[test]
+    fn native_error_with_null_file_and_nonzero_length_is_rejected_without_cleanup() {
+        let error = NativeError {
+            level: 0,
+            domain: 0,
+            code: 0,
+            line: 0,
+            column: 0,
+            reserved: 0,
+            message: std::ptr::null_mut(),
+            message_length: 0,
+            file: std::ptr::null_mut(),
+            file_length: 1,
+        };
+        let releases = Cell::new(0);
+
+        assert_eq!(
+            copy_and_release_native_errors(
+                std::ptr::from_ref(&error).cast_mut(),
+                1,
+                |_, _| releases.set(releases.get() + 1),
+            ),
+            Err(NativeResultAbiError::MalformedRequest)
+        );
+        assert_eq!(releases.get(), 0);
+    }
+
+    /// Rejects an error count that would exceed Rust's maximum slice byte range.
+    #[test]
+    fn native_error_array_larger_than_the_slice_limit_is_rejected_without_cleanup() {
+        let releases = Cell::new(0);
+        let count = isize::MAX as usize / std::mem::size_of::<NativeError>() + 1;
+
+        assert_eq!(
+            copy_and_release_native_errors(
+                std::ptr::NonNull::<NativeError>::dangling().as_ptr(),
+                count,
+                |_, _| releases.set(releases.get() + 1),
+            ),
+            Err(NativeResultAbiError::MalformedRequest)
+        );
+        assert_eq!(releases.get(), 0);
+    }
+
+    /// Rejects a byte length that would exceed Rust's maximum slice byte range.
+    #[test]
+    fn native_error_byte_range_larger_than_the_slice_limit_is_rejected_without_cleanup() {
+        let error = NativeError {
+            level: 0,
+            domain: 0,
+            code: 0,
+            line: 0,
+            column: 0,
+            reserved: 0,
+            message: std::ptr::NonNull::<u8>::dangling().as_ptr(),
+            message_length: isize::MAX as usize + 1,
+            file: std::ptr::null_mut(),
+            file_length: 0,
+        };
+        let releases = Cell::new(0);
+
+        assert_eq!(
+            copy_and_release_native_errors(
+                std::ptr::from_ref(&error).cast_mut(),
+                1,
+                |_, _| releases.set(releases.get() + 1),
+            ),
+            Err(NativeResultAbiError::MalformedRequest)
+        );
+        assert_eq!(releases.get(), 0);
+    }
+
+    /// Accepts null byte pointers when their native error ranges are empty.
+    #[test]
+    fn native_error_with_null_zero_length_ranges_is_copied_and_released_once() {
+        let error = NativeError {
+            level: 2,
+            domain: 3,
+            code: 4,
+            line: 5,
+            column: 6,
+            reserved: 0,
+            message: std::ptr::null_mut(),
+            message_length: 0,
+            file: std::ptr::null_mut(),
+            file_length: 0,
+        };
+        let releases = Cell::new(0);
+
+        assert_eq!(
+            copy_and_release_native_errors(
+                std::ptr::from_ref(&error).cast_mut(),
+                1,
+                |_, _| releases.set(releases.get() + 1),
+            ),
+            Ok(vec![LibxmlErrorObject {
+                level: 2,
+                domain: 3,
+                code: 4,
+                line: 5,
+                column: 6,
+                message: Vec::new(),
+                file: Vec::new(),
+            }])
+        );
+        assert_eq!(releases.get(), 1);
     }
 
     /// Preserves the C error-record layout while copying every borrowed byte range.
@@ -3853,10 +4034,15 @@ mod tests {
             file: file.as_mut_ptr(),
             file_length: file.len(),
         };
+        let releases = Cell::new(0);
 
         assert_eq!(std::mem::size_of::<NativeError>(), 56);
         assert_eq!(
-            copy_native_errors(&error, 1),
+            copy_and_release_native_errors(
+                std::ptr::from_ref(&error).cast_mut(),
+                1,
+                |_, _| releases.set(releases.get() + 1),
+            ),
             Ok(vec![LibxmlErrorObject {
                 level: 2,
                 domain: 3,
@@ -3867,5 +4053,6 @@ mod tests {
                 file,
             }])
         );
+        assert_eq!(releases.get(), 1);
     }
 }

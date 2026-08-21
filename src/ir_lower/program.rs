@@ -132,8 +132,9 @@ pub(crate) fn lower(
     // internal-extension opcode is authoritative evidence that the DOM bridge
     // must participate in the final link, including calls emitted from a
     // synthetic extension method body.
-    module.required_runtime_features.dom_bridge |= all_lowered_functions(&module)
+    let has_internal_extension_calls = all_lowered_functions(&module)
         .any(|function| function.instructions.iter().any(|inst| inst.op == Op::InternalExtensionCall));
+    module.required_runtime_features.dom_bridge |= has_internal_extension_calls;
     super::effect_refinement::refine_module(&mut module);
     validate_module(&module)?;
     Ok(module)
