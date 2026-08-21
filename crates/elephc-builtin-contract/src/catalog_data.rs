@@ -16536,9 +16536,12 @@ writes: None,
                 by_ref: true,
 writes: None,
             },
+            // php-src's stub is `?int $seconds` — nullable and REQUIRED. Declared as bare `Int`,
+            // a written `null` was coerced to `0`, which for this function is the opposite
+            // instruction: null blocks forever, `0` returns immediately.
             ParamSpec {
                 name: "seconds",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: None,
                 by_ref: false,
 writes: None,

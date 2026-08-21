@@ -79,6 +79,18 @@ pub enum TypeSpec {
     /// Same reason as `Ptr`: `__elephc_normalize_callable` checks as `PhpType::Callable`, whose
     /// representation is a descriptor rather than a boxed cell.
     Callable,
+    /// PHP's `?T` — a parameter that accepts `null` as a VALUE of its own.
+    ///
+    /// Not the same thing as `default: Some(DefaultSpec::Null)`, which says what an OMITTED
+    /// argument becomes. A REQUIRED nullable — php's `?int $seconds` on `stream_select()` — has
+    /// no default at all, and declaring it as the bare scalar makes a written `null`
+    /// indistinguishable from `0`. For that function they are opposite instructions: null blocks
+    /// forever, `0` returns immediately.
+    ///
+    /// Declaring `Mixed` instead would be the same mistake `Ptr` exists to avoid — it accepts
+    /// `stream_select($r, $w, $e, "abc")`, which php refuses, and this builtin has no check hook
+    /// to catch it afterwards.
+    Nullable(&'static TypeSpec),
 }
 
 /// Static PHP value used as an optional builtin parameter default.

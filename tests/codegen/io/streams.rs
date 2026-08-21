@@ -233,6 +233,11 @@ echo "got: " . $line;
 }
 
 /// Verifies fgets() raises a TypeError when passed false (e.g., from a failed fopen).
+///
+/// Asserted on `diagnostics`, not `stderr`. php CLI writes an uncaught fatal to STDOUT — MEASURED,
+/// `php -n` puts all 726 bytes of it there and leaves stderr empty — so a test reading `stderr`
+/// asserts on a field that is empty for php as well, and can only ever fail. elephc writes it to
+/// stdout too, which is the half that was already right.
 #[test]
 fn test_fopen_false_stream_use_is_type_error() {
     let out = compile_and_run_capture(
@@ -244,13 +249,22 @@ echo "done";
     );
     assert!(!out.success, "program unexpectedly succeeded");
     assert!(
-        out.stderr.contains("TypeError: fgets()") && out.stderr.contains("false given"),
-        "expected fgets TypeError, got stderr={}",
-        out.stderr
+        out.diagnostics.contains("TypeError: fgets()")
+            && out.diagnostics.contains("false given"),
+        "expected fgets TypeError, got diagnostics={} stdout={}",
+        out.diagnostics,
+        out.stdout
     );
 }
 
 /// Verifies fgets() TypeError reports the actual runtime type when a non-stream is passed.
+///
+/// The `mixed` round trip is the point: the checker cannot refuse this statically, so the refusal
+/// has to happen at RUN time, which is where php does it too. MEASURED across `string`, `int`,
+/// `null`, `false` and `array`, elephc reproduces php's message word for word.
+///
+/// Asserted on `diagnostics` for the reason spelled out on
+/// [`test_fopen_false_stream_use_is_type_error`]: php CLI writes an uncaught fatal to STDOUT.
 #[test]
 fn test_stream_type_error_reports_runtime_string_type() {
     let out = compile_and_run_capture(
@@ -263,9 +277,11 @@ fgets(identity("not a stream"));
     );
     assert!(!out.success, "program unexpectedly succeeded");
     assert!(
-        out.stderr.contains("TypeError: fgets()") && out.stderr.contains("string given"),
-        "expected string TypeError, got stderr={}",
-        out.stderr
+        out.diagnostics.contains("TypeError: fgets()")
+            && out.diagnostics.contains("string given"),
+        "expected string TypeError, got diagnostics={} stdout={}",
+        out.diagnostics,
+        out.stdout
     );
 }
 
@@ -951,6 +967,12 @@ unlink("spl_blank.csv");
 /// classes that really declared none. The two spellings are the same PHP null and differ only in
 /// elephc's representation: an untyped property is initialised to the in-band tagged null rather
 /// than to a cell pointer, which the context injection was freeing as though it were one.
+///
+/// The scheme is TWO letters, and has to be. php's `php_stream_locate_url_wrapper` requires
+/// `n > 1` — `f:` is a Windows drive letter — so a one-letter scheme registers and never
+/// dispatches: MEASURED, `fopen("w://x")` under `php -n` answers `false` and warns about the
+/// PATH, having never looked for a wrapper. This test was written with one, so once elephc
+/// implemented that rule the test asked for a resource php does not hand out either.
 #[test]
 fn test_an_untyped_context_property_receives_its_context() {
     let out = compile_and_run_capture(
@@ -963,8 +985,8 @@ class W {
     public function stream_stat() { return []; }
     public function stream_close() {}
 }
-stream_wrapper_register("w", "W");
-$h = fopen("w://x", "r");
+stream_wrapper_register("ww", "W");
+$h = fopen("ww://x", "r");
 echo $h === false ? "false" : "resource";
 fclose($h);
 "#,
@@ -983,6 +1005,9 @@ fclose($h);
 /// The guard above widens which spellings count as declared, so this pins the other side of it:
 /// PHP assigns the context whether or not the class declared a property for it, and deprecates
 /// the invented assignment.
+///
+/// Two letters for the reason given on [`test_an_untyped_context_property_receives_its_context`]:
+/// a one-letter scheme never dispatches, in php or here.
 #[test]
 fn test_a_wrapper_without_a_context_property_is_still_deprecated() {
     let out = compile_and_run_capture(
@@ -994,8 +1019,8 @@ class N {
     public function stream_stat() { return []; }
     public function stream_close() {}
 }
-stream_wrapper_register("n", "N");
-$h = fopen("n://x", "r");
+stream_wrapper_register("nn", "N");
+$h = fopen("nn://x", "r");
 echo $h === false ? "false" : "resource";
 fclose($h);
 "#,

@@ -346,6 +346,22 @@ pub(super) fn lower_builtin_call_args(
 ///
 /// The DEPRECATION notice is not emitted — a measured, separate gap that elephc has for an
 /// explicit `null` argument as well.
+/// Builtins whose php implementation reads `ZEND_NUM_ARGS()`, so an explicit trailing `null` is
+/// php-visibly different from an omitted argument and the operand must not be dropped.
+///
+/// MEASURED on `php -n` 8.5.6, and the whole difference is the deprecation:
+///
+/// ```text
+/// stream_context_set_option($c, ['http' => [...]])        E_DEPRECATED, then bool(true)
+/// stream_context_set_option($c, ['http' => [...]], null)  bool(true), and NO deprecation
+/// ```
+///
+/// This is a list because nothing in the contract can express it: ZPP hands a `?T $x = null`
+/// parameter a value plus an `is_null` flag, and whether a given C implementation consults that
+/// flag or the argument count is a property of its BODY. A name belongs here only with a
+/// measurement like the one above showing the two spellings differ.
+const ARITY_SENSITIVE_BUILTINS: &[&str] = &["stream_context_set_option"];
+
 fn coerce_null_operands_to_builtin_params(
     ctx: &mut LoweringContext<'_, '_>,
     canonical: &str,
@@ -375,7 +391,13 @@ fn coerce_null_operands_to_builtin_params(
     //
     // The dropped operand's INSTRUCTION stays in the IR and still runs, which is what keeps a
     // `warned_null` argument raising its `Warning: Undefined variable` before the call.
-    while let Some(last) = values.len().checked_sub(1) {
+    //
+    // And not at all for a builtin that reads the argument COUNT rather than the flag, because
+    // for those the two spellings are php-visibly different — see `ARITY_SENSITIVE_BUILTINS`.
+    while !ARITY_SENSITIVE_BUILTINS.contains(&canonical) {
+        let Some(last) = values.len().checked_sub(1) else {
+            break;
+        };
         let Some(param) = def.spec.params.get(last) else {
             break;
         };
