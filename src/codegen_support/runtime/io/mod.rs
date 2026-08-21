@@ -277,7 +277,9 @@ pub(crate) use stream_get_line::emit_stream_get_line;
 pub(crate) use stream_context_shape::emit_stream_context_options_shape_ok;
 pub(crate) use stream_select_cast_warning::emit_stream_select_cast_warning;
 pub(crate) use stream_select_memory_guard::emit_stream_select_memory_guard;
-pub(crate) use stream_pending::{emit_stream_pending_put, emit_stream_pending_take};
+pub(crate) use stream_pending::{
+    emit_stream_pending_clear, emit_stream_pending_put, emit_stream_pending_take,
+};
 pub(crate) use filter_inert::emit_filter_mark_inert;
 pub(crate) use filter_create_warning::emit_filter_create_warning;
 pub(crate) use filter_param_warning::emit_filter_param_warning;

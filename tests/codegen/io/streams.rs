@@ -11987,7 +11987,12 @@ fclose($f);
         undeclared, declared,
         "omitting the return type must not change what the wrapper reports"
     );
-    assert_eq!(declared, "w2s0t3rdefgf1l1u1e1");
+    // `e0`, not `e1`: MEASURED by replaying this exact sequence under `php -n` 8.5.6, which
+    // answers `w2s0t3rdefgf1l1u1e0`. php keeps the bytes a chunked read buffered, so after
+    // `ftruncate($f, 4)` the stream still has some and `feof()` is false. The literal said `e1`
+    // from when elephc asked its source for exactly what each call wanted and had nothing left
+    // over — a value both sides produced, and only one of them for php's reason.
+    assert_eq!(declared, "w2s0t3rdefgf1l1u1e0");
 }
 
 /// Verifies compiled PHP output for fopen silent fail for registered user wrapper.

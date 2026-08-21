@@ -47,6 +47,7 @@ use crate::codegen_support::runtime::resources::layout::{
 pub fn emit_fread(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fread_linux_x86_64(emitter);
+        emit_wrapper_chunked_read(emitter);
         return;
     }
 
@@ -118,6 +119,27 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fread_ret");                                    // DESCRIPTOR, which a wrapper fd overruns
 
     emitter.label("__rt_fread_wrapper_call");
+    // php asks its source for a WHOLE CHUNK and keeps what the call did not need, so a request
+    // SMALLER than a chunk goes through the chunked reader instead of asking the wrapper for
+    // exactly five bytes. A request of a chunk or more already matches php and stays direct —
+    // which is also what stops the chunked reader, which re-enters here, from recursing.
+    // Only a stream with a STATE can hold the surplus. Callers that drive this helper with the
+    // synthetic fd rather than the opaque handle — `readfile()`'s loop does — resolve no state, so
+    // chunking would read 8192 bytes, hand them to nothing, and answer none of them.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_state");                                // x0 = stable stream state, 0 when none
+    emitter.instruction("cbz x0, __rt_fread_wrapper_direct");                   // no buffer to keep a surplus in
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_chunk_size");                           // x0 = what php would ask for
+    emitter.instruction("ldr x1, [sp, #8]");                                    // the caller's request
+    emitter.instruction("cmp x1, x0");
+    emitter.instruction("b.ge __rt_fread_wrapper_direct");                      // at least a chunk: ask for exactly it
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the handle drives the chunked reader
+    emitter.instruction("ldr x1, [sp, #8]");                                    // and the caller's request
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame before tail dispatch
+    emitter.instruction("add sp, sp, #64");                                     // release native-read scratch storage
+    emitter.instruction("b __rt_uw_fread_chunked");
+    emitter.label("__rt_fread_wrapper_direct");
     emitter.instruction("ldr x0, [sp, #32]");                                   // the wrapper descriptor the probe clobbered
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the requested byte count for stream_read
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame before wrapper tail dispatch
@@ -276,6 +298,143 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    emit_wrapper_chunked_read(emitter);
+}
+
+/// Emits `__rt_uw_fread_chunked(handle, requested) -> (flag, ptr, len)`.
+///
+/// php never asks a stream's source for exactly what the caller wants: it asks for a whole chunk
+/// and keeps the surplus in the stream's own read buffer, where every later reader finds it. This
+/// is that rule for a user-registered wrapper — read one chunk, hand the whole thing to the
+/// stream, then take back only what the call asked for.
+///
+/// It re-enters `__rt_fread` for the chunk. That terminates because the request is EXACTLY the
+/// chunk size, and the caller's `>=` test then routes it down the ordinary direct path.
+///
+/// The surplus is put on the stream BEFORE anything is handed back, so the answer and the buffer
+/// can never disagree about which bytes were consumed.
+fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: chunked wrapper read ---");
+            emitter.label_global("__rt_uw_fread_chunked");
+            // Frame: [0]=handle [8]=requested [16]=chunk ptr [24]=chunk len [32]=destination
+            //        [40]=answered length
+            emitter.instruction("sub sp, sp, #64");
+            emitter.instruction("stp x29, x30, [sp, #48]");
+            emitter.instruction("add x29, sp, #48");
+            emitter.instruction("str x0, [sp, #0]");                            // the opaque stream handle
+            emitter.instruction("str x1, [sp, #8]");                            // what the caller asked for
+
+            emitter.instruction("bl __rt_stream_chunk_size");                   // x0 = the chunk php would ask for
+            emitter.instruction("mov x1, x0");                                  // read exactly one chunk
+            emitter.instruction("ldr x0, [sp, #0]");
+            emitter.instruction("bl __rt_fread");                               // x0 = flag, x1 = ptr, x2 = len
+            emitter.instruction("str x0, [sp, #40]");                           // the read's OWN verdict travels out
+            emitter.instruction("cbz x2, __rt_uwfc_empty");                     // the wrapper had nothing
+            emitter.instruction("stp x1, x2, [sp, #16]");                       // the chunk outlives the calls below
+
+            emitter.instruction("ldr x0, [sp, #0]");
+            emitter.instruction("ldr x1, [sp, #16]");
+            emitter.instruction("ldr x2, [sp, #24]");
+            emitter.instruction("bl __rt_stream_pending_put");                  // the WHOLE chunk belongs to the stream
+            emitter.instruction("ldr x1, [sp, #16]");
+            emitter.instruction("mov x2, #0");
+            emitter.instruction("bl __rt_concat_publish");                      // hand the scratch window back
+            emitter.instruction("ldr x0, [sp, #16]");
+            emitter.instruction("bl __rt_decref_any");                          // the copy on the stream is the one that lives
+
+            emitter.instruction("ldr x0, [sp, #8]");                            // storage for the caller's request
+            emitter.instruction("bl __rt_concat_reserve");
+            emitter.instruction("str x0, [sp, #32]");
+            emitter.instruction("ldr x0, [sp, #0]");
+            emitter.instruction("ldr x1, [sp, #32]");
+            emitter.instruction("ldr x2, [sp, #8]");
+            emitter.instruction("bl __rt_stream_pending_take");                 // x0 = how many came back
+            emitter.instruction("str x0, [sp, #40]");
+            emitter.instruction("ldr x1, [sp, #32]");
+            emitter.instruction("mov x2, x0");
+            emitter.instruction("bl __rt_concat_publish");                      // claim the window they occupy
+            emitter.instruction("mov x0, #1");                                  // a real result, not a failed read
+            emitter.instruction("ldr x1, [sp, #32]");
+            emitter.instruction("ldr x2, [sp, #40]");
+            emitter.instruction("ldp x29, x30, [sp, #48]");
+            emitter.instruction("add sp, sp, #64");
+            emitter.instruction("ret");
+
+            emitter.label("__rt_uwfc_empty");
+            // NOT a hardcoded success: a wrapper with no `stream_read` answers php `false`, and
+            // that verdict is the flag, not the length. Returning 1 here turned that false into
+            // `""` — a successful empty read.
+            emitter.instruction("ldr x0, [sp, #40]");                           // the read's own verdict
+            emitter.instruction("mov x1, #0");
+            emitter.instruction("mov x2, #0");
+            emitter.instruction("ldp x29, x30, [sp, #48]");
+            emitter.instruction("add sp, sp, #64");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: chunked wrapper read ---");
+            emitter.label_global("__rt_uw_fread_chunked");
+            // Frame: [rbp-8]=handle [rbp-16]=requested [rbp-24]=chunk ptr [rbp-32]=chunk len
+            //        [rbp-40]=destination [rbp-48]=answered length
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("sub rsp, 48");
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // the opaque stream handle
+            emitter.instruction("mov QWORD PTR [rbp - 16], rsi");               // what the caller asked for
+
+            emitter.instruction("call __rt_stream_chunk_size");                 // rax = the chunk php would ask for
+            emitter.instruction("mov rsi, rax");                                // read exactly one chunk
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+            emitter.instruction("call __rt_fread");                             // rax = ptr, rdx = len, rcx = flag
+            emitter.instruction("mov QWORD PTR [rbp - 48], rcx");               // the read's OWN verdict travels out
+            emitter.instruction("test rdx, rdx");
+            emitter.instruction("jz __rt_uwfc_empty_x86");                      // the wrapper had nothing
+            emitter.instruction("mov QWORD PTR [rbp - 24], rax");
+            emitter.instruction("mov QWORD PTR [rbp - 32], rdx");
+
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");
+            emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");
+            emitter.instruction("call __rt_stream_pending_put");                // the WHOLE chunk belongs to the stream
+            emitter.instruction("mov rax, QWORD PTR [rbp - 24]");               // publish reads RAX/RDX
+            emitter.instruction("xor edx, edx");
+            emitter.instruction("call __rt_concat_publish");                    // hand the scratch window back
+            emitter.instruction("mov rax, QWORD PTR [rbp - 24]");               // decref reads RAX, not rdi
+            emitter.instruction("call __rt_decref_any");                        // the copy on the stream is the one that lives
+
+            emitter.instruction("mov rax, QWORD PTR [rbp - 16]");               // reserve reads RAX
+            emitter.instruction("call __rt_concat_reserve");
+            emitter.instruction("mov QWORD PTR [rbp - 40], rax");
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");
+            emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");
+            emitter.instruction("call __rt_stream_pending_take");               // rax = how many came back
+            emitter.instruction("mov QWORD PTR [rbp - 48], rax");
+            emitter.instruction("mov rdx, rax");                                // publish takes the length in RDX
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // and the pointer in RAX
+            emitter.instruction("call __rt_concat_publish");                    // claim the window they occupy
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");
+            emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");
+            emitter.instruction("mov rcx, 1");                                  // a real result, not a failed read
+            emitter.instruction("mov rsp, rbp");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+
+            emitter.label("__rt_uwfc_empty_x86");
+            // See the AArch64 counterpart: the verdict is the flag, not the length.
+            emitter.instruction("xor eax, eax");
+            emitter.instruction("xor edx, edx");
+            emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");               // the read's own verdict
+            emitter.instruction("mov rsp, rbp");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
 }
 
 /// Emits the x86_64 Linux variant of `__rt_fread` using libc `read()`.
@@ -340,6 +499,23 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fread_ret_x86");
 
     emitter.label("__rt_fread_wrapper_call_x86");
+    // See the AArch64 counterpart: a request smaller than a chunk takes the chunked reader.
+    // See the AArch64 counterpart: no state means nowhere to keep a surplus.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_state");                              // rax = stable stream state, 0 when none
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fread_wrapper_direct_x86");                    // no buffer to keep a surplus in
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_chunk_size");                         // rax = what php would ask for
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // the caller's request
+    emitter.instruction("cmp r9, rax");
+    emitter.instruction("jge __rt_fread_wrapper_direct_x86");                   // at least a chunk: ask for exactly it
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the handle drives the chunked reader
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // and the caller's request
+    emitter.instruction("add rsp, 48");                                         // release native-read scratch storage
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("jmp __rt_uw_fread_chunked");
+    emitter.label("__rt_fread_wrapper_direct_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the wrapper descriptor the probe clobbered
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
     emitter.instruction("add rsp, 48");                                         // release native-read scratch storage

@@ -154,6 +154,69 @@ fn emit_take_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");
 }
 
+/// Emits `__rt_stream_pending_clear(handle)`, which drops everything the stream still holds.
+///
+/// A SEEK invalidates the buffer by definition: the bytes in it come from wherever the last read
+/// stopped, and the caller has just asked to continue somewhere else. Without this a chunk read
+/// ahead of a `fseek()` was served after it — the bytes were valid, for a position the program had
+/// left.
+pub fn emit_stream_pending_clear(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: drop retained stream bytes ---");
+            emitter.label_global("__rt_stream_pending_clear");
+            emitter.instruction("sub sp, sp, #32");
+            emitter.instruction("stp x29, x30, [sp, #16]");
+            emitter.instruction("add x29, sp, #16");
+            emitter.instruction("bl __rt_stream_state");                        // resolve the owning stream state
+            emitter.instruction("cbz x0, __rt_spc_done");                       // a stale handle holds nothing
+            emitter.instruction(&format!("ldr x9, [x0, #{STREAM_PENDING_PTR_OFFSET}]"));
+            emitter.instruction(&format!("str xzr, [x0, #{STREAM_PENDING_PTR_OFFSET}]"));
+            emitter.instruction(&format!("str xzr, [x0, #{STREAM_PENDING_LEN_OFFSET}]"));
+            emitter.instruction(&format!("str xzr, [x0, #{STREAM_PENDING_POS_OFFSET}]"));
+            emitter.instruction("cbz x9, __rt_spc_done");                       // nothing was allocated
+            emitter.instruction("mov x0, x9");
+            emitter.instruction("bl __rt_heap_free");                           // the holding area is empty again
+            emitter.label("__rt_spc_done");
+            emitter.instruction("ldp x29, x30, [sp, #16]");
+            emitter.instruction("add sp, sp, #32");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: drop retained stream bytes ---");
+            emitter.label_global("__rt_stream_pending_clear");
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("sub rsp, 16");
+            emitter.instruction("call __rt_stream_state");                      // resolve the owning stream state
+            emitter.instruction("test rax, rax");
+            emitter.instruction("jz __rt_spc_done_x86");                        // a stale handle holds nothing
+            emitter.instruction(&format!(
+                "mov r9, QWORD PTR [rax + {STREAM_PENDING_PTR_OFFSET}]"
+            ));
+            emitter.instruction(&format!(
+                "mov QWORD PTR [rax + {STREAM_PENDING_PTR_OFFSET}], 0"
+            ));
+            emitter.instruction(&format!(
+                "mov QWORD PTR [rax + {STREAM_PENDING_LEN_OFFSET}], 0"
+            ));
+            emitter.instruction(&format!(
+                "mov QWORD PTR [rax + {STREAM_PENDING_POS_OFFSET}], 0"
+            ));
+            emitter.instruction("test r9, r9");
+            emitter.instruction("jz __rt_spc_done_x86");                        // nothing was allocated
+            emitter.instruction("mov rdi, r9");
+            emitter.instruction("call __rt_heap_free");                         // the holding area is empty again
+            emitter.label("__rt_spc_done_x86");
+            emitter.instruction("mov rsp, rbp");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
+}
+
 /// The x86_64 writer.
 fn emit_put_x86_64(emitter: &mut Emitter) {
     emitter.blank();

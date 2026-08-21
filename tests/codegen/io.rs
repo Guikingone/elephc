@@ -23,6 +23,8 @@ mod compress_wrapper;
 mod gz_streams;
 #[path = "io/wrapper_read_buffer.rs"]
 mod wrapper_read_buffer;
+#[path = "io/wrapper_chunk_reads.rs"]
+mod wrapper_chunk_reads;
 #[path = "io/filesystem.rs"]
 mod filesystem;
 #[path = "io/misc.rs"]

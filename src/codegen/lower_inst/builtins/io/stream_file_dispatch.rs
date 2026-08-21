@@ -291,6 +291,12 @@ fn emit_clear_append_skip(ctx: &mut FunctionContext<'_>, stream: ValueId, name: 
             abi::emit_push_reg(ctx.emitter, "x0");                              // the seek result the caller is owed
             load_stream_handle_to_result(ctx, stream, name)?;
             abi::emit_call_label(ctx.emitter, "__rt_stream_clear_append_skip");
+            // A seek also invalidates the stream's READ BUFFER: what it holds came from wherever
+            // the last read stopped, and the caller has just asked to continue somewhere else.
+            // Without this, a chunk read ahead of `fseek($h, 3)` was served after it — valid
+            // bytes, for a position the program had left.
+            load_stream_handle_to_result(ctx, stream, name)?;
+            abi::emit_call_label(ctx.emitter, "__rt_stream_pending_clear");
             abi::emit_pop_reg(ctx.emitter, "x0");
         }
         Arch::X86_64 => {
@@ -298,6 +304,10 @@ fn emit_clear_append_skip(ctx: &mut FunctionContext<'_>, stream: ValueId, name: 
             load_stream_handle_to_result(ctx, stream, name)?;
             ctx.emitter.instruction("mov rdi, rax");
             abi::emit_call_label(ctx.emitter, "__rt_stream_clear_append_skip");
+            // See the AArch64 counterpart: the read buffer is stale after a seek.
+            load_stream_handle_to_result(ctx, stream, name)?;
+            ctx.emitter.instruction("mov rdi, rax");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_pending_clear");
             abi::emit_pop_reg(ctx.emitter, "rax");
         }
     }
@@ -436,6 +446,9 @@ pub(crate) fn lower_ftruncate(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     }
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_ftruncate");
     ctx.emitter.label(&done_label);
+    // NO buffer clear here, deliberately: php KEEPS its read buffer across a truncation. MEASURED
+    // on `php -n` 8.5.6 — after `fread($h, 4)` then `ftruncate($h, 5)`, the next `fread($h, 4)`
+    // hands back `"efgh"`, bytes the truncation had already removed, and `feof()` stays false.
     store_if_result(ctx, inst)
 }
 
