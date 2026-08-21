@@ -298,7 +298,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_mixed_array_get_not_indexable");             // out-of-range ids have no entry
     abi::emit_symbol_address(emitter, "x12", "_class_offsetget_ptrs");
     emitter.instruction("ldr x12, [x12, x11, lsl #3]");                         // resolve the concrete or inherited offsetGet
-    emitter.instruction("cbz x12, __rt_mixed_array_get_not_indexable");        // 0 means the class is not ArrayAccess at all
+    emitter.instruction("cbz x12, __rt_mixed_array_get_not_indexable");         // 0 means the class is not ArrayAccess at all
     emitter.instruction("str x10, [sp, #0]");                                   // save unboxed receiver while boxing the key
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
     emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?

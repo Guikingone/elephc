@@ -63,23 +63,23 @@ pub fn emit_stream_wrapper_register(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_swr_scan_start");                            // the whole protocol is in PHP's accepted set
     emitter.instruction("ldrb w6, [x0, x5]");                                   // next protocol byte
     emitter.instruction("cmp w6, #43");                                         // '+'
-    emitter.instruction("b.eq __rt_swr_chk_next");
+    emitter.instruction("b.eq __rt_swr_chk_next");                              // '+' is accepted — next byte
     emitter.instruction("cmp w6, #45");                                         // below '-' is outside the set (',' and friends)
-    emitter.instruction("b.lt __rt_swr_badproto");
+    emitter.instruction("b.lt __rt_swr_badproto");                              // outside PHP's scheme alphabet — warn and fail
     emitter.instruction("cmp w6, #46");                                         // '-' or '.'
-    emitter.instruction("b.le __rt_swr_chk_next");
+    emitter.instruction("b.le __rt_swr_chk_next");                              // '-' and '.' are accepted — next byte
     emitter.instruction("cmp w6, #48");                                         // '/' sits between '.' and '0'
-    emitter.instruction("b.lt __rt_swr_badproto");
+    emitter.instruction("b.lt __rt_swr_badproto");                              // outside PHP's scheme alphabet — warn and fail
     emitter.instruction("cmp w6, #57");                                         // '0'..'9'
-    emitter.instruction("b.le __rt_swr_chk_next");
+    emitter.instruction("b.le __rt_swr_chk_next");                              // digits are accepted — next byte
     emitter.instruction("cmp w6, #65");                                         // punctuation between '9' and 'A'
-    emitter.instruction("b.lt __rt_swr_badproto");
+    emitter.instruction("b.lt __rt_swr_badproto");                              // outside PHP's scheme alphabet — warn and fail
     emitter.instruction("cmp w6, #90");                                         // 'A'..'Z'
-    emitter.instruction("b.le __rt_swr_chk_next");
+    emitter.instruction("b.le __rt_swr_chk_next");                              // uppercase letters are accepted — next byte
     emitter.instruction("cmp w6, #97");                                         // punctuation between 'Z' and 'a'
-    emitter.instruction("b.lt __rt_swr_badproto");
+    emitter.instruction("b.lt __rt_swr_badproto");                              // outside PHP's scheme alphabet — warn and fail
     emitter.instruction("cmp w6, #122");                                        // 'a'..'z'
-    emitter.instruction("b.gt __rt_swr_badproto");
+    emitter.instruction("b.gt __rt_swr_badproto");                              // above 'z' — warn and fail
     emitter.label("__rt_swr_chk_next");
     emitter.instruction("add x5, x5, #1");                                      // advance the byte index
     emitter.instruction("b __rt_swr_chk");                                      // keep validating
@@ -145,14 +145,14 @@ pub fn emit_stream_wrapper_register(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x2, #{}", BAD_PROTOCOL_WARNING.len()));   // length of the invalid-scheme warning
     emitter.instruction("bl __rt_diag_warning");                                // honours an enclosing @ suppression
     emitter.instruction("mov x0, #0");                                          // PHP returns false for an invalid protocol
-    emitter.instruction("b __rt_swr_ret");
+    emitter.instruction("b __rt_swr_ret");                                      // share the common epilogue
 
     emitter.label("__rt_swr_dupproto");
     abi::emit_symbol_address(emitter, "x1", "_swr_dup_proto_msg");
     emitter.instruction(&format!("mov x2, #{}", DUPLICATE_PROTOCOL_WARNING.len())); // length of the already-defined warning
     emitter.instruction("bl __rt_diag_warning");                                // honours an enclosing @ suppression
     emitter.instruction("mov x0, #0");                                          // PHP returns false rather than redefining
-    emitter.instruction("b __rt_swr_ret");
+    emitter.instruction("b __rt_swr_ret");                                      // share the common epilogue
 
     emitter.label("__rt_swr_full");
     emitter.instruction("mov x0, #0");                                          // return false when the table is full
@@ -192,23 +192,23 @@ fn emit_stream_wrapper_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_swr_scan_start_x86");                         // the whole protocol is in PHP's accepted set
     emitter.instruction("movzx r10d, BYTE PTR [rdi + r9]");                     // next protocol byte
     emitter.instruction("cmp r10b, 43");                                        // '+'
-    emitter.instruction("je __rt_swr_chk_next_x86");
+    emitter.instruction("je __rt_swr_chk_next_x86");                            // '+' is accepted — next byte
     emitter.instruction("cmp r10b, 45");                                        // below '-' is outside the set
-    emitter.instruction("jb __rt_swr_badproto_x86");
+    emitter.instruction("jb __rt_swr_badproto_x86");                            // outside PHP's scheme alphabet — warn and fail
     emitter.instruction("cmp r10b, 46");                                        // '-' or '.'
-    emitter.instruction("jbe __rt_swr_chk_next_x86");
+    emitter.instruction("jbe __rt_swr_chk_next_x86");                           // '-' and '.' are accepted — next byte
     emitter.instruction("cmp r10b, 48");                                        // '/' sits between '.' and '0'
-    emitter.instruction("jb __rt_swr_badproto_x86");
+    emitter.instruction("jb __rt_swr_badproto_x86");                            // outside PHP's scheme alphabet — warn and fail
     emitter.instruction("cmp r10b, 57");                                        // '0'..'9'
-    emitter.instruction("jbe __rt_swr_chk_next_x86");
+    emitter.instruction("jbe __rt_swr_chk_next_x86");                           // digits are accepted — next byte
     emitter.instruction("cmp r10b, 65");                                        // punctuation between '9' and 'A'
-    emitter.instruction("jb __rt_swr_badproto_x86");
+    emitter.instruction("jb __rt_swr_badproto_x86");                            // outside PHP's scheme alphabet — warn and fail
     emitter.instruction("cmp r10b, 90");                                        // 'A'..'Z'
-    emitter.instruction("jbe __rt_swr_chk_next_x86");
+    emitter.instruction("jbe __rt_swr_chk_next_x86");                           // uppercase letters are accepted — next byte
     emitter.instruction("cmp r10b, 97");                                        // punctuation between 'Z' and 'a'
-    emitter.instruction("jb __rt_swr_badproto_x86");
+    emitter.instruction("jb __rt_swr_badproto_x86");                            // outside PHP's scheme alphabet — warn and fail
     emitter.instruction("cmp r10b, 122");                                       // 'a'..'z'
-    emitter.instruction("ja __rt_swr_badproto_x86");
+    emitter.instruction("ja __rt_swr_badproto_x86");                            // above 'z' — warn and fail
     emitter.label("__rt_swr_chk_next_x86");
     emitter.instruction("inc r9");                                              // advance the byte index
     emitter.instruction("jmp __rt_swr_chk_x86");                                // keep validating
@@ -275,14 +275,14 @@ fn emit_stream_wrapper_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov esi, {}", BAD_PROTOCOL_WARNING.len()));   // length of the invalid-scheme warning
     emitter.instruction("call __rt_diag_warning");                              // honours an enclosing @ suppression
     emitter.instruction("xor eax, eax");                                        // PHP returns false for an invalid protocol
-    emitter.instruction("jmp __rt_swr_ret_x86");
+    emitter.instruction("jmp __rt_swr_ret_x86");                                // share the common epilogue
 
     emitter.label("__rt_swr_dupproto_x86");
     abi::emit_symbol_address(emitter, "rdi", "_swr_dup_proto_msg");
     emitter.instruction(&format!("mov esi, {}", DUPLICATE_PROTOCOL_WARNING.len())); // length of the already-defined warning
     emitter.instruction("call __rt_diag_warning");                              // honours an enclosing @ suppression
     emitter.instruction("xor eax, eax");                                        // PHP returns false rather than redefining
-    emitter.instruction("jmp __rt_swr_ret_x86");
+    emitter.instruction("jmp __rt_swr_ret_x86");                                // share the common epilogue
 
     emitter.label("__rt_swr_full_x86");
     emitter.instruction("xor eax, eax");                                        // return false when the table is full

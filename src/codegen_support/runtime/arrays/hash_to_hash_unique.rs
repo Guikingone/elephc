@@ -61,12 +61,12 @@ fn emit_hash_to_hash_unique_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #24]");                                   // park the capacity hint across the two allocations
     emitter.instruction("mov x0, x9");                                          // capacity hint
     emitter.instruction("mov x1, x10");                                         // the result carries the source's value_type
-    emitter.instruction("bl __rt_hash_new");
+    emitter.instruction("bl __rt_hash_new");                                    // allocate the result hash
     emitter.instruction("str x0, [sp, #8]");                                    // save the result hash
 
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the capacity hint
     emitter.instruction("mov x1, #0");                                          // the seen table only ever stores a marker int
-    emitter.instruction("bl __rt_hash_new");
+    emitter.instruction("bl __rt_hash_new");                                    // allocate the seen table
     emitter.instruction("str x0, [sp, #16]");                                   // save the seen table
     emitter.instruction("str xzr, [sp, #24]");                                  // cursor = 0 starts the insertion-order walk
 
@@ -75,7 +75,7 @@ fn emit_hash_to_hash_unique_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #24]");                                   // current cursor
     emitter.instruction("bl __rt_hash_iter_next");                              // x0=cursor, x1/x2=key, x3/x4=value, x5=tag
     emitter.instruction("cmp x0, #-1");                                         // has the walk finished?
-    emitter.instruction("b.eq __rt_h2h_uniq_done");
+    emitter.instruction("b.eq __rt_h2h_uniq_done");                             // walk finished: return the result
     emitter.instruction("str x0, [sp, #24]");                                   // save the resumed cursor
     emitter.instruction("stp x1, x2, [sp, #32]");                               // save the entry's key pair
     emitter.instruction("stp x3, x4, [sp, #48]");                               // save the entry's value pair
@@ -87,9 +87,9 @@ fn emit_hash_to_hash_unique_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #48]");                                   // value low word
     emitter.instruction("ldr x9, [sp, #72]");                                   // value_type
     emitter.instruction("cmp x9, #1");                                          // is the value a string?
-    emitter.instruction("b.eq __rt_h2h_uniq_str_probe");
+    emitter.instruction("b.eq __rt_h2h_uniq_str_probe");                        // strings probe with (pointer, length)
     emitter.instruction("mov x2, #-1");                                         // integer keys carry the -1 sentinel
-    emitter.instruction("b __rt_h2h_uniq_probe");
+    emitter.instruction("b __rt_h2h_uniq_probe");                               // integer key is ready to probe
     emitter.label("__rt_h2h_uniq_str_probe");
     emitter.instruction("ldr x2, [sp, #56]");                                   // string keys carry the length
     emitter.label("__rt_h2h_uniq_probe");
@@ -101,29 +101,29 @@ fn emit_hash_to_hash_unique_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #48]");                                   // value low word
     emitter.instruction("ldr x9, [sp, #72]");                                   // value_type
     emitter.instruction("cmp x9, #1");                                          // string values key on their length too
-    emitter.instruction("b.eq __rt_h2h_uniq_str_mark");
+    emitter.instruction("b.eq __rt_h2h_uniq_str_mark");                         // strings mark with (pointer, length)
     emitter.instruction("mov x2, #-1");                                         // integer-key sentinel
-    emitter.instruction("b __rt_h2h_uniq_mark");
+    emitter.instruction("b __rt_h2h_uniq_mark");                                // integer key is ready to mark
     emitter.label("__rt_h2h_uniq_str_mark");
     emitter.instruction("ldr x2, [sp, #56]");                                   // string key length
     emitter.label("__rt_h2h_uniq_mark");
     emitter.instruction("mov x3, #1");                                          // any non-null marker will do
     emitter.instruction("mov x4, #0");                                          // markers have no high word
     emitter.instruction("mov x5, #0");                                          // runtime tag 0 = int
-    emitter.instruction("bl __rt_hash_set");
+    emitter.instruction("bl __rt_hash_set");                                    // record the value in the seen table
     emitter.instruction("str x0, [sp, #16]");                                   // the seen table may have moved
 
     // The result takes ownership of the payload, the way the indexed-array builder does.
     emitter.instruction("ldr x9, [sp, #72]");                                   // value_type
     emitter.instruction("cmp x9, #1");                                          // strings are copied, not shared
-    emitter.instruction("b.eq __rt_h2h_uniq_persist");
+    emitter.instruction("b.eq __rt_h2h_uniq_persist");                          // strings get an independent copy
     emitter.instruction("cmp x9, #4");                                          // below the heap-backed tag range?
     emitter.instruction("b.lt __rt_h2h_uniq_insert");                           // scalars need no retain
     emitter.instruction("cmp x9, #7");                                          // above the heap-backed tag range?
     emitter.instruction("b.gt __rt_h2h_uniq_insert");                           // non-heap tags need no retain
     emitter.instruction("ldr x0, [sp, #48]");                                   // the heap-backed payload
     emitter.instruction("bl __rt_incref");                                      // retain it for the result
-    emitter.instruction("b __rt_h2h_uniq_insert");
+    emitter.instruction("b __rt_h2h_uniq_insert");                              // payload retained: insert it
     emitter.label("__rt_h2h_uniq_persist");
     emitter.instruction("ldr x1, [sp, #48]");                                   // string pointer
     emitter.instruction("ldr x2, [sp, #56]");                                   // string length
@@ -135,9 +135,9 @@ fn emit_hash_to_hash_unique_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x1, x2, [sp, #32]");                               // the entry's ORIGINAL key
     emitter.instruction("ldp x3, x4, [sp, #48]");                               // the owned payload
     emitter.instruction("ldr x5, [sp, #64]");                                   // its runtime tag
-    emitter.instruction("bl __rt_hash_set");
+    emitter.instruction("bl __rt_hash_set");                                    // insert under the original key
     emitter.instruction("str x0, [sp, #8]");                                    // the result may have moved
-    emitter.instruction("b __rt_h2h_uniq_loop");
+    emitter.instruction("b __rt_h2h_uniq_loop");                                // process the next entry
 
     emitter.label("__rt_h2h_uniq_done");
     emitter.instruction("ldr x0, [sp, #16]");                                   // the seen table is scratch
@@ -145,7 +145,7 @@ fn emit_hash_to_hash_unique_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #8]");                                    // x0 = the result hash
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release the frame
-    emitter.instruction("ret");
+    emitter.instruction("ret");                                                 // return the owned unique hash to the caller
 }
 
 /// Emits `__rt_hash_to_hash_unique` for x86_64.
@@ -158,8 +158,8 @@ fn emit_hash_to_hash_unique_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_to_hash_unique ---");
     emitter.label_global("__rt_hash_to_hash_unique");
-    emitter.instruction("push rbp");
-    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("push rbp");                                            // save the caller's frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the frame pointer
     emitter.instruction("sub rsp, 96");                                         // reserve the walk state, keeping rsp aligned
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source hash
@@ -173,21 +173,21 @@ fn emit_hash_to_hash_unique_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // park the capacity hint
     emitter.instruction("mov rdi, rax");                                        // capacity hint
     emitter.instruction("mov rsi, r10");                                        // the result carries the source's value_type
-    emitter.instruction("call __rt_hash_new");
+    emitter.instruction("call __rt_hash_new");                                  // allocate the result hash
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the result hash
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the capacity hint
     emitter.instruction("xor esi, esi");                                        // the seen table only ever stores a marker int
-    emitter.instruction("call __rt_hash_new");
+    emitter.instruction("call __rt_hash_new");                                  // allocate the seen table
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the seen table
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // cursor = 0 starts the walk
 
     emitter.label("__rt_h2h_uniq_loop_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // source hash
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // current cursor
-    emitter.instruction("call __rt_hash_iter_next");
+    emitter.instruction("call __rt_hash_iter_next");                            // rax=cursor, rdi/rdx=key, rcx/r8=value, r9=tag
     emitter.instruction("cmp rax, -1");                                         // has the walk finished?
-    emitter.instruction("je __rt_h2h_uniq_done_x");
+    emitter.instruction("je __rt_h2h_uniq_done_x");                             // walk finished: return the result
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the resumed cursor
     // Read off the helper, not deduced from SysV: `__rt_hash_iter_next` returns its tuple in
     // rax/rdi/rdx/rcx/r8/r9, NOT in argument order. Deducing it saved four wrong registers.
@@ -201,47 +201,47 @@ fn emit_hash_to_hash_unique_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // the seen table
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // value low word
     emitter.instruction("cmp QWORD PTR [rbp - 80], 1");                         // is the value a string?
-    emitter.instruction("je __rt_h2h_uniq_str_probe_x");
+    emitter.instruction("je __rt_h2h_uniq_str_probe_x");                        // strings probe with (pointer, length)
     emitter.instruction("mov rdx, -1");                                         // integer keys carry the -1 sentinel
-    emitter.instruction("jmp __rt_h2h_uniq_probe_x");
+    emitter.instruction("jmp __rt_h2h_uniq_probe_x");                           // integer key is ready to probe
     emitter.label("__rt_h2h_uniq_str_probe_x");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // string keys carry the length
     emitter.label("__rt_h2h_uniq_probe_x");
     emitter.instruction("call __rt_hash_get");                                  // rax = 1 when already kept
-    emitter.instruction("test rax, rax");
+    emitter.instruction("test rax, rax");                                       // was this value already kept?
     emitter.instruction("jnz __rt_h2h_uniq_loop_x");                            // duplicate: keep only the FIRST occurrence
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // the seen table
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // value low word
     emitter.instruction("cmp QWORD PTR [rbp - 80], 1");                         // string values key on their length too
-    emitter.instruction("je __rt_h2h_uniq_str_mark_x");
+    emitter.instruction("je __rt_h2h_uniq_str_mark_x");                         // strings mark with (pointer, length)
     emitter.instruction("mov rdx, -1");                                         // integer-key sentinel
-    emitter.instruction("jmp __rt_h2h_uniq_mark_x");
+    emitter.instruction("jmp __rt_h2h_uniq_mark_x");                            // integer key is ready to mark
     emitter.label("__rt_h2h_uniq_str_mark_x");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // string key length
     emitter.label("__rt_h2h_uniq_mark_x");
     emitter.instruction("mov rcx, 1");                                          // any non-null marker will do
     emitter.instruction("xor r8d, r8d");                                        // markers have no high word
     emitter.instruction("xor r9d, r9d");                                        // runtime tag 0 = int
-    emitter.instruction("call __rt_hash_set");
+    emitter.instruction("call __rt_hash_set");                                  // record the value in the seen table
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // the seen table may have moved
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // value_type
     emitter.instruction("cmp r10, 1");                                          // strings are copied, not shared
-    emitter.instruction("je __rt_h2h_uniq_persist_x");
+    emitter.instruction("je __rt_h2h_uniq_persist_x");                          // strings get an independent copy
     emitter.instruction("cmp r10, 4");                                          // below the heap-backed tag range?
     emitter.instruction("jl __rt_h2h_uniq_insert_x");                           // scalars need no retain
     emitter.instruction("cmp r10, 7");                                          // above the heap-backed tag range?
     emitter.instruction("jg __rt_h2h_uniq_insert_x");                           // non-heap tags need no retain
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // the heap-backed payload
     emitter.instruction("call __rt_incref");                                    // retain it for the result
-    emitter.instruction("jmp __rt_h2h_uniq_insert_x");
+    emitter.instruction("jmp __rt_h2h_uniq_insert_x");                          // payload retained: insert it
     emitter.label("__rt_h2h_uniq_persist_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // string pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // string length
     emitter.instruction("call __rt_str_persist");                               // rax/rdx = an independent copy
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // the result stores the copy
-    emitter.instruction("mov QWORD PTR [rbp - 64], rdx");
+    emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // and the copy's length
 
     emitter.label("__rt_h2h_uniq_insert_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // the result hash
@@ -250,15 +250,15 @@ fn emit_hash_to_hash_unique_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // the owned payload
     emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // its high word
     emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // its runtime tag
-    emitter.instruction("call __rt_hash_set");
+    emitter.instruction("call __rt_hash_set");                                  // insert under the original key
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // the result may have moved
-    emitter.instruction("jmp __rt_h2h_uniq_loop_x");
+    emitter.instruction("jmp __rt_h2h_uniq_loop_x");                            // process the next entry
 
     emitter.label("__rt_h2h_uniq_done_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // the seen table is scratch
     emitter.instruction("call __rt_decref_hash");                               // release it (this helper reads rax)
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // rax = the result hash
-    emitter.instruction("mov rsp, rbp");
-    emitter.instruction("pop rbp");
-    emitter.instruction("ret");
+    emitter.instruction("mov rsp, rbp");                                        // release the frame
+    emitter.instruction("pop rbp");                                             // restore the caller's frame pointer
+    emitter.instruction("ret");                                                 // return the owned unique hash to the caller
 }

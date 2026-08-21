@@ -334,11 +334,11 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // closing-brace position
     emitter.instruction("ldr x10, [sp, #16]");                                  // source end
     emitter.instruction("cmp x9, x10");                                         // require the closing delimiter byte
-    emitter.instruction("b.hs __rt_unser_at_array_fail");
+    emitter.instruction("b.hs __rt_unser_at_array_fail");                       // input ended before the closing '}'
     emitter.instruction("ldr x10, [sp, #0]");                                   // source base
     emitter.instruction("ldrb w11, [x10, x9]");                                 // bounded closing delimiter
     emitter.instruction("cmp w11, #125");                                       // exact `}`
-    emitter.instruction("b.ne __rt_unser_at_array_fail");
+    emitter.instruction("b.ne __rt_unser_at_array_fail");                       // anything but '}' fails the array
     emitter.instruction("mov x0, #24");                                         // box the hash: Mixed cell = tag + two payload words
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the boxed Mixed cell
     emitter.instruction("mov x9, #5");                                          // heap kind 5 = boxed Mixed cell

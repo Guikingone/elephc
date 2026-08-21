@@ -106,7 +106,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     // path as `echo`, so buffered text precedes it; this helper used to exit without flushing,
     // which discarded every byte a program had buffered — `ob_start(); echo "x"; throw …` printed
     // nothing at all on stdout. Nothing is live yet at the entry, so the call costs no spill.
-    emitter.instruction("bl __rt_ob_flush_all");
+    emitter.instruction("bl __rt_ob_flush_all");                                // drain every open output buffer before the report is written
 
     abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
     emitter.instruction("cbz x9, __rt_uncaught_fallback");                      // no throwable published: keep the constant message rather than dereferencing null
@@ -196,8 +196,8 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
 
     // See the ARM64 path. `and rsp, -16` is the realignment the shared exit path performs for the
     // same call; this helper never returns, so clobbering the alignment afterwards is harmless.
-    emitter.instruction("and rsp, -16");
-    emitter.instruction("call __rt_ob_flush_all");
+    emitter.instruction("and rsp, -16");                                        // realign the stack for the C-ABI flush; this helper never returns
+    emitter.instruction("call __rt_ob_flush_all");                              // drain every open output buffer before the report is written
 
     abi::emit_load_symbol_to_reg(emitter, "r8", "_exc_value", 0);
     emitter.instruction("test r8, r8");                                         // no throwable published: keep the constant message rather than dereferencing null

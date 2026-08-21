@@ -273,7 +273,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_mixed");                                // release it
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed value
     emitter.instruction("bl __rt_decref_mixed");                                // release it too
-    emitter.instruction("b __rt_mixed_array_set_done");
+    emitter.instruction("b __rt_mixed_array_set_done");                         // both releases done: leave through the shared epilogue
 
     // PHP refuses to index an object that is not ArrayAccess, on writes exactly as on reads.
     emitter.label("__rt_mixed_array_set_not_indexable");
@@ -516,7 +516,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_mixed");                              // release it
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed value
     emitter.instruction("call __rt_decref_mixed");                              // release it too
-    emitter.instruction("jmp __rt_mixed_array_set_done");
+    emitter.instruction("jmp __rt_mixed_array_set_done");                       // both releases done: leave through the shared epilogue
 
     // PHP refuses to index an object that is not ArrayAccess, on writes exactly as on reads.
     emitter.label("__rt_mixed_array_set_not_indexable");

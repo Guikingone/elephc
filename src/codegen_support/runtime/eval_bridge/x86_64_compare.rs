@@ -317,8 +317,8 @@ pub(super) fn emit_x86_64_compare(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, -1");                                         // integer hash keys use an all-ones high-word sentinel
     emitter.label("__elephc_eval_value_regular_key_call_x86");
     emitter.instruction("mov rdx, rdi");                                        // pass the right key low word to the native comparator
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                      // pass the saved left key low word
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                      // pass the saved left key high word or integer sentinel
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the saved left key low word
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the saved left key high word or integer sentinel
     emitter.instruction("call __rt_key_compare_regular");                       // apply the same SORT_REGULAR ordering used by AOT ksort
     emitter.instruction("jmp __elephc_eval_value_regular_key_done_x86");        // preserve the normalized -1, 0, or 1 result
     emitter.label("__elephc_eval_value_regular_key_invalid_x86");

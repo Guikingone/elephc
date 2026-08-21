@@ -101,10 +101,10 @@ fn emit_stat_mode_access_aarch64(emitter: &mut Emitter) {
     // -- test the wanted bit inside the selected triad --
     emitter.label("__rt_sma_owner");
     emitter.instruction("mov x9, #6");                                          // the owner triad sits in bits 6..8
-    emitter.instruction("b __rt_sma_test");
+    emitter.instruction("b __rt_sma_test");                                     // → the shared permission test
     emitter.label("__rt_sma_group");
     emitter.instruction("mov x9, #3");                                          // the group triad sits in bits 3..5
-    emitter.instruction("b __rt_sma_test");
+    emitter.instruction("b __rt_sma_test");                                     // → the shared permission test
     emitter.label("__rt_sma_world");
     emitter.instruction("mov x9, #0");                                          // the world triad sits in bits 0..2
     emitter.label("__rt_sma_test");
@@ -176,10 +176,10 @@ fn emit_stat_mode_access_linux_x86_64(emitter: &mut Emitter) {
     // -- test the wanted bit inside the selected triad --
     emitter.label("__rt_sma_owner_x86");
     emitter.instruction("mov ecx, 6");                                          // the owner triad sits in bits 6..8
-    emitter.instruction("jmp __rt_sma_test_x86");
+    emitter.instruction("jmp __rt_sma_test_x86");                               // → the shared permission test
     emitter.label("__rt_sma_group_x86");
     emitter.instruction("mov ecx, 3");                                          // the group triad sits in bits 3..5
-    emitter.instruction("jmp __rt_sma_test_x86");
+    emitter.instruction("jmp __rt_sma_test_x86");                               // → the shared permission test
     emitter.label("__rt_sma_world_x86");
     emitter.instruction("xor ecx, ecx");                                        // the world triad sits in bits 0..2
     emitter.label("__rt_sma_test_x86");

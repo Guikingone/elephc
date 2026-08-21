@@ -90,9 +90,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("shr r11, 8");                                          // move runtime element tag to low bits
     emitter.instruction("and r11, 0x7f");                                       // isolate seven-bit runtime element tag
     emitter.instruction("cmp r11, 1");                                          // direct string payload?
-    emitter.instruction("je __rt_unser_options_indexed_string_x");
+    emitter.instruction("je __rt_unser_options_indexed_string_x");              // direct strings append without conversion
     emitter.instruction("cmp r11, 6");                                          // direct object pointer payload?
-    emitter.instruction("je __rt_unser_options_indexed_object_x");
+    emitter.instruction("je __rt_unser_options_indexed_object_x");              // objects convert through __toString
     emitter.instruction("cmp r11, 7");                                          // heterogeneous packed values use boxed Mixed cells
     emitter.instruction("jne __rt_unser_allowed_classes_entry_metadata_error_x"); // other homogeneous values are invalid class names
     emitter.instruction("mov r10, QWORD PTR [r8 + r9 * 8 + 24]");               // selected boxed Mixed pointer
@@ -102,27 +102,27 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // boxed low payload
     emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // boxed high payload
     emitter.instruction("cmp r11, 1");                                          // boxed string entry?
-    emitter.instruction("je __rt_unser_options_append_borrowed_x");
+    emitter.instruction("je __rt_unser_options_append_borrowed_x");             // append the boxed string's borrowed bytes
     emitter.instruction("cmp r11, 6");                                          // boxed object entry?
-    emitter.instruction("je __rt_unser_options_boxed_object_x");
+    emitter.instruction("je __rt_unser_options_boxed_object_x");                // unwrap the object for __toString conversion
     emitter.instruction("mov rax, r11");                                        // forward invalid boxed runtime tag
     emitter.instruction("mov rdi, rsi");                                        // forward invalid boxed low payload
-    emitter.instruction("jmp __rt_unser_allowed_classes_entry_type_error_x");
+    emitter.instruction("jmp __rt_unser_allowed_classes_entry_type_error_x");   // other boxed types are invalid class names
     emitter.label("__rt_unser_options_indexed_string_x");
     emitter.instruction("mov r10, r9");                                         // copy index before scaling
     emitter.instruction("shl r10, 4");                                          // direct string-pair stride is sixteen bytes
     emitter.instruction("lea r10, [r8 + r10 + 24]");                            // select current direct string pair
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // borrow source string pointer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // borrow source string length
-    emitter.instruction("jmp __rt_unser_options_append_borrowed_x");
+    emitter.instruction("jmp __rt_unser_options_append_borrowed_x");            // append the borrowed string as an allowed name
     emitter.label("__rt_unser_options_indexed_object_x");
     emitter.instruction("mov rax, QWORD PTR [r8 + r9 * 8 + 24]");               // load selected direct object pointer
     emitter.instruction("test rax, rax");                                       // null object slot?
     emitter.instruction("jz __rt_unser_allowed_classes_entry_null_error_x");    // report PHP null
-    emitter.instruction("jmp __rt_unser_options_convert_object_x");
+    emitter.instruction("jmp __rt_unser_options_convert_object_x");             // convert the entry object via __toString
     emitter.label("__rt_unser_options_boxed_object_x");
     emitter.instruction("mov rax, rsi");                                        // boxed low payload is object pointer
-    emitter.instruction("jmp __rt_unser_options_convert_object_x");
+    emitter.instruction("jmp __rt_unser_options_convert_object_x");             // convert the boxed object via __toString
 
     emitter.label("__rt_unser_options_hash_list_loop_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // associative source hash
@@ -132,7 +132,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("je __rt_unser_options_done_x");                        // normalized policy is ready
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve next iterator cursor
     emitter.instruction("cmp r9, 7");                                           // boxed Mixed hash value?
-    emitter.instruction("jne __rt_unser_options_hash_unboxed_x");
+    emitter.instruction("jne __rt_unser_options_hash_unboxed_x");               // direct typed values skip the unwrap
     emitter.instruction("test rcx, rcx");                                       // null boxed cell?
     emitter.instruction("jz __rt_unser_allowed_classes_entry_null_error_x");    // report PHP null
     emitter.instruction("mov r10, rcx");                                        // preserve boxed cell pointer for payload reads
@@ -141,16 +141,16 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [r10 + 16]");                        // unwrap high payload
     emitter.label("__rt_unser_options_hash_unboxed_x");
     emitter.instruction("cmp r9, 1");                                           // string hash value?
-    emitter.instruction("je __rt_unser_options_hash_string_x");
+    emitter.instruction("je __rt_unser_options_hash_string_x");                 // strings append without conversion
     emitter.instruction("cmp r9, 6");                                           // object hash value?
-    emitter.instruction("je __rt_unser_options_hash_object_x");
+    emitter.instruction("je __rt_unser_options_hash_object_x");                 // objects convert through __toString
     emitter.instruction("mov rax, r9");                                         // forward invalid value runtime tag
     emitter.instruction("mov rdi, rcx");                                        // forward invalid low payload
-    emitter.instruction("jmp __rt_unser_allowed_classes_entry_type_error_x");
+    emitter.instruction("jmp __rt_unser_allowed_classes_entry_type_error_x");   // other value types are invalid class names
     emitter.label("__rt_unser_options_hash_string_x");
     emitter.instruction("mov rsi, rcx");                                        // normalize iterator string pointer to push ABI
     emitter.instruction("mov rdx, r8");                                         // normalize iterator string length to push ABI
-    emitter.instruction("jmp __rt_unser_options_append_borrowed_x");
+    emitter.instruction("jmp __rt_unser_options_append_borrowed_x");            // append the borrowed hash-value string
     emitter.label("__rt_unser_options_hash_object_x");
     emitter.instruction("mov rax, rcx");                                        // iterator low payload is object pointer
 
@@ -173,7 +173,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("je __rt_unser_options_list_continue_x");               // transferred storage is now owned by the normalized array
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // recover transient __toString return owner
     emitter.instruction("call __rt_heap_free_safe");                            // release it after array_push_str copied the bytes
-    emitter.instruction("jmp __rt_unser_options_list_continue_x");
+    emitter.instruction("jmp __rt_unser_options_list_continue_x");              // process the next source value
 
     emitter.label("__rt_unser_options_append_borrowed_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // normalized destination array
@@ -211,12 +211,12 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_unser_class_allowed_no_x");                   // no exact match means incomplete object
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // list base
     emitter.instruction("cmp QWORD PTR [rip + _unser_allowed_list_mixed], 0");  // does this list contain boxed Mixed strings?
-    emitter.instruction("jne __rt_unser_class_allowed_mixed_cell_x");
+    emitter.instruction("jne __rt_unser_class_allowed_mixed_cell_x");           // boxed cells need an extra dereference
     emitter.instruction("mov rax, r10");                                        // preserve the list cursor while deriving a byte offset
     emitter.instruction("shl rax, 4");                                          // scale the cursor by the 16-byte direct-string pair stride
     emitter.instruction("add r11, rax");                                        // advance the list base to the selected direct-string pair
     emitter.instruction("add r11, 24");                                         // skip the indexed-array header before reading the string pair
-    emitter.instruction("jmp __rt_unser_class_allowed_compare_x");
+    emitter.instruction("jmp __rt_unser_class_allowed_compare_x");              // compare against the requested class name
     emitter.label("__rt_unser_class_allowed_mixed_cell_x");
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8 + 24]");             // validated boxed string cell
     emitter.instruction("add r11, 8");                                          // string payload pair follows its Mixed tag
@@ -243,10 +243,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
 
     emitter.label("__rt_unser_options_type_error_x");
     emitter.instruction("test rax, rax");                                       // a null Mixed pointer reports null
-    emitter.instruction("jz __rt_unser_options_type_null_error_x");
+    emitter.instruction("jz __rt_unser_options_type_null_error_x");             // report the rejected options value as null
     emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // rejected runtime payload
     emitter.instruction("mov rax, QWORD PTR [rax]");                            // rejected runtime tag
-    emitter.instruction("jmp __rt_unser_options_type_dispatch_x");
+    emitter.instruction("jmp __rt_unser_options_type_dispatch_x");              // compose the options TypeError message
     emitter.label("__rt_unser_options_type_null_error_x");
     emitter.instruction("mov eax, 8");                                          // runtime null tag
     emitter.instruction("xor edi, edi");                                        // null has no payload
@@ -258,7 +258,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_unser_allowed_classes_entry_null_error_x");
     emitter.instruction("mov eax, 8");                                          // forward the invalid null-entry tag directly
     emitter.instruction("xor edi, edi");                                        // null has no payload
-    emitter.instruction("jmp __rt_unser_allowed_classes_entry_type_error_x");
+    emitter.instruction("jmp __rt_unser_allowed_classes_entry_type_error_x");   // share the entry TypeError cleanup path
     emitter.label("__rt_unser_allowed_classes_entry_metadata_error_x");
     emitter.instruction("mov rax, r11");                                        // packed element metadata uses runtime tag numbering
     emitter.instruction("xor edi, edi");                                        // homogeneous metadata has no single payload

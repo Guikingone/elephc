@@ -854,7 +854,7 @@ fn emit_aarch64_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
 fn emit_aarch64_scalar_slot_call(emitter: &mut Emitter, vtable_slot: usize, tag: &str) {
     let boxed = format!("__rt_uw{tag}_boxed_scalar");
     let done = format!("__rt_uw{tag}_scalar_done");
-    emitter.instruction(&format!("tbnz x13, #{}, {}", vtable_slot, boxed));      // an undeclared return type arrives boxed instead
+    emitter.instruction(&format!("tbnz x13, #{}, {}", vtable_slot, boxed));     // an undeclared return type arrives boxed instead
     emitter.instruction("blr x11");                                             // invoke the wrapper method for its raw scalar
     emitter.instruction(&format!("b {}", done));                                // the declared shape needs no conversion
     emitter.label(&boxed);

@@ -119,7 +119,7 @@ pub fn emit_pdo_call_agg_step(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_pdo_call_agg_step_slot0_null");           // null before the first row → box PHP null
     emitter.instruction("bl __rt_incref");                                      // retain the accumulator for its args-array slot
     emitter.instruction("ldr x0, [sp, #248]");                                  // reload the accumulator pointer to store
-    emitter.instruction("b __rt_pdo_call_agg_step_slot0_store");
+    emitter.instruction("b __rt_pdo_call_agg_step_slot0_store");                // retained accumulator in x0 → store it into slot 0
     emitter.label("__rt_pdo_call_agg_step_slot0_null");
     emitter.instruction("mov x0, #8");                                          // runtime tag 8 = Void/NULL
     emitter.instruction("mov x1, #0");                                          // value_lo unused
@@ -154,33 +154,33 @@ pub fn emit_pdo_call_agg_step(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, x13");                                   // x11 = &argv[k]
     emitter.instruction("ldr x14, [x11, #0]");                                  // load the ElephcVal storage-class tag
     emitter.instruction("cmp x14, #1");                                         // SQLITE_INTEGER?
-    emitter.instruction("b.eq __rt_pdo_call_agg_step_box_int");
+    emitter.instruction("b.eq __rt_pdo_call_agg_step_box_int");                 // yes → box as a Mixed int
     emitter.instruction("cmp x14, #2");                                         // SQLITE_FLOAT?
-    emitter.instruction("b.eq __rt_pdo_call_agg_step_box_float");
+    emitter.instruction("b.eq __rt_pdo_call_agg_step_box_float");               // yes → box as a Mixed float
     emitter.instruction("cmp x14, #3");                                         // SQLITE_TEXT?
-    emitter.instruction("b.eq __rt_pdo_call_agg_step_box_str");
+    emitter.instruction("b.eq __rt_pdo_call_agg_step_box_str");                 // yes → box as a Mixed string
     emitter.instruction("cmp x14, #4");                                         // SQLITE_BLOB?
-    emitter.instruction("b.eq __rt_pdo_call_agg_step_box_str");
+    emitter.instruction("b.eq __rt_pdo_call_agg_step_box_str");                 // yes → blobs box as Mixed strings too
     // -- tag 0 (SQLITE_NULL) or any unexpected code → PHP null (Mixed tag 8) --
     emitter.instruction("mov x0, #8");                                          // runtime tag 8 = Void/NULL
     emitter.instruction("mov x1, #0");                                          // value_lo unused
     emitter.instruction("mov x2, #0");                                          // value_hi unused
-    emitter.instruction("b __rt_pdo_call_agg_step_box_call");
+    emitter.instruction("b __rt_pdo_call_agg_step_box_call");                   // box the PHP null via the shared boxing tail
     emitter.label("__rt_pdo_call_agg_step_box_int");
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = int
     emitter.instruction("ldr x1, [x11, #8]");                                   // value_lo = ElephcVal.i
     emitter.instruction("mov x2, #0");                                          // value_hi unused
-    emitter.instruction("b __rt_pdo_call_agg_step_box_call");
+    emitter.instruction("b __rt_pdo_call_agg_step_box_call");                   // box the int via the shared boxing tail
     emitter.label("__rt_pdo_call_agg_step_box_float");
     emitter.instruction("mov x0, #2");                                          // runtime tag 2 = float
     emitter.instruction("ldr x1, [x11, #16]");                                  // value_lo = ElephcVal.f raw f64 bit-pattern
     emitter.instruction("mov x2, #0");                                          // value_hi unused
-    emitter.instruction("b __rt_pdo_call_agg_step_box_call");
+    emitter.instruction("b __rt_pdo_call_agg_step_box_call");                   // box the float via the shared boxing tail
     emitter.label("__rt_pdo_call_agg_step_box_str");
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string (binary-safe)
     emitter.instruction("ldr x1, [x11, #24]");                                  // value_lo = ElephcVal.ptr
     emitter.instruction("ldr x2, [x11, #32]");                                  // value_hi = ElephcVal.len
-    emitter.instruction("b __rt_pdo_call_agg_step_box_call");
+    emitter.instruction("b __rt_pdo_call_agg_step_box_call");                   // box the string via the shared boxing tail
     emitter.label("__rt_pdo_call_agg_step_box_call");
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = owned boxed Mixed row value
     emitter.instruction("ldr x9, [sp, #312]");                                  // reload the loop index (clobbered by the call)
@@ -329,7 +329,7 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_pdo_call_agg_step_slot0_null_x86");            // yes → box PHP null
     emitter.instruction("call __rt_incref");                                    // retain the accumulator for its args-array slot
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the accumulator pointer to store
-    emitter.instruction("jmp __rt_pdo_call_agg_step_slot0_store_x86");
+    emitter.instruction("jmp __rt_pdo_call_agg_step_slot0_store_x86");          // retained accumulator in rax → store it into slot 0
     emitter.label("__rt_pdo_call_agg_step_slot0_null_x86");
     emitter.instruction("mov rdi, 0");                                          // value_lo unused
     emitter.instruction("mov rsi, 0");                                          // value_hi unused
@@ -361,33 +361,33 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, rax");                                        // r11 = &argv[k]
     emitter.instruction("mov r8, QWORD PTR [r11 + 0]");                         // load the ElephcVal storage-class tag
     emitter.instruction("cmp r8, 1");                                           // SQLITE_INTEGER?
-    emitter.instruction("je __rt_pdo_call_agg_step_box_int_x86");
+    emitter.instruction("je __rt_pdo_call_agg_step_box_int_x86");               // yes → box as a Mixed int
     emitter.instruction("cmp r8, 2");                                           // SQLITE_FLOAT?
-    emitter.instruction("je __rt_pdo_call_agg_step_box_float_x86");
+    emitter.instruction("je __rt_pdo_call_agg_step_box_float_x86");             // yes → box as a Mixed float
     emitter.instruction("cmp r8, 3");                                           // SQLITE_TEXT?
-    emitter.instruction("je __rt_pdo_call_agg_step_box_str_x86");
+    emitter.instruction("je __rt_pdo_call_agg_step_box_str_x86");               // yes → box as a Mixed string
     emitter.instruction("cmp r8, 4");                                           // SQLITE_BLOB?
-    emitter.instruction("je __rt_pdo_call_agg_step_box_str_x86");
+    emitter.instruction("je __rt_pdo_call_agg_step_box_str_x86");               // yes → blobs box as Mixed strings too
     // -- tag 0 (SQLITE_NULL) or any unexpected code → PHP null (Mixed tag 8) --
     emitter.instruction("mov eax, 8");                                          // runtime tag 8 = Void/NULL
     emitter.instruction("xor edi, edi");                                        // value_lo unused
     emitter.instruction("xor esi, esi");                                        // value_hi unused
-    emitter.instruction("jmp __rt_pdo_call_agg_step_box_call_x86");
+    emitter.instruction("jmp __rt_pdo_call_agg_step_box_call_x86");             // box the PHP null via the shared boxing tail
     emitter.label("__rt_pdo_call_agg_step_box_int_x86");
     emitter.instruction("mov eax, 0");                                          // runtime tag 0 = int
     emitter.instruction("mov rdi, QWORD PTR [r11 + 8]");                        // value_lo = ElephcVal.i
     emitter.instruction("xor esi, esi");                                        // value_hi unused
-    emitter.instruction("jmp __rt_pdo_call_agg_step_box_call_x86");
+    emitter.instruction("jmp __rt_pdo_call_agg_step_box_call_x86");             // box the int via the shared boxing tail
     emitter.label("__rt_pdo_call_agg_step_box_float_x86");
     emitter.instruction("mov eax, 2");                                          // runtime tag 2 = float
     emitter.instruction("mov rdi, QWORD PTR [r11 + 16]");                       // value_lo = ElephcVal.f raw f64 bit-pattern
     emitter.instruction("xor esi, esi");                                        // value_hi unused
-    emitter.instruction("jmp __rt_pdo_call_agg_step_box_call_x86");
+    emitter.instruction("jmp __rt_pdo_call_agg_step_box_call_x86");             // box the float via the shared boxing tail
     emitter.label("__rt_pdo_call_agg_step_box_str_x86");
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string (binary-safe)
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // value_lo = ElephcVal.ptr
     emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");                       // value_hi = ElephcVal.len
-    emitter.instruction("jmp __rt_pdo_call_agg_step_box_call_x86");
+    emitter.instruction("jmp __rt_pdo_call_agg_step_box_call_x86");             // box the string via the shared boxing tail
     emitter.label("__rt_pdo_call_agg_step_box_call_x86");
     emitter.instruction("call __rt_mixed_from_value");                          // rax = owned boxed Mixed row value
     emitter.instruction("mov r9, QWORD PTR [rbp - 80]");                        // reload the loop index (clobbered by the call)
@@ -464,7 +464,7 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0); // take ownership of the pending Throwable
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // clear the exception slot before release
     emitter.instruction("test rax, rax");                                       // was a Throwable actually published?
-    emitter.instruction("jz __rt_pdo_call_agg_step_threw_released_x86");       // tolerate a defensive null exception slot
+    emitter.instruction("jz __rt_pdo_call_agg_step_threw_released_x86");        // tolerate a defensive null exception slot
     emitter.instruction("call __rt_decref_any");                                // release the caught Throwable object
     emitter.label("__rt_pdo_call_agg_step_threw_released_x86");
     // release the args container (drops the slot-0 incref) but PRESERVE the accumulator
