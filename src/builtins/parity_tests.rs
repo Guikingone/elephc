@@ -42,7 +42,7 @@ fn php_visible_extension_builtins() -> Vec<String> {
 fn preludes_built_in_rust_never_call_php_visible_extension_builtins() {
     let extension_names = php_visible_extension_builtins();
 
-    let built: &[(&str, crate::parser::ast::Program)] = &[
+    let mut built: Vec<(&str, crate::parser::ast::Program)> = vec![
         ("hash_prelude", crate::hash_prelude::hash_declarations()),
         ("tz_prelude", crate::tz_prelude::tz_declarations()),
         (
@@ -92,9 +92,24 @@ fn preludes_built_in_rust_never_call_php_visible_extension_builtins() {
         ),
         ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),
     ];
+    // The mysqli prelude is a second bridge surface whose PHP fragments are
+    // parsed (not built as Rust AST like the others), so parse each fragment and
+    // scan it too — the gate must cover mysqli's `__elephc_*` internal-alias
+    // discipline. The shared `elephc_pdo` extern block declares only symbols and
+    // calls nothing, and the PDO build above already carries it, so it needs no
+    // separate entry.
+    for &(name, src) in crate::mysqli_prelude::fragment_sources() {
+        // Fragments carry no `<?php` header (they are concatenated after one in
+        // `source_for_version`), so add it before tokenizing this one on its own.
+        let source = format!("<?php\n{src}");
+        let tokens = crate::lexer::tokenize(&source).expect("mysqli fragment must tokenize");
+        let program =
+            crate::parser::parse_internal(&tokens).expect("mysqli fragment must parse");
+        built.push((name, program));
+    }
 
     let mut violations: Vec<String> = Vec::new();
-    for (prelude, program) in built {
+    for (prelude, program) in &built {
         let called = crate::synthetic_class::called_function_names(program);
         for name in &extension_names {
             if called.iter().any(|call| call.eq_ignore_ascii_case(name)) {

@@ -56,6 +56,14 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::autoload::collect_aliases(ast);
     let mut prelude_inventory = crate::optimize::reachability::PreludeInventory::new();
     let ast = crate::pdo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    // Same injection order as `pipeline::compile`: mysqli after PDO, so the
+    // shared `elephc_pdo` externs are merged in exactly once.
+    let ast = crate::mysqli_prelude::inject_if_used(
+        ast,
+        false,
+        crate::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
+    );
     let ast = crate::tz_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::var_export_prelude::inject_if_used(ast, &mut prelude_inventory);

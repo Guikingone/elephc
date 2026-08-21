@@ -134,6 +134,10 @@ impl Checker {
         let previous_loop_storage_scope =
             std::mem::replace(&mut self.current_loop_storage_scope, function_key.clone());
         self.resolving_functions.insert(function_key.clone());
+        // Track the innermost function body being walked (nested resolution of
+        // a called function saves and restores the enclosing name), so friend
+        // channels can identify compiler-owned procedural aliases.
+        let previous_function = self.current_function.replace(function_key.clone());
         let body_check_result = self.with_local_storage_context(ref_param_names, |checker| {
             for stmt in &decl.body {
                 if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
@@ -149,6 +153,7 @@ impl Checker {
             }
             Ok(())
         });
+        self.current_function = previous_function;
         self.resolving_functions.remove(&function_key);
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;

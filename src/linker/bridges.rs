@@ -60,8 +60,11 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         macos_frameworks: &["CoreFoundation", "SystemConfiguration"],
         needs_libdl: true,
-        // The bridge exposes the core PDO database-access surface.
-        php_extension: Some("PDO"),
+        // The archive backs MORE THAN ONE PHP surface (PDO and mysqli), so the
+        // linked staticlib alone cannot identify a PHP extension. Reporting comes
+        // from the injected PHP surface(s) instead: `pipeline::compile` passes
+        // `linked_php_surfaces` ("PDO" / "mysqli") to the backend seeding.
+        php_extension: None,
     },
     BridgeStaticlib {
         lib_name: "elephc_crypto",
@@ -672,7 +675,9 @@ mod tests {
             vec![("elephc_tls", "tls"), ("elephc_magician", "eval")]
         );
         assert_eq!(php_extension_for_lib("elephc_tls"), Some("openssl"));
-        assert_eq!(php_extension_for_lib("elephc_pdo"), Some("PDO"));
+        // elephc_pdo backs two PHP surfaces (PDO, mysqli); reporting is
+        // surface-based via `linked_php_surfaces`, never archive-based.
+        assert_eq!(php_extension_for_lib("elephc_pdo"), None);
         assert_eq!(php_extension_for_lib("elephc_crypto"), Some("hash"));
         assert_eq!(php_extension_for_lib("elephc_bcmath"), Some("bcmath"));
         assert_eq!(php_extension_for_lib("elephc_phar"), Some("Phar"));

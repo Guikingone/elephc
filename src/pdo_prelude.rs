@@ -26,13 +26,78 @@
 
 #[cfg(test)]
 use std::borrow::Cow;
+use std::sync::OnceLock;
 
-use crate::parser::ast::Program;
+use crate::parser::ast::{Program, Stmt, StmtKind};
 use crate::php_version::PhpVersion;
 
 pub(crate) mod build;
+mod bridge_externs;
 mod detect;
 
+
+static PARSED_BRIDGE_EXTERNS: OnceLock<Program> = OnceLock::new();
+
+/// Returns the shared `extern "elephc_pdo"` block source, for source-level scans
+/// (the prelude parity gates) and any consumer that needs the raw fragment text.
+#[allow(dead_code)] // consumed by the cfg(test) parity gate; unused in the bin target
+pub fn bridge_externs_src() -> &'static str {
+    bridge_externs::SRC
+}
+
+/// Returns an independent clone of the parsed shared `extern "elephc_pdo"` block.
+/// Cached like the class prelude: later passes mutate injected ASTs, so the cache
+/// stores an immutable template and clones it per compilation.
+fn parsed_bridge_externs() -> Program {
+    PARSED_BRIDGE_EXTERNS
+        .get_or_init(|| {
+            let tokens = crate::lexer::tokenize(bridge_externs::SRC)
+                .expect("elephc_pdo extern block must tokenize");
+            crate::parser::parse_internal(&tokens).expect("elephc_pdo extern block must parse")
+        })
+        .clone()
+}
+
+/// Returns whether the program references the PDO surface. Exposed so the
+/// pipeline can record the "PDO" PHP surface for `extension_loaded()` reporting
+/// using the same detection that decides prelude injection.
+pub fn program_uses_pdo(program: &[Stmt]) -> bool {
+    detect::program_uses_pdo(program)
+}
+
+/// Prepends every shared `extern "elephc_pdo"` declaration that `program` does not
+/// ALREADY declare, so both PHP surfaces can request the bridge symbols without
+/// duplicating any. A per-name MERGE (rather than an all-or-nothing skip) is
+/// load-bearing now that the PDO surface is BUILT (`build::pdo_declarations`)
+/// with the driver-agnostic subset of these externs: a program using both PDO
+/// and mysqli would otherwise be missing the mysqli-only externs
+/// (`elephc_pdo_real_escape_string`, `_mysql_charset`, …) that the PDO build
+/// does not declare. Extern blocks parse into flat top-level `ExternFunctionDecl`
+/// statements, so a top-level name scan is sufficient.
+pub fn inject_bridge_externs(program: Program) -> Program {
+    use std::collections::HashSet;
+    let existing: HashSet<String> = program
+        .iter()
+        .filter_map(|stmt| match &stmt.kind {
+            StmtKind::ExternFunctionDecl { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    let missing: Program = parsed_bridge_externs()
+        .into_iter()
+        .filter(|stmt| match &stmt.kind {
+            StmtKind::ExternFunctionDecl { name, .. } => !existing.contains(name),
+            // The shared fragment is all extern decls; keep anything else defensively.
+            _ => true,
+        })
+        .collect();
+    if missing.is_empty() {
+        return program;
+    }
+    let mut combined = missing;
+    combined.extend(program);
+    combined
+}
 
 #[cfg(test)]
 /// The elephc-PHP source implementing PDO over the driver-agnostic `elephc_pdo`
@@ -6836,7 +6901,10 @@ pub fn inject_if_used_for_version(
         inventory.record_internal_callable_method("pdo", class, method, false);
     }
     combined.extend(program);
-    combined
+    // The extern block lives in its own shared fragment (`bridge_externs`) so a
+    // second PHP surface (mysqli) can declare the same bridge symbols; prepend it
+    // idempotently so double injection can never declare the block twice.
+    inject_bridge_externs(combined)
 }
 
 
