@@ -20,6 +20,9 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
+use crate::codegen_support::runtime::resources::layout::{
+    STREAM_PENDING_LEN_OFFSET, STREAM_PENDING_POS_OFFSET,
+};
 
 /// Emits the `__rt_fread` runtime helper for reading bytes from a stream handle.
 ///
@@ -76,6 +79,46 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("add x10, x9, x10");                                    // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     emitter.instruction("cmp x0, x10");                                         // is the backend above the wrapper range?
     emitter.instruction("b.hs __rt_fread_real_fd");                             // non-wrapper synthetic backends stay on the native path
+    // -- a wrapper stream's OWN read buffer answers before `stream_read` is called again --
+    //
+    // php's read buffer is shared by every reader, so an `fgets()` that stopped at its length
+    // bound leaves the rest of the chunk for the next `fread()`. The drain below the native path
+    // never runs here, because this branch tail-calls away first — so a wrapper stream answered
+    // `""` for bytes it was holding. The state is probed rather than drained blind: two loads,
+    // and nothing is reserved unless there is something to move.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_state");                                // x0 = stable stream state, 0 when none
+    emitter.instruction("cbz x0, __rt_fread_wrapper_call");                     // no state: nothing can be held
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_PENDING_LEN_OFFSET}]")); // held byte count
+    emitter.instruction(&format!("ldr x10, [x0, #{STREAM_PENDING_POS_OFFSET}]")); // how many were already handed out
+    emitter.instruction("subs x9, x9, x10");                                    // what remains
+    emitter.instruction("b.le __rt_fread_wrapper_call");                        // nothing held: ask the wrapper
+    emitter.instruction("ldr x1, [sp, #8]");                                    // the requested byte count
+    emitter.instruction("cmp x1, #1");                                          // a non-positive request moves nothing
+    emitter.instruction("b.lt __rt_fread_wrapper_call");
+    emitter.instruction("mov x0, x1");                                          // storage for at most the requested count
+    emitter.instruction("bl __rt_concat_reserve");
+    emitter.instruction("str x0, [sp, #16]");                                   // the destination, and the returned pointer
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("ldr x1, [sp, #16]");                                   // the destination
+    emitter.instruction("ldr x2, [sp, #8]");                                    // at most the requested count
+    emitter.instruction("bl __rt_stream_pending_take");                         // x0 = how many came back
+    emitter.instruction("cbnz x0, __rt_fread_held_ok");                         // the held bytes are the whole result
+    emitter.instruction("ldr x1, [sp, #16]");                                   // nothing came back after all: give the
+    emitter.instruction("mov x2, #0");                                          // window back before asking the wrapper
+    emitter.instruction("bl __rt_concat_publish");
+    emitter.instruction("b __rt_fread_wrapper_call");
+    emitter.label("__rt_fread_held_ok");
+    emitter.instruction("str x0, [sp, #24]");                                   // the result length
+    emitter.instruction("ldr x1, [sp, #16]");
+    emitter.instruction("mov x2, x0");
+    emitter.instruction("bl __rt_concat_publish");                              // claim the window they occupy
+    emitter.instruction("ldr x1, [sp, #16]");                                   // return the pair directly: the shared
+    emitter.instruction("ldr x2, [sp, #24]");                                   // exit indexes the filter table BY
+    emitter.instruction("b __rt_fread_ret");                                    // DESCRIPTOR, which a wrapper fd overruns
+
+    emitter.label("__rt_fread_wrapper_call");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // the wrapper descriptor the probe clobbered
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the requested byte count for stream_read
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame before wrapper tail dispatch
     emitter.instruction("add sp, sp, #64");                                     // release native-read scratch storage
@@ -261,7 +304,43 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, r9");                                         // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     emitter.instruction("cmp rax, r10");                                        // is the backend above the wrapper range?
     emitter.instruction("jae __rt_fread_real_fd_x86");                          // non-wrapper synthetic backends stay on the native path
-    emitter.instruction("mov rdi, rax");                                        // pass the synthetic backend descriptor to stream_read
+    // Same as the AArch64 arm: the wrapper stream's own read buffer answers first, and leaves
+    // through the epilogue that skips the descriptor-indexed filter table.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_state");                              // rax = stable stream state, 0 when none
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fread_wrapper_call_x86");                      // no state: nothing can be held
+    emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_PENDING_LEN_OFFSET}]")); // held byte count
+    emitter.instruction(&format!("mov r10, QWORD PTR [rax + {STREAM_PENDING_POS_OFFSET}]")); // already handed out
+    emitter.instruction("sub r9, r10");                                         // what remains
+    emitter.instruction("cmp r9, 0");
+    emitter.instruction("jle __rt_fread_wrapper_call_x86");                     // nothing held: ask the wrapper
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the requested byte count
+    emitter.instruction("cmp rax, 1");                                          // a non-positive request moves nothing
+    emitter.instruction("jl __rt_fread_wrapper_call_x86");
+    emitter.instruction("call __rt_concat_reserve");                            // reserve reads RAX, not rdi; rax = destination
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // the destination, and the returned pointer
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // the destination
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // at most the requested count
+    emitter.instruction("call __rt_stream_pending_take");                       // rax = how many came back
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jnz __rt_fread_held_ok_x86");                          // the held bytes are the whole result
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // nothing came back after all: give the
+    emitter.instruction("xor edx, edx");                                        // window back (publish reads RAX/RDX)
+    emitter.instruction("call __rt_concat_publish");
+    emitter.instruction("jmp __rt_fread_wrapper_call_x86");
+    emitter.label("__rt_fread_held_ok_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // the result length
+    emitter.instruction("mov rdx, rax");                                        // publish takes the length in RDX
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // and the pointer in RAX
+    emitter.instruction("call __rt_concat_publish");                            // claim the window they occupy
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the pair directly
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");
+    emitter.instruction("jmp __rt_fread_ret_x86");
+
+    emitter.label("__rt_fread_wrapper_call_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the wrapper descriptor the probe clobbered
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
     emitter.instruction("add rsp, 48");                                         // release native-read scratch storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

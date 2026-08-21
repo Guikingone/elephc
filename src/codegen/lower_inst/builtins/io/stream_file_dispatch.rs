@@ -63,7 +63,12 @@ pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_fpassthru");
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the drain loop after native streaming
             ctx.emitter.label(&wrapper_label);
-            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // x0 = the synthetic wrapper fd, its own read handle
+            // The OPAQUE HANDLE, not the fd. `__rt_fread`/`__rt_feof` take a handle and resolve
+            // the descriptor themselves; passing the fd worked only because that resolution maps a
+            // synthetic fd to itself, and it hid the stream STATE — which is where php keeps the
+            // bytes a previous read left behind.
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // the opaque handle drives the loop
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
             ctx.emitter.label(&drain_label);
             ctx.emitter.instruction("sub sp, sp, #32");                         // reserve fd, byte total, and chunk scratch storage
             ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve the read handle
@@ -128,7 +133,9 @@ pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_fpassthru");
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the drain loop after native streaming
             ctx.emitter.label(&wrapper_label);
-            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // rax = the synthetic wrapper fd, its own read handle
+            // See the AArch64 counterpart: the loop is driven by the opaque handle, not the fd.
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // the opaque handle drives the loop
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
             ctx.emitter.label(&drain_label);
             ctx.emitter.instruction("sub rsp, 32");                             // reserve fd, byte total, and chunk scratch storage
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the read handle

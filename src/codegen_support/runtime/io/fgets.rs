@@ -279,6 +279,14 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #8]");                                   // store the updated line length
     emitter.instruction("cmp w13, #0x0A");                                      // is the byte a newline?
     emitter.instruction("b.eq __rt_fgets_wrapper_done");                        // newline: finish the line
+    // php's OTHER stopping condition, which this loop did not have: it fills at most `$length - 1`
+    // bytes. Without it `fgets($h, 6)` on a wrapper answered the whole line — a wrong VALUE, and a
+    // silent one, since the call still returns a string.
+    emitter.instruction("ldr x11, [sp, #48]");                                  // the caller's bound (0 = unbounded)
+    emitter.instruction("cbz x11, __rt_fgets_wrapper_loop");                    // unbounded: only the newline stops this
+    emitter.instruction("sub x11, x11, #1");                                    // php fills `$length - 1` bytes
+    emitter.instruction("cmp x10, x11");                                        // is the line already that long?
+    emitter.instruction("b.ge __rt_fgets_wrapper_done");                        // bound reached: finish the line
     emitter.instruction("b __rt_fgets_wrapper_loop");                           // read the next byte
     emitter.label("__rt_fgets_wrapper_done");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_user_wrapper_drain_buf"); // line pointer
@@ -536,6 +544,13 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // store the updated line length
     emitter.instruction("cmp cl, 0x0A");                                        // is the byte a newline?
     emitter.instruction("je __rt_fgets_wrapper_done_x86");                      // newline: finish the line
+    // Same bound as the AArch64 arm above: php fills at most `$length - 1` bytes.
+    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // the caller's bound (0 = unbounded)
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jz __rt_fgets_wrapper_loop_x86");                      // unbounded: only the newline stops this
+    emitter.instruction("sub r9, 1");                                           // php fills `$length - 1` bytes
+    emitter.instruction("cmp r10, r9");                                         // is the line already that long?
+    emitter.instruction("jge __rt_fgets_wrapper_done_x86");                     // bound reached: finish the line
     emitter.instruction("jmp __rt_fgets_wrapper_loop_x86");                     // read the next byte
     emitter.label("__rt_fgets_wrapper_done_x86");
     abi::emit_symbol_address(emitter, "rax", "_user_wrapper_drain_buf");        // line pointer

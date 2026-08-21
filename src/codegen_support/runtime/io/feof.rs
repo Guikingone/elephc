@@ -9,6 +9,9 @@
 //! - Native EOF is owned by `StreamState`; userspace wrappers still delegate
 //!   to their `stream_eof` callback through the synthetic backend descriptor.
 
+use crate::codegen_support::runtime::resources::layout::{
+    STREAM_PENDING_LEN_OFFSET, STREAM_PENDING_POS_OFFSET,
+};
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_feof` runtime helper.
@@ -29,6 +32,7 @@ pub fn emit_feof(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // establish a stable helper frame
     emitter.instruction("str x0, [sp, #0]");                                    // preserve the opaque stream handle
     emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor for wrapper dispatch
+    emitter.instruction("str x0, [sp, #8]");                                    // the probe below clobbers it
     emitter.instruction("mov w9, #0x4000");                                     // load the high half of USER_WRAPPER_FD_BASE = 0x40000000
     emitter.instruction("lsl w9, w9, #16");                                     // shift into bits 30..16 to form 0x40000000
     emitter.instruction("cmp x0, x9");                                          // is the backend below the synthetic wrapper range?
@@ -39,6 +43,25 @@ pub fn emit_feof(emitter: &mut Emitter) {
     emitter.instruction("add x10, x9, x10");                                    // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     emitter.instruction("cmp x0, x10");                                         // is the backend above the synthetic wrapper range?
     emitter.instruction("b.hs __rt_feof_stream_state");                         // non-wrapper synthetic backends use StreamState EOF
+    // -- a stream that still HOLDS bytes is not at its end, whatever the wrapper says --
+    //
+    // php's `feof()` answers false while the read buffer has anything left, because the next read
+    // will come out of it. `stream_eof()` reports the WRAPPER's position, which a buffered read
+    // has already moved past — so a bounded `fgets()` made `feof()` true and `fpassthru()` answer
+    // zero while 22 bytes were still on the stream.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_state");                                // x0 = stable stream state, 0 when none
+    emitter.instruction("cbz x0, __rt_feof_wrapper_call");                      // no state: nothing can be held
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_PENDING_LEN_OFFSET}]")); // held byte count
+    emitter.instruction(&format!("ldr x10, [x0, #{STREAM_PENDING_POS_OFFSET}]")); // how many were already handed out
+    emitter.instruction("subs x9, x9, x10");                                    // what remains
+    emitter.instruction("b.le __rt_feof_wrapper_call");                         // nothing held: ask the wrapper
+    emitter.instruction("mov x0, #0");                                          // holding bytes: not at end
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller frame and return address
+    emitter.instruction("add sp, sp, #32");                                     // release helper scratch storage
+    emitter.instruction("ret");
+    emitter.label("__rt_feof_wrapper_call");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // the wrapper descriptor the probe clobbered
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller frame before wrapper tail dispatch
     emitter.instruction("add sp, sp, #32");                                     // release helper scratch storage
     emitter.instruction("b __rt_user_wrapper_feof");                            // wrapper backend delegates to stream_eof
@@ -72,7 +95,23 @@ fn emit_feof_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, r9");                                         // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     emitter.instruction("cmp rax, r10");                                        // is the backend above the synthetic wrapper range?
     emitter.instruction("jae __rt_feof_stream_state_x86");                      // non-wrapper synthetic backends use StreamState EOF
-    emitter.instruction("mov rdi, rax");                                        // pass the synthetic backend descriptor to stream_eof
+    // Same probe as the AArch64 arm: bytes still held mean the stream is not at its end.
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // the descriptor, which the probe clobbers
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_state");                              // rax = stable stream state, 0 when none
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_feof_wrapper_call_x86");                       // no state: nothing can be held
+    emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_PENDING_LEN_OFFSET}]")); // held byte count
+    emitter.instruction(&format!("mov r10, QWORD PTR [rax + {STREAM_PENDING_POS_OFFSET}]")); // already handed out
+    emitter.instruction("sub r9, r10");                                         // what remains
+    emitter.instruction("cmp r9, 0");
+    emitter.instruction("jle __rt_feof_wrapper_call_x86");                      // nothing held: ask the wrapper
+    emitter.instruction("xor eax, eax");                                        // holding bytes: not at end
+    emitter.instruction("add rsp, 16");                                         // release stream-handle storage
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");
+    emitter.label("__rt_feof_wrapper_call_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // the wrapper descriptor the probe clobbered
     emitter.instruction("add rsp, 16");                                         // release stream-handle storage before tail dispatch
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("jmp __rt_user_wrapper_feof");                          // wrapper backend delegates to stream_eof

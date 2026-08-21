@@ -21,6 +21,8 @@ mod streams;
 mod compress_wrapper;
 #[path = "io/gz_streams.rs"]
 mod gz_streams;
+#[path = "io/wrapper_read_buffer.rs"]
+mod wrapper_read_buffer;
 #[path = "io/filesystem.rs"]
 mod filesystem;
 #[path = "io/misc.rs"]
