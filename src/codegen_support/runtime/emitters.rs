@@ -253,4 +253,6 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
 }
 
 #[cfg(test)]
+mod frame_balance_tests;
+#[cfg(test)]
 mod tests;
