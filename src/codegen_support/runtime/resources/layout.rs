@@ -208,6 +208,15 @@ pub(crate) const STREAM_APPEND_SKIP_OFFSET: i64 = 216;
 /// reading seven bytes even when the wrapper's `stream_tell()` is written to return something
 /// else entirely. Asking the method on every `ftell()`, as this used to, reports whatever the
 /// wrapper feels like rather than where the stream is.
+/// php's default stream chunk size, the amount a read asks its source for when nothing has
+/// called `stream_set_chunk_size()`.
+///
+/// `php_stream_set_chunk_size()` reports it: `stream_set_chunk_size($h, 100)` on a fresh stream
+/// answers `int(8192)`. It is observable through a user wrapper too — that is the `$count` its
+/// `stream_read()` receives — which is how the read-loop fallback being 4096 showed up: `fgets()`
+/// asked for 4096 where php asks for 8192.
+pub(crate) const STREAM_DEFAULT_CHUNK_SIZE: i64 = 8192;
+
 pub(crate) const STREAM_WRAPPER_POS_OFFSET: i64 = 224;
 
 /// Byte offset of the position PHP reports for a stream whose reads go through a read filter.

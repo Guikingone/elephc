@@ -9,6 +9,7 @@
 //! - Standard streams resolve through persistent generation-one registry slots.
 //! - Adoption closes an acquired descriptor whenever publication cannot complete.
 
+use crate::codegen_support::runtime::resources::layout::STREAM_DEFAULT_CHUNK_SIZE;
 use super::super::layout::{
     RESOURCE_FLAG_OWNS_STATE, RESOURCE_KIND_STREAM, RESOURCE_STATUS_CLOSING,
     RESOURCE_STATUS_LIVE, SLOT_KIND_OFFSET, SLOT_STATE_PTR_OFFSET, SLOT_STATUS_OFFSET,
@@ -434,7 +435,7 @@ fn emit_stream_chunk_size(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // was an explicit size configured?
     emitter.instruction("jnz __rt_stream_chunk_size_done");                     // return the configured size
     emitter.label("__rt_stream_chunk_size_default");
-    emitter.instruction("mov eax, 4096");                                       // preserve the current read-loop default
+    emitter.instruction(&format!("mov eax, {STREAM_DEFAULT_CHUNK_SIZE}"));      // php's default when nothing configured one
     emitter.label("__rt_stream_chunk_size_done");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the effective read-loop chunk size
