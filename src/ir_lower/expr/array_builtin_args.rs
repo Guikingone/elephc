@@ -425,6 +425,9 @@ fn lower_builtin_call_operands(
         {
             lower_user_value_sort_args(ctx, sig, args)
         }
+        crate::builtins::semantics::BuiltinArgumentLowering::ReverseKeySort => {
+            lower_reverse_key_sort_args(ctx, sig, args)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::OpensslEncrypt => {
             prepare_openssl_encrypt_tag_local(ctx, args);
             if !crate::types::call_args::has_named_args(args)
@@ -584,6 +587,68 @@ fn lower_write_only_out_arg(
     ctx.load_local(name, Some(arg.span)).value
 }
 
+/// Promotes a packed local before `krsort()` so descending iteration can preserve integer keys.
+///
+/// Packed storage has no independent iteration-order metadata: reversing its slots would also
+/// change `$array[0]`. Converting the by-reference local to hash storage keeps each key/value
+/// pair intact while allowing the runtime helper to reorder only the insertion-order links.
+///
+/// The backend REFUSES `krsort()` on packed storage rather than guessing, so this promotion is
+/// not an optimisation: without it the call cannot be lowered at all.
+fn lower_reverse_key_sort_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let Some(sig) = sig else {
+        return lower_args(ctx, args);
+    };
+    if args.len() == 1 && !args.iter().any(is_spread_arg) {
+        let arg = match &args[0].kind {
+            ExprKind::NamedArg { value, .. } => value.as_ref(),
+            _ => &args[0],
+        };
+        if let Some(value) = lower_indexed_array_ref_arg_to_hash(ctx, sig, 0, arg) {
+            return vec![value];
+        }
+    }
+    lower_args_with_signature(ctx, Some(sig), args)
+}
+
+/// Converts one packed by-reference local argument into key-preserving associative storage.
+fn lower_indexed_array_ref_arg_to_hash(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) -> Option<crate::ir::ValueId> {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    let ExprKind::Variable(name) = &arg.kind else {
+        return None;
+    };
+    let PhpType::Array(elem_ty) = ctx.local_type(name).codegen_repr() else {
+        return None;
+    };
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Int),
+        value: elem_ty,
+    };
+    let array = ctx.load_local(name, Some(arg.span));
+    ctx.prepare_mutated_local_owner(name, array, assoc_ty.clone(), Some(arg.span));
+    let hash = ctx.emit_value(
+        Op::ArrayToHash,
+        vec![array.value],
+        None,
+        assoc_ty.clone(),
+        Op::ArrayToHash.default_effects(),
+        Some(arg.span),
+    );
+    ctx.store_prepared_mutated_local(name, hash, assoc_ty, Some(arg.span));
+    Some(ctx.load_local(name, Some(arg.span)).value)
+}
+
 /// Lowers `count()` arguments, dropping a statically-default mode argument.
 ///
 /// The EIR backend implements only `COUNT_NORMAL`; a literal `0` mode (named
@@ -727,4 +792,76 @@ pub(super) fn lower_value_sort_comparator_closure(
         *is_static,
     )
     .value
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every `BuiltinArgumentLowering` variant a builtin can declare has an arm that runs it.
+    ///
+    /// A variant is a four-sided contract: the enum declares it, a builtin selects it, the docs
+    /// generator names it, and this file does the work. The origin/main merge resolved the
+    /// conflict in this file toward the branch's own copy, which predates upstream's
+    /// `ReverseKeySort`, so three sides survived and the one that acts did not. Nothing said so:
+    /// the variant simply fell through to the default arm, and `krsort($a)` on a packed array
+    /// reached a backend refusal written on the assumption that this lowering had already
+    /// promoted the receiver. Fourteen tests failed a long way from the cause.
+    ///
+    /// The dispatch is a `match` with guards, so it cannot be made exhaustive over the enum and
+    /// have the compiler carry this. Reading the two sources is the honest alternative: it costs
+    /// nothing and it names the missing side directly. `Standard` is excluded because it IS the
+    /// default arm and has no name of its own there.
+    #[test]
+    fn every_argument_lowering_variant_has_a_dispatch_arm() {
+        let declared = include_str!("../../builtins/semantics.rs");
+        // Two other lowerings intercept a variant BEFORE it reaches this file's dispatch:
+        // `ArrayInternalPointer` is resolved from its descriptor by `expr::mod` and scanned for
+        // by `array_pointer_scan`, so it never arrives here and rightly has no arm. Listing
+        // them keeps the property "a variant is consumed SOMEWHERE" rather than narrowing it to
+        // one file and reporting a correctly-handled variant as missing.
+        let dispatch = concat!(
+            include_str!("array_builtin_args.rs"),
+            include_str!("mod.rs"),
+            include_str!("../array_pointer_scan.rs"),
+        );
+        let variants: Vec<&str> = declared
+            .split("pub enum BuiltinArgumentLowering {")
+            .nth(1)
+            .expect("the argument-lowering enum is declared in builtins::semantics")
+            .split("\n}")
+            .next()
+            .expect("the enum body is brace-terminated")
+            .lines()
+            .map(str::trim)
+            .filter(|line| {
+                line.ends_with(',')
+                    && !line.starts_with("///")
+                    && line.chars().next().is_some_and(char::is_uppercase)
+            })
+            // A tuple variant carries a payload — `ArrayInternalPointer(ArrayPointerOp)` — and
+            // only the identifier before the parenthesis is the name to look for.
+            .map(|line| {
+                let name = line.trim_end_matches(',');
+                name.split_once('(').map_or(name, |(head, _)| head)
+            })
+            .filter(|name| *name != "Standard")
+            .collect();
+        assert!(
+            variants.len() >= 8,
+            "the enum parse found only {variants:?}, which cannot be the whole list"
+        );
+        // Comment lines are stripped first: a variant NAMED in prose is exactly the state this
+        // test exists to reject, and the arm that ran `ReverseKeySort` was gone while the
+        // module still talked about key sorts.
+        let code: String = dispatch
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for variant in variants {
+            assert!(
+                code.contains(&format!("BuiltinArgumentLowering::{variant}")),
+                "{variant} is declared and selectable but no arm in this file runs it"
+            );
+        }
+    }
 }
