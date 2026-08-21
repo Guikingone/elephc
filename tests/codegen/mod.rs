@@ -19,6 +19,7 @@ mod strict_php;
 mod lfc;
 mod benchmarks;
 mod echo_vars;
+mod null_receivers;
 mod undefined_variables;
 mod php_tags;
 mod eval;

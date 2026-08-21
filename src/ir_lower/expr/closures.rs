@@ -133,7 +133,7 @@ pub(super) fn lower_closure_with_context(
             // nothing uninitialized to load: `$f = function () use (&$x) { ... };` leaves `$x`
             // as NULL with no diagnostic at all — MEASURED on `php -n` 8.5.6, against the
             // by-VALUE spelling one line above it, which does warn. Without the store the
-            // capture reached the backend as an `undefined_local_read`, which has no
+            // capture reached the backend as an `warned_null`, which has no
             // by-reference form and refused the program.
             //
             // It runs BEFORE the widening below for the same reason a hand-written `$x = null;`

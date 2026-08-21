@@ -176,7 +176,7 @@ pub(super) fn lower_const_bool(ctx: &mut FunctionContext<'_>, inst: &Instruction
 /// The value produced is the same `null` `Op::ConstNull` produces, and by the same helper, so a
 /// consumer expecting a tagged scalar gets one; PHP's `zval_undefined_cv` likewise answers with
 /// `&EG(uninitialized_zval)` rather than a value of its own.
-pub(super) fn lower_undefined_local_read(
+pub(super) fn lower_warned_null(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

@@ -108,7 +108,7 @@ impl Checker {
     ///
     /// The WARNING is not raised here. Whether a given read is undefined is a flow-sensitive
     /// question — `echo $x; $x = 1;` warns once, on the first line — and only EIR lowering tracks
-    /// which slots a store definitely reached. It emits `Op::UndefinedLocalRead` for those; see
+    /// which slots a store definitely reached. It emits `Op::WarnedNull` for those; see
     /// `LoweringContext::read_is_of_an_undefined_local`.
     ///
     /// `$span` is kept in the signature: the diagnostic moved, it did not disappear, and the

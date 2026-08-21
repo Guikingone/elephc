@@ -183,6 +183,20 @@ pub(super) fn lower_array_access_with_missing_warning(
     } else {
         lower_subscript_receiver_silently(ctx, array)
     };
+    // The twin of the property-access arm: PHP reads an offset through a null base rather than
+    // refusing, raising `Trying to access array offset on null` and answering NULL — MEASURED on
+    // `php -n` 8.5.6. `warn_on_missing` is false exactly in the probe constructs, which is what
+    // keeps `isset($n['k'])` silent. The INDEX is still lowered, because PHP evaluates it.
+    if warn_on_missing
+        && !ctx.in_null_probe()
+        && value_is_definitely_null(ctx, array_value.value)
+    {
+        lower_expr(ctx, index);
+        return ctx.emit_warned_null(
+            "Warning: Trying to access array offset on null\n",
+            Some(expr.span),
+        );
+    }
     if value_is_nullable(ctx, array_value.value) {
         return lower_nullable_array_access(ctx, array_value, index, expr, warn_on_missing);
     }
@@ -216,6 +230,12 @@ pub(super) fn lower_null_probe_chain(
     ctx: &mut LoweringContext<'_, '_>,
     chain: &Expr,
 ) -> LoweredValue {
+    // A subscript link DESCENDS rather than being silenced whole: its own receiver continues
+    // the chain while its index steps back out and is read normally. Silencing the link
+    // outright would take the index with it, and `isset($a[$b]->p)` warns about `$b` in PHP.
+    if let ExprKind::ArrayAccess { array, index } = &chain.kind {
+        return lower_array_access_with_missing_warning(ctx, array, index, chain, false);
+    }
     ctx.enter_probe_spine();
     let value = lower_expr(ctx, chain);
     ctx.leave_probe_spine();

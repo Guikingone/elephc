@@ -261,7 +261,7 @@ pub enum Op {
     /// The immediate is the variable NAME; the whole diagnostic is composed at compile time from
     /// it. `MAY_WARN` is what gives the instruction its source line, through the same publisher
     /// every other warning uses.
-    UndefinedLocalRead,
+    WarnedNull,
     StoreLocal,
     UnsetLocal,
     LoadRefCell,
@@ -631,7 +631,7 @@ impl Op {
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             // Reads nothing — the point is that there is nothing to read — but it WARNS, and
             // `MAY_WARN` is the gate the per-instruction location publisher runs on.
-            UndefinedLocalRead => E::MAY_WARN,
+            WarnedNull => E::MAY_WARN,
             StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | FinallyEnter | FinallyExit => {
                 E::WRITES_LOCAL
             }
@@ -868,7 +868,7 @@ impl Op {
             LoadCalledClassId => "load_called_class_id",
             DataAddr => "data_addr",
             LoadLocal => "load_local",
-            UndefinedLocalRead => "undefined_local_read",
+            WarnedNull => "warned_null",
             StoreLocal => "store_local",
             UnsetLocal => "unset_local",
             LoadRefCell => "load_ref_cell",

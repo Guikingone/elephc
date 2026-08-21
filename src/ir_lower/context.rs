@@ -761,6 +761,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.probe_spine_depth = self.probe_spine_depth.saturating_sub(1);
     }
 
+    /// Returns true while lowering the chain a null probe examines.
+    ///
+    /// PHP raises nothing for anything on that chain — not the undefined variable at its root,
+    /// and not a property or offset read through a null further along it.
+    pub(crate) const fn in_null_probe(&self) -> bool {
+        self.probe_spine_depth > 0
+    }
+
     /// Marks a local slot as initialized by caller or synthetic setup.
     pub(crate) fn mark_local_initialized(&mut self, name: &str) {
         if let Some(slot) = self.local_slots.get(name) {
@@ -1206,31 +1214,39 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.in_main && (name == EVAL_ARGC_LOCAL_NAME || name == EVAL_ARGV_LOCAL_NAME)
     }
 
-    /// Emits the warning PHP raises for an undefined read, and answers `null`.
+    /// Emits a warning PHP raises for a read that answers `null`, and answers `null`.
     ///
-    /// The message is composed HERE because both halves are known at compile time; the backend
-    /// receives a finished string and needs no run-time formatting. The instruction carries
-    /// `MAY_WARN`, which is what makes the shared publisher stamp it with this line.
-    fn emit_undefined_local_read(&mut self, name: &str, span: Option<Span>) -> LoweredValue {
-        let message = format!("Warning: Undefined variable ${name}\n");
-        let data = self.intern_string(&message);
+    /// The message is composed by the CALLER because every half of it is known at compile time;
+    /// the backend receives a finished string and needs no run-time formatting. The instruction
+    /// carries `MAY_WARN`, which is what makes the shared publisher stamp it with this line.
+    ///
+    /// Three reads share it, because PHP gives all three the same shape — a warning and a null
+    /// result: a variable that was never assigned, a property read on null, and an array offset
+    /// on null.
+    pub(crate) fn emit_warned_null(&mut self, message: &str, span: Option<Span>) -> LoweredValue {
+        let data = self.intern_string(message);
         let value = self
             .builder
             .emit_with_effects(
-                Op::UndefinedLocalRead,
+                Op::WarnedNull,
                 Vec::new(),
                 Some(Immediate::Data(data)),
                 IrType::I64,
                 PhpType::Void,
                 Ownership::NonHeap,
-                Op::UndefinedLocalRead.default_effects(),
+                Op::WarnedNull.default_effects(),
                 span,
             )
-            .expect("undefined_local_read produces a value");
+            .expect("warned_null produces a value");
         LoweredValue {
             value,
             ir_type: IrType::I64,
         }
+    }
+
+    /// Emits the warning PHP raises for a read of a variable that was never assigned.
+    fn emit_undefined_local_read(&mut self, name: &str, span: Option<Span>) -> LoweredValue {
+        self.emit_warned_null(&format!("Warning: Undefined variable ${name}\n"), span)
     }
 
     /// Emits a load from a PHP local slot.

@@ -340,7 +340,7 @@ pub(super) fn lower_builtin_call_args(
 /// semantics for undefined variables is what made that reachable; a conditionally assigned
 /// variable is null on the path that skips the assignment, exactly as PHP says.
 ///
-/// The operand it replaces is left in place and still runs: it is the `undefined_local_read`
+/// The operand it replaces is left in place and still runs: it is the `warned_null`
 /// that raises `Warning: Undefined variable $x`, which PHP raises here too. Only the VALUE
 /// handed to the builtin changes.
 ///

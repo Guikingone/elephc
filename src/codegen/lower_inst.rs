@@ -208,7 +208,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ConstClassName => strings::lower_const_class_name(ctx, &inst),
         Op::LoadCalledClassId => strings::lower_load_called_class_id(ctx, &inst),
         Op::LoadLocal => lower_load_local(ctx, &inst),
-        Op::UndefinedLocalRead => globals_constants::lower_undefined_local_read(ctx, &inst),
+        Op::WarnedNull => globals_constants::lower_warned_null(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
         Op::UnsetLocal => lower_unset_local(ctx, &inst),
         Op::LoadRefCell => lower_load_ref_cell(ctx, &inst),

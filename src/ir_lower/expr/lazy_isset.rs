@@ -147,10 +147,14 @@ pub(super) fn lower_lazy_empty(
             None,
         ));
     }
-    // A plain variable has no magic-property semantics to lower lazily, so it used to fall
-    // through to the eager builtin — which reads its operand like any other expression and so
-    // warned about a name `empty()` exists to ask about. PHP answers `true` in silence.
-    if matches!(&args[0].kind, ExprKind::Variable(_)) {
+    // A plain variable — or a property chain rooted in one — has no magic-property semantics to
+    // lower lazily, so it used to fall through to the eager builtin, which reads its operand
+    // like any other expression and so warned about a name `empty()` exists to ask about. PHP
+    // answers `true` in silence for both.
+    if matches!(
+        &args[0].kind,
+        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. }
+    ) {
         let value = lower_null_probe_chain(ctx, &args[0]);
         return Some(emit_builtin_call_value(
             ctx,
@@ -180,7 +184,7 @@ pub(super) fn lower_lazy_empty(
             property_isset_action(ctx, object, property),
             Some(IssetPropertyAction::Initialized)
         ) {
-            let object = lower_expr(ctx, object);
+            let object = lower_null_probe_chain(ctx, object);
             return Some(lower_initialized_property_empty(
                 ctx, object, property, name, &args[0],
             ));

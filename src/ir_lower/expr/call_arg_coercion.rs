@@ -37,7 +37,7 @@ pub(super) fn lower_arg_with_signature(
 /// raised and the variable is NULL afterwards: `function f(&$x) { $x = 7; } f($nope);` prints
 /// `int(7)` in silence — MEASURED on `php -n` 8.5.6, against the by-VALUE spelling of the same
 /// call, which warns. Without the store the argument reached the backend as an
-/// `undefined_local_read`, which has no by-reference form, and the program was refused.
+/// `warned_null`, which has no by-reference form, and the program was refused.
 ///
 /// It lives in `lower_args_with_signature` so every call shape gets it from one place: plain
 /// functions, instance and static methods, nullable method calls and closure calls all lower
