@@ -22,6 +22,7 @@ pub(crate) use user::{
     is_user_filter_contract_method, is_user_wrapper_contract_method, is_user_wrapper_marker_method,
 };
 pub(crate) use user::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
+pub(crate) use user::USER_WRAPPER_VTABLE_CONTEXT_OFFSET;
 
 /// Fatal error message when `php_uname()` receives a `$mode` argument whose length is not exactly 1.
 pub(crate) const PHP_UNAME_MODE_LEN_MSG: &str =

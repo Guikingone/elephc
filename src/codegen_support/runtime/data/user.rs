@@ -699,9 +699,10 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .quad 0\n");
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _user_wrapper_vtable_missing\n_user_wrapper_vtable_missing:\n");
-    // The method pointers plus the trailing boxed-result mask, so a class with no
-    // wrapper method shares a table the helpers can read to the same extent.
-    for _ in 0..USER_WRAPPER_VTABLE_SLOTS + 1 {
+    // The method pointers plus BOTH trailing quads — the boxed-result mask and the `$context`
+    // offset — so a class with no wrapper method shares a table the helpers can read to the same
+    // extent. A short table here would let a helper read past its end.
+    for _ in 0..USER_WRAPPER_VTABLE_SLOTS + 2 {
         out.push_str("    .quad 0\n");
     }
     out.push_str("    .p2align 3\n");
@@ -2336,6 +2337,18 @@ pub(crate) const USER_WRAPPER_VTABLE_SLOTS: usize = 23;
 /// writes the quad at this position and the runtime helpers read it from here.
 pub(crate) const USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET: usize = USER_WRAPPER_VTABLE_SLOTS * 8;
 
+/// Byte offset of the `$context` property quad, which follows the boxed-result mask.
+///
+/// Its own quad, not a second reading of the mask's. Both branches of the origin/main merge
+/// appended one quad here — this one the context offset, upstream the mask — and the merge kept
+/// the mask while `fopen` went on reading the address as an offset. A zero mask then read as
+/// "undeclared" and deprecated a property the class declares; a non-zero one read as an offset
+/// and stored the boxed context that many bytes into the object.
+///
+/// The value is the offset PLUS ONE, with zero meaning undeclared, because a declared
+/// `$context` may legitimately live at offset zero.
+pub(crate) const USER_WRAPPER_VTABLE_CONTEXT_OFFSET: usize = USER_WRAPPER_VTABLE_SLOTS * 8 + 8;
+
 /// The number of fixed-slot stream-filter methods recorded per class in
 /// `_user_filter_vtable_<class_id>` (Phase 10 tier 3). Slot order:
 /// 0 filter, 1 onCreate, 2 onClose. Slot 3 is a non-method "arity" flag:
@@ -2602,11 +2615,19 @@ fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
             out.push_str("    .quad 0\n");
         }
     }
-    // One trailing quad after the method pointers: the boxed-result mask.
+    // Two trailing quads after the method pointers: the boxed-result mask, then the byte offset
+    // of a declared `public $context;` PLUS ONE — zero meaning the class declares none, which is
+    // the case php deprecates as an invented property.
     out.push_str(&format!(
         "    .quad {}\n",
         user_wrapper_boxed_result_mask(class_info)
     ));
+    let context_offset = class_info
+        .property_offsets
+        .get("context")
+        .copied()
+        .map_or(0, |offset| offset + 1);
+    out.push_str(&format!("    .quad {}\n", context_offset));
 }
 
 /// Emits the per-class callable-method name table and count for __invoke support.

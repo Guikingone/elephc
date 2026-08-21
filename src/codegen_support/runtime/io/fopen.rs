@@ -8,6 +8,7 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
+use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_CONTEXT_OFFSET;
 use super::MIN_WRAPPER_SCHEME_LEN;
 use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -270,7 +271,9 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0]");                                        // load the wrapper class id
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // load this class's wrapper vtable
-    emitter.instruction("ldr x11, [x10, #184]");                                // slot 23 holds the context-property offset PLUS ONE
+    emitter.instruction(&format!(
+        "ldr x11, [x10, #{}]", USER_WRAPPER_VTABLE_CONTEXT_OFFSET
+    ));                                                                         // the context-property offset PLUS ONE, in its own quad
     emitter.instruction("cbz x11, __rt_fopen_uw_context_dynamic");              // zero means undeclared; php invents the property and deprecates it
     emitter.instruction("sub x11, x11, #1");                                    // recover the real offset, which may legitimately be zero
     abi::emit_symbol_address(emitter, "x9", "_stream_current_context_handle");
@@ -620,7 +623,9 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the wrapper class id
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // load this class's wrapper vtable
-    emitter.instruction("mov r10, QWORD PTR [r11 + 184]");                      // slot 23 holds the offset PLUS ONE
+    emitter.instruction(&format!(
+        "mov r10, QWORD PTR [r11 + {}]", USER_WRAPPER_VTABLE_CONTEXT_OFFSET
+    ));                                                                         // the context-property offset PLUS ONE, in its own quad
     emitter.instruction("test r10, r10");                                       // does the wrapper declare an injectable context property?
     emitter.instruction("jz __rt_fopen_uw_context_dynamic_x86");                // zero means undeclared; php deprecates the invented property
     emitter.instruction("sub r10, 1");                                          // recover the real offset, which may legitimately be zero
