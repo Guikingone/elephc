@@ -23,6 +23,32 @@ pub(crate) struct Request {
     flat_values: Vec<Value>,
 }
 
+/// Distinguishes unreadable request structure from an otherwise readable incompatible ABI.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DecodeError {
+    /// The request layout, ranges, tags, or nested value tree cannot be decoded safely.
+    MalformedRequest,
+    /// The readable header names a bridge ABI version this binary does not support.
+    IncompatibleAbiVersion,
+}
+
+impl DecodeError {
+    /// Returns the stable C ABI status associated with this decode failure.
+    pub(crate) const fn status(self) -> u32 {
+        match self {
+            Self::MalformedRequest => crate::abi::STATUS_MALFORMED_REQUEST,
+            Self::IncompatibleAbiVersion => crate::abi::STATUS_ABI_ERROR,
+        }
+    }
+}
+
+impl From<()> for DecodeError {
+    /// Normalizes internal validation failures to the externally visible malformed status.
+    fn from(_: ()) -> Self {
+        Self::MalformedRequest
+    }
+}
+
 impl Request {
     /// Builds one trusted receiver-only request for reusing a zero-argument bridge projection.
     pub(crate) fn receiver_only(&self) -> Self {
@@ -171,7 +197,10 @@ impl Request {
 }
 
 /// Copies and validates one request message.
-pub(crate) fn decode(pointer: *const u8, length: u64) -> Result<Request, ()> {
+pub(crate) fn decode(
+    pointer: *const u8,
+    length: u64,
+) -> Result<Request, DecodeError> {
     let length = usize::try_from(length).map_err(|_| ())?;
     if pointer.is_null() || length < std::mem::size_of::<RequestHeader>() {
         return Err(());
@@ -179,7 +208,7 @@ pub(crate) fn decode(pointer: *const u8, length: u64) -> Result<Request, ()> {
     let input = unsafe { std::slice::from_raw_parts(pointer, length) };
     let header = read_header(input)?;
     if header.abi_version != crate::abi::ABI_VERSION {
-        return Err(());
+        return Err(DecodeError::IncompatibleAbiVersion);
     }
     let header_size = usize::try_from(header.header_size).map_err(|_| ())?;
     if header_size < std::mem::size_of::<RequestHeader>() || header_size > input.len() {

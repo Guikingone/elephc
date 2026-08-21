@@ -56,6 +56,10 @@ struct NativeError {
     file_length: usize,
 }
 
+/// Signals that the native fault-injection bridge reached the allocation-failure branch.
+#[cfg(test)]
+pub(crate) const TEST_RESOURCE_LOADER_INPUT_CREATION_FAILED: i32 = 1;
+
 /// Native XML parse outcome with independently freed structured errors.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -329,6 +333,11 @@ unsafe extern "C" {
         input_name_length: usize,
         host_context: u64,
     ) -> NativeParseResult;
+    /// Forces the stream-backed resource-loader input allocation to fail for one test call.
+    #[cfg(test)]
+    fn elephc_dom_native_test_resource_loader_input_from_io_failure(
+        host_context: u64,
+    ) -> i32;
     /// Parses one named legacy HTML byte stream through libxml2's HTML4 parser.
     fn elephc_dom_native_document_parse_html4(
         bytes: *const u8,
@@ -1278,10 +1287,17 @@ pub(crate) fn document_parse_xml(
             0,
         )
     };
-    let errors = copy_native_errors(result.errors, result.error_count);
-    unsafe {
-        elephc_dom_native_parse_result_free(result.errors, result.error_count);
-    }
+    let errors = match copy_and_free_native_errors(result.errors, result.error_count) {
+        Ok(errors) => errors,
+        Err(NativeResultAbiError::MalformedRequest) => {
+            if !result.document.is_null() {
+                unsafe {
+                    elephc_dom_native_document_free(result.document);
+                }
+            }
+            return Err(());
+        }
+    };
     if result.allocation_failed != 0 {
         if !result.document.is_null() {
             unsafe {
@@ -1322,10 +1338,17 @@ pub(crate) fn document_parse_xml_with_host(
             host_context,
         )
     };
-    let errors = copy_native_errors(result.errors, result.error_count);
-    unsafe {
-        elephc_dom_native_parse_result_free(result.errors, result.error_count);
-    }
+    let errors = match copy_and_free_native_errors(result.errors, result.error_count) {
+        Ok(errors) => errors,
+        Err(NativeResultAbiError::MalformedRequest) => {
+            if !result.document.is_null() {
+                unsafe {
+                    elephc_dom_native_document_free(result.document);
+                }
+            }
+            return Err(());
+        }
+    };
     if result.allocation_failed != 0 {
         if !result.document.is_null() {
             unsafe {
@@ -1339,6 +1362,16 @@ pub(crate) fn document_parse_xml_with_host(
         errors,
         host_status: result.status,
     })
+}
+
+/// Exercises the native resource-loader cleanup path after input allocation failure.
+#[cfg(test)]
+pub(crate) fn test_resource_loader_input_from_io_failure(
+    host_context: u64,
+) -> i32 {
+    unsafe {
+        elephc_dom_native_test_resource_loader_input_from_io_failure(host_context)
+    }
 }
 
 /// Parses one legacy HTML byte sequence through libxml2's HTML4 parser.
@@ -1358,10 +1391,17 @@ pub(crate) fn document_parse_html4(
             input_name_length,
         )
     };
-    let errors = copy_native_errors(result.errors, result.error_count);
-    unsafe {
-        elephc_dom_native_parse_result_free(result.errors, result.error_count);
-    }
+    let errors = match copy_and_free_native_errors(result.errors, result.error_count) {
+        Ok(errors) => errors,
+        Err(NativeResultAbiError::MalformedRequest) => {
+            if !result.document.is_null() {
+                unsafe {
+                    elephc_dom_native_document_free(result.document);
+                }
+            }
+            return Err(());
+        }
+    };
     if result.allocation_failed != 0 {
         if !result.document.is_null() {
             unsafe {
@@ -1398,10 +1438,17 @@ pub(crate) fn document_parse_html5(
             input_name.len(),
         )
     };
-    let errors = copy_native_errors(result.errors, result.error_count);
-    unsafe {
-        elephc_dom_native_parse_result_free(result.errors, result.error_count);
-    }
+    let errors = match copy_and_free_native_errors(result.errors, result.error_count) {
+        Ok(errors) => errors,
+        Err(NativeResultAbiError::MalformedRequest) => {
+            if !result.document.is_null() {
+                unsafe {
+                    elephc_dom_native_document_free(result.document);
+                }
+            }
+            return Err(HtmlParseError::Allocation);
+        }
+    };
     if result.status == 1 {
         return Err(HtmlParseError::InvalidEncoding);
     }
@@ -1466,10 +1513,8 @@ pub(crate) fn document_convert_modern_xml(document: usize) -> bool {
 fn validation_outcome(
     result: NativeValidationResult,
 ) -> Result<ValidationOutcome, ()> {
-    let errors = copy_native_errors(result.errors, result.error_count);
-    unsafe {
-        elephc_dom_native_parse_result_free(result.errors, result.error_count);
-    }
+    let errors = copy_and_free_native_errors(result.errors, result.error_count)
+        .map_err(|_| ())?;
     if result.allocation_failed != 0 {
         return Err(());
     }
@@ -1505,10 +1550,11 @@ pub(crate) fn document_xinclude(
             host_context,
         )
     };
-    let malformed_errors = result.errors.is_null() && result.error_count != 0;
+    let native_errors = copy_and_free_native_errors(result.errors, result.error_count);
+    let malformed_errors = native_errors.is_err();
     let malformed_invalidated =
         result.invalidated.is_null() && result.invalidated_count != 0;
-    let errors = copy_native_errors(result.errors, result.error_count);
+    let errors = native_errors.unwrap_or_default();
     let invalidated = if result.invalidated.is_null() {
         Vec::new()
     } else {
@@ -1524,8 +1570,8 @@ pub(crate) fn document_xinclude(
     };
     unsafe {
         elephc_dom_native_xinclude_result_free(
-            result.errors,
-            result.error_count,
+            std::ptr::null_mut(),
+            0,
             result.invalidated,
         );
     }
@@ -1599,14 +1645,15 @@ pub(crate) fn node_c14n(
         )
     };
     let malformed_bytes = result.bytes.is_null() && result.length != 0;
-    let malformed_errors = result.errors.is_null() && result.error_count != 0;
+    let native_errors = copy_and_free_native_errors(result.errors, result.error_count);
+    let malformed_errors = native_errors.is_err();
     let bytes = copy_native_bytes(result.bytes, result.length);
-    let errors = copy_native_errors(result.errors, result.error_count);
+    let errors = native_errors.unwrap_or_default();
     unsafe {
         elephc_dom_native_c14n_result_free(
             result.bytes,
-            result.errors,
-            result.error_count,
+            std::ptr::null_mut(),
+            0,
         );
     }
     if result.allocation_failed != 0 || malformed_bytes || malformed_errors {
@@ -1684,12 +1731,13 @@ pub(crate) fn xpath_evaluate(
     let malformed_pointers =
         result.pointers.is_null() && result.pointer_count != 0;
     let malformed_bytes = result.bytes.is_null() && result.byte_count != 0;
-    let malformed_errors = result.errors.is_null() && result.error_count != 0;
+    let native_errors = copy_and_free_native_errors(result.errors, result.error_count);
+    let malformed_errors = native_errors.is_err();
     let malformed_callback_leases =
         result.callback_leases.is_null() && result.callback_lease_count != 0;
     let pointers = copy_native_pointers(result.pointers, result.pointer_count);
     let mut bytes = copy_native_bytes(result.bytes, result.byte_count);
-    let errors = copy_native_errors(result.errors, result.error_count);
+    let errors = native_errors.unwrap_or_default();
     let callback_lease_ids = if result.callback_leases.is_null()
         || result.callback_lease_count == 0
     {
@@ -1707,8 +1755,8 @@ pub(crate) fn xpath_evaluate(
         elephc_dom_native_xpath_result_free(
             result.pointers,
             result.bytes,
-            result.errors,
-            result.error_count,
+            std::ptr::null_mut(),
+            0,
             result.callback_leases,
         );
     }
@@ -1834,12 +1882,40 @@ pub(crate) fn document_relaxng_validate_file(
     })
 }
 
-/// Copies one native structured-error array before its C allocation is released.
-fn copy_native_errors(pointer: *const NativeError, count: usize) -> Vec<LibxmlErrorObject> {
-    if pointer.is_null() || count == 0 {
-        return Vec::new();
+/// Classifies malformed pointer/count ownership pairs returned by the native adapter.
+#[derive(Debug, PartialEq, Eq)]
+enum NativeResultAbiError {
+    MalformedRequest,
+}
+
+/// Copies and releases one well-formed native structured-error allocation.
+fn copy_and_free_native_errors(
+    pointer: *mut NativeError,
+    count: usize,
+) -> Result<Vec<LibxmlErrorObject>, NativeResultAbiError> {
+    let errors = copy_native_errors(pointer, count)?;
+    unsafe {
+        elephc_dom_native_parse_result_free(pointer, count);
     }
-    unsafe { std::slice::from_raw_parts(pointer, count) }
+    Ok(errors)
+}
+
+/// Copies one native structured-error array before its C allocation is released.
+fn copy_native_errors(
+    pointer: *const NativeError,
+    count: usize,
+) -> Result<Vec<LibxmlErrorObject>, NativeResultAbiError> {
+    if pointer.is_null() {
+        return if count == 0 {
+            Ok(Vec::new())
+        } else {
+            Err(NativeResultAbiError::MalformedRequest)
+        };
+    }
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    Ok(unsafe { std::slice::from_raw_parts(pointer, count) }
         .iter()
         .map(|error| LibxmlErrorObject {
             level: i64::from(error.level),
@@ -1850,7 +1926,7 @@ fn copy_native_errors(pointer: *const NativeError, count: usize) -> Vec<LibxmlEr
             message: copy_native_bytes(error.message, error.message_length),
             file: copy_native_bytes(error.file, error.file_length),
         })
-        .collect()
+        .collect())
 }
 
 /// Copies one native pointer array before its C allocation is released.
@@ -2371,10 +2447,8 @@ pub(crate) fn fragment_append_xml(
             input.len(),
         )
     };
-    let errors = copy_native_errors(result.errors, result.error_count);
-    unsafe {
-        elephc_dom_native_parse_result_free(result.errors, result.error_count);
-    }
+    let errors = copy_and_free_native_errors(result.errors, result.error_count)
+        .map_err(|_| ())?;
     if result.allocation_failed != 0 || result.status != 0 {
         return Err(());
     }
@@ -3743,4 +3817,55 @@ fn copy_simplexml_namespace_result(
         return Err(());
     }
     Ok(SimpleXmlNamespaceOutcome { items: copied })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        copy_and_free_native_errors, copy_native_errors, NativeError,
+        NativeResultAbiError,
+    };
+    use crate::objects::LibxmlErrorObject;
+
+    /// Rejects a nonzero native error count without an owned error-array pointer.
+    #[test]
+    fn malformed_null_error_array_is_not_copied_or_freed() {
+        assert_eq!(
+            copy_and_free_native_errors(std::ptr::null_mut(), 1),
+            Err(NativeResultAbiError::MalformedRequest)
+        );
+    }
+
+    /// Preserves the C error-record layout while copying every borrowed byte range.
+    #[test]
+    fn native_error_records_copy_all_fields_from_the_c_layout() {
+        let mut message = b"native-message".to_vec();
+        let mut file = b"native-file.xml".to_vec();
+        let error = NativeError {
+            level: 2,
+            domain: 3,
+            code: 4,
+            line: 5,
+            column: 6,
+            reserved: 0,
+            message: message.as_mut_ptr(),
+            message_length: message.len(),
+            file: file.as_mut_ptr(),
+            file_length: file.len(),
+        };
+
+        assert_eq!(std::mem::size_of::<NativeError>(), 56);
+        assert_eq!(
+            copy_native_errors(&error, 1),
+            Ok(vec![LibxmlErrorObject {
+                level: 2,
+                domain: 3,
+                code: 4,
+                line: 5,
+                column: 6,
+                message,
+                file,
+            }])
+        );
+    }
 }

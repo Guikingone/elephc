@@ -269,6 +269,220 @@ class CoverageManifestContractTests(CoverageFixture):
             {"dom": 868, "libxml": 32, "simplexml": 156},
         )
 
+    def test_generator_rejects_source_roots_that_escape_the_repository(self) -> None:
+        """Refuse a symlinked php-src root whose resolved location is outside the repo."""
+        external = self.repo_root.parent / "outside-php-src"
+        (external / "ext/dom/tests").mkdir(parents=True)
+        (external / "ext/dom/tests/outside.phpt").write_text("--TEST--\noutside\n")
+        escaped = self.repo_root / "escaped-php-src"
+        escaped.symlink_to(external, target_is_directory=True)
+        source = self.repo_root / "escaped-input.json"
+        source.write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "php_src_root": escaped.name,
+                    "requirements": [],
+                    "routes": [],
+                    "components": {"dom": 1},
+                }
+            )
+        )
+        result = self.run_generator(source, self.repo_root / "escaped-output.json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("UNSAFE_PATH:php_src_root", result.stderr)
+
+    def test_generator_uses_atomic_output_replacement(self) -> None:
+        """Require a temp-file replacement rather than a truncating direct output write."""
+        implementation = GENERATOR.read_text(encoding="utf-8")
+        self.assertIn("os.replace", implementation)
+        self.assertNotIn("arguments.output.write_text", implementation)
+
+    def test_strict_rejects_empty_or_nonfrozen_inventory_and_target_sets(self) -> None:
+        """Pin the campaign's 603/1,056 component counts and all three target reports."""
+        empty = {
+            "schema": 1,
+            "source": {"php_commit": PHP_COMMIT, "php_version": "8.5.8"},
+            "build": {"commit": BUILD_COMMIT},
+            "supported_targets": [],
+            "inventory": {"requirements": 0, "routes": 0, "families": 0, "phpts": 0},
+            "requirements": [],
+            "routes": [],
+            "families": [],
+            "rust_tests": [],
+            "phpts": [],
+            "reports": [],
+        }
+        self.assert_gate_fails(empty, "FROZEN_INVENTORY_MISMATCH:requirements")
+        self.assert_gate_fails(empty, "FROZEN_COMPONENT_COUNT_MISMATCH:dom")
+        self.assert_gate_fails(empty, "SUPPORTED_TARGETS_MISMATCH")
+
+    def test_strict_uses_locked_source_and_checked_in_ledgers(self) -> None:
+        """Reject source claims that disagree with source-lock or lack all PHPT ledgers."""
+        wrong_source = self.manifest()
+        wrong_source["source"]["php_commit"] = "unlocked-commit"
+        self.assert_gate_fails(wrong_source, "SOURCE_LOCK_MISMATCH:php_commit")
+        self.assert_gate_fails(self.manifest(), "LEDGER_MISSING:dom")
+
+    def test_strict_pins_the_entire_source_lock_provenance(self) -> None:
+        """Reject a lock whose PHP archive digest changes despite an unchanged commit."""
+        lock_path = self.repo_root / "tools/php-dom/source-lock.json"
+        lock_path.parent.mkdir(parents=True)
+        lock = json.loads((TOOLS_ROOT / "source-lock.json").read_text())
+        lock["php"]["archive_sha256"] = "0" * 64
+        lock_path.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n")
+        self.assert_gate_fails(self.manifest(), "SOURCE_LOCK_INVALID:provenance")
+
+    def test_strict_compares_the_exact_route_id_set_to_generated_opcodes(self) -> None:
+        """Reject a two-row route set even when it can claim a matching row count."""
+        opcode_path = self.repo_root / "tests/php_dom/surface/opcodes-php-8.5.8.json"
+        opcode_path.parent.mkdir(parents=True)
+        shutil.copy2(
+            TOOLS_ROOT.parents[1] / "tests/php_dom/surface/opcodes-php-8.5.8.json",
+            opcode_path,
+        )
+        self.assert_gate_fails(self.manifest(), "ROUTE_SET_MISMATCH")
+
+    def test_strict_requires_closed_ledgers_without_pending_authority_entries(self) -> None:
+        """Reject the checked-in upstream ledger itself until every PHPT is closed."""
+        upstream = self.repo_root / "tests/php_dom/upstream"
+        upstream.mkdir(parents=True)
+        for component in ("dom", "libxml", "simplexml"):
+            shutil.copy2(
+                TOOLS_ROOT.parents[1] / "tests/php_dom/upstream" / f"{component}-php-8.5.8.json",
+                upstream / f"{component}-php-8.5.8.json",
+            )
+        self.assert_gate_fails(self.manifest(), "LEDGER_NOT_CLOSED:dom")
+
+    def test_strict_rejects_symlinked_source_lock_and_ledgers(self) -> None:
+        """Treat authority symlinks as unsafe even when their target has valid JSON."""
+        lock_path = self.repo_root / "tools/php-dom/source-lock.json"
+        lock_path.parent.mkdir(parents=True)
+        lock_path.symlink_to(TOOLS_ROOT / "source-lock.json")
+        self.assert_gate_fails(self.manifest(), "UNSAFE_AUTHORITY:source-lock")
+
+        ledger_path = self.repo_root / "tests/php_dom/upstream/dom-php-8.5.8.json"
+        ledger_path.parent.mkdir(parents=True)
+        ledger_path.symlink_to(
+            TOOLS_ROOT.parents[1] / "tests/php_dom/upstream/dom-php-8.5.8.json"
+        )
+        self.assert_gate_fails(self.manifest(), "UNSAFE_AUTHORITY:ledger:dom")
+
+    def test_strict_enforces_closed_ledger_status_evidence_semantics(self) -> None:
+        """Reject invalid status values and status-specific fixture, reason, and observations."""
+        upstream = self.repo_root / "tests/php_dom/upstream"
+        upstream.mkdir(parents=True)
+        ledgers = {}
+        for component in ("dom", "libxml", "simplexml"):
+            source = TOOLS_ROOT.parents[1] / "tests/php_dom/upstream" / f"{component}-php-8.5.8.json"
+            ledger = json.loads(source.read_text())
+            ledger["closed"] = True
+            for entry in ledger["entries"]:
+                entry["status"] = "direct"
+                entry["fixture"] = None
+                entry["reason"] = None
+                entry["observations"] = []
+            ledgers[component] = ledger
+
+        ledgers["dom"]["entries"][0]["status"] = "unsupported"
+        (upstream / "dom-php-8.5.8.json").write_text(json.dumps(ledgers["dom"], indent=2) + "\n")
+        for component in ("libxml", "simplexml"):
+            (upstream / f"{component}-php-8.5.8.json").write_text(json.dumps(ledgers[component], indent=2) + "\n")
+        self.assert_gate_fails(self.manifest(), "LEDGER_STATUS_INVALID:dom:unsupported")
+
+        translated = ledgers["dom"]
+        translated["entries"][0]["status"] = "translated"
+        translated["entries"][0]["fixture"] = None
+        (upstream / "dom-php-8.5.8.json").write_text(json.dumps(translated, indent=2) + "\n")
+        self.assert_gate_fails(self.manifest(), "LEDGER_TRANSLATED_FIXTURE_MISSING:dom")
+
+        translated["entries"][0]["fixture"] = "tests/dom/translated.php"
+        translated["entries"][0]["reason"] = None
+        (upstream / "dom-php-8.5.8.json").write_text(json.dumps(translated, indent=2) + "\n")
+        self.assert_gate_fails(self.manifest(), "LEDGER_TRANSLATED_REASON_MISSING:dom")
+
+        translated["entries"][0]["reason"] = "Compiler-equivalent fixture."
+        translated["entries"][0]["observations"] = None
+        (upstream / "dom-php-8.5.8.json").write_text(json.dumps(translated, indent=2) + "\n")
+        self.assert_gate_fails(self.manifest(), "LEDGER_OBSERVATIONS_INVALID:dom")
+
+        translated["entries"][0]["observations"] = []
+        translated["entries"][0]["status"] = "not-applicable"
+        translated["entries"][0]["fixture"] = None
+        translated["entries"][0]["reason"] = None
+        (upstream / "dom-php-8.5.8.json").write_text(json.dumps(translated, indent=2) + "\n")
+        self.assert_gate_fails(self.manifest(), "LEDGER_NOT_APPLICABLE_REASON_MISSING:dom")
+
+    def test_strict_pins_opcode_authority_beyond_a_matching_route_set(self) -> None:
+        """Reject a forged opcode authority that supplies the right 603 IDs but wrong provenance."""
+        opcode_path = self.repo_root / "tests/php_dom/surface/opcodes-php-8.5.8.json"
+        opcode_path.parent.mkdir(parents=True)
+        operations = [{"key": f"route-{index:03d}"} for index in range(603)]
+        opcode_path.write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "php_version": "8.5.8",
+                    "manifest_sha256": "forged",
+                    "surface_sha256": "forged",
+                    "operations": operations,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        document = self.manifest()
+        document["routes"] = [
+            {
+                "id": operation["key"],
+                "family": "document",
+                "dispatcher_anchor": "document.dispatch",
+                "coverage": {"rust_test": "dom_document_create_element"},
+            }
+            for operation in operations
+        ]
+        document["inventory"]["routes"] = 603
+        self.assert_gate_fails(document, "OPCODE_AUTHORITY_INVALID:provenance")
+
+    def test_strict_resolves_every_phpt_mapping_owner(self) -> None:
+        """Reject PHPT mappings that name absent requirement, route, family, or Rust-test rows."""
+        mutations = (
+            ("requirement", "REQ-NOT-DECLARED", "UNKNOWN_REQUIREMENT:REQ-NOT-DECLARED"),
+            ("route", "ROUTE-NOT-DECLARED", "UNKNOWN_ROUTE:ROUTE-NOT-DECLARED"),
+            ("family", "FAMILY-NOT-DECLARED", "UNKNOWN_FAMILY:FAMILY-NOT-DECLARED"),
+            ("rust_test", "test_not_declared", "UNKNOWN_RUST_TEST:test_not_declared"),
+        )
+        for field, value, diagnostic in mutations:
+            with self.subTest(field=field):
+                document = self.manifest()
+                document["phpts"][0]["mapping"][field] = value
+                self.assert_gate_fails(document, diagnostic)
+
+    def test_strict_rejects_non_object_rows_in_every_collection(self) -> None:
+        """Fail closed instead of silently dropping malformed collection rows."""
+        collections = ("requirements", "routes", "families", "phpts", "rust_tests")
+        for collection in collections:
+            with self.subTest(collection=collection):
+                document = self.manifest()
+                document[collection][0] = "not-an-object"
+                self.assert_gate_fails(document, f"SCHEMA_ROW_INVALID:{collection}:0")
+
+        targets = self.manifest()
+        targets["supported_targets"][0] = {"target": "not-a-string"}
+        self.assert_gate_fails(targets, "SCHEMA_ROW_INVALID:targets:0")
+
+    def test_strict_rejects_self_declared_build_provenance_and_escaped_paths(self) -> None:
+        """Require an independent build attestation and reject binary paths outside the repo."""
+        self.assert_gate_fails(self.manifest(), "BUILD_PROVENANCE_UNVERIFIED")
+
+        escaped = self.repo_root.parent / "outside-elephc-dom"
+        escaped.write_bytes(b"outside binary")
+        document = self.manifest()
+        document["reports"][0]["binary"]["path"] = "../outside-elephc-dom"
+        document["reports"][0]["binary"]["sha256"] = sha256_file(escaped)
+        self.assert_gate_fails(document, "UNSAFE_PATH:binary:macos-aarch64")
+
     def test_strict_rejects_each_unmapped_requirement_route_family_and_phpt(self) -> None:
         """Reject every coverage-cell type that is present but lacks a named owner."""
         mutations = (
@@ -358,6 +572,17 @@ class CoverageManifestContractTests(CoverageFixture):
         unregistered = self.manifest()
         (self.repo_root / "tests/codegen/mod.rs").write_text("//! Detached fixture module.\n")
         self.assert_gate_fails(unregistered, "RUST_TEST_UNREGISTERED:dom_document_create_element")
+
+    def test_strict_requires_rust_test_attributes_and_referenced_owners(self) -> None:
+        """Reject a plain Rust function even when its name and module still match."""
+        document = self.manifest()
+        path = self.repo_root / "tests/codegen/dom_contract.rs"
+        path.write_text(path.read_text().replace("#[test]\nfn dom_node_name", "fn dom_node_name"))
+        self.assert_gate_fails(document, "RUST_TEST_NOT_TEST:dom_node_name")
+
+        unregistered_owner = self.manifest()
+        unregistered_owner["requirements"][0]["coverage"]["rust_test"] = "not_registered"
+        self.assert_gate_fails(unregistered_owner, "RUST_TEST_OWNER_UNKNOWN:not_registered")
 
     def test_strict_rejects_deceptive_reuse_for_independent_atomic_cells(self) -> None:
         """Prevent one broad Rust test from falsely satisfying two atomic requirements."""

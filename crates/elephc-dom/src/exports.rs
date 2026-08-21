@@ -14,7 +14,8 @@ use std::rc::Rc;
 
 use crate::abi::{
     DomClassMetadataEntry, HostVTable, ResultHeader, ABI_VERSION, OPCODE_ABI_PING,
-    STATUS_ABI_ERROR, STATUS_INTERNAL_PANIC, STATUS_OK, STATUS_THROW,
+    STATUS_ABI_ERROR, STATUS_INTERNAL_PANIC, STATUS_MALFORMED_REQUEST, STATUS_OK,
+    STATUS_THROW, VALUE_NULL,
 };
 use crate::context::{
     context as find_context, ping_value_tag, register_context, register_result, remove_context,
@@ -160,8 +161,10 @@ pub unsafe extern "C" fn elephc_dom_context_set_class_metadata(
             }
             unsafe { std::slice::from_raw_parts(entries, count) }
         };
-        context.class_metadata.install(entries);
-        STATUS_OK
+        match context.class_metadata.install(entries) {
+            Ok(()) => STATUS_OK,
+            Err(()) => STATUS_MALFORMED_REQUEST,
+        }
     })) {
         Ok(status) => status,
         Err(_) => STATUS_INTERNAL_PANIC,
@@ -208,7 +211,7 @@ unsafe fn call_impl(
 ) -> u32 {
     let request = match crate::request::decode(request_ptr, request_len) {
         Ok(request) => request,
-        Err(()) => return STATUS_ABI_ERROR,
+        Err(error) => return publish_decode_error(context_id, error, out_result),
     };
     let _ = request.values.len();
     let _ = request.bytes.len();
@@ -256,6 +259,28 @@ unsafe fn call_impl(
         }
         _ => STATUS_ABI_ERROR,
     }
+}
+
+/// Registers one pointer-free result for a rejected ABI request after decoding fails.
+unsafe fn publish_decode_error(
+    context_id: u64,
+    error: crate::request::DecodeError,
+    out_result: *mut ResultHeader,
+) -> u32 {
+    let Some(context) = find_context(context_id) else {
+        return STATUS_ABI_ERROR;
+    };
+    let Ok(mut context) = context.try_borrow_mut() else {
+        return STATUS_ABI_ERROR;
+    };
+    let status = error.status();
+    let result = register_result(
+        &mut context,
+        ResultFrame::abi_status(status),
+        VALUE_NULL,
+    );
+    out_result.write(result);
+    status
 }
 
 /// Executes deferred host actions and registers one dispatch result after all context borrows end.

@@ -10,6 +10,9 @@ Authoritative worktree:
 Current committed implementation checkpoint: `571d19bbd`
 (`feat(dom): checkpoint PHP 8.5 compliance campaign`)
 
+Current branch head: `207ecadc4`
+(`docs(dom): record upstream rebase checkpoint`)
+
 Current published head: `50347ae2ee`
 (`docs(dom): track xpath resolver remediation`), containing implementation
 checkpoint `e7315176e`.
@@ -36,8 +39,8 @@ Legend:
   URL-stat success flags, `__PHP_Incomplete_Class` serialization, parser
   regressions, SimpleXML comparisons/casts/isset/unset/numeric coercion,
   DOM `NamedNodeMap` errors, XPath dynamic-spread presence, DOM/SimpleXML
-  writes/foreach ownership, and their new modular homes. The branch is now one
-  commit ahead and zero behind `origin/main`; the rebase state is clean. The
+  writes/foreach ownership, and their new modular homes. The branch is now two
+  commits ahead and zero behind `origin/main`; the rebase state is clean. The
   remote fork still names the pre-rewrite history and must later be updated
   with `--force-with-lease` after validation, never pulled into this branch.
 - [x] Read `CONTRIBUTING.md` and the repository target/test/ownership rules;
@@ -150,6 +153,34 @@ Legend:
   from the tests after a second exact oracle probe (`DOMXPath:false`,
   `Dom\\XPath:false`, `DOMNameSpaceNode:true`); the legitimate namespace-node
   clone case remains. No Rust/product command or edit occurred in these waves.
+  The coverage-gate implementation now has 26 strict contract tests and runs
+  together with the 25 PHPT-runner tests: all 51 pass. Independent reviews
+  rejected earlier permissive revisions, leading to fail-closed checks for the
+  exact 603 route identities, the 1,056-entry `868/32/156` PHPT partition, all
+  three supported targets, complete locked-source and build provenance, true
+  registered Rust test owners, confined non-symlink paths, atomic writes, and
+  closed non-skipped ledgers. After four adversarial rejection/correction
+  rounds, the independent final re-review returned `GO` for the gate contract;
+  no complete coverage manifest or target attestation exists yet. The
+  checked-in ledgers correctly remain
+  `closed: false` with all 1,056 entries `pending`, so the strict gate must fail
+  on the real campaign today. Additional tests now cover DOM/SimpleXML wrapper
+  retention, live and weak cache identity, detach/reattach, clone/import,
+  cycles and heap-debug finalization, plus the last previously unmentioned
+  direct routes (`importLegacyNode`, `relaxNgValidateSource`, `isSupported`) and
+  `libxml_disable_entity_loader` state/deprecation behavior. A real bootstrap
+  now materializes all 603 requirements/routes and 1,056 pending PHPTs without
+  inventing owners or target attestations; its strict run reproducibly exits
+  non-zero with 2,872 gap diagnostics. The official PHP 8.5.8 tarball and
+  libxml2 2.15.3 archive were restored and verified at the locked SHA-256
+  values (libxml tag commit `c94eb0210`). The serialized `-j1` oracle build is
+  complete at `/private/tmp/php-dom-oracle-build-8.5.8/sapi/cli/php`; it reports
+  `PHP 8.5.8`, `libxml2 2.15.3`, statically linked libxml, and binary SHA-256
+  `6253fe2a063a1368d4a821878afebe946a604b73715f4069f687e72502ee9f79`.
+  Every expectation added in the newest XPath, GC/cache, SimpleXML, entity-
+  loader, and uncovered-route tests has now been replayed byte-for-byte against
+  that exact oracle. Elephc Cargo/heap-debug execution remains pending while
+  unrelated Cargo work is consuming memory after two earlier OOMs.
 - [ ] Add final examples plus public and internals documentation.
 - [ ] Validate the complete supported target matrix.
 - [ ] Obtain absolute implementation consensus from GLM 5.2, Kimi K2.7, and

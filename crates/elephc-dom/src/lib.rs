@@ -27,7 +27,7 @@ mod runtime_value;
 pub use abi::{
     Diagnostic, DomClassMetadataEntry, HostCall, HostVTable, RequestHeader, ResultHeader,
     Value, ABI_VERSION, DOM_CLASS_NO_PARENT, STATUS_ABI_ERROR, STATUS_FATAL,
-    STATUS_INTERNAL_PANIC, STATUS_OK, STATUS_THROW,
+    STATUS_INTERNAL_PANIC, STATUS_MALFORMED_REQUEST, STATUS_OK, STATUS_THROW,
 };
 pub use exports::{
     elephc_dom_call, elephc_dom_context_free, elephc_dom_context_new,

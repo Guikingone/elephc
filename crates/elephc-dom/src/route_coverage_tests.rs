@@ -13,15 +13,9 @@ use std::ffi::c_void;
 
 use crate::abi::{
     HostVTable, RequestHeader, ResultHeader, Value, ABI_VERSION, OPCODE_ABI_PING,
-    STATUS_ABI_ERROR, STATUS_OK, VALUE_ARRAY, VALUE_BRIDGE_HANDLE, VALUE_BYTES,
-    VALUE_MAP,
+    STATUS_ABI_ERROR, STATUS_MALFORMED_REQUEST, STATUS_OK, VALUE_ARRAY,
+    VALUE_BRIDGE_HANDLE, VALUE_BYTES, VALUE_MAP,
 };
-
-/// Locked `MALFORMED_REQUEST` status from specification section 5.6.
-///
-/// This remains local until the production ABI exports the generated constant. Keeping the
-/// expectation numeric lets this TDD module compile while exposing the missing ABI member.
-const SPEC_STATUS_MALFORMED_REQUEST: u32 = 5;
 
 /// The three bridge-internal DOM lifecycle routes generated in the manifest.
 const INTERNAL_DOM_ROUTES: &[&str] = &[
@@ -406,11 +400,23 @@ fn abi_boundary_matrix_rejects_before_opcode_or_mutation() {
             ),
             STATUS_ABI_ERROR,
         ),
-        ("abi-shorter-than-prefix", vec![0; 7], SPEC_STATUS_MALFORMED_REQUEST),
+        ("abi-shorter-than-prefix", vec![0; 7], STATUS_MALFORMED_REQUEST),
         (
             "abi-readable-prefix-truncated-header",
             prefix_only,
-            SPEC_STATUS_MALFORMED_REQUEST,
+            STATUS_MALFORMED_REQUEST,
+        ),
+        (
+            "abi-readable-prefix-invalid-header-size",
+            request_bytes(
+                RequestHeader {
+                    header_size: 8,
+                    ..ping_header()
+                },
+                &[],
+                &[],
+            ),
+            STATUS_MALFORMED_REQUEST,
         ),
         (
             "abi-value-count-overflow",
@@ -423,7 +429,7 @@ fn abi_boundary_matrix_rejects_before_opcode_or_mutation() {
                 &[],
                 &[],
             ),
-            SPEC_STATUS_MALFORMED_REQUEST,
+            STATUS_MALFORMED_REQUEST,
         ),
         (
             "abi-byte-count-overflow",
@@ -435,7 +441,7 @@ fn abi_boundary_matrix_rejects_before_opcode_or_mutation() {
                 &[],
                 &[],
             ),
-            SPEC_STATUS_MALFORMED_REQUEST,
+            STATUS_MALFORMED_REQUEST,
         ),
         (
             "abi-unknown-value-tag",
@@ -452,7 +458,7 @@ fn abi_boundary_matrix_rejects_before_opcode_or_mutation() {
                 }],
                 &[],
             ),
-            SPEC_STATUS_MALFORMED_REQUEST,
+            STATUS_MALFORMED_REQUEST,
         ),
         (
             "abi-array-range-overflow",
@@ -469,7 +475,7 @@ fn abi_boundary_matrix_rejects_before_opcode_or_mutation() {
                 }],
                 &[],
             ),
-            SPEC_STATUS_MALFORMED_REQUEST,
+            STATUS_MALFORMED_REQUEST,
         ),
         (
             "abi-map-entry-count-overflow",
@@ -486,7 +492,7 @@ fn abi_boundary_matrix_rejects_before_opcode_or_mutation() {
                 }],
                 &[],
             ),
-            SPEC_STATUS_MALFORMED_REQUEST,
+            STATUS_MALFORMED_REQUEST,
         ),
         (
             "abi-byte-range-overflow",
@@ -504,7 +510,7 @@ fn abi_boundary_matrix_rejects_before_opcode_or_mutation() {
                 }],
                 b"x",
             ),
-            SPEC_STATUS_MALFORMED_REQUEST,
+            STATUS_MALFORMED_REQUEST,
         ),
         (
             "abi-cyclic-value-tree",
@@ -521,7 +527,7 @@ fn abi_boundary_matrix_rejects_before_opcode_or_mutation() {
                 }],
                 &[],
             ),
-            SPEC_STATUS_MALFORMED_REQUEST,
+            STATUS_MALFORMED_REQUEST,
         ),
     ];
     for (case_id, request, expected_status) in cases {

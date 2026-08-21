@@ -786,7 +786,10 @@ fn simplexml_loader_class_name_accepts_only_simplexml_subclasses() {
         })
         .collect::<Vec<_>>();
     let mut native_context = context();
-    native_context.class_metadata.install(&entries);
+    native_context
+        .class_metadata
+        .install(&entries)
+        .expect("class metadata is valid");
     let context_id = crate::context::register_context(native_context);
 
     let source = b"<root/>";

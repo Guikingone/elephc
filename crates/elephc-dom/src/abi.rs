@@ -27,6 +27,8 @@ pub const STATUS_FATAL: u32 = 2;
 pub const STATUS_ABI_ERROR: u32 = 3;
 /// Contained Rust/native panic status.
 pub const STATUS_INTERNAL_PANIC: u32 = 4;
+/// Readable ABI input whose required fields or nested records are malformed.
+pub const STATUS_MALFORMED_REQUEST: u32 = 5;
 
 /// PHP error-kind discriminator for a catchable `DOMException`.
 pub const PHP_ERROR_KIND_DOM_EXCEPTION: u32 = 1;

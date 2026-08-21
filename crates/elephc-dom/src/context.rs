@@ -55,24 +55,32 @@ impl ClassMetadataTable {
         Self::default()
     }
 
-    /// Replaces the table contents with copied, structurally valid foreign rows.
-    pub(crate) fn install(&mut self, entries: &[DomClassMetadataEntry]) {
-        self.by_name.clear();
-        self.by_id.clear();
+    /// Replaces the table only after every foreign row passes structural validation.
+    pub(crate) fn install(
+        &mut self,
+        entries: &[DomClassMetadataEntry],
+    ) -> Result<(), ()> {
+        let mut by_name = HashMap::with_capacity(entries.len());
+        let mut by_id = HashMap::with_capacity(entries.len());
         for entry in entries {
-            let Some(canonical_name) = read_class_name(entry) else {
-                continue;
-            };
+            let canonical_name = read_class_name(entry).ok_or(())?;
             let meta = ClassMeta {
                 canonical_name: canonical_name.clone(),
                 id: entry.class_id,
                 parent_id: entry.parent_class_id,
                 is_abstract: entry.is_abstract != 0,
             };
-            self.by_name
-                .insert(php_class_key(&canonical_name), meta.clone());
-            self.by_id.insert(entry.class_id, meta);
+            if by_name
+                .insert(php_class_key(&canonical_name), meta.clone())
+                .is_some()
+                || by_id.insert(entry.class_id, meta).is_some()
+            {
+                return Err(());
+            }
         }
+        self.by_name = by_name;
+        self.by_id = by_id;
+        Ok(())
     }
 
     /// Returns copied metadata for one case-insensitively matched PHP class name.
@@ -210,6 +218,14 @@ impl ResultFrame {
             values: Box::default(),
             diagnostics: Box::default(),
             pending_host_actions: Vec::new(),
+        }
+    }
+
+    /// Builds a pointer-free result for one non-PHP ABI status.
+    pub(crate) fn abi_status(status: u32) -> Self {
+        Self {
+            status,
+            ..Self::null()
         }
     }
 
