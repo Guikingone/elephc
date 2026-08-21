@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/gz_prelude.rs`:126](https://github.com/illegalstudio/elephc/blob/main/src/gz_prelude.rs#L126) (`readgzfile`)
+- **Lowering**: [`src/gz_prelude.rs`:260](https://github.com/illegalstudio/elephc/blob/main/src/gz_prelude.rs#L260) (`readgzfile`)
 - **Function symbol**: `readgzfile()`
 
 

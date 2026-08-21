@@ -2,7 +2,7 @@
 title: "hex2bin()"
 description: "Decodes a hexadecimal string back into its binary representation."
 sidebar:
-  order: 438
+  order: 440
 ---
 
 ## hex2bin()

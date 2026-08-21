@@ -144,6 +144,31 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         "Closes an open gz-file pointer."
     ),
     surface!(
+        "gzdecode",
+        String,
+        PreludeProvided,
+        [
+            param!("data", Str),
+            param!("max_length", Int = DefaultSpec::Int(0)),
+        ],
+        None,
+        Mixed,
+        "Decodes a gzip-framed string."
+    ),
+    surface!(
+        "gzencode",
+        String,
+        PreludeProvided,
+        [
+            param!("data", Str),
+            param!("level", Int = DefaultSpec::Int(-1)),
+            param!("encoding", Int = DefaultSpec::Int(31)),
+        ],
+        None,
+        Mixed,
+        "Compresses a string with the gzip framing."
+    ),
+    surface!(
         "gzeof",
         Io,
         PreludeProvided,
@@ -357,5 +382,39 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Some("vars"),
         Void,
         "Unsets the given variables."
+    ),
+    surface!(
+        "zlib_decode",
+        String,
+        PreludeProvided,
+        [
+            param!("data", Str),
+            param!("max_length", Int = DefaultSpec::Int(0)),
+        ],
+        None,
+        Mixed,
+        "Decompresses a raw, zlib or gzip framed string, detecting which."
+    ),
+    surface!(
+        "zlib_get_coding_type",
+        String,
+        PreludeProvided,
+        [],
+        None,
+        Mixed,
+        "Returns the compression the output layer applied, or false when none did."
+    ),
+    surface!(
+        "zlib_encode",
+        String,
+        PreludeProvided,
+        [
+            param!("data", Str),
+            param!("encoding", Int),
+            param!("level", Int = DefaultSpec::Int(-1)),
+        ],
+        None,
+        Mixed,
+        "Compresses a string with the requested zlib framing."
     ),
 ];

@@ -435,7 +435,9 @@ sidebar:
 | [`explode()`](./builtins/string/explode.md) | `(string $separator, string $string, int $limit = PHP_INT_MAX): array` | `array` | ✓ | ✓ |
 | [`grapheme_strrev()`](./builtins/string/grapheme_strrev.md) | `(string $string): mixed` | `mixed` | ✓ | ✓ |
 | [`gzcompress()`](./builtins/string/gzcompress.md) | `(string $data, int $level = -1): string` | `string` | ✓ | ✓ |
+| [`gzdecode()`](./builtins/string/gzdecode.md) | `(string $data, int $max_length = 0): mixed` | `mixed` | ✓ | — |
 | [`gzdeflate()`](./builtins/string/gzdeflate.md) | `(string $data, int $level = -1): string` | `string` | ✓ | ✓ |
+| [`gzencode()`](./builtins/string/gzencode.md) | `(string $data, int $level = -1, int $encoding = 31): mixed` | `mixed` | ✓ | — |
 | [`gzinflate()`](./builtins/string/gzinflate.md) | `(string $data, int $max_length = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`gzuncompress()`](./builtins/string/gzuncompress.md) | `(string $data, int $max_length = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`hash()`](./builtins/string/hash.md) | `(string $algo, string $data, bool $binary = false): string` | `string` | ✓ | ✓ |
@@ -513,6 +515,9 @@ sidebar:
 | [`vprintf()`](./builtins/string/vprintf.md) | `(string $format, array $values): int` | `int` | ✓ | ✓ |
 | [`vsprintf()`](./builtins/string/vsprintf.md) | `(string $format, array $values): string` | `string` | ✓ | ✓ |
 | [`wordwrap()`](./builtins/string/wordwrap.md) | `(string $string, int $width = 75, string $break = '\n', bool $cut_long_words = false): string` | `string` | ✓ | ✓ |
+| [`zlib_decode()`](./builtins/string/zlib_decode.md) | `(string $data, int $max_length = 0): mixed` | `mixed` | ✓ | — |
+| [`zlib_encode()`](./builtins/string/zlib_encode.md) | `(string $data, int $encoding, int $level = -1): mixed` | `mixed` | ✓ | — |
+| [`zlib_get_coding_type()`](./builtins/string/zlib_get_coding_type.md) | `(): mixed` | `mixed` | ✓ | — |
 | [`boolval()`](./builtins/type/boolval.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`ctype_alnum()`](./builtins/type/ctype_alnum.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
 | [`ctype_alpha()`](./builtins/type/ctype_alpha.md) | `(string $text): bool` | `bool` | ✓ | ✓ |

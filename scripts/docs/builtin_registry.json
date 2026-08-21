@@ -33275,7 +33275,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzclose",
-      "codegen_line": 72,
+      "codegen_line": 89,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -33466,6 +33466,82 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "max_length",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "gzdecode",
+    "description": "Decodes a gzip-framed string.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/gz_prelude.rs",
+      "codegen_function": "gzdecode",
+      "codegen_line": 226,
+      "notes": [
+        "Implemented by a compiler-injected PHP prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "name": "gzdecode",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "max_length",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "gzdecode",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -33633,6 +33709,96 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": -1,
+          "name": "level",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": 31,
+          "name": "encoding",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "gzencode",
+    "description": "Compresses a string with the gzip framing.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/gz_prelude.rs",
+      "codegen_function": "gzencode",
+      "codegen_line": 157,
+      "notes": [
+        "Implemented by a compiler-injected PHP prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "name": "gzencode",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "-1",
+          "name": "level",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "31",
+          "name": "encoding",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "gzencode",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "stream",
           "optional": false,
           "type": "mixed"
@@ -33661,7 +33827,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzeof",
-      "codegen_line": 76,
+      "codegen_line": 93,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -33730,7 +33896,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzfile",
-      "codegen_line": 122,
+      "codegen_line": 256,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -33799,7 +33965,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzgetc",
-      "codegen_line": 80,
+      "codegen_line": 97,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -33868,7 +34034,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzgets",
-      "codegen_line": 84,
+      "codegen_line": 101,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34114,7 +34280,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzopen",
-      "codegen_line": 68,
+      "codegen_line": 85,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34190,7 +34356,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzpassthru",
-      "codegen_line": 106,
+      "codegen_line": 123,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34266,7 +34432,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzputs",
-      "codegen_line": 102,
+      "codegen_line": 119,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34349,7 +34515,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzread",
-      "codegen_line": 91,
+      "codegen_line": 108,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34418,7 +34584,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzrewind",
-      "codegen_line": 110,
+      "codegen_line": 127,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34494,7 +34660,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzseek",
-      "codegen_line": 114,
+      "codegen_line": 131,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34570,7 +34736,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gztell",
-      "codegen_line": 118,
+      "codegen_line": 135,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34809,7 +34975,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzwrite",
-      "codegen_line": 95,
+      "codegen_line": 112,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -57305,7 +57471,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "readgzfile",
-      "codegen_line": 126,
+      "codegen_line": 260,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -78836,6 +79002,218 @@
       "variadic": null
     },
     "slug": "wordwrap",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "max_length",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "zlib_decode",
+    "description": "Decompresses a raw, zlib or gzip framed string, detecting which.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/gz_prelude.rs",
+      "codegen_function": "zlib_decode",
+      "codegen_line": 234,
+      "notes": [
+        "Implemented by a compiler-injected PHP prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "name": "zlib_decode",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "max_length",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "zlib_decode",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "encoding",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": -1,
+          "name": "level",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "zlib_encode",
+    "description": "Compresses a string with the requested zlib framing.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/gz_prelude.rs",
+      "codegen_function": "zlib_encode",
+      "codegen_line": 173,
+      "notes": [
+        "Implemented by a compiler-injected PHP prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "name": "zlib_encode",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "encoding",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "-1",
+          "name": "level",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "zlib_encode",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "zlib_get_coding_type",
+    "description": "Returns the compression the output layer applied, or false when none did.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/gz_prelude.rs",
+      "codegen_function": "zlib_get_coding_type",
+      "codegen_line": 249,
+      "notes": [
+        "Implemented by a compiler-injected PHP prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "name": "zlib_get_coding_type",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "zlib_get_coding_type",
     "sub_area": "String"
   },
   {

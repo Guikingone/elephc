@@ -21,7 +21,9 @@ sidebar:
 | [`explode()`](./string/explode.md) | `(string $separator, string $string, int $limit = PHP_INT_MAX): array` | `array` | ✓ | ✓ |
 | [`grapheme_strrev()`](./string/grapheme_strrev.md) | `(string $string): mixed` | `mixed` | ✓ | ✓ |
 | [`gzcompress()`](./string/gzcompress.md) | `(string $data, int $level = -1): string` | `string` | ✓ | ✓ |
+| [`gzdecode()`](./string/gzdecode.md) | `(string $data, int $max_length = 0): mixed` | `mixed` | ✓ | — |
 | [`gzdeflate()`](./string/gzdeflate.md) | `(string $data, int $level = -1): string` | `string` | ✓ | ✓ |
+| [`gzencode()`](./string/gzencode.md) | `(string $data, int $level = -1, int $encoding = 31): mixed` | `mixed` | ✓ | — |
 | [`gzinflate()`](./string/gzinflate.md) | `(string $data, int $max_length = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`gzuncompress()`](./string/gzuncompress.md) | `(string $data, int $max_length = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`hash()`](./string/hash.md) | `(string $algo, string $data, bool $binary = false): string` | `string` | ✓ | ✓ |
@@ -99,3 +101,6 @@ sidebar:
 | [`vprintf()`](./string/vprintf.md) | `(string $format, array $values): int` | `int` | ✓ | ✓ |
 | [`vsprintf()`](./string/vsprintf.md) | `(string $format, array $values): string` | `string` | ✓ | ✓ |
 | [`wordwrap()`](./string/wordwrap.md) | `(string $string, int $width = 75, string $break = '\n', bool $cut_long_words = false): string` | `string` | ✓ | ✓ |
+| [`zlib_decode()`](./string/zlib_decode.md) | `(string $data, int $max_length = 0): mixed` | `mixed` | ✓ | — |
+| [`zlib_encode()`](./string/zlib_encode.md) | `(string $data, int $encoding, int $level = -1): mixed` | `mixed` | ✓ | — |
+| [`zlib_get_coding_type()`](./string/zlib_get_coding_type.md) | `(): mixed` | `mixed` | ✓ | — |

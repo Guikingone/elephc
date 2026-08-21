@@ -44,6 +44,13 @@ pub(super) const GZ_FUNCTIONS: &[&str] = &[
     "gztell",
     "gzfile",
     "readgzfile",
+    // The string half of the surface: these frame BYTES rather than serve a stream, but they live
+    // in the same prelude and a program naming one needs it injected just the same.
+    "gzencode",
+    "gzdecode",
+    "zlib_encode",
+    "zlib_decode",
+    "zlib_get_coding_type",
 ];
 
 /// Returns whether the program references any `gz*` stream function, so the prelude must be

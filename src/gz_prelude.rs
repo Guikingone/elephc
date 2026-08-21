@@ -9,6 +9,23 @@
 //!   resolution and before name resolution.
 //!
 //! Key details:
+//! - THE FOUR STRING FUNCTIONS (`gzencode`, `gzdecode`, `zlib_encode`, `zlib_decode`) are here too,
+//!   though they frame BYTES rather than serve a stream: they are the rest of what ext-zlib owes
+//!   that the primitives already present can build. `ZLIB_ENCODING_RAW` and `_DEFLATE` were
+//!   MEASURED to be exactly `gzdeflate()` and `gzcompress()`, so those encodings ARE those calls;
+//!   only the gzip framing is written out, and its body is exactly `gzdeflate($data, $level)`.
+//! - `$data` IS DECLARED `mixed` on those four, and has to be. `gzdecode(gzencode($s))` is
+//!   idiomatic php — the inner call answers `string|false` and php complains only at RUN time, if
+//!   a false actually arrives. These are ordinary PHP functions here, so the checker applies
+//!   user-function strictness and refused the CALL: "parameter $data expects Str, got
+//!   Union([Str, False])". The same nesting through the native `gzuncompress(gzcompress($s))`
+//!   compiles, because a builtin's own check hook tolerates it — the strictness is about where a
+//!   function is declared, not about these functions. The catalogue still declares `string`, which
+//!   is what php documents.
+//! - THE GZIP OS BYTE is the one value that cannot be measured for every target from one host:
+//!   zlib stamps its own `OS_CODE`, 19 on Darwin and 3 on other Unix builds. It is selected from
+//!   `PHP_OS` so each target stamps what its own zlib would, and no test asserts it — the
+//!   round trip and the platform-independent header and trailer bytes are what is pinned.
 //! - WHY THIS IS AN EQUIVALENCE AND NOT AN APPROXIMATION. php-src implements `gzopen` as a stream
 //!   open on the zlib wrapper, so the whole family IS the plain stream API over that URL. That was
 //!   MEASURED rather than read: all fifteen pairs below — `gzread`/`fread`, `gzgets`/`fgets`,
@@ -117,6 +134,123 @@ function gzseek(mixed $stream, int $offset, int $whence = SEEK_SET): int {
 
 function gztell(mixed $stream): int|false {
     return ftell($stream);
+}
+
+function __elephc_gzip_frame(mixed $data, int $level): string {
+    // MEASURED on `php -n` 8.5.6: magic, deflate method, no flags, zero mtime, then XFL and OS.
+    $xfl = 0;
+    if ($level === 9) {
+        $xfl = 2;
+    } elseif ($level === 0 || $level === 1) {
+        $xfl = 4;
+    }
+    // zlib stamps its own OS_CODE: 19 on Darwin, 3 on other Unix builds.
+    $os = PHP_OS === 'Darwin' ? 19 : 3;
+    $crc = crc32($data);
+    $len = strlen($data);
+    return "\x1f\x8b\x08\x00\x00\x00\x00\x00" . chr($xfl) . chr($os)
+        . gzdeflate($data, $level)
+        . chr($crc & 255) . chr(($crc >> 8) & 255) . chr(($crc >> 16) & 255) . chr(($crc >> 24) & 255)
+        . chr($len & 255) . chr(($len >> 8) & 255) . chr(($len >> 16) & 255) . chr(($len >> 24) & 255);
+}
+
+function gzencode(mixed $data, int $level = -1, int $encoding = 31): string|false {
+    if ($level < -1 || $level > 9) {
+        throw new \ValueError('gzencode(): Argument #2 ($level) must be between -1 and 9');
+    }
+    if ($encoding === -15) {
+        return gzdeflate($data, $level);
+    }
+    if ($encoding === 15) {
+        return gzcompress($data, $level);
+    }
+    if ($encoding !== 31) {
+        throw new \ValueError('gzencode(): Argument #3 ($encoding) must be one of ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP, or ZLIB_ENCODING_DEFLATE');
+    }
+    return __elephc_gzip_frame($data, $level);
+}
+
+function zlib_encode(mixed $data, int $encoding, int $level = -1): string|false {
+    if ($level < -1 || $level > 9) {
+        throw new \ValueError('zlib_encode(): Argument #3 ($level) must be between -1 and 9');
+    }
+    if ($encoding === -15) {
+        return gzdeflate($data, $level);
+    }
+    if ($encoding === 15) {
+        return gzcompress($data, $level);
+    }
+    if ($encoding !== 31) {
+        throw new \ValueError('zlib_encode(): Argument #2 ($encoding) must be one of ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP, or ZLIB_ENCODING_DEFLATE');
+    }
+    return __elephc_gzip_frame($data, $level);
+}
+
+function __elephc_gzip_body(mixed $data): string|false {
+    // The header is fixed-width only when no optional field is present; FLG says which are.
+    if (strlen($data) < 18) {
+        return false;
+    }
+    if ($data[0] !== "\x1f" || $data[1] !== "\x8b" || ord($data[2]) !== 8) {
+        return false;
+    }
+    $flg = ord($data[3]);
+    $pos = 10;
+    if (($flg & 4) !== 0) {
+        $pos = $pos + 2 + (ord($data[$pos]) | (ord($data[$pos + 1]) << 8));
+    }
+    if (($flg & 8) !== 0) {
+        $nameEnd = strpos($data, "\x00", $pos);
+        if ($nameEnd === false) {
+            return false;
+        }
+        $pos = $nameEnd + 1;
+    }
+    if (($flg & 16) !== 0) {
+        $commentEnd = strpos($data, "\x00", $pos);
+        if ($commentEnd === false) {
+            return false;
+        }
+        $pos = $commentEnd + 1;
+    }
+    if (($flg & 2) !== 0) {
+        $pos = $pos + 2;
+    }
+    $length = strlen($data) - $pos - 8;
+    if ($length < 0) {
+        return false;
+    }
+    return substr($data, $pos, $length);
+}
+
+function gzdecode(mixed $data, int $max_length = 0): string|false {
+    $body = __elephc_gzip_body($data);
+    if ($body === false) {
+        return false;
+    }
+    return gzinflate($body, $max_length);
+}
+
+function zlib_decode(mixed $data, int $max_length = 0): string|false {
+    if (strlen($data) < 2) {
+        return false;
+    }
+    // The three framings are told apart by their first bytes, which is what php's own
+    // auto-detection does: gzip carries its magic, a zlib stream a CMF whose low nibble is 8.
+    if ($data[0] === "\x1f" && $data[1] === "\x8b") {
+        return gzdecode($data, $max_length);
+    }
+    if ((ord($data[0]) & 15) === 8) {
+        return gzuncompress($data, $max_length);
+    }
+    return gzinflate($data, $max_length);
+}
+
+function zlib_get_coding_type(): string|false {
+    // php reports what its OUTPUT layer compressed with, and answers false when nothing did.
+    // elephc has no zlib output compression, so false is php's answer for every configuration
+    // this can be in — not a placeholder for one.
+    return false;
 }
 
 function gzfile(string $filename, int $use_include_path = 0): array|false {

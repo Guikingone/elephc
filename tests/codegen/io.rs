@@ -25,6 +25,8 @@ mod gz_streams;
 mod wrapper_read_buffer;
 #[path = "io/wrapper_chunk_reads.rs"]
 mod wrapper_chunk_reads;
+#[path = "io/zlib_string_functions.rs"]
+mod zlib_string_functions;
 #[path = "io/filesystem.rs"]
 mod filesystem;
 #[path = "io/misc.rs"]

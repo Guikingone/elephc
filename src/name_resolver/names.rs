@@ -416,5 +416,6 @@ fn is_builtin_global_constant(name: &str) -> bool {
         .chain(crate::types::error_constants::ERROR_LEVEL_CONSTANTS.iter())
         .chain(crate::types::array_constants::ARRAY_INT_CONSTANTS.iter())
         .chain(crate::types::math_constants::MATH_INT_CONSTANTS.iter())
+        .chain(crate::types::zlib_constants::ZLIB_INT_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name)
 }

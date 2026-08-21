@@ -231,6 +231,8 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     // it: MEASURED, `eval('gzopen(...)')` in a program that never calls one itself reports
     // "eval() fragment uses an unsupported construct". `dir` above is the same case.
     "gzclose",
+    "gzdecode",
+    "gzencode",
     "gzeof",
     "gzfile",
     "gzgetc",
@@ -257,6 +259,9 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "strncmp",
     "substr_count",
     "unserialize",
+    "zlib_decode",
+    "zlib_encode",
+    "zlib_get_coding_type",
     "zval_free",
     "zval_pack",
     "zval_type",
@@ -305,12 +310,12 @@ mod tests {
 
         assert_eq!(eval_registry, 484);
         assert_eq!(eval_internal, 40);
-        assert_eq!(eval_pending, 48);                                   // + the 14 `gz*` prelude functions
+        assert_eq!(eval_pending, 53);                                   // + zlib_get_coding_type
         // 544 on the merged catalogue: this branch counted 543 and main 531, and main also
         // PROMOTES get_object_vars out of the external surface into the registry. Neither
         // branch's number survives the merge; this one is measured on the result.
         assert_eq!(aot_registry, 544);
-        assert_eq!(aot_external, 25);                                   // + the 14 `gz*` prelude functions
+        assert_eq!(aot_external, 30);                                   // + zlib_get_coding_type
         assert_eq!(aot_unsupported, 3);
     }
 
@@ -358,7 +363,7 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 463);
-        assert_eq!(unsupported, 88);                                    // + the 14 `gz*` prelude functions
+        assert_eq!(unsupported, 93);                                   // + zlib_get_coding_type
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

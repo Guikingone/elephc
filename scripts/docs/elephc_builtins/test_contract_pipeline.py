@@ -50,7 +50,7 @@ class ContractPipelineTests(unittest.TestCase):
                     "language-construct": 5,
                     "dedicated-syntax": 1,
                     # The 5 that were here plus the 14 `gz*` stream functions.
-                    "prelude": 19,
+                    "prelude": 24,
                     "none": 3,
                 }
             ),

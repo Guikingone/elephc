@@ -92,6 +92,9 @@ impl Checker {
         for (name, _value) in ARRAY_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        for (name, _value) in crate::types::zlib_constants::ZLIB_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
         for (name, _value) in JSON_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }

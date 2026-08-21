@@ -18,6 +18,7 @@ mod array_keys;
 mod array_storage;
 /// PHP array extension integer constants.
 pub(crate) mod array_constants;
+pub(crate) mod zlib_constants;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
 /// Fiber/stack introspection for async and coroutine analysis.
