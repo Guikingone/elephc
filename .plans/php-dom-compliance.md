@@ -13,9 +13,9 @@ implementation checkpoint `dfacafcf1`.
 
 Current branch head before this plan-only synchronization update: `65727371d`.
 
-Current published head: `50347ae2ee`
-(`docs(dom): track xpath resolver remediation`), containing implementation
-checkpoint `e7315176e`.
+Current published synchronization checkpoint: `19ca0cddd`
+(`docs(dom): record main synchronization`), containing implementation/test
+checkpoint `65727371d`.
 
 Current synchronized upstream baseline: `1c6bb5e34`
 (`chore: update repository stats`)
@@ -52,8 +52,9 @@ Legend:
   new `prelude_prune` home. The resulting topology is zero behind and three
   commits ahead of `origin/main` before this plan-only update. The locked spec
   digest remains exact and the 52 focused Python coverage/PHPT-runner tests pass.
-  The fork still points at the pre-rewrite history at this checkpoint and is the
-  next explicit `--force-with-lease` step.
+  The fork was then force-updated with an explicit lease from old remote head
+  `50347ae2ee` to synchronized checkpoint `19ca0cddd`; the lease and a direct
+  `ls-remote` verification both confirmed the intended publication.
 - [x] Read `CONTRIBUTING.md` and the repository target/test/ownership rules;
   the referenced `RTK.md` is not present in this checkout.
 - [x] Freeze PHP `8.5.8`, php-src commit
