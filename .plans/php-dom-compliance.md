@@ -1,23 +1,23 @@
 # PHP DOM 8.5 compliance plan
 
-Last verified: 2026-08-18
+Last verified: 2026-08-21
 
 Authoritative branch: `feat/php-dom-compliance`
 
 Authoritative worktree:
 `/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/php-dom-compliance`
 
-Current committed implementation checkpoint: `571d19bbd`
-(`feat(dom): checkpoint PHP 8.5 compliance campaign`)
+Current committed implementation checkpoint: `65727371d`
+(`test(dom): checkpoint coverage and safety hardening`), containing rebased
+implementation checkpoint `dfacafcf1`.
 
-Current branch head: `207ecadc4`
-(`docs(dom): record upstream rebase checkpoint`)
+Current branch head before this plan-only synchronization update: `65727371d`.
 
 Current published head: `50347ae2ee`
 (`docs(dom): track xpath resolver remediation`), containing implementation
 checkpoint `e7315176e`.
 
-Current synchronized upstream baseline: `127ca4f6b`
+Current synchronized upstream baseline: `1c6bb5e34`
 (`chore: update repository stats`)
 
 Legend:
@@ -43,6 +43,17 @@ Legend:
   commits ahead and zero behind `origin/main`; the rebase state is clean. The
   remote fork still names the pre-rewrite history and must later be updated
   with `--force-with-lease` after validation, never pulled into this branch.
+- [x] Refresh the rebased campaign again on 2026-08-21 onto `origin/main`
+  `1c6bb5e34`. Checkpoint `0f0b9a091` was preserved as
+  `backup/php-dom-compliance-wip-pre-rebase-20260821`; the three rebased commits
+  are now `dfacafcf1`, `20070e4a7`, and `65727371d`. Terra/Luna resolved the 15
+  modular conflicts across frontend/EIR, backend/runtime metadata, and
+  builtins/IO while retaining the deleted legacy `web_prelude/usage.rs` in its
+  new `prelude_prune` home. The resulting topology is zero behind and three
+  commits ahead of `origin/main` before this plan-only update. The locked spec
+  digest remains exact and the 52 focused Python coverage/PHPT-runner tests pass.
+  The fork still points at the pre-rewrite history at this checkpoint and is the
+  next explicit `--force-with-lease` step.
 - [x] Read `CONTRIBUTING.md` and the repository target/test/ownership rules;
   the referenced `RTK.md` is not present in this checkout.
 - [x] Freeze PHP `8.5.8`, php-src commit
