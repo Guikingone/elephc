@@ -38,10 +38,11 @@ The cursor is the lowest-level component. It walks through the source text one c
 
 ```rust
 pub struct Cursor<'a> {
-    bytes: &'a [u8],    // the source text as bytes
-    pos: usize,         // current byte offset
-    line: usize,        // current line number (1-indexed)
-    col: usize,         // current column (1-indexed)
+    bytes: &'a [u8],          // the source text as bytes
+    pos: usize,               // current byte offset
+    line: usize,              // current line number (1-indexed)
+    col: usize,               // current column (1-indexed)
+    text: Option<&'a str>,    // source as &str, sliced in O(1) by remaining()
 }
 ```
 

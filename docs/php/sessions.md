@@ -11,7 +11,8 @@ session functions and the `$_SESSION` superglobal.
 
 Sessions are only available under `--web` — they require the HTTP request/response
 lifecycle provided by the web server binary. A CLI-compiled program has no session
-context.
+context. The full implementation specification lives in
+[PHP Session Support](../specs/session-support.md).
 
 Select the PHP minor whose observable session behavior should be compiled with
 `--php-version=8.2`, `8.3`, `8.4`, or `8.5`. The default is `8.5`. PHP 8.4

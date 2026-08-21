@@ -176,7 +176,16 @@ $f = (float)42;      // 42.0
 $s = (string)42;     // "42"
 $b = (bool)0;        // false
 $a = (array)42;      // [42]
+$o = (array)$obj;    // property name => value hash, with PHP's visibility-mangled keys
+$m = (array)$mixed;  // dispatches on the runtime tag: arrays pass through, scalars wrap, objects project
 ```
+
+`(array)` on an object projects all of its properties into a string-keyed hash
+using PHP's exact key mangling — `x` for a public property, `"\0*\0y"` for a
+protected one, `"\0Class\0z"` for a private one — including the
+`__PHP_Incomplete_Class` payload a restricted `unserialize()` produces. For the
+scope-aware, unmangled view use `get_object_vars()`. `(array)` on a boxed
+`mixed` value dispatches on the runtime tag at run time.
 
 Cast names and aliases are case-insensitive, matching PHP. For example,
 `(INT)`, `(Integer)`, and `(integer)` are equivalent.

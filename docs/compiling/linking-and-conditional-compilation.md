@@ -106,7 +106,7 @@ that do not need a feature never link its crate, so binaries stay small.
 `--with-CRATE` force-enables a bridge regardless of that auto-detection. It
 force-links the staticlib (whole-archived, so it is retained even if no symbol
 references it) and, for crates whose PHP surface comes from an injected prelude
-(`pdo`, `tz`, `image`), force-injects that prelude so the classes/functions are
+(`pdo`, `mysqli`, `tz`, `image`), force-injects that prelude so the classes/functions are
 available. This is useful when a program reaches a feature through indirection
 that detection cannot see. The flag is repeatable:
 
@@ -137,6 +137,10 @@ Without it, dynamic eval still compiles and runs non-regex code, but `preg_*`
 names are unavailable there and calls fail at runtime. A statically visible
 regex use enables the same provider automatically. Declaring PCRE2 without
 either trigger does not link it.
+
+`--with-mysqli` is the other runtime-capability flag. It force-injects the
+mysqli prelude — which links the shared `elephc_pdo` archive — without
+injecting the PDO classes; there is no separate `elephc_mysqli` bridge.
 
 `--with-web` is an alias for [`--web`](../beyond-php/web.md) (the full server
 mode, which owns the program entry point). An unknown capability name is
@@ -181,8 +185,11 @@ mechanism:
 - **macOS** emits the runtime object with `.subsections_via_symbols` so each
   helper is a separately collectable atom, and links with `-dead_strip`.
 
-Shared libraries (`--emit cdylib`) keep the full runtime, since any exported
-symbol may be reached by a host the linker cannot see.
+Shared libraries (`--emit cdylib`) are collected the same way. Every symbol
+outside the export allowlist — the lifecycle entry points plus `#[Export]`
+trampolines — is emitted `.hidden` on ELF and `.private_extern` on Mach-O, so
+it is not an export and not a collection root; only the public ABI and what it
+reaches survives.
 
 ## Symbol stripping
 

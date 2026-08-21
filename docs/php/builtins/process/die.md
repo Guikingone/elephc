@@ -24,3 +24,7 @@ Terminates execution with an optional status.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/die.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/die.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
+
+## Internals
+
+For how `die` is implemented in the compiler, see [the internals page](../../../internals/builtins/process/die.md).

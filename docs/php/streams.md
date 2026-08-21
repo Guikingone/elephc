@@ -37,7 +37,7 @@ code should guard failed opens before using the handle.
 | `fseek()` | `fseek(resource $handle, $offset [, $whence]): int` | Seek a stream. User wrappers route through `stream_seek()`. |
 | `ftell()` | `ftell(resource $handle): int` | Return the current stream position. User wrappers route through `stream_tell()`. |
 | `rewind()` | `rewind(resource $handle): bool` | Seek to the start of the stream. |
-| `fgetcsv()` | `fgetcsv(resource $handle [, $sep]): array` | Read and parse one CSV line. User wrappers are read through `stream_read()`. |
+| `fgetcsv()` | `fgetcsv(resource $handle [, $sep]): array\|false` | Read and parse one CSV line, or `false` at end of file — the arm that terminates the manual's `while (($row = fgetcsv($h)) !== false)` loop; an empty CSV line still returns an array. User wrappers are read through `stream_read()`. |
 | `fputcsv()` | `fputcsv(resource $handle, $fields [, $sep]): int` | Format and write one CSV line. User wrappers are written through `stream_write()`. |
 | `readline()` | `readline([$prompt]): string` | Read a line from standard input. |
 | `readfile()` | `readfile($filename): int\|false` | Open a path or wrapper URL, stream it to stdout, and return copied bytes; returns `false` when open fails. |
@@ -275,6 +275,12 @@ Supported wrapper methods include `stream_open`, `stream_read`, `stream_write`,
 `stream_stat`, `stream_lock`, `stream_truncate`, `stream_metadata`,
 `stream_set_option`, `stream_cast`, `url_stat`, and the directory methods
 `dir_opendir`, `dir_readdir`, `dir_rewinddir`, and `dir_closedir`.
+
+`url_stat` is consulted by the whole stat family — `stat()`, `lstat()`,
+`file_exists()`, `filesize()`, `filemtime()`, `is_file()`, `is_dir()`,
+`is_readable()`, `is_writable()`, `is_writeable()`, and `is_executable()` — each
+handing the wrapper the same `STREAM_URL_STAT_*` flag values reference PHP
+passes. See [System & I/O](system-and-io.md) for the per-builtin semantics.
 
 Wrapper methods should declare return types that match their PHP contracts.
 `stream_stat()` and `url_stat()` are exceptions: declare them without a return

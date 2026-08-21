@@ -23,7 +23,7 @@ Today the AST optimizer is split into six passes:
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
 
-Alongside those five passes, the optimizer also builds lightweight local **effect summaries**. These summaries answer two questions conservatively:
+Alongside those six passes, the optimizer also builds lightweight local **effect summaries**. These summaries answer two questions conservatively:
 
 - does this expression have observable side effects?
 - can this expression throw?
@@ -290,10 +290,10 @@ global widening. The same shared argument planner maps reordered named arguments
 before introspection targets, callbacks, or argument-dependent builtin link
 requirements are inspected. Registry parameters with a callable type or
 structural callback-slot metadata add callable edges, including named arguments
-and conservative dynamic-spread fallback. Explicit prelude requests
-such as `--with-pdo`, `--with-tz`, and `--with-image` root their complete
-inventory group; `--with-crypto` only force-links the bridge, and `--web` is
-demand-pruned from its executable bootstrap roots.
+and conservative dynamic-spread fallback. Explicit prelude requests —
+`--with-pdo`, `--with-mysqli`, `--with-tz`, and `--with-image` — root their
+complete inventory group; `--with-crypto` only force-links the bridge, and
+`--web` is demand-pruned from its executable bootstrap roots.
 
 Dynamic hazards are accumulated from top-level executable code and from
 declarations reached through executable calls; hazards hidden in dead bodies do

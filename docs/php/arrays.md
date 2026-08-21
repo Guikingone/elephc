@@ -248,7 +248,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 
 | Function | Signature | Description |
 |---|---|---|
-| `count()` | `count($value [, $mode]): int` | Number of elements; on objects implementing `Countable`, dispatches to `count()`. `$mode` accepts `COUNT_NORMAL` (default) and `COUNT_RECURSIVE`; anything else throws `\ValueError`. `COUNT_RECURSIVE` is currently supported only where the receiver cannot hold a nested array — a nested receiver is a compile error rather than a wrong count |
+| `count()` | `count($value [, $mode]): int` | Number of elements; on objects implementing `Countable`, dispatches to `count()`. A value that is not countable — `false`, an `int`, `float`, `string`, `null`, or resource arriving through a `mixed` — raises PHP 8's `TypeError` (`count(): Argument #1 ($value) must be of type Countable\|array, X given`) instead of answering `0`. `$mode` accepts `COUNT_NORMAL` (default) and `COUNT_RECURSIVE`; anything else throws `\ValueError`. `COUNT_RECURSIVE` is currently supported only where the receiver cannot hold a nested array — a nested receiver is a compile error rather than a wrong count |
 | `array_count_values()` | `array_count_values($array): array` | Maps each distinct `int`/`string` value to its number of occurrences; other values are skipped with a warning |
 | `array_push()` | `array_push($arr, $val): void` | Add element to end |
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
@@ -277,7 +277,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_intersect_assoc()` | `array_intersect_assoc($arr1, $arr2): array` | Entries of $arr1 whose `(key, value)` pair is present in $arr2 (values compared as strings). Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |
 | `array_udiff()` | `array_udiff($arr1, $arr2, $cmp): array` | Values in $arr1 not in $arr2, equality decided by the two-argument comparator (`$cmp($a, $b) === 0`). Supports string / function / non-capturing closure comparators. |
 | `array_uintersect()` | `array_uintersect($arr1, $arr2, $cmp): array` | Values in both arrays, equality decided by the comparator (`$cmp($a, $b) === 0`). |
-| `array_unique()` | `array_unique($arr): array` | Remove duplicates |
+| `array_unique()` | `array_unique($arr): array` | Remove duplicates, keeping each survivor's original key — an indexed input therefore returns a sparse, hash-shaped result (keys `0, 1, 3` for `[1,2,2,3,1]`), exactly as in PHP |
 | `array_reverse()` | `array_reverse($arr, $preserve_keys = false): array` | Reverse order. `$preserve_keys` must be a literal `bool` in AOT mode because it changes the result shape: `true` keeps the original integer keys, producing an integer-keyed array |
 | `array_flip()` | `array_flip($arr): array` | Exchange keys and values, normalizing integer and numeric-string result keys |
 | `array_shift()` | `array_shift($arr): mixed` | Remove and return first |
