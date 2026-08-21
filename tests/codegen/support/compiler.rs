@@ -250,7 +250,8 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved = elephc::dir_prelude::inject_if_used(resolved);
     let resolved = elephc::gz_prelude::inject_if_used(resolved);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
-    let resolved = elephc::scanf_prelude::inject_if_used(resolved);
+    let resolved =
+        elephc::scanf_prelude::inject_if_used(resolved, &mut prelude_inventory);
     // `zend_version()`, `php_sapi_name()` and `ini_restore()` are ordinary php-visible functions;
     // without this the suite could not compile a program that calls one.
     let resolved =
@@ -270,12 +271,23 @@ fn try_compile_source_to_asm_with_defines_repr(
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
     let empty_roots = HashSet::new();
+    // The scanf engine is reachable only through a call the backend emits, so the pass has no
+    // edge to follow to it. Forcing the group here is what makes this harness agree with
+    // `pipeline.rs`; without it, every `sscanf()`/`fscanf()` fixture fails to compile while the
+    // real compiler builds it.
+    let mut forced_groups: HashSet<String> = HashSet::new();
+    if prelude_inventory
+        .groups
+        .contains_key(elephc::scanf_prelude::PRELUDE_GROUP_ID)
+    {
+        forced_groups.insert(elephc::scanf_prelude::PRELUDE_GROUP_ID.to_string());
+    }
     let optimized = elephc::optimize::prune_unreachable_declarations(
         optimized,
         &mut check_result,
         elephc::optimize::reachability::PruneOptions {
             inventory: &prelude_inventory,
-            forced_groups: &empty_roots,
+            forced_groups: &forced_groups,
             exported_functions: &empty_roots,
             eval_forced: false,
         },

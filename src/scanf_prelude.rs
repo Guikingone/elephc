@@ -641,19 +641,34 @@ fn scanf_vars_wrappers() -> String {
     out
 }
 
+/// The reachability group these declarations belong to.
+///
+/// It is FORCED wherever the pass runs, which is not a hole in pay-for-use: the prelude is
+/// injected only when the program references `sscanf`/`fscanf`, so the group existing at all is
+/// already the proof that the program needs every function in it.
+pub const PRELUDE_GROUP_ID: &str = "scanf";
+
 /// Injects the scanf prelude when the program references `sscanf()` or `fscanf()`, leaving
 /// every other program untouched.
 ///
 /// There is no user-declaration escape hatch here, unlike `dir()`: both names are registry
 /// builtins, so PHP itself refuses to redeclare them and no program can own them. The prelude
 /// carries only declarations, so prepending it is order-independent — PHP hoists them.
-pub fn inject_if_used(program: crate::parser::ast::Program) -> crate::parser::ast::Program {
+pub fn inject_if_used(
+    program: crate::parser::ast::Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> crate::parser::ast::Program {
     if !detect::program_references_scanf(&program) {
         return program;
     }
     let source = format!("{}{}", SCANF_PRELUDE_SRC, scanf_vars_wrappers());
     let tokens = crate::lexer::tokenize(&source).expect("scanf prelude must tokenize");
     let mut combined = crate::parser::parse_internal(&tokens).expect("scanf prelude must parse");
+    // These declarations are reachable ONLY through a call the backend emits for `sscanf()` and
+    // `fscanf()`. No walk over PHP source can see that edge, so without recording the group here
+    // — and forcing it where the pass runs — reachability prunes the engine and the backend then
+    // meets a call to a function that no longer exists.
+    inventory.record_program(PRELUDE_GROUP_ID, &combined);
     combined.extend(program);
     combined
 }

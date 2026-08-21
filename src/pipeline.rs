@@ -132,7 +132,7 @@ pub(crate) fn compile(config: CliConfig) {
     }
 
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
-    let forced_groups: HashSet<String> = [
+    let mut forced_groups: HashSet<String> = [
         (with_crates.contains("pdo"), "pdo"),
         (with_crates.contains("tz"), "tz"),
         (with_crates.contains("image"), "image"),
@@ -321,7 +321,16 @@ pub(crate) fn compile(config: CliConfig) {
     // is detected, and before name resolution so the emitted call resolves to a declared function.
     crate::progress::phase("scanf-prelude");
     let phase_started = Instant::now();
-    let ast = crate::scanf_prelude::inject_if_used(ast);
+    let ast = crate::scanf_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // The engine is named only by the lowerings of `sscanf()`/`fscanf()`, never by PHP source, so
+    // reachability has no edge to follow to it. The group exists only when the prelude was
+    // injected, which happens only when the program references one of those two names.
+    if prelude_inventory
+        .groups
+        .contains_key(crate::scanf_prelude::PRELUDE_GROUP_ID)
+    {
+        forced_groups.insert(crate::scanf_prelude::PRELUDE_GROUP_ID.to_string());
+    }
     timings.record_since("scanf-prelude", phase_started);
 
     crate::progress::phase("web-prelude");
