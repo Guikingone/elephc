@@ -84,6 +84,16 @@ fn dom_construction_and_native_write_diagnostic_matrix() {
             source: "<?php function mutate(DOMNodeList $nodes): void { $nodes[0] = null; }",
             expected: Some("Cannot write to DOMNodeList offset"),
         },
+        DiagnosticCase {
+            id: "DOM-XPATH-DIRECT-DIMENSION-LEGACY-01",
+            source: "<?php $document = new DOMDocument(); $xpath = new DOMXPath($document); $node = ($xpath->query('//x'))[0];",
+            expected: None,
+        },
+        DiagnosticCase {
+            id: "DOM-XPATH-DIRECT-DIMENSION-MODERN-01",
+            source: "<?php $document = Dom\\XMLDocument::createFromString('<root/>'); $xpath = new Dom\\XPath($document); $node = ($xpath->query('//x'))[0];",
+            expected: None,
+        },
     ];
 
     for case in cases {

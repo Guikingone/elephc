@@ -98,6 +98,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "bcmath",
         whole_archive: false,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // The decimal bridge implements PHP's procedural `bcmath` extension.
         php_extension: Some("bcmath"),

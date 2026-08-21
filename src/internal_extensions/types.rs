@@ -163,6 +163,11 @@ pub(crate) fn method_result_type_override(
             PhpType::False,
         ]));
     }
+    if receiver.eq_ignore_ascii_case("Dom\\XPath")
+        && method.eq_ignore_ascii_case("query")
+    {
+        return Some(PhpType::Object("Dom\\NodeList".to_string()));
+    }
     if receiver.eq_ignore_ascii_case("SimpleXMLElement") {
         if method.eq_ignore_ascii_case("xpath") {
             return Some(normalize_union(vec![
@@ -601,6 +606,10 @@ mod tests {
                 PhpType::Object("DOMNodeList".to_string()),
                 PhpType::False,
             ]))
+        );
+        assert_eq!(
+            method_result_type_override("Dom\\XPath", "query"),
+            Some(PhpType::Object("Dom\\NodeList".to_string()))
         );
     }
 

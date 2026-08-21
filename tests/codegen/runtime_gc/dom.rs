@@ -86,7 +86,9 @@ unset($child);
             expected_stdout: "child|DO",
         },
         DomGcCase {
-            id: "DOM-GC-WEAK-WRAPPER-CACHE-05",
+            // This row intentionally keeps a second reference alive: it proves live-wrapper
+            // identity, not eviction after the final wrapper is destroyed.
+            id: "DOM-GC-LIVE-WRAPPER-CACHE-05",
             source: r#"<?php
 $document = new DOMDocument();
 $document->loadXML('<root/>');
@@ -172,6 +174,60 @@ for ($index = 0; $index < 32; $index++) {
 }
 "#,
             expected_stdout: "IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII",
+        },
+        // Expected outputs verified with the pinned PHP 8.5.8/libxml2 2.15.3 oracle.
+        DomGcCase {
+            // A live cached wrapper keeps its original registered class after policy changes.
+            id: "DOM-GC-LIVE-CACHE-POLICY-11",
+            source: r#"<?php
+class FirstGcElement extends DOMElement {}
+class SecondGcElement extends DOMElement {}
+$document = new DOMDocument();
+$document->registerNodeClass(DOMElement::class, FirstGcElement::class);
+$document->loadXML('<root/>');
+$first = $document->documentElement;
+$document->registerNodeClass(DOMElement::class, SecondGcElement::class);
+$second = $document->documentElement;
+echo get_class($first) . '|' . get_class($second) . '|';
+echo ($first === $second ? 'I' : 'x');
+unset($second, $first, $document);
+"#,
+            expected_stdout: "FirstGcElement|FirstGcElement|I",
+        },
+        DomGcCase {
+            id: "DOM-GC-DETACH-REATTACH-12",
+            source: r#"<?php
+$document = new DOMDocument();
+$document->loadXML('<root><child/></root>');
+$root = $document->documentElement;
+$child = $root->firstChild;
+$root->removeChild($child);
+$root->appendChild($child);
+$again = $root->firstChild;
+echo ($again === $child ? 'I' : 'x') . '|';
+echo ($child->ownerDocument === $document ? 'O' : 'x') . '|' . $child->nodeName;
+unset($again, $child, $root, $document);
+"#,
+            expected_stdout: "I|O|child",
+        },
+        DomGcCase {
+            id: "DOM-GC-WEAK-CACHE-AFTER-DROP-13",
+            source: r#"<?php
+class FirstDroppedElement extends DOMElement {}
+class SecondDroppedElement extends DOMElement {}
+$document = new DOMDocument();
+$document->registerNodeClass(DOMElement::class, FirstDroppedElement::class);
+$document->loadXML('<root/>');
+$first = $document->documentElement;
+echo get_class($first) . '|';
+unset($first);
+$document->registerNodeClass(DOMElement::class, SecondDroppedElement::class);
+$second = $document->documentElement;
+echo get_class($second) . '|';
+echo ($second instanceof SecondDroppedElement ? 'new' : 'x');
+unset($second, $document);
+"#,
+            expected_stdout: "FirstDroppedElement|SecondDroppedElement|new",
         },
     ];
 

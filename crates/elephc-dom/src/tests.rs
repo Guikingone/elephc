@@ -16,13 +16,15 @@ use std::sync::Mutex;
 use crate::abi::{
     DomClassMetadataEntry, HostVTable, RequestHeader, ResultHeader, Value,
     ABI_VERSION, DOM_CLASS_NO_PARENT,
-    HOST_OPCODE_RELEASE_CALLABLE, HOST_OPCODE_RETAIN_CALLABLE, OPCODE_ABI_PING,
+    HOST_OPCODE_OPEN_STREAM, HOST_OPCODE_RELEASE_CALLABLE,
+    HOST_OPCODE_RELEASE_RESULT, HOST_OPCODE_RETAIN_CALLABLE, OPCODE_ABI_PING,
     PHP_ERROR_KIND_DOM_EXCEPTION, PHP_ERROR_KIND_ERROR,
     PHP_ERROR_KIND_EXCEPTION, PHP_ERROR_KIND_PENDING_HOST_THROWABLE,
     PHP_ERROR_KIND_TYPE_ERROR, PHP_ERROR_KIND_VALUE_ERROR,
-    REQUEST_FLAG_ARGUMENT_COUNT, STATUS_ABI_ERROR, STATUS_OK, STATUS_THROW,
+    REQUEST_FLAG_ARGUMENT_COUNT, STATUS_ABI_ERROR, STATUS_MALFORMED_REQUEST,
+    STATUS_OK, STATUS_THROW,
     VALUE_ARRAY, VALUE_BOOL, VALUE_BRIDGE_HANDLE, VALUE_BYTES, VALUE_FLOAT,
-    VALUE_INT, VALUE_MAP, VALUE_NULL, VALUE_OBJECT,
+    VALUE_INT, VALUE_MAP, VALUE_NULL, VALUE_OBJECT, VALUE_RESOURCE,
 };
 
 static HOST_RETAINS: AtomicU32 = AtomicU32::new(0);
@@ -31,6 +33,7 @@ static HOST_THROW_OPCODE: AtomicU32 = AtomicU32::new(0);
 static HOST_REENTRANT_CONTEXT: AtomicU64 = AtomicU64::new(0);
 static HOST_TEST_LOCK: Mutex<()> = Mutex::new(());
 static FILE_TEST_ID: AtomicU32 = AtomicU32::new(0);
+static INPUT_FROM_IO_FAILURE_CLOSES: AtomicU32 = AtomicU32::new(0);
 
 /// Host callback probe that rejects every callback request.
 unsafe extern "C" fn rejecting_host_call(
@@ -40,6 +43,42 @@ unsafe extern "C" fn rejecting_host_call(
     _out_result: *mut ResultHeader,
 ) -> u32 {
     STATUS_ABI_ERROR
+}
+
+/// Opens a leased stream and records its release from the native input-allocation failure path.
+unsafe extern "C" fn input_from_io_failure_host_call(
+    _user_data: *mut c_void,
+    request_ptr: *const u8,
+    _request_len: u64,
+    out_result: *mut ResultHeader,
+) -> u32 {
+    let header = std::ptr::read_unaligned(request_ptr.cast::<RequestHeader>());
+    match header.opcode {
+        HOST_OPCODE_OPEN_STREAM => {
+            *out_result = ResultHeader {
+                value_tag: VALUE_RESOURCE,
+                result_id: 0x711,
+                payload0: 0x822,
+                payload1: 3,
+                ..ResultHeader::abi_error()
+            };
+            (*out_result).status = STATUS_OK;
+        }
+        HOST_OPCODE_RELEASE_RESULT => {
+            let value = std::ptr::read_unaligned(
+                request_ptr.add(std::mem::size_of::<RequestHeader>()).cast::<Value>(),
+            );
+            assert_eq!(value.payload0, 0x711);
+            INPUT_FROM_IO_FAILURE_CLOSES.fetch_add(1, Ordering::Relaxed);
+            *out_result = ResultHeader {
+                status: STATUS_OK,
+                value_tag: VALUE_NULL,
+                ..ResultHeader::abi_error()
+            };
+        }
+        opcode => panic!("unexpected input-allocation failure host opcode {opcode}"),
+    }
+    STATUS_OK
 }
 
 /// Accepts callable ownership requests and returns one valid pointer-free null result.
@@ -332,6 +371,122 @@ fn malformed_requests_return_abi_error_without_mutation() {
         STATUS_ABI_ERROR
     );
     assert_eq!(result.result_id, 0);
+    crate::elephc_dom_context_free(context);
+}
+
+/// Rejects malformed class metadata without replacing the last valid compiler table.
+#[test]
+fn malformed_class_metadata_returns_malformed_request_without_mutation() {
+    let context = new_context();
+    let name = b"DOMNode";
+    let valid = DomClassMetadataEntry {
+        name_ptr: name.as_ptr(),
+        name_len: name.len() as u64,
+        class_id: 0x30,
+        parent_class_id: DOM_CLASS_NO_PARENT,
+        is_abstract: 0,
+        reserved: 0,
+    };
+    assert_eq!(
+        unsafe { crate::elephc_dom_context_set_class_metadata(context, &valid, 1) },
+        STATUS_OK
+    );
+
+    let invalid = DomClassMetadataEntry {
+        reserved: 1,
+        ..valid
+    };
+    assert_eq!(
+        unsafe { crate::elephc_dom_context_set_class_metadata(context, &invalid, 1) },
+        STATUS_MALFORMED_REQUEST
+    );
+    assert_eq!(
+        crate::context::context(context)
+            .expect("context remains registered")
+            .borrow()
+            .class_metadata
+            .by_name(b"DOMNode")
+            .expect("previous metadata remains installed")
+            .id,
+        valid.class_id
+    );
+
+    let duplicate = DomClassMetadataEntry {
+        class_id: valid.class_id + 1,
+        ..valid
+    };
+    assert_eq!(
+        unsafe {
+            crate::elephc_dom_context_set_class_metadata(
+                context,
+                [valid, duplicate].as_ptr(),
+                2,
+            )
+        },
+        STATUS_MALFORMED_REQUEST
+    );
+
+    let second_name = b"DOMElement";
+    let second = DomClassMetadataEntry {
+        name_ptr: second_name.as_ptr(),
+        name_len: second_name.len() as u64,
+        class_id: valid.class_id + 2,
+        ..valid
+    };
+    assert_eq!(
+        unsafe {
+            crate::elephc_dom_context_set_class_metadata(
+                context,
+                [valid, invalid, second].as_ptr(),
+                3,
+            )
+        },
+        STATUS_MALFORMED_REQUEST
+    );
+    assert_eq!(
+        crate::context::context(context)
+            .expect("context remains registered")
+            .borrow()
+            .class_metadata
+            .by_name(b"DOMNode")
+            .expect("invalid metadata never replaces the installed table")
+            .id,
+        valid.class_id
+    );
+
+    assert_eq!(
+        unsafe {
+            crate::elephc_dom_context_set_class_metadata(
+                context,
+                std::ptr::null(),
+                0,
+            )
+        },
+        STATUS_OK
+    );
+    assert!(
+        crate::context::context(context)
+            .expect("context remains registered")
+            .borrow()
+            .class_metadata
+            .by_name(b"DOMNode")
+            .is_none(),
+        "an empty metadata snapshot clears prior compiler rows"
+    );
+    crate::elephc_dom_context_free(context);
+}
+
+/// Balances a callback stream lease when libxml refuses the newly allocated input object.
+#[test]
+fn native_resource_loader_closes_stream_when_input_creation_fails() {
+    let context = new_context_with_host(Some(input_from_io_failure_host_call));
+    INPUT_FROM_IO_FAILURE_CLOSES.store(0, Ordering::Relaxed);
+
+    assert_eq!(
+        crate::native::test_resource_loader_input_from_io_failure(context),
+        crate::native::TEST_RESOURCE_LOADER_INPUT_CREATION_FAILED,
+    );
+    assert_eq!(INPUT_FROM_IO_FAILURE_CLOSES.load(Ordering::Relaxed), 1);
     crate::elephc_dom_context_free(context);
 }
 

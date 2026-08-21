@@ -289,6 +289,7 @@ static const xmlChar elephc_dom_xmlns_namespace[] =
 static const xmlChar elephc_dom_html_namespace[] =
     "http://www.w3.org/1999/xhtml";
 static const uint8_t elephc_dom_modern_xml_marker = 0;
+static _Thread_local int elephc_dom_test_fail_xml_new_input_from_io = 0;
 
 static xmlNodePtr elephc_dom_next_descendant(
     xmlNodePtr node,
@@ -462,14 +463,17 @@ static xmlParserErrors elephc_dom_resource_loader(
         }
         stream->lease_id = result.resource;
         stream->loader = loader;
-        input = xmlNewInputFromIO(
-            url,
-            elephc_dom_stream_io_read,
-            elephc_dom_stream_io_close,
-            stream,
-            flags
-        );
+        input = elephc_dom_test_fail_xml_new_input_from_io != 0
+            ? NULL
+            : xmlNewInputFromIO(
+                url,
+                elephc_dom_stream_io_read,
+                elephc_dom_stream_io_close,
+                stream,
+                flags
+            );
         if (input == NULL) {
+            (void) elephc_dom_stream_io_close(stream);
             return XML_ERR_NO_MEMORY;
         }
         *out = input;
@@ -480,6 +484,35 @@ static xmlParserErrors elephc_dom_resource_loader(
     }
     loader->host_status = 3;
     return XML_ERR_INTERNAL_ERROR;
+}
+
+int elephc_dom_native_test_resource_loader_input_from_io_failure(
+    uint64_t host_context
+)
+{
+    elephc_dom_resource_loader_context loader = {
+        host_context,
+        NULL,
+        0
+    };
+    xmlParserInput *input = NULL;
+    xmlParserErrors status;
+
+    elephc_dom_test_fail_xml_new_input_from_io = 1;
+    status = elephc_dom_resource_loader(
+        &loader,
+        "elephc-test-resource",
+        NULL,
+        (xmlResourceType) 0,
+        0,
+        &input
+    );
+    elephc_dom_test_fail_xml_new_input_from_io = 0;
+    if (input != NULL) {
+        xmlFreeInputStream(input);
+        return 0;
+    }
+    return status == XML_ERR_NO_MEMORY ? 1 : 0;
 }
 
 static void elephc_dom_set_memory_document_url(xmlDocPtr document)
@@ -3872,6 +3905,9 @@ void elephc_dom_native_parse_result_free(
     size_t error_count
 )
 {
+    if (errors == NULL) {
+        return;
+    }
     while (error_count != 0) {
         elephc_dom_native_error_free(&errors[--error_count]);
     }
