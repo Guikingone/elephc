@@ -491,7 +491,12 @@ fn the_runtime_defines_the_natural_hash_sorts_on_both_targets() {
         for (entry, wanted, unwanted) in [
             ("__rt_hash_natsort", "__rt_hash_natcmp", "__rt_php_compare"),
             ("__rt_hash_natcasesort", "__rt_hash_natcasecmp", "__rt_php_compare"),
-            ("__rt_hash_ksort", "__rt_php_compare", "__rt_hash_natcmp"),
+            // A KEY sort names php's exact key ordering; naming the VALUE table instead is a
+            // silent wrong answer, not a missed optimisation — it calls two numeric strings
+            // equal once they round to the same binary64, and a stable sort then leaves them
+            // in insertion order. That is why the value table is the `unwanted` here.
+            ("__rt_hash_ksort", "__rt_hash_keycmp", "__rt_php_compare"),
+            ("__rt_hash_krsort", "__rt_hash_keycmp", "__rt_php_compare"),
             ("__rt_hash_asort", "__rt_php_compare", "__rt_hash_natcmp"),
         ] {
             let body = body_of(entry);
@@ -520,6 +525,20 @@ fn the_runtime_defines_the_natural_hash_sorts_on_both_targets() {
         assert!(
             body_of("__rt_hash_natcasecmp").contains(&tail.replace("natcmp", "natcasecmp")),
             "__rt_hash_natcasecmp on {target_name} must tail-branch into __rt_natcasecmp"
+        );
+
+        // The key adapter bridges the engine's comparison TRIPLE to the key comparator's pair
+        // of words, the way the natural ones bridge to `__rt_natcmp`. It must reach php's key
+        // ordering and must NOT fall back to the value table: a fallback would restore exactly
+        // the ordering this adapter exists to replace.
+        let keycmp = body_of("__rt_hash_keycmp");
+        assert!(
+            keycmp.contains("__rt_key_compare_regular"),
+            "__rt_hash_keycmp on {target_name} must reach php's exact key ordering"
+        );
+        assert!(
+            !keycmp.contains("__rt_php_compare"),
+            "__rt_hash_keycmp on {target_name} must not fall back to the value table"
         );
 
         // The engine calls whatever the entry point selected; naming a comparator here

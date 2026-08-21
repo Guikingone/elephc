@@ -113,6 +113,7 @@ impl Checker {
         // whether the receiver is null is a run-time fact and the probe depth it consults is
         // the lowering's own.
         if matches!(obj_ty, PhpType::Void) {
+            self.tolerated_null_receiver = true;
             return Ok(PhpType::Void);
         }
         Err(CompileError::new(

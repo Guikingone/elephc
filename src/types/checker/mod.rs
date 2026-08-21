@@ -212,6 +212,15 @@ pub(crate) struct Checker {
     /// up with that assigned type and its slot is read before any store. `check_top_level_program`
     /// therefore defers the decision to the end of the pass, where `global_env` is authoritative.
     pub pending_null_probe_roots: Vec<(String, Span)>,
+    /// Whether typing the statement in progress reached THROUGH a null receiver.
+    ///
+    /// A property read or an array offset on `null` answers `null` in php rather than failing, so
+    /// the checker types it that way. In the INITIAL top-level pass that answer is not
+    /// trustworthy: the pass runs before method bodies are checked, so an untyped property has
+    /// not yet learned its type from a constructor assignment and reads as null for no better
+    /// reason than that. Whatever the rest of the expression then concludes is the final pass's
+    /// to judge — see `can_suppress_initial_top_level_errors`.
+    pub tolerated_null_receiver: bool,
     /// Nesting depth of null-probe operand inference (`isset`/`empty`/`unset` arguments and the
     /// left operand of `??`).
     ///

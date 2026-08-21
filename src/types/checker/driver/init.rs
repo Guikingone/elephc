@@ -188,6 +188,7 @@ impl Checker {
             flow_typed_returns: HashMap::new(),
             null_probe_scope_is_top_level: false,
             pending_null_probe_roots: Vec::new(),
+            tolerated_null_receiver: false,
             null_probe_depth: 0,
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),

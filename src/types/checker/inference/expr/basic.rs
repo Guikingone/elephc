@@ -328,7 +328,10 @@ impl Checker {
                     // — `isset($n['k'])`, `$n['k'] ?? $d` — it raises nothing and answers the
                     // same null. The twin of the property-access arm; which spelling WARNS is
                     // decided by EIR lowering.
-                    PhpType::Void => Ok(PhpType::Void),
+                    PhpType::Void => {
+                        self.tolerated_null_receiver = true;
+                        Ok(PhpType::Void)
+                    }
                     _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
                 }
             }
