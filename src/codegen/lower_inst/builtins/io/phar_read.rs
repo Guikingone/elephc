@@ -75,6 +75,21 @@ fn emit_file_get_contents_bytes(
         // matched only the rarer form, so `file_get_contents("data:,abc")` fell through to the
         // FILE reader and answered false with "No such file or directory" — while `fopen()` on
         // the same URL read it. `data://` still matches, since it starts with `data:`.
+        // The OPENER knows both compress schemes and decompresses through them; the plain byte
+        // reader below does not, and they are in `STREAM_WRAPPERS`, so they used to fall through
+        // to it and be opened as a FILENAME. `file_get_contents("compress.zlib://f.gz")` answered
+        // `Failed to open stream: No such file or directory` where `fopen()` on the same URL read
+        // it — measured against `php -n` 8.5.6, which decompresses.
+        //
+        // Delegating is what php-src does: `file_get_contents` is `php_stream_open_wrapper`
+        // followed by `_php_stream_copy_to_mem`, so every scheme the opener knows is readable by
+        // definition. This is the same route a user-registered wrapper already takes below.
+        if path_literal.starts_with("compress.zlib://")
+            || path_literal.starts_with("compress.bzip2://")
+        {
+            super::emit_literal_wrapper_file_get_contents_bytes(ctx, path_literal)?;
+            return Ok(false);
+        }
         if path_literal.starts_with("data:") {
             emit_literal_data_uri_file_get_contents_bytes(ctx, path_literal, persist_literal_bytes);
             return Ok(false);
@@ -635,6 +650,22 @@ pub(crate) fn lower_readfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     // published context, so a `$context` argument has to be published for this call.
     let explicit_context = inst.operands.get(2).copied();
     begin_fopen_context_scope(ctx, explicit_context)?;
+    // A literal URL whose scheme the dispatch below cannot serve is read through the SHARED
+    // opener, and its bytes go out through the same write-and-count tail the filter route uses.
+    // Without this the URL reached the plain dispatch as a filename: `readfile("data:,abc")` and
+    // `readfile("compress.zlib://f.gz")` both failed where php writes them.
+    if let Some(literal) = optional_const_string_operand(ctx, path)? {
+        if literal.starts_with("data:")
+            || literal.starts_with("compress.zlib://")
+            || literal.starts_with("compress.bzip2://")
+        {
+            super::emit_literal_wrapper_file_get_contents_bytes(ctx, &literal)?;
+            super::wrapper_dispatch::emit_readfile_bytes_tail(ctx, "readfile_literal_wrapper");
+            box_readfile_result(ctx);
+            finish_fopen_context_scope(ctx);
+            return store_if_result(ctx, inst);
+        }
+    }
     load_string_to_result(ctx, path, "readfile")?;
     emit_readfile_wrapper_dispatch(ctx)?;
     box_readfile_result(ctx);

@@ -968,6 +968,30 @@ pub(super) fn emit_literal_fopen_result(
     mode: LiteralOpenMode,
     path: &str,
 ) -> Result<()> {
+    // The compress wrappers are resolved HERE, not only in `lower_fopen`, because php-src has one
+    // opener: `php_stream_open_wrapper_ex` resolves the scheme for every function that takes a
+    // filename. Keeping these two branches above the opener meant `fopen()` decompressed while
+    // `file_get_contents()` — and `file()`/`readfile()` through it — reported
+    // `Failed to open stream: No such file or directory` for the very same URL.
+    for (prefix, wrapper) in DYNAMIC_COMPRESS_WRAPPERS.iter().copied() {
+        if let Some(underlying) = path.strip_prefix(prefix) {
+            // A mode that is not a compile-time literal reads, which is the overwhelmingly
+            // common open and what this branch assumed before it knew about `$mode` at all.
+            let mode_text = match mode {
+                LiteralOpenMode::Operand(operand) => optional_const_string_operand(ctx, operand)?
+                    .unwrap_or_else(|| "r".to_string()),
+                LiteralOpenMode::ReadOnly => "r".to_string(),
+            };
+            emit_literal_compress_wrapper_fopen_result(
+                ctx,
+                CompressUnderlying::Literal(underlying),
+                path,
+                wrapper,
+                &mode_text,
+            )?;
+            return Ok(());
+        }
+    }
     if let Some(fd) = php_standard_stream_fd(path) {
         emit_dup_fd_result(ctx, fd);
         box_stream_fd_or_false_result(ctx, "fopen");

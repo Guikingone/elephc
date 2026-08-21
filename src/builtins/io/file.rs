@@ -26,6 +26,9 @@ builtin! {
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::File,
     ),
+    // The same reader, so the same libraries: a `compress.*://` filename links the compression
+    // library it decodes with, exactly as `file_get_contents()` does for the same URL.
+    requirements: crate::builtins::semantics::file_get_contents_requirements,
 }
 
 /// Returns `array<string>|false`: the file's lines as strings, or `false` when the read fails.

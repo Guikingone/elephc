@@ -36,6 +36,44 @@ pub(super) const URL_STAT_FLAGS_LINK: u64 = 5;
 const URL_STAT_FLAGS_QUIET: u64 = 6;
 
 /// Emits the wrapper-vs-filesystem dispatch for `readfile()`.
+/// Writes bytes already in the string result registers and answers `readfile()`'s byte count.
+///
+/// `x1`/`x2` (`rax`/`rdx`) hold the pair; a null pointer means the open failed, which answers the
+/// `-2` sentinel the boxing reads as php's `false`. Shared by the filter-chain exit and the
+/// literal-wrapper route so the two cannot disagree on what the call returns.
+pub(super) fn emit_readfile_bytes_tail(ctx: &mut FunctionContext<'_>, prefix: &str) {
+    let failed = ctx.next_label(&format!("{prefix}_failed"));
+    let done = ctx.next_label(&format!("{prefix}_done"));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {}", failed));
+            ctx.emitter.instruction("sub sp, sp, #16");
+            ctx.emitter.instruction("str x2, [sp, #0]");                        // readfile() returns the byte count
+            abi::emit_call_label(ctx.emitter, "__rt_vd_write");                 // through the ob/web-aware sink
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            ctx.emitter.instruction("add sp, sp, #16");
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("mov x0, #-2");                             // the open-failure sentinel
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}", failed));
+            ctx.emitter.instruction("sub rsp, 16");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rdx");            // readfile() returns the byte count
+            ctx.emitter.instruction("mov rsi, rax");                            // `__rt_vd_write` takes its buffer in rsi
+            abi::emit_call_label(ctx.emitter, "__rt_vd_write");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");
+            ctx.emitter.instruction("add rsp, 16");
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("mov rax, -2");                             // the open-failure sentinel
+            ctx.emitter.label(&done);
+        }
+    }
+}
+
 pub(super) fn emit_readfile_wrapper_dispatch(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let wrapper = ctx.next_label("readfile_wrapper");
     let after = ctx.next_label("readfile_after");

@@ -24799,8 +24799,7 @@
         "kind": "may_alias_arguments"
       },
       "requirements": {
-        "kind": "static",
-        "values": []
+        "kind": "shared"
       },
       "result_type": "checked",
       "runtime_functions": [
@@ -56257,8 +56256,7 @@
         "kind": "may_alias_arguments"
       },
       "requirements": {
-        "kind": "static",
-        "values": []
+        "kind": "shared"
       },
       "result_type": "checked",
       "runtime_functions": [

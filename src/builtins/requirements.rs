@@ -58,6 +58,16 @@ pub fn file_get_contents_requirements(
         Some(ExprKind::StringLiteral(url)) if url.starts_with("zip://") => {
             vec![BuiltinRequirement::Bridge("elephc_phar")]
         }
+        // A `compress.*://` URL decompresses through the same opener `fopen()` uses, so it needs
+        // the same library. It used to need nothing because the read never reached that opener —
+        // it opened the URL as a filename and failed — so making the read work is what makes the
+        // requirement real.
+        Some(ExprKind::StringLiteral(url)) if url.starts_with("compress.zlib://") => {
+            vec![BuiltinRequirement::SystemLibrary("z")]
+        }
+        Some(ExprKind::StringLiteral(url)) if url.starts_with("compress.bzip2://") => {
+            vec![BuiltinRequirement::SystemLibrary("bz2")]
+        }
         Some(ExprKind::StringLiteral(_)) => Vec::new(),
         _ => vec![
             BuiltinRequirement::Bridge("elephc_tls"),

@@ -637,6 +637,22 @@ pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     // Publish `$context` for this read, like fopen()/file_get_contents()/readfile().
     let explicit_context = inst.operands.get(2).copied();
     begin_fopen_context_scope(ctx, explicit_context)?;
+    // A literal URL whose scheme the plain reader below cannot serve is read through the SHARED
+    // opener, and its bytes enter the same second entry a filter chain uses. Without this the
+    // URL reached the plain reader as a filename: `file("data:,abc")` and
+    // `file("compress.zlib://f.gz")` both failed where php reads them.
+    if let Some(literal) = optional_const_string_operand(ctx, path)? {
+        if literal.starts_with("data:")
+            || literal.starts_with("compress.zlib://")
+            || literal.starts_with("compress.bzip2://")
+        {
+            super::emit_literal_wrapper_file_get_contents_bytes(ctx, &literal)?;
+            emit_file_flags_then_call(ctx, flags, "__rt_file_from_bytes")?;
+            box_listing_or_false_result(ctx, "file");
+            finish_fopen_context_scope(ctx);
+            return store_if_result(ctx, inst);
+        }
+    }
     load_string_to_result(ctx, path, "file")?;
     // A `php://filter/...` filename reads through the chain first and only then splits into
     // lines: `__rt_file` performs its own read, so the filtered bytes enter through the

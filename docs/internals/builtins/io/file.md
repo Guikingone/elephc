@@ -27,7 +27,7 @@ sidebar:
 - **Result type source**: `checked`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (16 declared effects)`
-- **Requirements**: `static (0 requirements)`
+- **Requirements**: `shared`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
 
