@@ -259,7 +259,7 @@ pub(crate) fn lower_fread(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 /// lets `ftell()` answer 7 after seven bytes rather than whatever the wrapper's own
 /// `stream_tell()` chooses to return. The helper is a no-op for a stream with no state, and the
 /// field it moves is read only on the wrapper path, so a file stream is unaffected.
-fn emit_advance_wrapper_position(
+pub(super) fn emit_advance_wrapper_position(
     ctx: &mut FunctionContext<'_>,
     stream: ValueId,
     name: &str,
@@ -515,6 +515,7 @@ pub(crate) fn lower_fgets(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_fgets");
+    emit_advance_wrapper_position(ctx, stream, "fgets")?;
     box_stream_string_or_false_on_empty_result(ctx, "fgets");
     store_if_result(ctx, inst)
 }
@@ -528,6 +529,7 @@ pub(crate) fn lower_fgetc(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         ctx.emitter.instruction("mov rdi, rax");                                // pass the opaque stream handle to the x86_64 fgetc helper
     }
     abi::emit_call_label(ctx.emitter, "__rt_fgetc");
+    emit_advance_wrapper_position(ctx, stream, "fgetc")?;
     box_stream_string_or_false_on_empty_result(ctx, "fgetc");
     store_if_result(ctx, inst)
 }

@@ -147,9 +147,10 @@ pub(super) fn lower_stream_get_contents_seek(
 /// Performs a finite bounded read or jumps to read-all for null/negative length.
 pub(super) fn lower_stream_get_contents_bounded_or_all(
     ctx: &mut FunctionContext<'_>,
+    stream: crate::ir::ValueId,
     read_all: &str,
     done: &str,
-) {
+) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x9, [sp, #8]");                        // reload the requested byte count
@@ -159,6 +160,7 @@ pub(super) fn lower_stream_get_contents_bounded_or_all(
             ctx.emitter.instruction("ldr x2, [sp, #16]");                       // pass the state-owned read-loop chunk size
             emit_stream_get_contents_frame_leave(ctx);
             abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents_bounded");
+            super::stream_file_ops::emit_advance_wrapper_position(ctx, stream, "stream_get_contents")?;
             crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
             ctx.emitter.instruction(&format!("b {}", done));                    // bounded read completed successfully
         }
@@ -171,10 +173,12 @@ pub(super) fn lower_stream_get_contents_bounded_or_all(
             ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 16]");           // pass the state-owned read-loop chunk size
             emit_stream_get_contents_frame_leave(ctx);
             abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents_bounded");
+            super::stream_file_ops::emit_advance_wrapper_position(ctx, stream, "stream_get_contents")?;
             crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
             ctx.emitter.instruction(&format!("jmp {}", done));                  // bounded read completed successfully
         }
     }
+    Ok(())
 }
 
 /// Branches when a length value means "read until EOF".

@@ -1030,6 +1030,10 @@ pub(crate) fn lower_stream_get_contents(
             }
         }
         lower_stream_get_contents_read_all(ctx);
+        // php advances a userspace wrapper's own position by the bytes it hands back, and
+        // `ftell()` reports that count rather than asking the wrapper. See
+        // `emit_advance_wrapper_position`.
+        super::stream_file_ops::emit_advance_wrapper_position(ctx, stream, "stream_get_contents")?;
         crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
         return store_if_result(ctx, inst);
     }
@@ -1088,10 +1092,11 @@ pub(crate) fn lower_stream_get_contents(
         lower_stream_get_contents_seek(ctx, &skip_seek, &wrap_seek, &seek_failed);
     }
 
-    lower_stream_get_contents_bounded_or_all(ctx, &read_all, &done);
+    lower_stream_get_contents_bounded_or_all(ctx, stream, &read_all, &done)?;
     ctx.emitter.label(&read_all);
     lower_stream_get_contents_reload_fd_and_leave_frame(ctx);
     lower_stream_get_contents_read_all(ctx);
+    super::stream_file_ops::emit_advance_wrapper_position(ctx, stream, "stream_get_contents")?;
     crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
