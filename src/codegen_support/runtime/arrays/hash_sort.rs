@@ -50,6 +50,14 @@ pub(super) const MODE_VALUE_DESCENDING: i64 = 3;
 /// The comparator behind every non-natural sort: PHP 8's own comparison table.
 const CMP_PHP: &str = "__rt_php_compare";
 
+/// The comparator behind `ksort`/`krsort`: php's exact SORT_REGULAR ordering for KEYS.
+///
+/// Not `__rt_php_compare`: that is php's ordering table for VALUES, and it calls two numeric
+/// strings equal once they round to the same binary64. php orders integer-spelled keys exactly,
+/// so `"+9007199254740992"` sorts before `"+9007199254740993"` where the value table sees one
+/// number twice and a stable sort leaves them in insertion order.
+const CMP_KEY: &str = "__rt_hash_keycmp";
+
 /// The comparator behind `natsort`: php's `strnatcmp_ex` over two string payloads.
 const CMP_NATURAL: &str = "__rt_hash_natcmp";
 
@@ -74,6 +82,7 @@ pub fn emit_hash_sort(emitter: &mut Emitter) {
         emit_hash_sort_entry_points_x86_64(emitter);
         emit_hash_sort_links_x86_64(emitter);
         emit_hash_sort_triple_x86_64(emitter);
+        emit_hash_keycmp_x86_64(emitter);
         emit_hash_natcmp_x86_64(emitter, "__rt_hash_natcmp", "__rt_natcmp");
         emit_hash_natcmp_x86_64(emitter, "__rt_hash_natcasecmp", "__rt_natcasecmp");
         return;
@@ -81,8 +90,66 @@ pub fn emit_hash_sort(emitter: &mut Emitter) {
     emit_hash_sort_entry_points_aarch64(emitter);
     emit_hash_sort_links_aarch64(emitter);
     emit_hash_sort_triple_aarch64(emitter);
+    emit_hash_keycmp_aarch64(emitter);
     emit_hash_natcmp_aarch64(emitter, "__rt_hash_natcmp", "__rt_natcmp");
     emit_hash_natcmp_aarch64(emitter, "__rt_hash_natcasecmp", "__rt_natcasecmp");
+}
+
+/// Emits the AArch64 adapter bridging the sort engine's triple ABI to
+/// `__rt_key_compare_regular`'s `(low, high, low, high)` key ABI.
+///
+/// In: `x0`/`x3` = the two runtime tags, `x1`/`x4` = low payload words, `x2`/`x5` = high payload
+/// words — exactly what the engine already staged. A string key carries its pointer in the low
+/// word and its length in the high word; an integer key carries its value in the low word.
+///
+/// The high word is REBUILT for an integer key rather than forwarded: `__rt_hash_sort_triple`
+/// zeroes it, because a triple's high word is a payload and an integer has none, while
+/// `__rt_key_compare_regular` recognises an integer key by an all-ones high word. Forwarding the
+/// zero would present every integer key as a zero-length string.
+fn emit_hash_keycmp_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: __rt_hash_keycmp (triple ABI -> __rt_key_compare_regular) ---");
+    emitter.label_global("__rt_hash_keycmp");
+
+    emitter.instruction("cmp x0, #1");                                          // runtime tag 1 = string on the left key
+    emitter.instruction("b.eq __rt_hash_keycmp_left_str");
+    emitter.instruction("mov x2, #-1");                                         // an integer key is marked by the all-ones high word
+    emitter.label("__rt_hash_keycmp_left_str");
+    emitter.instruction("cmp x3, #1");                                          // runtime tag 1 = string on the right key
+    emitter.instruction("b.eq __rt_hash_keycmp_right_str");
+    emitter.instruction("mov x5, #-1");                                         // the same sentinel for an integer right key
+    emitter.label("__rt_hash_keycmp_right_str");
+    emitter.instruction("mov x0, x1");                                          // left low word becomes the first key argument
+    emitter.instruction("mov x1, x2");                                          // left high word or sentinel becomes the second
+    emitter.instruction("mov x2, x4");                                          // right low word becomes the third
+    emitter.instruction("mov x3, x5");                                          // right high word or sentinel becomes the fourth
+    emitter.instruction("b __rt_key_compare_regular");                          // tail-branch: the -1/0/1 result is already ours to return
+}
+
+/// Emits the x86_64 System V form of [`emit_hash_keycmp_aarch64`].
+///
+/// In: `rdi`/`rcx` = the two runtime tags, `rsi`/`r8` = low payload words, `rdx`/`r9` = high
+/// payload words. `__rt_key_compare_regular` wants `rdi`/`rsi` = the left key pair and
+/// `rdx`/`rcx` = the right one, so `rcx` is read as the right TAG before it is overwritten with
+/// the right high word — the one ordering constraint in the shuffle.
+fn emit_hash_keycmp_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: __rt_hash_keycmp (triple ABI -> __rt_key_compare_regular) ---");
+    emitter.label_global("__rt_hash_keycmp");
+
+    emitter.instruction("cmp rdi, 1");                                          // runtime tag 1 = string on the left key
+    emitter.instruction("je __rt_hash_keycmp_left_str_x86");
+    emitter.instruction("mov rdx, -1");                                         // an integer key is marked by the all-ones high word
+    emitter.label("__rt_hash_keycmp_left_str_x86");
+    emitter.instruction("cmp rcx, 1");                                          // runtime tag 1 = string on the right key
+    emitter.instruction("je __rt_hash_keycmp_right_str_x86");
+    emitter.instruction("mov r9, -1");                                          // the same sentinel for an integer right key
+    emitter.label("__rt_hash_keycmp_right_str_x86");
+    emitter.instruction("mov rdi, rsi");                                        // left low word becomes the first key argument
+    emitter.instruction("mov rsi, rdx");                                        // left high word or sentinel becomes the second
+    emitter.instruction("mov rdx, r8");                                         // right low word becomes the third
+    emitter.instruction("mov rcx, r9");                                         // right high word or sentinel becomes the fourth
+    emitter.instruction("jmp __rt_key_compare_regular");                        // tail-jump: the -1/0/1 result is already ours to return
 }
 
 /// Emits the AArch64 natural-order adapter bridging `__rt_php_compare`'s triple ABI to
@@ -181,8 +248,8 @@ fn emit_hash_sort_entry_points_x86_64(emitter: &mut Emitter) {
 /// `--gc-sections` still drop php's ~1.4 KB natural comparator pair from the binary.
 fn hash_sort_entry_points() -> [(&'static str, i64, &'static str, &'static str); 6] {
     [
-        ("__rt_hash_ksort", MODE_KEY_ASCENDING, CMP_PHP, "sort a hash by key ascending"),
-        ("__rt_hash_krsort", MODE_KEY_DESCENDING, CMP_PHP, "sort a hash by key descending"),
+        ("__rt_hash_ksort", MODE_KEY_ASCENDING, CMP_KEY, "sort a hash by key ascending"),
+        ("__rt_hash_krsort", MODE_KEY_DESCENDING, CMP_KEY, "sort a hash by key descending"),
         ("__rt_hash_asort", MODE_VALUE_ASCENDING, CMP_PHP, "sort a hash by value ascending"),
         ("__rt_hash_arsort", MODE_VALUE_DESCENDING, CMP_PHP, "sort a hash by value descending"),
         (
