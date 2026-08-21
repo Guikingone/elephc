@@ -70,7 +70,9 @@ class mysqli_stmt {
 
     // Internal factory for the two-step mysqli::stmt_init() + prepare() form:
     // an unprepared statement bound to a connection, ready for prepare().
-    public static function __elephcInit(mysqli $link, int $conn): mysqli_stmt {
+    // Private like __elephcFromPrepare — the checker's mysqli friend channel
+    // exposes it to mysqli::stmt_init only.
+    private static function __elephcInit(mysqli $link, int $conn): mysqli_stmt {
         $_statement = new mysqli_stmt();
         $_statement->link = $link;
         $_statement->conn = $conn;
@@ -84,6 +86,9 @@ class mysqli_stmt {
         }
         if ($query === "") {
             throw new ValueError("mysqli_stmt::prepare(): Argument #1 (\$query) cannot be empty");
+        }
+        if (!$this->requireLinkNotBusy()) {
+            return false;
         }
         if ($this->stmt >= 0) {
             elephc_pdo_finalize($this->stmt);
@@ -101,6 +106,22 @@ class mysqli_stmt {
         $this->executedOnce = false;
         $this->hasPending = false;
         $this->clearError();
+        return true;
+    }
+
+    // Guards the two-step prepare() and execute() while the LINK has
+    // unconsumed results (a multi_query batch or a real_query result):
+    // php-src raises CR_COMMANDS_OUT_OF_SYNC (2014) on the statement there —
+    // sending COM_STMT_PREPARE / COM_STMT_EXECUTE on a busy connection would
+    // corrupt the pending batch. One-shot mysqli::prepare() has its own
+    // connection-level guard; this is the statement-side twin, reading the
+    // link's private state through the checker's mysqli friend channel.
+    private function requireLinkNotBusy(): bool {
+        $_link = $this->link;
+        if ($_link !== null && $_link->__elephcHasPendingResults()) {
+            $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
+            return false;
+        }
         return true;
     }
 
@@ -127,9 +148,10 @@ class mysqli_stmt {
         return $this->__elephcBindParamValues($types, $_values);
     }
 
-    // Shared validation + snapshot behind bind_param and the procedural
-    // mysqli_stmt_bind_param alias (not part of PHP's surface).
-    public function __elephcBindParamValues(string $types, array $values): bool {
+    // Shared validation + snapshot behind bind_param (the procedural
+    // mysqli_stmt_bind_param alias forwards through bind_param itself).
+    // Private: not part of PHP's mysqli surface.
+    private function __elephcBindParamValues(string $types, array $values): bool {
         $_want = strlen($types);
         if ($_want == 0) {
             throw new ValueError("mysqli_stmt::bind_param(): Argument #1 (\$types) cannot be empty");
@@ -152,6 +174,9 @@ class mysqli_stmt {
     public function execute(?array $params = null): bool {
         if ($this->stmt < 0) {
             $this->syntheticFailure(2006, "mysqli_stmt object is already closed", "HY000");
+            return false;
+        }
+        if (!$this->requireLinkNotBusy()) {
             return false;
         }
         if ($this->executedOnce) {

@@ -211,6 +211,40 @@ fn with_mysqli_force_injects_without_static_new() {
     );
 }
 
+/// Verifies `--with-mysqli` roots the injected surface for reachability like
+/// `--with-pdo` (forced prelude group): with only an `extension_loaded` probe in
+/// the source — no static class/function reference and no dynamic hazard — the
+/// mysqli classes and methods must survive the compiler's dead-code
+/// elimination into the emitted code. (The LINKER may still strip functions
+/// nothing in this particular binary references — that is per-binary and
+/// reference-driven; the compiler-level keep is what `--with-mysqli`
+/// guarantees, and what a program with any dynamic-lookup hazard relies on.)
+#[test]
+fn with_mysqli_forces_surface_past_reachability() {
+    let dir = make_test_dir("ext_with_mysqli_dce");
+    let src = "<?php var_dump(extension_loaded('mysqli'));";
+    let bin = compile_with_flags(&dir, src, "app", &["--with-mysqli"]);
+    let out = run_binary(&bin);
+    assert_eq!(out, "bool(true)\n");
+    let php = dir.join("asm.php");
+    fs::write(&php, src).unwrap();
+    let mut cmd = Command::new(elephc_bin());
+    cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.current_dir(&dir);
+    cmd.args(["--with-mysqli", "--emit-asm"]).arg(&php);
+    let output = cmd.output().expect("failed to spawn elephc --emit-asm");
+    assert!(
+        output.status.success(),
+        "elephc --emit-asm failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(dir.join("asm.s")).expect("emitted assembly missing");
+    assert!(
+        asm.contains("_method_mysqli_query"),
+        "--with-mysqli: forced mysqli surface was dead-code-eliminated (mysqli::query missing from emitted code)"
+    );
+}
+
 /// Verifies a program using BOTH surfaces reports both extensions (they share one
 /// archive; the shared externs must be declared exactly once for this to compile).
 #[test]

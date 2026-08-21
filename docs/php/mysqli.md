@@ -179,7 +179,11 @@ While result sets remain unconsumed (including a `real_query()` result not yet
 picked up by `store_result()`), issuing a new statement — `query()`,
 `prepare()`, `multi_query()`, `ping()`, `select_db()`, `set_charset()`,
 `stat()`, or a transaction control — fails with errno 2014, php-src's
-"Commands out of sync; you can't run this command now".
+"Commands out of sync; you can't run this command now". The two-step statement
+form honors the same guard: `mysqli_stmt::prepare()` and
+`mysqli_stmt::execute()` on a busy link fail with 2014 recorded on the
+statement. `close()` discards any unconsumed result with the connection, so a
+later `real_connect()` on the same object starts clean.
 
 ## Errors, mysqli_report, and mysqli_sql_exception
 
@@ -291,7 +295,11 @@ never leaving a quote reachable. Under `NO_BACKSLASH_ESCAPES` only `'` is double
   GBK-family `<lead><0x5C>` inside a string literal is lexed as one character
   exactly like the server, and cannot hide the real closing quote to smuggle a
   second statement past the guard. The scan skips string literals, backtick
-  identifiers, and comments; a trailing `;` is fine. There
+  identifiers, and comments; a trailing `;` is fine. Executable comments are
+  **not** skipped: MySQL's `/*! … */` (bare or versioned) and MariaDB's
+  `/*M! … */` are live SQL to the server, so a `;` inside them counts as a
+  statement separator (the marker is case-sensitive, like the server's —
+  a lowercase `/*m!` is an ordinary inert comment). There
   is no exemption for compound-body DDL: `CREATE PROCEDURE … BEGIN …; … END`
   through `query()` is rejected too (telling body semicolons apart from a
   statement separator safely needs a full BEGIN/END parser, and any cheaper

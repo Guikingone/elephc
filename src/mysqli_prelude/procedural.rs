@@ -472,8 +472,11 @@ function mysqli_stmt_bind_param(mixed $statement, string $types, mixed &...$vars
     if (!($statement instanceof mysqli_stmt)) {
         throw new TypeError("mysqli_stmt_bind_param(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
     }
-    // Same bind-time value capture as the method; see statement.rs for the
-    // documented divergence from PHP's read-at-execute reference semantics.
+    // Same bind-time value capture as the method (forwarding `...$vars` into
+    // bind_param is rejected: a by-ref variadic cannot take spread
+    // arguments); the checker's mysqli friend channel lets this alias reach
+    // the private helper. See statement.rs for the documented divergence
+    // from PHP's read-at-execute reference semantics.
     $_values = [];
     $_given = count($vars);
     for ($_i = 0; $_i < $_given; $_i++) {

@@ -245,7 +245,12 @@ fn try_compile_source_to_asm_with_defines_repr(
         &mut prelude_inventory,
     );
     let mysqli_used = elephc::mysqli_prelude::program_uses_mysqli(&resolved);
-    let resolved = elephc::mysqli_prelude::inject_if_used(resolved, false, php_version);
+    let resolved = elephc::mysqli_prelude::inject_if_used(
+        resolved,
+        false,
+        php_version,
+        &mut prelude_inventory,
+    );
     let mut linked_php_surfaces: Vec<String> = Vec::new();
     if pdo_used {
         linked_php_surfaces.push("PDO".to_string());

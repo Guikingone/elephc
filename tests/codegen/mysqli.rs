@@ -60,6 +60,28 @@ echo "|", mysqli_thread_safe() === false ? "not-ts" : "ts";
     assert_eq!(out, "all-fns|methods|field_seek|cor|not-ts");
 }
 
+/// The `__elephc*` instance internals are compiler plumbing, not part of PHP's
+/// mysqli surface: user code calling them hits normal private-member
+/// visibility (a catchable `Error` at runtime), exactly like the PDO prelude's
+/// factories. (The static `__elephcInit` factory is rejected at compile time —
+/// see `error_tests/mysqli.rs`.)
+#[test]
+fn test_mysqli_internal_helpers_are_private() {
+    let out = compile_and_run(
+        r#"<?php
+mysqli_report(MYSQLI_REPORT_OFF);
+$stmt = new mysqli_stmt();
+try {
+    $stmt->__elephcBindParamValues("i", [1]);
+    echo "callable";
+} catch (Error $e) {
+    echo "blocked";
+}
+"#,
+    );
+    assert_eq!(out, "blocked");
+}
+
 /// The transaction-name allowlist rule needs no server: an empty name is a
 /// `ValueError` (php's exact message), and a name carrying an executable-comment
 /// injection payload is silently sanitized rather than throwing (php strips it),

@@ -58,11 +58,23 @@ pub fn program_uses_mysqli(program: &[Stmt]) -> bool {
 /// `force` (set by `--with-mysqli`) bypasses the usage scan so the mysqli
 /// surface is always injected and the bridge always linked. The PDO classes are
 /// never injected by this path.
-pub fn inject_if_used(program: Program, force: bool, php_version: PhpVersion) -> Program {
+///
+/// Injection records every prelude declaration in `inventory` under the
+/// `"mysqli"` group, so `--with-mysqli` can root the whole surface through
+/// reachability (`forced_groups`) exactly like `--with-pdo` — without it, a
+/// program with no static mysqli reference would have the forced surface
+/// dead-code-eliminated out of the binary.
+pub fn inject_if_used(
+    program: Program,
+    force: bool,
+    php_version: PhpVersion,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
     if !force && !detect::program_uses_mysqli(&program) {
         return program;
     }
     let mut combined = parsed_prelude_for_version(php_version);
+    inventory.record_program("mysqli", &combined);
     combined.extend(program);
     // Shared with the PDO prelude; idempotent, so whichever surface injects
     // second finds the block already declared and leaves it alone.
@@ -100,4 +112,46 @@ fn parsed_prelude_for_version(php_version: PhpVersion) -> Program {
             crate::parser::parse_internal(&tokens).expect("mysqli prelude must parse")
         })
         .clone()
+}
+
+#[cfg(test)]
+mod inventory_tests {
+    use super::*;
+    use crate::names::php_symbol_key;
+
+    /// `--with-mysqli` forces the surface through reachability via the prelude
+    /// inventory: injection must record every mysqli declaration under the
+    /// "mysqli" group so `forced_groups` can root it (same contract as PDO —
+    /// without this, a program whose only trace is `extension_loaded('mysqli')`
+    /// gets the whole surface dead-code-eliminated).
+    #[test]
+    fn inject_records_the_mysqli_prelude_group() {
+        let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+        let program =
+            inject_if_used(Vec::new(), true, PhpVersion::default(), &mut inventory);
+        assert!(!program.is_empty(), "forced injection must produce the prelude");
+        let group = inventory
+            .groups
+            .get("mysqli")
+            .expect("injection must record the mysqli prelude group");
+        for class in ["mysqli", "mysqli_stmt", "mysqli_result", "mysqli_sql_exception"] {
+            assert!(
+                group.classes.contains(&php_symbol_key(class)),
+                "mysqli group missing class {class}"
+            );
+        }
+        for function in ["mysqli_connect", "mysqli_query", "mysqli_stmt_bind_param"] {
+            assert!(
+                group.functions.contains(&php_symbol_key(function)),
+                "mysqli group missing function {function}"
+            );
+        }
+        assert!(
+            group.methods.iter().any(|(class, method, _)| {
+                class == &php_symbol_key("mysqli")
+                    && method == &php_symbol_key("real_connect")
+            }),
+            "mysqli group missing method mysqli::real_connect"
+        );
+    }
 }

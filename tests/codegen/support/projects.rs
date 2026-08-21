@@ -235,6 +235,7 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
         resolved,
         false,
         elephc::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
     );
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =

@@ -135,6 +135,7 @@ pub(crate) fn compile(config: CliConfig) {
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
     let forced_groups: HashSet<String> = [
         (with_crates.contains("pdo"), "pdo"),
+        (with_crates.contains("mysqli"), "mysqli"),
         (with_crates.contains("tz"), "tz"),
         (with_crates.contains("image"), "image"),
     ]
@@ -191,7 +192,8 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     let mysqli_force = with_crates.contains("mysqli");
     let mysqli_used = mysqli_force || mysqli_prelude::program_uses_mysqli(&ast);
-    let ast = mysqli_prelude::inject_if_used(ast, mysqli_used, php_version);
+    let ast =
+        mysqli_prelude::inject_if_used(ast, mysqli_used, php_version, &mut prelude_inventory);
     if mysqli_used {
         linked_php_surfaces.push("mysqli".to_string());
     }

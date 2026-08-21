@@ -251,6 +251,12 @@ class mysqli {
             }
             elephc_pdo_release($this->conn, 0);
             $this->conn = -1;
+            // An unconsumed buffered result dies with the connection (php-src
+            // frees all pending state on close): without this, a later
+            // real_connect() on the same object — which skips its own cleanup
+            // because $conn is already -1 — would inherit the stale pending
+            // result and raise a spurious 2014 on the first statement.
+            $this->pendingResult = null;
         }
         return true;
     }
@@ -625,8 +631,7 @@ class mysqli {
             return false;
         }
         $this->multiStmt = $_stmt;
-        $this->multiDrainCurrent($_rc);
-        return true;
+        return $this->multiDrainCurrent($_rc);
     }
 
     public function more_results(): bool {
@@ -646,8 +651,7 @@ class mysqli {
             $this->multiClose();
             return false;
         }
-        $this->multiDrainCurrent($_rc);
-        return true;
+        return $this->multiDrainCurrent($_rc);
     }
 
     public function store_result(int $mode = 0): mysqli_result|false {
@@ -712,11 +716,21 @@ class mysqli {
     // CR_COMMANDS_OUT_OF_SYNC (2014) there, and silently mixing the pending
     // batch state with a new statement would corrupt store_result/next_result.
     private function requireNoPendingResults(): bool {
-        if ($this->multiStmt >= 0 || $this->multiMore || $this->pendingResult !== null) {
+        if ($this->__elephcHasPendingResults()) {
             $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
             return false;
         }
         return true;
+    }
+
+    // Read-only pending probe for mysqli_stmt's two-step prepare()/execute()
+    // guard: the stmt records the 2014 on ITS OWN error state (php-src puts a
+    // busy-connection failure on the statement), so it needs the condition,
+    // not requireNoPendingResults' connection-level failure. Private — the
+    // checker's mysqli friend channel exposes it to mysqli_stmt only, keeping
+    // it off PHP's mysqli surface.
+    private function __elephcHasPendingResults(): bool {
+        return $this->multiStmt >= 0 || $this->multiMore || $this->pendingResult !== null;
     }
 
     // Renders a transaction $name as php-src's ` /*name*/` SQL comment suffix
@@ -971,8 +985,13 @@ class mysqli {
     // $this->pendingResult (or records affected_rows/insert_id for a
     // non-select set), then eagerly probes elephc_pdo_next_rowset so
     // more_results() can answer without consuming; the batch statement is
-    // finalized as soon as the probe reports no further set.
-    private function multiDrainCurrent(int $firstStep): void {
+    // finalized as soon as the probe reports no further set. Returns false —
+    // error recorded, batch closed, nothing buffered — if a step fails
+    // mid-drain (same contract as runQuery's fetch loop; with the bridge's
+    // buffered execution the first step surfaces server errors, so this is
+    // the defensive twin for a mid-stream failure, e.g. a dropped
+    // connection).
+    private function multiDrainCurrent(int $firstStep): bool {
         $_stmt = $this->multiStmt;
         $_cols = elephc_pdo_column_count($_stmt);
         if ($_cols == 0) {
@@ -1005,6 +1024,15 @@ class mysqli {
                 $_rowCount = $_rowCount + 1;
                 $_rc = elephc_pdo_step($_stmt);
             }
+            if ($_rc < 0) {
+                // A step failed mid-set: report the error instead of passing
+                // off the truncated buffer as a complete result, and close
+                // the batch — its remaining sets are not trustworthy.
+                $this->opFailed();
+                $this->multiClose();
+                $this->pendingResult = null;
+                return false;
+            }
             $this->affected_rows = $_rowCount;
             $this->insert_id = 0;
             $this->field_count = $_cols;
@@ -1017,6 +1045,7 @@ class mysqli {
             elephc_pdo_finalize($_stmt);
             $this->multiStmt = -1;
         }
+        return true;
     }
 
     // Finalizes any active multi_query batch statement and clears its state.

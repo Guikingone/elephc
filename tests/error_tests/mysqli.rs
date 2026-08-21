@@ -28,10 +28,12 @@ fn check_mysqli(src: &str) -> Result<(), String> {
     let defines: HashSet<String> = HashSet::new();
     let ast = elephc::conditional::apply(ast, &defines);
     let ast = elephc::autoload::collect_aliases(ast);
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::mysqli_prelude::inject_if_used(
         ast,
         false,
         elephc::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
     );
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
@@ -137,5 +139,19 @@ $db = new mysqli();
 $db->select_db();
 "#,
         "select_db",
+    );
+}
+
+/// The internal static factory `mysqli_stmt::__elephcInit` is private (the
+/// checker's friend channel exposes it to `mysqli::stmt_init` only): user code
+/// calling it is rejected at compile time like any private static.
+#[test]
+fn internal_stmt_init_factory_is_private() {
+    expect_mysqli_error(
+        r#"<?php
+$db = new mysqli();
+$stmt = mysqli_stmt::__elephcInit($db, -1);
+"#,
+        "__elephcInit",
     );
 }

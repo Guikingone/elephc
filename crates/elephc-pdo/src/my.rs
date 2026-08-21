@@ -811,6 +811,18 @@ fn scan_my_comment(bytes: &[u8], i: usize) -> Option<usize> {
         // multi-statement guard. `/*!` is therefore not a comment here (the
         // caller re-lexes its body); a plain `/* ... */` still is.
         b'/' if i + 2 < len && bytes[i + 1] == b'*' && bytes[i + 2] == b'!' => None,
+        // `/*M! ... */` (optionally `/*M!NNNNNN ...`) is MariaDB's executable
+        // comment — same live-SQL semantics as `/*!`. The marker is
+        // case-sensitive on the server (MariaDB 11.8: `/*M!` executes, `/*m!`
+        // is inert), so only uppercase `M` is live here: matching `/*m!` too
+        // would move `?` placeholders hidden in a genuinely inert comment.
+        b'/' if i + 3 < len
+            && bytes[i + 1] == b'*'
+            && bytes[i + 2] == b'M'
+            && bytes[i + 3] == b'!' =>
+        {
+            None
+        }
         b'/' if i + 1 < len && bytes[i + 1] == b'*' => {
             let mut j = i + 2;
             while j + 1 < len && !(bytes[j] == b'*' && bytes[j + 1] == b'/') {
@@ -3697,6 +3709,24 @@ mod tests {
             "utf8mb4",
         ));
         assert!(!sql_has_multiple_statements(b"SELECT 1 /* ; SELECT 2 */", false, "utf8mb4"));
+    }
+
+    /// SECURITY: MariaDB's `/*M! ... */` (and versioned `/*M!NNNNNN ...`)
+    /// executable comment is live SQL exactly like MySQL's `/*!`, so a `;`
+    /// inside it separates statements and must be detected. The marker is
+    /// case-sensitive on the server (verified against MariaDB 11.8:
+    /// `SELECT 1/*M! +41*/` returns 42, `/*m!` returns 1), so a lowercase
+    /// `/*m!` stays an inert comment here too — treating it as live would
+    /// shift `?` placeholder positions for legitimate queries.
+    #[test]
+    fn multi_statement_detection_sees_mariadb_executable_comments() {
+        assert!(sql_has_multiple_statements(b"SELECT 1/*M!;DROP TABLE t*/", false, "utf8mb4"));
+        assert!(sql_has_multiple_statements(
+            b"SELECT 1 /*M!100000 ; SELECT 2 */",
+            false,
+            "utf8mb4",
+        ));
+        assert!(!sql_has_multiple_statements(b"SELECT 1 /*m! ; SELECT 2 */", false, "utf8mb4"));
     }
 
     /// SECURITY: the multi-statement scanner must lex string literals like the

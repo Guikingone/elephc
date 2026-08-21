@@ -532,6 +532,114 @@ echo "|", $db->errno;
     assert_eq!(out, "F|1064|7|str-ok|8|mq|6|F|1064");
 }
 
+/// SECURITY: executable comments cannot smuggle a second statement through
+/// `query()`. MySQL's `/*! ... */` and MariaDB's `/*M! ... */` (bare and
+/// versioned) are live SQL — on MariaDB the server expands `/*M!` and would
+/// EXECUTE the hidden statement — so all three are rejected client-side with
+/// 1064. A plain `/* */` and the case-mismatched `/*m!` (inert on the server,
+/// verified on MariaDB 11.8) stay ordinary comments.
+#[test]
+#[ignore]
+fn test_mysqli_query_rejects_executable_comment_statement() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+echo $db->query("SELECT 1/*!;DROP TABLE t*/") === false ? "F" : "ok";
+echo "|", $db->errno;
+echo "|", $db->query("SELECT 1/*M!;DROP TABLE t*/") === false ? "F" : "ok";
+echo "|", $db->errno;
+echo "|", $db->query("SELECT 1/*M!100000 ;DROP TABLE t*/") === false ? "F" : "ok";
+echo "|", $db->errno;
+$r = $db->query("SELECT 3 /*m! ; not a second statement */ AS v");
+echo "|", ($r instanceof mysqli_result) ? $r->fetch_column(0) : ("no:" . $db->errno);
+"#,
+    ));
+    assert_eq!(out, "F|1064|F|1064|F|1064|3");
+}
+
+/// `close()` discards an unconsumed buffered result, so `real_connect` +
+/// `query` on the same object afterwards starts clean instead of raising a
+/// spurious 2014 (php-src frees all pending state with the connection).
+/// Covers both the `real_query` and `multi_query` pending shapes.
+#[test]
+#[ignore]
+fn test_mysqli_close_clears_pending_result_for_reconnect() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->real_query("SELECT 1");
+$db->close();
+echo $db->real_connect($host, $user, $pass, $dbname, $port) ? "re" : "no";
+$r = $db->query("SELECT 2");
+echo "|", ($r instanceof mysqli_result) ? $r->fetch_column(0) : ("no:" . $db->errno);
+$db->multi_query("SELECT 3 AS a; SELECT 4 AS b");
+$db->close();
+echo "|", $db->real_connect($host, $user, $pass, $dbname, $port) ? "re" : "no";
+$r2 = $db->query("SELECT 5");
+echo "|", ($r2 instanceof mysqli_result) ? $r2->fetch_column(0) : ("no:" . $db->errno);
+"#,
+    ));
+    assert_eq!(out, "re|2|re|5");
+}
+
+/// The two-step `stmt_init()` + `prepare()` form honors the
+/// commands-out-of-sync guard exactly like one-shot `mysqli::prepare()`:
+/// while an unconsumed result is pending, both `prepare()` and `execute()`
+/// fail with 2014 instead of issuing wire commands on a busy connection, and
+/// both succeed again once the pending result is consumed.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_two_step_out_of_sync_guard() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$n = 5;
+$ready = $db->stmt_init();
+echo $ready->prepare("SELECT ?") ? "prep" : "no";
+$ready->bind_param("i", $n);
+$db->real_query("SELECT 1");
+$stmt = $db->stmt_init();
+echo "|", $stmt->prepare("SELECT 2") === false ? "F" : "ok";
+echo "|", $stmt->errno;
+echo "|", $ready->execute() === false ? "F" : "ok";
+echo "|", $ready->errno;
+$pending = $db->store_result();
+echo "|", ($pending instanceof mysqli_result) ? "drained" : "no";
+echo "|", $stmt->prepare("SELECT 2") ? "prep2" : "no";
+echo "|", $ready->execute() ? "exec" : "no";
+$res = $ready->get_result();
+echo "|", ($res instanceof mysqli_result) ? $res->fetch_column(0) : "no";
+"#,
+    ));
+    assert_eq!(out, "prep|F|2014|F|2014|drained|prep2|exec|5");
+}
+
+/// A server error in the middle of draining a multi_query result set (a
+/// stored function SIGNALs after the first row) is reported as a failure —
+/// errno set, no partial result buffered, batch closed — instead of being
+/// swallowed as a truncated success. The connection stays usable afterwards.
+#[test]
+#[ignore]
+fn test_mysqli_multi_query_reports_mid_set_error() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP TABLE IF EXISTS mde");
+$db->query("CREATE TABLE mde (v INT)");
+$db->query("INSERT INTO mde (v) VALUES (1), (2), (3)");
+$db->query("DROP FUNCTION IF EXISTS mdf");
+echo $db->multi_query("CREATE FUNCTION mdf(x INT) RETURNS INT DETERMINISTIC BEGIN IF x > 1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'mid-set failure'; END IF; RETURN x; END") ? "ddl" : ("noddl:" . $db->errno);
+echo "|", $db->multi_query("SELECT REPEAT('x', 20000) AS pad, mdf(v) AS f FROM mde; SELECT 99") ? "mq" : "F";
+echo "|", $db->errno;
+echo "|", $db->store_result() === false ? "nores" : "res";
+echo "|", $db->more_results() ? "more" : "nomore";
+$r = $db->query("SELECT 7");
+echo "|", ($r instanceof mysqli_result) ? $r->fetch_column(0) : ("no:" . $db->errno);
+"#,
+    ));
+    assert_eq!(out, "ddl|F|1644|nores|nomore|7");
+}
+
 /// Compound-body DDL is NOT exempt from the multi-statement scan: through
 /// `query()` it fails 1064 (including the `... END; DROP ...` injection-tail
 /// shape), while `multi_query()` runs it as one statement and `CALL` works.

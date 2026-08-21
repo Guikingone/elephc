@@ -135,6 +135,12 @@ pub(crate) struct Checker {
     pub current_class: Option<String>,
     /// Name of the current method being type-checked, when inside a class body.
     pub current_method: Option<String>,
+    /// Name of the top-level function whose body is currently being type-checked
+    /// (saved/restored around each `resolve_function_signature` body walk, so
+    /// nested resolution of a called function tracks the innermost body). Used
+    /// by prelude friend channels to identify compiler-owned procedural
+    /// aliases, which have no class context.
+    pub current_function: Option<String>,
     /// Whether the current method being type-checked is static.
     pub current_method_is_static: bool,
     /// Whether the function/method/closure body currently being checked returns by
