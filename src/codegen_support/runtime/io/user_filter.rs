@@ -105,10 +105,8 @@ pub fn emit_stream_filter_register(emitter: &mut Emitter) {
     emitter.instruction("b __rt_sfr_scan");                                     // continue scanning
 
     emitter.label("__rt_sfr_taken");
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the frame
     emitter.instruction("mov x0, #0");                                          // php answers false for a name already taken
-    emitter.instruction("ret");
+    emitter.instruction("b __rt_sfr_ret");                                      // the single epilogue releases the frame
 
     emitter.label("__rt_sfr_store");
     // The registry OUTLIVES the call, so it cannot keep the caller's pointer: a name built at
@@ -128,18 +126,17 @@ pub fn emit_stream_filter_register(emitter: &mut Emitter) {
     emitter.instruction("str x8, [x6, #8]");                                    // filter-name length
     emitter.instruction("str x2, [x6, #16]");                                   // class-name pointer
     emitter.instruction("str x3, [x6, #24]");                                   // class-name length
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the frame
     emitter.instruction("mov x0, #1");                                          // return true for a successful registration
-    emitter.instruction("b __rt_sfr_ret");                                      // share the common epilogue
+    emitter.instruction("b __rt_sfr_ret");                                      // the single epilogue releases the frame
 
     emitter.label("__rt_sfr_full");
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the frame
     emitter.instruction("mov x0, #0");                                          // return false when the registry is full
 
+    // ONE epilogue, reached by every exit. Each arm used to release the frame itself and then
+    // branch here, where it was released a SECOND time: `ret` jumped to whatever the caller's
+    // stack held. Restoring in a single place is what makes that unrepresentable.
     emitter.label("__rt_sfr_ret");
-    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return to the caller
 }
@@ -202,9 +199,8 @@ fn emit_stream_filter_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_sfr_scan_x86");                               // continue scanning
 
     emitter.label("__rt_sfr_taken_x86");
-    emitter.instruction("leave");
     emitter.instruction("xor eax, eax");                                        // php answers false for a name already taken
-    emitter.instruction("ret");
+    emitter.instruction("jmp __rt_sfr_ret_x86");                                // the single epilogue releases the frame
 
     emitter.label("__rt_sfr_store_x86");
     // See the AArch64 arm: the registry outlives the call, so it must own the name rather than
@@ -221,17 +217,16 @@ fn emit_stream_filter_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, rdi");                                        // the class pointer goes in the next slot
     emitter.instruction("mov QWORD PTR [r10 + 16], rdx");                       // class-name pointer
     emitter.instruction("mov QWORD PTR [r10 + 24], rcx");                       // class-name length
-    emitter.instruction("leave");
     emitter.instruction("mov eax, 1");                                          // return true for a successful registration
-    emitter.instruction("jmp __rt_sfr_ret_x86");                                // share the common epilogue
+    emitter.instruction("jmp __rt_sfr_ret_x86");                                // the single epilogue releases the frame
 
     emitter.label("__rt_sfr_full_x86");
-    emitter.instruction("leave");
     emitter.instruction("xor eax, eax");                                        // return false when the registry is full
 
+    // See the AArch64 arm: ONE epilogue, reached by every exit. Each arm used to `leave` and then
+    // fall into this tail, which released the frame a second time.
     emitter.label("__rt_sfr_ret_x86");
-    emitter.instruction("add rsp, 48");                                         // release the helper frame
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("leave");                                               // release the helper frame
     emitter.instruction("ret");                                                 // return to the caller
 }
 
