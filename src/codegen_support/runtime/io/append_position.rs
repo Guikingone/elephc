@@ -17,7 +17,7 @@
 
 use crate::codegen_support::runtime::resources::layout::{
     STREAM_APPEND_SKIP_OFFSET, STREAM_FILTERED_BUF_PTR_OFFSET, STREAM_FILTERED_POS_OFFSET,
-    STREAM_READ_FILTER_HEAD_OFFSET, STREAM_WRAPPER_POS_OFFSET,
+    STREAM_WRAPPER_POS_OFFSET,
 };
 use crate::codegen_support::runtime::data::{
     DYNAMIC_PROP_DEPRECATED_HEAD, DYNAMIC_PROP_DEPRECATED_TAIL,
@@ -255,8 +255,10 @@ pub fn emit_stream_filtered_pos(emitter: &mut Emitter) {
             emitter.instruction("mov x29, sp");
             emitter.instruction("bl __rt_stream_state");                        // x0 = the owning state, zero for a raw descriptor
             emitter.instruction("cbz x0, __rt_sfp_untracked");
-            emitter.instruction(&format!("ldr x9, [x0, #{STREAM_READ_FILTER_HEAD_OFFSET}]"));
-            emitter.instruction("cbz x9, __rt_sfp_untracked");                  // an unfiltered stream is at its descriptor offset
+            // The question is whether this stream ever went through the buffered path, NOT whether
+            // a filter is still attached: `stream_filter_remove()` leaves the produced bytes on
+            // the stream, and php keeps reporting the position it has HANDED OUT rather than
+            // jumping to the descriptor, which the filter ran far ahead.
             emitter.instruction(&format!("ldr x9, [x0, #{STREAM_FILTERED_BUF_PTR_OFFSET}]"));
             emitter.instruction("cbz x9, __rt_sfp_untracked");                  // the buffered path never ran: fgets() reads do not use it
             emitter.instruction(&format!("ldr x0, [x0, #{STREAM_FILTERED_POS_OFFSET}]"));
@@ -275,11 +277,7 @@ pub fn emit_stream_filtered_pos(emitter: &mut Emitter) {
             emitter.instruction("call __rt_stream_state");                      // rax = the owning state, zero for a raw descriptor
             emitter.instruction("test rax, rax");
             emitter.instruction("jz __rt_sfp_untracked_x86");
-            emitter.instruction(&format!(
-                "mov r10, QWORD PTR [rax + {STREAM_READ_FILTER_HEAD_OFFSET}]"
-            ));
-            emitter.instruction("test r10, r10");
-            emitter.instruction("jz __rt_sfp_untracked_x86");                   // an unfiltered stream is at its descriptor offset
+            // See the AArch64 arm: the buffer, not the chain, is the question.
             emitter.instruction(&format!(
                 "mov r10, QWORD PTR [rax + {STREAM_FILTERED_BUF_PTR_OFFSET}]"
             ));
@@ -418,12 +416,21 @@ mod tests {
     /// The filtered-position probe answers `-1` for every stream that never engaged the buffered
     /// filtered read, and `ftell()` reads that as "keep the descriptor probe".
     ///
-    /// Both guards matter and both are cheap to lose: dropping the read-chain check would make an
-    /// unfiltered stream report a field nothing ever writes, and dropping the buffer-pointer check
-    /// would make a filtered stream read only through `fgets()` — which never touches that buffer —
-    /// report `0` instead of where its reads left the descriptor.
+    /// The guard is the BUFFER POINTER, and it must not become the read-chain head again.
+    ///
+    /// Both were once tested. The chain test was redundant for what it claimed to protect — a
+    /// stream that never engaged the buffered path has a null buffer pointer, which the second
+    /// guard already catches — and it was actively wrong after `stream_filter_remove()`: php
+    /// leaves the produced bytes on the stream and keeps reporting the position it has HANDED
+    /// OUT, while the chain test sent `ftell()` to the descriptor, which the filter had run far
+    /// ahead. MEASURED: php answers 3 there and elephc answered 6.
+    ///
+    /// Dropping the buffer-pointer check would make a filtered stream read only through `fgets()`
+    /// — which never touches that buffer — report `0` instead of where its reads left the
+    /// descriptor, so that half is still pinned.
     #[test]
-    fn test_stream_filtered_pos_guards_both_conditions_on_both_arches() {
+    fn test_stream_filtered_pos_guards_the_buffer_on_both_arches() {
+        use crate::codegen_support::runtime::resources::layout::STREAM_READ_FILTER_HEAD_OFFSET;
         for target in [
             Target::new(Platform::MacOS, Arch::AArch64),
             Target::new(Platform::Linux, Arch::X86_64),
@@ -433,8 +440,9 @@ mod tests {
             let asm = emitter.output();
             assert!(asm.contains("__rt_stream_filtered_pos:\n"));
             assert!(
-                asm.contains(&format!("{STREAM_READ_FILTER_HEAD_OFFSET}]")),
-                "the read-chain guard is missing for {:?}",
+                !asm.contains(&format!("{STREAM_READ_FILTER_HEAD_OFFSET}]")),
+                "the read-chain guard is back for {:?}: a removed filter leaves bytes on the \
+                 stream, and testing the chain sends ftell() to the descriptor",
                 target.arch
             );
             assert!(

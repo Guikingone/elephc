@@ -21,7 +21,7 @@ use super::super::layout::{
     STREAM_FILTERED_BUF_CAP_OFFSET, STREAM_FILTERED_BUF_LEN_OFFSET, STREAM_FILTERED_BUF_POS_OFFSET,
     STREAM_FILTERED_BUF_PTR_OFFSET, STREAM_FILTERED_FLUSHED_OFFSET,
     STREAM_MODE_LEN_OFFSET, STREAM_MODE_PTR_OFFSET,
-    STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_READ_FILTER_HEAD_OFFSET, STREAM_STATE_SIZE,
+    STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_SIZE,
     STREAM_TLS_SESSION_OFFSET,
     STREAM_URI_LEN_OFFSET,
     STREAM_URI_PTR_OFFSET,
@@ -292,10 +292,11 @@ fn emit_stream_eof_get(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_stream_eof_get_fail");                         // invalid or legacy handles have no state-owned EOF bit
     // See the AArch64 counterpart: a filtered stream is at EOF only once the reader has seen
     // everything, so buffered output and an owed `$closing` dispatch both hold `feof()` false.
+    // See the AArch64 counterpart: the FILTERED BUFFER is the question, not the chain.
     emitter.instruction(&format!(
-        "cmp QWORD PTR [rax + {}], 0", STREAM_READ_FILTER_HEAD_OFFSET
-    ));                                                                         // does the stream carry a read filter?
-    emitter.instruction("je __rt_stream_eof_get_backend");                      // unfiltered: the backend's state is the answer
+        "cmp QWORD PTR [rax + {}], 0", STREAM_FILTERED_BUF_PTR_OFFSET
+    ));                                                                         // did this stream ever buffer filtered bytes?
+    emitter.instruction("je __rt_stream_eof_get_backend");                      // never filtered: the backend's state is the answer
     emitter.instruction(&format!(
         "mov r10, QWORD PTR [rax + {}]", STREAM_FILTERED_BUF_LEN_OFFSET
     ));                                                                         // filtered bytes held

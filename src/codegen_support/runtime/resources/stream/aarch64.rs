@@ -21,7 +21,7 @@ use super::super::layout::{
     STREAM_FILTERED_BUF_CAP_OFFSET, STREAM_FILTERED_BUF_LEN_OFFSET, STREAM_FILTERED_BUF_POS_OFFSET,
     STREAM_FILTERED_BUF_PTR_OFFSET, STREAM_FILTERED_FLUSHED_OFFSET,
     STREAM_MODE_LEN_OFFSET, STREAM_MODE_PTR_OFFSET,
-    STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_READ_FILTER_HEAD_OFFSET, STREAM_STATE_SIZE,
+    STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_SIZE,
     STREAM_TLS_SESSION_OFFSET,
     STREAM_URI_LEN_OFFSET,
     STREAM_URI_PTR_OFFSET,
@@ -281,10 +281,14 @@ fn emit_stream_eof_get(emitter: &mut Emitter) {
     emitter.instruction("str x30, [sp, #8]");                                   // save the caller link register
     emitter.instruction("bl __rt_stream_state");                                // resolve the stable stream state from the opaque handle
     emitter.instruction("cbz x0, __rt_stream_eof_get_fail");                    // invalid or legacy handles have no state-owned EOF bit
+    // The question is whether this stream went through the FILTERED BUFFER, not whether a filter
+    // is still attached: `stream_filter_remove()` leaves the produced bytes on the stream, and
+    // php keeps answering false until a read ATTEMPT comes back empty. Testing the chain head
+    // made `feof()` true the instant the filter went, with bytes still owed to the reader.
     emitter.instruction(&format!(
-        "ldr x9, [x0, #{}]", STREAM_READ_FILTER_HEAD_OFFSET
-    ));                                                                         // does the stream carry a read filter?
-    emitter.instruction("cbz x9, __rt_stream_eof_get_backend");                 // unfiltered: the backend's state is the answer
+        "ldr x9, [x0, #{}]", STREAM_FILTERED_BUF_PTR_OFFSET
+    ));                                                                         // did this stream ever buffer filtered bytes?
+    emitter.instruction("cbz x9, __rt_stream_eof_get_backend");                 // never filtered: the backend's state is the answer
     emitter.instruction(&format!(
         "ldr x10, [x0, #{}]", STREAM_FILTERED_BUF_LEN_OFFSET
     ));                                                                         // filtered bytes held

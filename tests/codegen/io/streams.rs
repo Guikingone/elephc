@@ -17382,3 +17382,68 @@ catch (\ValueError $e) { echo $e->getMessage(); }
     );
     assert_eq!(out, "scandir(): Argument #1 ($directory) must not be empty");
 }
+
+/// Verifies `stream_filter_remove()` leaves the bytes the filter had already produced.
+///
+/// A read filter reads its whole input to produce a few bytes, so removing it mid-read leaves a
+/// remainder on the stream. php serves it; `ftell()` stays where the READER is, not where the
+/// filter drove the descriptor; and `feof()` stays false until a read ATTEMPT comes back empty.
+/// MEASURED end to end on `php -n` 8.5.6:
+///
+/// ```text
+/// fread($h, 3)            "ABC"   ftell 3   feof false
+/// stream_filter_remove()  true            ftell 3   feof false
+/// fread($h, 3)            "DEF"   ftell 6   feof false
+/// fread($h, 3)            ""              feof true
+/// ```
+///
+/// THREE helpers asked "is a filter chain ATTACHED?" where the question is "did this stream go
+/// through the filtered buffer?" — `__rt_fread`, `__rt_stream_filtered_pos` and
+/// `__rt_stream_eof_get`. `stream_filter_remove()` answers the first no while leaving the second
+/// yes, so all three jumped to the descriptor and the remainder became unreachable: `fread()`
+/// answered `""`, `ftell()` reported 6, `feof()` reported true. On a 10 000-byte file php
+/// recovered every byte and elephc recovered 1 818.
+#[test]
+fn test_stream_filter_remove_keeps_the_bytes_the_filter_produced() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("fr.txt", "abcdef");
+$h = fopen("fr.txt", "r");
+$f = stream_filter_append($h, "string.toupper", STREAM_FILTER_READ);
+echo fread($h, 3), "|", ftell($h), "|", var_export(feof($h), true), "|";
+stream_filter_remove($f);
+echo ftell($h), "|", var_export(feof($h), true), "|";
+echo fread($h, 3), "|", ftell($h), "|", var_export(feof($h), true), "|";
+echo "[", fread($h, 3), "]|", var_export(feof($h), true);
+fclose($h);
+unlink("fr.txt");
+"#,
+    );
+    assert_eq!(out, "ABC|3|false|3|false|DEF|6|false|[]|true");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a LARGE filtered read recovers every byte across a removal.
+///
+/// The small case fits in one backend chunk, so it cannot catch a route that loses whatever the
+/// chunking left over. MEASURED: php recovers all 10 000 bytes; before the fix elephc recovered
+/// 1 818.
+#[test]
+fn test_stream_filter_remove_loses_nothing_across_chunk_boundaries() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("big.txt", str_repeat("ab", 5000));
+$h = fopen("big.txt", "r");
+$f = stream_filter_append($h, "string.toupper", STREAM_FILTER_READ);
+$total = strlen(fread($h, 10));
+stream_filter_remove($f);
+$total = $total + strlen(fread($h, 10));
+$total = $total + strlen(stream_get_contents($h));
+echo $total;
+fclose($h);
+unlink("big.txt");
+"#,
+    );
+    assert_eq!(out, "10000");
+    let _ = fs::remove_dir_all(&dir);
+}

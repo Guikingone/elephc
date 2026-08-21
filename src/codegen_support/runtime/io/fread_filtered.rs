@@ -152,7 +152,25 @@ fn emit_fread_wrapper_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stream_state");                                // resolve the owning stream state
     emitter.instruction("cbz x0, __rt_freadb_passthrough");                     // no live state: the raw helper reports the error
     emitter.instruction(&format!("ldr x9, [x0, #{STREAM_READ_FILTER_HEAD_OFFSET}]")); // read-direction chain head
-    emitter.instruction("cbz x9, __rt_freadb_passthrough");                     // unfiltered stream: keep the raw path untouched
+    emitter.instruction("cbnz x9, __rt_freadb_have_chain");                     // a filtered stream takes the normal path
+    // No chain — but `stream_filter_remove()` LEAVES the bytes the filter had already produced on
+    // the stream, and php serves them. Asking "is a filter attached?" made those bytes
+    // unreachable the moment the filter went: `fread()` answered "" where php answers the
+    // remainder.
+    emitter.instruction(&format!("ldr x10, [x0, #{STREAM_FILTERED_BUF_LEN_OFFSET}]")); // bytes held
+    emitter.instruction(&format!("ldr x11, [x0, #{STREAM_FILTERED_BUF_POS_OFFSET}]")); // bytes already served
+    emitter.instruction("cmp x11, x10");
+    // Drained, and the filter that produced these bytes is gone — so nothing more can ever come
+    // from it, which is exactly what the flushed flag asserts. Without setting it here `feof()`
+    // would hold false forever on a stream whose reader has already seen everything.
+    emitter.instruction("b.lo __rt_freadb_hold");
+    emitter.instruction("mov x10, #1");
+    emitter.instruction(&format!("str x10, [x0, #{STREAM_FILTERED_FLUSHED_OFFSET}]"));
+    emitter.instruction("b __rt_freadb_passthrough");                           // nothing held: the raw path is untouched
+    emitter.label("__rt_freadb_hold");
+    emitter.instruction("str x0, [sp, #16]");                                   // preserve the state pointer
+    emitter.instruction("b __rt_freadb_serve");                                 // serve the remainder php keeps
+    emitter.label("__rt_freadb_have_chain");
     emitter.instruction("str x0, [sp, #16]");                                   // preserve the state pointer
     // php answers `false` — not `""` — when a read filter reports PSFS_ERR_FATAL, so the
     // code the brigade publishes has to survive to the return below. It is reset to
@@ -393,7 +411,26 @@ fn emit_fread_wrapper_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_freadb_passthrough_x");                        // no live state: the raw helper reports it
     emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_READ_FILTER_HEAD_OFFSET}]")); // read-direction chain head
     emitter.instruction("test r9, r9");
-    emitter.instruction("jz __rt_freadb_passthrough_x");                        // unfiltered: keep the raw path untouched
+    emitter.instruction("jnz __rt_freadb_have_chain_x");                        // a filtered stream takes the normal path
+    // See the AArch64 arm: `stream_filter_remove()` LEAVES the bytes the filter had already
+    // produced on the stream, and php serves them.
+    emitter.instruction(&format!(
+        "mov r10, QWORD PTR [rax + {STREAM_FILTERED_BUF_LEN_OFFSET}]"
+    ));
+    emitter.instruction(&format!(
+        "mov r11, QWORD PTR [rax + {STREAM_FILTERED_BUF_POS_OFFSET}]"
+    ));
+    emitter.instruction("cmp r11, r10");
+    // See the AArch64 arm: drained plus a removed filter means nothing more can come.
+    emitter.instruction("jb __rt_freadb_hold_x");
+    emitter.instruction(&format!(
+        "mov QWORD PTR [rax + {STREAM_FILTERED_FLUSHED_OFFSET}], 1"
+    ));
+    emitter.instruction("jmp __rt_freadb_passthrough_x");                       // nothing held: the raw path is untouched
+    emitter.label("__rt_freadb_hold_x");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the state pointer
+    emitter.instruction("jmp __rt_freadb_serve_x");                             // serve the remainder php keeps
+    emitter.label("__rt_freadb_have_chain_x");
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the state pointer
     // See the AArch64 arm: the published PSFS code has to survive to the return, and the
     // BSS symbol starts at zero, which is PSFS_ERR_FATAL.
