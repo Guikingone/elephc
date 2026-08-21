@@ -23,6 +23,8 @@ pub(crate) fn lower_file_put_contents(
     abi::emit_call_label(ctx.emitter, "__rt_resource_id_burn");
     let path = expect_operand(inst, 0)?;
     let data = expect_operand(inst, 1)?;
+    // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.
+    super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
     let path_literal = optional_const_string_operand(ctx, path)?;
     if let Some(path_literal) = path_literal.as_deref() {
         if path_literal.starts_with("phar://") {

@@ -633,6 +633,8 @@ pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count_between(inst, "file", 1, 3)?;
     let path = expect_operand(inst, 0)?;
+    // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.
+    super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
     let flags = inst.operands.get(1).copied();
     // Publish `$context` for this read, like fopen()/file_get_contents()/readfile().
     let explicit_context = inst.operands.get(2).copied();
@@ -642,7 +644,20 @@ pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     // URL reached the plain reader as a filename: `file("data:,abc")` and
     // `file("compress.zlib://f.gz")` both failed where php reads them.
     if let Some(literal) = optional_const_string_operand(ctx, path)? {
-        if literal.starts_with("data:")
+        // A scheme that is NOT built in is a wrapper the program registered, and the opener is
+        // the only thing that can serve it. `file()` reached the plain reader instead and
+        // answered false with php's "No such file or directory" — while `file_get_contents()` on
+        // the identical URL read it, because that lowering already applies this same test.
+        let user_wrapper = literal.find("://").is_some_and(|scheme_end| {
+            let scheme = &literal[..scheme_end];
+            !crate::types::stream_constants::STREAM_WRAPPERS
+                .iter()
+                .any(|known| *known == scheme)
+                && scheme != "compress.zlib"
+                && scheme != "compress.bzip2"
+        });
+        if user_wrapper
+            || literal.starts_with("data:")
             || literal.starts_with("compress.zlib://")
             || literal.starts_with("compress.bzip2://")
         {

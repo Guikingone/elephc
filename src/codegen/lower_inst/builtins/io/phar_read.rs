@@ -33,6 +33,10 @@ pub(crate) fn lower_file_get_contents(
     // `var_dump($handle)`, `(int) $handle` and `get_resource_id()`. The cursor is never
     // reused, so advancing it is the whole of what php does here.
     abi::emit_call_label(ctx.emitter, "__rt_resource_id_burn");
+    // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.
+    if let Some(path) = inst.operands.first().copied() {
+        super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
+    }
     let range = FileReadRange::from_operands(ctx, inst, 3, 4)?;
     range.emit_negative_length_guard(ctx, FILE_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE)?;
     let context_scope = emit_file_get_contents_bytes(ctx, inst, range.is_active())?;
@@ -651,6 +655,10 @@ pub(super) fn publish_phar_get_signature_type_function_pointer(ctx: &mut Functio
 
 /// Lowers `hash_file(algo, filename, binary?)` by reading bytes then hashing them.
 pub(crate) fn lower_hash_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.
+    if let Some(path) = inst.operands.get(1).copied() {
+        super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
+    }
     ensure_arg_count_between(inst, "hash_file", 2, 3)?;
     let fail = ctx.next_label("hash_file_fail");
     let done = ctx.next_label("hash_file_box");
@@ -664,6 +672,10 @@ pub(crate) fn lower_hash_file(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 
 /// Lowers `readfile(path)` and boxes the runtime byte-count-or-false result.
 pub(crate) fn lower_readfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.
+    if let Some(path) = inst.operands.get(0).copied() {
+        super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
+    }
     super::super::ensure_arg_count_between(inst, "readfile", 1, 3)?;
     let path = expect_operand(inst, 0)?;
     // Same reason as file_get_contents(): the wrapper reads its options from the

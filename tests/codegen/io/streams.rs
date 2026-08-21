@@ -17236,3 +17236,107 @@ fclose($f);
     );
     assert_eq!(out, "[abc][def]");
 }
+
+/// Verifies `file()` reads a user-registered wrapper, as every other reader already does.
+///
+/// `fread`, `fgets`, `fgetc`, `stream_get_contents`, `stream_get_line`, `file_get_contents`,
+/// `readfile` and `fpassthru` all reached the wrapper; `file()` warned `Failed to open stream: No
+/// such file or directory` and answered false — naming `file_get_contents` in the warning, not
+/// itself. php-src's `file()` is `php_stream_open_wrapper` followed by a split, so every scheme
+/// the OPENER knows is readable by definition; the lowering delegated for `data:` and the compress
+/// schemes but not for a scheme the program registered.
+#[test]
+fn test_file_reads_a_user_wrapper_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+class LinesW {
+    private $pos = 0;
+    private $data = "one\ntwo\nthree\n";
+    public function stream_open($p, $m, $o, &$op): bool { return true; }
+    public function stream_read(int $count): string {
+        $chunk = substr($this->data, $this->pos, $count);
+        $this->pos = $this->pos + strlen($chunk);
+        return $chunk;
+    }
+    public function stream_eof(): bool { return $this->pos >= strlen($this->data); }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register("lines", "LinesW");
+echo json_encode(file("lines://x")), "|";
+echo json_encode(file("lines://x", FILE_IGNORE_NEW_LINES));
+"#,
+    );
+    assert_eq!(
+        out,
+        "[\"one\\n\",\"two\\n\",\"three\\n\"]|[\"one\",\"two\",\"three\"]"
+    );
+}
+
+/// Verifies an EMPTY filename is php's `ValueError`, not a warning and `false`.
+///
+/// php-src's `CHECK_NULL_PATH` guards the functions that OPEN a stream, and the rule is sharply
+/// drawn — MEASURED across 28 path-taking functions on `php -n` 8.5.6. These seven throw
+/// `ValueError: Path must not be empty`. The other side is pinned by
+/// `test_an_empty_path_is_false_for_the_non_opening_family`, so widening this guard fails there
+/// rather than passing silently.
+#[test]
+fn test_an_empty_path_is_a_value_error_for_every_opener() {
+    let out = compile_and_run(
+        r#"<?php
+try { fopen("", "r"); echo "fopen=no throw|"; }
+catch (\ValueError $e) { echo "fopen=", $e->getMessage(), "|"; }
+try { file_get_contents(""); echo "fgc=no throw|"; }
+catch (\ValueError $e) { echo "fgc=", $e->getMessage(), "|"; }
+try { file_put_contents("", "x"); echo "fpc=no throw|"; }
+catch (\ValueError $e) { echo "fpc=", $e->getMessage(), "|"; }
+try { file(""); echo "file=no throw|"; }
+catch (\ValueError $e) { echo "file=", $e->getMessage(), "|"; }
+try { readfile(""); echo "readfile=no throw|"; }
+catch (\ValueError $e) { echo "readfile=", $e->getMessage(), "|"; }
+try { copy("", "x"); echo "copy=no throw|"; }
+catch (\ValueError $e) { echo "copy=", $e->getMessage(), "|"; }
+try { hash_file("md5", ""); echo "hash_file=no throw|"; }
+catch (\ValueError $e) { echo "hash_file=", $e->getMessage(), "|"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "fopen=Path must not be empty|",
+            "fgc=Path must not be empty|",
+            "fpc=Path must not be empty|",
+            "file=Path must not be empty|",
+            "readfile=Path must not be empty|",
+            "copy=Path must not be empty|",
+            "hash_file=Path must not be empty|",
+        )
+    );
+}
+
+/// Verifies the OTHER side of php's empty-path rule: the non-opening family answers `false`.
+///
+/// Eighteen path-taking functions answer plain `false` for an empty filename in php — MEASURED —
+/// so a guard applied to "anything holding a path" would turn eighteen correct answers into
+/// exceptions. This is what refuses that.
+#[test]
+fn test_an_empty_path_is_false_for_the_non_opening_family() {
+    let out = compile_and_run(
+        r#"<?php
+$bad = "";
+if (@unlink("") !== false) { $bad .= "unlink "; }
+if (@rename("", "x") !== false) { $bad .= "rename "; }
+if (@mkdir("") !== false) { $bad .= "mkdir "; }
+if (@rmdir("") !== false) { $bad .= "rmdir "; }
+if (@opendir("") !== false) { $bad .= "opendir "; }
+if (@is_file("") !== false) { $bad .= "is_file "; }
+if (@is_dir("") !== false) { $bad .= "is_dir "; }
+if (@file_exists("") !== false) { $bad .= "file_exists "; }
+if (@filesize("") !== false) { $bad .= "filesize "; }
+if (@filemtime("") !== false) { $bad .= "filemtime "; }
+if (@touch("") !== false) { $bad .= "touch "; }
+if (@is_readable("") !== false) { $bad .= "is_readable "; }
+echo $bad === "" ? "all false" : "NOT FALSE: " . $bad;
+"#,
+    );
+    assert_eq!(out, "all false");
+}

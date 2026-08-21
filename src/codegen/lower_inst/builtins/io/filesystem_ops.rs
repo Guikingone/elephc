@@ -106,6 +106,10 @@ pub(crate) fn lower_chdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 
 /// Lowers `copy(source, dest)` through the target-aware runtime helper.
 pub(crate) fn lower_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.
+    if let Some(path) = inst.operands.get(0).copied() {
+        super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
+    }
     lower_binary_path_call_with_context(ctx, inst, "copy", "__rt_copy")
 }
 

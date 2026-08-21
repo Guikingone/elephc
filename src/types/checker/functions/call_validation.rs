@@ -246,20 +246,9 @@ impl Checker {
         )
     }
 
-    /// Normalizes arguments for a builtin or extern function call, rejecting unknown named
-    /// arguments and not allowing unknown named arguments to flow into the variadic parameter.
-    pub(crate) fn normalize_builtin_call_args(
-        &self,
-        sig: &FunctionSig,
-        args: &[Expr],
-        span: crate::span::Span,
-        callee_desc: &str,
-        env: &TypeEnv,
-    ) -> Result<Vec<Expr>, CompileError> {
-        self.normalize_call_args(sig, args, span, callee_desc, true, false, env)
-    }
-
-    /// Normalizes a builtin call and reports which slots the NORMALIZER filled.
+    /// Normalizes a builtin or extern call and reports which slots the NORMALIZER filled.
+    ///
+    /// Unknown named arguments are rejected rather than flowing into the variadic parameter.
     ///
     /// The by-reference check needs to tell an omitted parameter from a literal the program wrote
     /// in that position: php accepts the first and raises an Error for the second, and after

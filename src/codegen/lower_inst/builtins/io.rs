@@ -243,6 +243,41 @@ pub(super) use string_validation::load_string_to_result;
 /// filename, which is why a registered user wrapper answered `Failed to open stream` here while
 /// `fopen()` on the same URI worked. The opener already scans the wrapper registry and reports an
 /// unknown scheme the way php does, so delegating covers both outcomes.
+/// php-src's `CHECK_NULL_PATH` wording for an empty filename reaching a stream open.
+pub(super) const EMPTY_PATH_MESSAGE: &str = "Path must not be empty";
+
+/// Throws php's `ValueError` when the filename is empty, before anything tries to open it.
+///
+/// MEASURED on `php -n` 8.5.6: `fopen("")`, `file_get_contents("")`, `file_put_contents("", "x")`,
+/// `file("")`, `readfile("")`, `copy("", "x")` and `hash_file("md5", "")` all throw
+/// `ValueError: Path must not be empty`, while `unlink("")`, `mkdir("")`, `is_file("")` and the
+/// rest of the path-taking surface answer plain `false`. The guard therefore belongs to the
+/// OPENERS, not to every builtin holding a path — the twenty that answer `false` already agree
+/// with php, and widening this would break them.
+///
+/// A literal empty path is refused during lowering, so the throw costs nothing at run time for
+/// every other program; an assembled filename is checked on its byte length, where php checks it.
+pub(super) fn emit_empty_path_value_error(
+    ctx: &mut FunctionContext<'_>,
+    path: ValueId,
+    message: &str,
+) -> Result<()> {
+    if let Some(literal) = optional_const_string_operand(ctx, path)? {
+        if literal.is_empty() {
+            super::exceptions::emit_value_error(ctx, message);
+        }
+        return Ok(());
+    }
+    load_string_to_result(ctx, path, "path")?;
+    let (_, len_reg) = abi::string_result_regs(ctx.emitter);
+    super::exceptions::emit_value_error_unless(
+        ctx,
+        super::exceptions::ValueGuard::SignedAtLeast(len_reg, 1),
+        message,
+    );
+    Ok(())
+}
+
 fn emit_literal_wrapper_file_get_contents_bytes(
     ctx: &mut FunctionContext<'_>,
     path: &str,

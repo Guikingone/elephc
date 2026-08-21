@@ -11,6 +11,10 @@ use super::*;
 
 /// Lowers `fopen(filename, mode)` and boxes stream resources or PHP false.
 pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.
+    if let Some(path) = inst.operands.get(0).copied() {
+        super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
+    }
     ensure_arg_count_between(inst, "fopen", 2, 4)?;
     let filename = expect_operand(inst, 0)?;
     let mode = expect_operand(inst, 1)?;
