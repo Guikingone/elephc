@@ -2,7 +2,7 @@
 title: "socket_set_blocking() — internals"
 description: "Compiler internals for socket_set_blocking(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 223
+  order: 237
 ---
 
 ## `socket_set_blocking()` — internals

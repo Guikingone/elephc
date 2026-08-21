@@ -2,7 +2,7 @@
 title: "stream_wrapper_unregister() — internals"
 description: "Compiler internals for stream_wrapper_unregister(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 266
+  order: 280
 ---
 
 ## `stream_wrapper_unregister()` — internals

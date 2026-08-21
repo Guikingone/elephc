@@ -307,6 +307,15 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = crate::dir_prelude::inject_if_used(ast);
     timings.record_since("dir-prelude", phase_started);
 
+    // php's `gz*` stream surface, spelled as the `compress.zlib://` wrapper the stream builtins
+    // already serve, injected only when the program references one of those functions. Runs beside
+    // the other preludes, after include resolution so a reference inside an include is detected,
+    // and before name resolution so a namespaced caller resolves to it.
+    crate::progress::phase("gz-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::gz_prelude::inject_if_used(ast);
+    timings.record_since("gz-prelude", phase_started);
+
     // php's scanf engine, injected only when the program references `sscanf()`/`fscanf()`, whose
     // registry lowerings call into it. Runs after include resolution so a scan inside an include
     // is detected, and before name resolution so the emitted call resolves to a declared function.

@@ -248,8 +248,13 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved =
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::dir_prelude::inject_if_used(resolved);
+    let resolved = elephc::gz_prelude::inject_if_used(resolved);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::scanf_prelude::inject_if_used(resolved);
+    // `zend_version()`, `php_sapi_name()` and `ini_restore()` are ordinary php-visible functions;
+    // without this the suite could not compile a program that calls one.
+    let resolved =
+        elephc::version_prelude::inject_if_used(resolved, php_version, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");

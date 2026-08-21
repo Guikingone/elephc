@@ -135,6 +135,160 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         "Returns method names visible on an object or class."
     ),
     surface!(
+        "gzclose",
+        Io,
+        PreludeProvided,
+        [param!("stream", Mixed)],
+        None,
+        Bool,
+        "Closes an open gz-file pointer."
+    ),
+    surface!(
+        "gzeof",
+        Io,
+        PreludeProvided,
+        [param!("stream", Mixed)],
+        None,
+        Bool,
+        "Tests for end-of-file on a gz-file pointer."
+    ),
+    surface!(
+        "gzfile",
+        Io,
+        PreludeProvided,
+        [
+            param!("filename", Str),
+            param!("use_include_path", Int = DefaultSpec::Int(0)),
+        ],
+        None,
+        Mixed,
+        "Reads an entire gz-file into an array of lines."
+    ),
+    surface!(
+        "gzgetc",
+        Io,
+        PreludeProvided,
+        [param!("stream", Mixed)],
+        None,
+        Mixed,
+        "Gets one character from a gz-file pointer."
+    ),
+    surface!(
+        "gzgets",
+        Io,
+        PreludeProvided,
+        [
+            param!("stream", Mixed),
+            param!("length", Int = DefaultSpec::Null),
+        ],
+        None,
+        Mixed,
+        "Gets one line from a gz-file pointer."
+    ),
+    surface!(
+        "gzopen",
+        Io,
+        PreludeProvided,
+        [
+            param!("filename", Str),
+            param!("mode", Str),
+            param!("use_include_path", Int = DefaultSpec::Int(0)),
+        ],
+        None,
+        Mixed,
+        "Opens a gz-file pointer on the zlib compression wrapper."
+    ),
+    surface!(
+        "gzpassthru",
+        Io,
+        PreludeProvided,
+        [param!("stream", Mixed)],
+        None,
+        Int,
+        "Outputs all remaining data on a gz-file pointer."
+    ),
+    surface!(
+        "gzputs",
+        Io,
+        PreludeProvided,
+        [
+            param!("stream", Mixed),
+            param!("data", Str),
+            param!("length", Int = DefaultSpec::Null),
+        ],
+        None,
+        Mixed,
+        "Alias of gzwrite()."
+    ),
+    surface!(
+        "gzread",
+        Io,
+        PreludeProvided,
+        [
+            param!("stream", Mixed),
+            param!("length", Int),
+        ],
+        None,
+        Mixed,
+        "Reads up to length bytes from a gz-file pointer."
+    ),
+    surface!(
+        "gzrewind",
+        Io,
+        PreludeProvided,
+        [param!("stream", Mixed)],
+        None,
+        Bool,
+        "Rewinds the position of a gz-file pointer."
+    ),
+    surface!(
+        "gzseek",
+        Io,
+        PreludeProvided,
+        [
+            param!("stream", Mixed),
+            param!("offset", Int),
+            param!("whence", Int = DefaultSpec::Int(0)),
+        ],
+        None,
+        Int,
+        "Seeks on a gz-file pointer."
+    ),
+    surface!(
+        "gztell",
+        Io,
+        PreludeProvided,
+        [param!("stream", Mixed)],
+        None,
+        Mixed,
+        "Tells the read/write position of a gz-file pointer."
+    ),
+    surface!(
+        "gzwrite",
+        Io,
+        PreludeProvided,
+        [
+            param!("stream", Mixed),
+            param!("data", Str),
+            param!("length", Int = DefaultSpec::Null),
+        ],
+        None,
+        Mixed,
+        "Writes a string to a gz-file pointer."
+    ),
+    surface!(
+        "readgzfile",
+        Io,
+        PreludeProvided,
+        [
+            param!("filename", Str),
+            param!("use_include_path", Int = DefaultSpec::Int(0)),
+        ],
+        None,
+        Mixed,
+        "Outputs a gz-file and answers the byte count."
+    ),
+    surface!(
         "get_class_vars",
         Callables,
         Function,

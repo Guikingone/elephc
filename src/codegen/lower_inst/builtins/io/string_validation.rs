@@ -140,9 +140,13 @@ pub(super) fn load_optional_int_to_result(
     // checker was happily accepting one.
     let declared = ctx.value_php_type(value)?.codegen_repr();
     let loaded = ctx.load_value_to_result(value)?.codegen_repr();
+    let is_tagged = loaded == PhpType::TaggedScalar;
     require_optional_int(loaded, name)?;
     if matches!(declared, PhpType::Void | PhpType::Never) {
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), null_answer);
+    } else if is_tagged {
+        // A forwarded `?int $length = null` parameter, which arrives as a (value, tag) pair.
+        crate::codegen::lower_inst::emit_tagged_scalar_to_int_or(ctx, null_answer);
     }
     Ok(())
 }
@@ -153,7 +157,10 @@ pub(super) fn load_optional_int_to_result(
 /// `load_optional_int_to_result` reintroduces the zero-for-null bug above, and this is what stops
 /// that spelling from existing.
 fn require_optional_int(ty: PhpType, name: &str) -> Result<()> {
-    if matches!(ty, PhpType::Int | PhpType::Void | PhpType::Never) {
+    if matches!(
+        ty,
+        PhpType::Int | PhpType::Void | PhpType::Never | PhpType::TaggedScalar
+    ) {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(

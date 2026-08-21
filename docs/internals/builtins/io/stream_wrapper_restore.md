@@ -2,7 +2,7 @@
 title: "stream_wrapper_restore() — internals"
 description: "Compiler internals for stream_wrapper_restore(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 265
+  order: 279
 ---
 
 ## `stream_wrapper_restore()` — internals

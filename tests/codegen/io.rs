@@ -17,6 +17,10 @@ mod output_buffering;
 mod files;
 #[path = "io/streams.rs"]
 mod streams;
+#[path = "io/compress_wrapper.rs"]
+mod compress_wrapper;
+#[path = "io/gz_streams.rs"]
+mod gz_streams;
 #[path = "io/filesystem.rs"]
 mod filesystem;
 #[path = "io/misc.rs"]

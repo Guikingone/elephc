@@ -483,10 +483,31 @@ def resolve_non_registry_lowering(
     lowering = LoweringInfo(sig_file=contract_file)
     kind = aot_support.get("kind")
     if kind == "prelude":
-        prelude = repo / "src" / "hash_prelude.rs"
-        match = re.search(rf"^function\s+{re.escape(canonical)}\s*\(", read(prelude), re.MULTILINE)
-        lowering.codegen_file = str(prelude.relative_to(repo))
-        lowering.codegen_line = read(prelude)[: match.start()].count("\n") + 1 if match else 1
+        # Which prelude is FOUND, not assumed. This named `hash_prelude.rs` outright, so every
+        # prelude-provided function that lives elsewhere — `dir()` in `dir_prelude.rs`, the whole
+        # `gz*` family in `gz_prelude.rs` — was documented as sitting at line 1 of a file that does
+        # not declare it. The declaration is searched for across the preludes instead.
+        preludes = sorted((repo / "src").glob("*_prelude.rs"))
+        # Two spellings: PHP source (`function gzopen(`) and the Rust declaration builder some
+        # preludes use instead (`function("hash_init")`). The PHP one is tried first because it
+        # points at a body rather than at a registration.
+        patterns = (
+            rf"^function\s+{re.escape(canonical)}\s*\(",
+            rf"function\(\s*\"{re.escape(canonical)}\"\s*\)",
+        )
+        prelude, line = None, 1
+        for candidate in preludes:
+            body = read(candidate)
+            for pattern in patterns:
+                match = re.search(pattern, body, re.MULTILINE)
+                if match:
+                    prelude, line = candidate, body[: match.start()].count("\n") + 1
+                    break
+            if prelude is not None:
+                break
+        if prelude is not None:
+            lowering.codegen_file = str(prelude.relative_to(repo))
+            lowering.codegen_line = line
         lowering.codegen_function = canonical
         lowering.notes.append("Implemented by a compiler-injected PHP prelude.")
     elif kind == "language-construct":

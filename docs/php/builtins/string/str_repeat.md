@@ -2,7 +2,7 @@
 title: "str_repeat()"
 description: "Repeats a string a given number of times."
 sidebar:
-  order: 460
+  order: 474
 ---
 
 ## str_repeat()

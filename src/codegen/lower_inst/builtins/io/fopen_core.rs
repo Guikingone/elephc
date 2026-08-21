@@ -20,29 +20,10 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         let open_mode = LiteralOpenMode::Operand(mode);
         if path.starts_with("php://filter/") {
             emit_literal_php_filter_fopen_result(ctx, open_mode, path, "fopen")?;
-        } else if let Some(underlying) = path.strip_prefix("compress.zlib://") {
-            // A mode that is not a compile-time literal reads: it is the overwhelmingly common
-            // open, and it is also what this branch did before it knew about `$mode` at all.
-            let mode_text =
-                optional_const_string_operand(ctx, mode)?.unwrap_or_else(|| "r".to_string());
-            emit_literal_compress_wrapper_fopen_result(
-                ctx,
-                CompressUnderlying::Literal(underlying),
-                path,
-                CompressWrapper::Zlib,
-                &mode_text,
-            )?;
-        } else if let Some(underlying) = path.strip_prefix("compress.bzip2://") {
-            let mode_text =
-                optional_const_string_operand(ctx, mode)?.unwrap_or_else(|| "r".to_string());
-            emit_literal_compress_wrapper_fopen_result(
-                ctx,
-                CompressUnderlying::Literal(underlying),
-                path,
-                CompressWrapper::Bzip2,
-                &mode_text,
-            )?;
         } else {
+            // The compress schemes are NOT special-cased here. They used to be, in a copy of the
+            // branches that now live in `emit_literal_fopen_result`, and the copy is what kept
+            // `fopen()` from seeing the run-time mode classification the shared opener grew.
             emit_literal_fopen_result(ctx, open_mode, path)?;
         }
         emit_record_stream_mode_after_boxed(ctx, mode)?;
@@ -90,7 +71,11 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 
 
 /// The compression wrappers, with the prefix a run-time URL is recognised by.
-const DYNAMIC_COMPRESS_WRAPPERS: &[(&str, CompressWrapper)] = &[
+///
+/// Shared with the byte readers rather than copied: `file_get_contents` resolves the same two
+/// schemes at run time, and a second list is how one of them comes to know a scheme the other
+/// does not.
+pub(super) const DYNAMIC_COMPRESS_WRAPPERS: &[(&str, CompressWrapper)] = &[
     ("compress.zlib://", CompressWrapper::Zlib),
     ("compress.bzip2://", CompressWrapper::Bzip2),
 ];
@@ -107,8 +92,9 @@ const DYNAMIC_COMPRESS_WRAPPERS: &[(&str, CompressWrapper)] = &[
 /// path runs — the same open, the same filter attach — with the underlying path taken from the
 /// staged string registers instead of a baked data string.
 ///
-/// `$mode` follows the literal path's rule: a compile-time literal decides the direction, and
-/// anything else reads, which is the overwhelmingly common open.
+/// `$mode` is classified at RUN time when it is not a literal. It used to fall back to "r", which
+/// made `$m = $write ? "w" : "r"; fopen("compress.zlib://f.gz", $m)` open for reading and warn
+/// about a missing file it was asked to create.
 ///
 /// Returns the label the caller must place AFTER the ordinary dynamic open, so a URL one of the
 /// wrappers claimed jumps past it.
@@ -118,7 +104,7 @@ fn emit_dynamic_compress_wrapper_fopen(
     filename: ValueId,
     mode: ValueId,
 ) -> Result<Option<String>> {
-    let mode_text = optional_const_string_operand(ctx, mode)?.unwrap_or_else(|| "r".to_string());
+    let literal_mode = optional_const_string_operand(ctx, mode)?;
     let done_label = ctx.next_label("compress_dyn_done");
     for (prefix, kind) in DYNAMIC_COMPRESS_WRAPPERS {
         let next_label = ctx.next_label("compress_dyn_next");
@@ -144,22 +130,137 @@ fn emit_dynamic_compress_wrapper_fopen(
                 ctx.emitter.instruction(&format!("je {}", next_label));
             }
         }
-        // Reload: the prefix probe consumed the staged registers, and the opener reads the url
-        // from them to step past the prefix it just matched.
-        load_string_to_result(ctx, filename, "fopen filename")?;
-        emit_literal_compress_wrapper_fopen_result(
-            ctx,
-            CompressUnderlying::Staged { prefix_len },
-            prefix,
-            *kind,
-            &mode_text,
-        )?;
-        emit_record_stream_mode_after_boxed(ctx, mode)?;
-        store_if_result(ctx, inst)?;
+        match literal_mode.as_deref() {
+            Some(mode_text) => {
+                // Reload: the prefix probe consumed the staged registers, and the opener reads the
+                // url from them to step past the prefix it just matched.
+                load_string_to_result(ctx, filename, "fopen filename")?;
+                emit_literal_compress_wrapper_fopen_result(
+                    ctx,
+                    CompressUnderlying::Staged { prefix_len },
+                    prefix,
+                    *kind,
+                    mode_text,
+                )?;
+                emit_record_stream_mode_after_boxed(ctx, mode)?;
+                store_if_result(ctx, inst)?;
+            }
+            None => {
+                emit_run_time_mode_compress_open(
+                    ctx,
+                    CompressUnderlying::Staged { prefix_len },
+                    Some(filename),
+                    mode,
+                    prefix,
+                    *kind,
+                )?;
+                emit_record_stream_mode_after_boxed(ctx, mode)?;
+                store_if_result(ctx, inst)?;
+            }
+        }
         abi::emit_jump(ctx.emitter, &done_label);
         ctx.emitter.label(&next_label);
     }
     Ok(Some(done_label))
+}
+
+/// Classifies a run-time `$mode` the way php's compress wrapper does, and opens accordingly.
+///
+/// php-src's zlib wrapper looks at the FIRST character and refuses any `+`: `r*` reads, `w*` and
+/// `a*` write, everything else answers `false`. That rule needs no compile-time knowledge, so it
+/// is emitted as a scan for `+` followed by a three-way branch on byte zero.
+///
+/// Each arm re-runs the ordinary open with the mode it selected, because the direction decides
+/// three separate things — the mode handed to `__rt_fopen`, whether `zlib.level` is published, and
+/// whether the inflate or deflate filter is attached — and threading a run-time flag through all
+/// three would be a wider change than emitting the open three times for the uncommon case of a
+/// computed mode.
+///
+/// Leaves a BOXED open result and does not store it, so both openers can use it: the literal one
+/// returns it to its own caller, and the dynamic one records the mode and stores. `restage` names
+/// the filename to reload before each arm, which only the staged form needs — a literal underlying
+/// path is baked into the open itself.
+fn emit_run_time_mode_compress_open(
+    ctx: &mut FunctionContext<'_>,
+    underlying: CompressUnderlying<'_>,
+    restage: Option<ValueId>,
+    mode: ValueId,
+    prefix: &str,
+    kind: CompressWrapper,
+) -> Result<()> {
+    let refused = ctx.next_label("compress_mode_refused");
+    let read_arm = ctx.next_label("compress_mode_read");
+    let write_arm = ctx.next_label("compress_mode_write");
+    let append_arm = ctx.next_label("compress_mode_append");
+    let joined = ctx.next_label("compress_mode_done");
+    let scan = ctx.next_label("compress_mode_scan");
+    let classify = ctx.next_label("compress_mode_classify");
+
+    load_string_to_result(ctx, mode, "fopen mode")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x9, #0");                              // scan cursor
+            ctx.emitter.label(&scan);
+            ctx.emitter.instruction("cmp x9, x2");
+            ctx.emitter.instruction(&format!("b.ge {}", classify));             // no `+` anywhere
+            ctx.emitter.instruction("ldrb w10, [x1, x9]");
+            ctx.emitter.instruction("cmp w10, #43");                            // '+'
+            ctx.emitter.instruction(&format!("b.eq {}", refused));              // php refuses every `+` mode
+            ctx.emitter.instruction("add x9, x9, #1");
+            abi::emit_jump(ctx.emitter, &scan);
+            ctx.emitter.label(&classify);
+            ctx.emitter.instruction(&format!("cbz x2, {}", refused));           // an empty mode is refused
+            ctx.emitter.instruction("ldrb w10, [x1]");                          // php reads the FIRST character only
+            ctx.emitter.instruction("cmp w10, #114");                           // 'r'
+            ctx.emitter.instruction(&format!("b.eq {}", read_arm));
+            ctx.emitter.instruction("cmp w10, #119");                           // 'w'
+            ctx.emitter.instruction(&format!("b.eq {}", write_arm));
+            ctx.emitter.instruction("cmp w10, #97");                            // 'a'
+            ctx.emitter.instruction(&format!("b.eq {}", append_arm));
+            abi::emit_jump(ctx.emitter, &refused);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xor r9, r9");                              // scan cursor
+            ctx.emitter.label(&scan);
+            ctx.emitter.instruction("cmp r9, rdx");
+            ctx.emitter.instruction(&format!("jge {}", classify));              // no `+` anywhere
+            ctx.emitter.instruction("movzx r10d, BYTE PTR [rax + r9]");
+            ctx.emitter.instruction("cmp r10d, 43");                            // '+'
+            ctx.emitter.instruction(&format!("je {}", refused));                // php refuses every `+` mode
+            ctx.emitter.instruction("add r9, 1");
+            abi::emit_jump(ctx.emitter, &scan);
+            ctx.emitter.label(&classify);
+            ctx.emitter.instruction("test rdx, rdx");
+            ctx.emitter.instruction(&format!("je {}", refused));                // an empty mode is refused
+            ctx.emitter.instruction("movzx r10d, BYTE PTR [rax]");              // php reads the FIRST character only
+            ctx.emitter.instruction("cmp r10d, 114");                           // 'r'
+            ctx.emitter.instruction(&format!("je {}", read_arm));
+            ctx.emitter.instruction("cmp r10d, 119");                           // 'w'
+            ctx.emitter.instruction(&format!("je {}", write_arm));
+            ctx.emitter.instruction("cmp r10d, 97");                            // 'a'
+            ctx.emitter.instruction(&format!("je {}", append_arm));
+            abi::emit_jump(ctx.emitter, &refused);
+        }
+    }
+
+    for (label, selected) in [
+        (&read_arm, "r"),
+        (&write_arm, "w"),
+        (&append_arm, "a"),
+    ] {
+        ctx.emitter.label(label);
+        if let Some(filename) = restage {
+            load_string_to_result(ctx, filename, "fopen filename")?;
+        }
+        emit_literal_compress_wrapper_fopen_result(ctx, underlying, prefix, kind, selected)?;
+        abi::emit_jump(ctx.emitter, &joined);
+    }
+
+    ctx.emitter.label(&refused);
+    emit_fd_result(ctx, -1);
+    box_stream_fd_or_false_result(ctx, "fopen");
+    ctx.emitter.label(&joined);
+    Ok(())
 }
 
 /// Where the open mode a `php://filter` URL is opened with comes from.
@@ -975,20 +1076,36 @@ pub(super) fn emit_literal_fopen_result(
     // `Failed to open stream: No such file or directory` for the very same URL.
     for (prefix, wrapper) in DYNAMIC_COMPRESS_WRAPPERS.iter().copied() {
         if let Some(underlying) = path.strip_prefix(prefix) {
-            // A mode that is not a compile-time literal reads, which is the overwhelmingly
-            // common open and what this branch assumed before it knew about `$mode` at all.
+            // A mode known at compile time picks the direction here; one that is not is
+            // classified at RUN time by php's own rule. Falling back to "r" — which this did —
+            // opened `fopen("compress.zlib://o.gz", $m)` for reading whatever `$m` said, and
+            // accepted `"r+"` and `""` where php answers false.
             let mode_text = match mode {
-                LiteralOpenMode::Operand(operand) => optional_const_string_operand(ctx, operand)?
-                    .unwrap_or_else(|| "r".to_string()),
-                LiteralOpenMode::ReadOnly => "r".to_string(),
+                LiteralOpenMode::Operand(operand) => optional_const_string_operand(ctx, operand)?,
+                LiteralOpenMode::ReadOnly => Some("r".to_string()),
             };
-            emit_literal_compress_wrapper_fopen_result(
-                ctx,
-                CompressUnderlying::Literal(underlying),
-                path,
-                wrapper,
-                &mode_text,
-            )?;
+            match mode_text {
+                Some(mode_text) => emit_literal_compress_wrapper_fopen_result(
+                    ctx,
+                    CompressUnderlying::Literal(underlying),
+                    path,
+                    wrapper,
+                    &mode_text,
+                )?,
+                None => {
+                    let LiteralOpenMode::Operand(operand) = mode else {
+                        unreachable!("only an operand mode can be absent at compile time");
+                    };
+                    emit_run_time_mode_compress_open(
+                        ctx,
+                        CompressUnderlying::Literal(underlying),
+                        None,
+                        operand,
+                        path,
+                        wrapper,
+                    )?;
+                }
+            }
             return Ok(());
         }
     }

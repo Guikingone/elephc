@@ -145,6 +145,23 @@ fn emit_file_get_contents_bytes(
     // below never creates a stream, so a filter chain would have nowhere to attach: the route
     // parses first and reads through a real stream when the URL names a filter, and falls
     // through with the path swapped to the RESOURCE when it names none the runtime knows.
+    // A filename assembled at run time may name a compression wrapper. `fopen()` resolves those
+    // at run time already; this reader only ever resolved the compile-time literal, so the two
+    // spellings of one read disagreed. Probed BEFORE the filter route, which may legitimately
+    // swap the staged registers to a RESOURCE for a `php://filter/...` URL — a compress URL is
+    // never one, and probing first keeps the two from having to reason about each other.
+    let compress_done = if path_literal.is_none() {
+        let landing = ctx.next_label("fgc_dyn_compress_bytes");
+        super::emit_dynamic_compress_read_route(
+            ctx,
+            path,
+            "file_get_contents filename",
+            &landing,
+        )?;
+        Some(landing)
+    } else {
+        None
+    };
     let filter_done = if path_literal.is_none() {
         Some(super::emit_dynamic_php_filter_read_route(
             ctx,
@@ -177,6 +194,9 @@ fn emit_file_get_contents_bytes(
         ctx.emitter.label(&done);
     }
     if let Some(done) = filter_done {
+        ctx.emitter.label(&done);
+    }
+    if let Some(done) = compress_done {
         ctx.emitter.label(&done);
     }
     Ok(true)
@@ -667,7 +687,25 @@ pub(crate) fn lower_readfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         }
     }
     load_string_to_result(ctx, path, "readfile")?;
+    // A run-time compress URL reads through the shared opener; its bytes go out through the same
+    // write-and-count tail the filter route uses, placed AFTER the ordinary dispatch so the
+    // ordinary result jumps over it. Without this the URL reached the dispatch as a filename,
+    // where `fopen()` on the identical string decompresses.
+    let compress_bytes = if optional_const_string_operand(ctx, path)?.is_none() {
+        let landing = ctx.next_label("readfile_dyn_compress_bytes");
+        super::emit_dynamic_compress_read_route(ctx, path, "readfile", &landing)?;
+        Some(landing)
+    } else {
+        None
+    };
     emit_readfile_wrapper_dispatch(ctx)?;
+    if let Some(landing) = compress_bytes {
+        let after = ctx.next_label("readfile_dyn_compress_after");
+        abi::emit_jump(ctx.emitter, &after);
+        ctx.emitter.label(&landing);
+        super::wrapper_dispatch::emit_readfile_bytes_tail(ctx, "readfile_dyn_compress");
+        ctx.emitter.label(&after);
+    }
     box_readfile_result(ctx);
     finish_fopen_context_scope(ctx);
     store_if_result(ctx, inst)

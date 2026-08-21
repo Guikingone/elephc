@@ -2,7 +2,7 @@
 title: "http_clear_last_response_headers() — internals"
 description: "Compiler internals for http_clear_last_response_headers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 201
+  order: 214
 ---
 
 ## `http_clear_last_response_headers()` — internals

@@ -135,7 +135,7 @@ use context_result_helpers::*;
 use stream_context::*;
 use fopen_core::{begin_fopen_context_scope, emit_literal_php_filter_fopen_result,
     emit_request_default_stream_context_handle, emit_static_diag_warning,
-    finish_fopen_context_scope, LiteralOpenMode};
+    finish_fopen_context_scope, LiteralOpenMode, DYNAMIC_COMPRESS_WRAPPERS};
 use resource_handles::*;
 use seek_hash_arch::*;
 use boxing_helpers::*;
@@ -476,6 +476,72 @@ fn emit_dynamic_php_filter_read_route(
     ctx.emitter.label(&fall_through);
     abi::emit_release_temporary_stack(ctx.emitter, 16);                         // the plain path drops the saved URL too
     Ok(done)
+}
+
+/// Reads a RUN-TIME `compress.zlib://` / `compress.bzip2://` URL through the opener `fopen()` uses.
+///
+/// The literal spelling is resolved during lowering; a URL assembled at run time — a filename from
+/// config, a path built with `sys_get_temp_dir()`, or the concatenation any wrapper-forwarding
+/// helper writes — reached the plain byte reader and was opened as a FILENAME, so
+/// `file_get_contents("compress.zlib://" . $p)` answered `Failed to open stream: No such file or
+/// directory` while `fopen()` on the identical string decompressed. Measured against `php -n`
+/// 8.5.6, which reads it.
+///
+/// The prefix probe is given its own copy of the staged filename each time and the pair is
+/// restored on the way out, so a URL none of the wrappers claims leaves the registers exactly as
+/// it found them for the routes that follow. A claimed URL runs the same open the literal path
+/// runs and ends in the shared open-read-close tail, then branches to `bytes_ready`.
+///
+/// The landing label comes FROM the caller because the three readers do different things with the
+/// bytes: `file_get_contents` answers them, `file()` splits them into lines and `readfile()`
+/// writes and counts them. Each already has an entry that takes bytes in the string registers —
+/// the one a filter chain feeds — and that is the label to pass.
+fn emit_dynamic_compress_read_route(
+    ctx: &mut FunctionContext<'_>,
+    filename: ValueId,
+    callee: &str,
+    bytes_ready: &str,
+) -> Result<()> {
+    for (prefix, kind) in DYNAMIC_COMPRESS_WRAPPERS.iter().copied() {
+        let next = ctx.next_label("fgc_dyn_compress_next");
+        let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
+        load_string_to_result(ctx, filename, callee)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                // `__rt_str_starts_with` reads the haystack from x1/x2, where the load left it.
+                abi::emit_symbol_address(ctx.emitter, "x3", &prefix_label);
+                ctx.emitter.instruction(&format!("mov x4, #{prefix_len}"));
+                abi::emit_call_label(ctx.emitter, "__rt_str_starts_with");
+                ctx.emitter.instruction(&format!("cbz x0, {}", next));
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // the url pointer
+                ctx.emitter.instruction("mov rsi, rdx");                        // and its byte length
+                ctx.emitter
+                    .instruction(&format!("lea rdx, [rip + {prefix_label}]"));  // the wrapper prefix
+                ctx.emitter.instruction(&format!("mov rcx, {prefix_len}"));
+                abi::emit_call_label(ctx.emitter, "__rt_str_starts_with");
+                ctx.emitter.instruction("test rax, rax");
+                ctx.emitter.instruction(&format!("je {}", next));
+            }
+        }
+        // The probe consumed the staged pair; the opener reads the url from it to step past the
+        // prefix it just matched, so it is loaded again.
+        load_string_to_result(ctx, filename, callee)?;
+        emit_literal_compress_wrapper_fopen_result(
+            ctx,
+            CompressUnderlying::Staged { prefix_len },
+            prefix,
+            kind,
+            "r",
+        )?;
+        emit_open_read_close_tail(ctx, "fgc_dyn_compress")?;
+        abi::emit_jump(ctx.emitter, bytes_ready);
+        ctx.emitter.label(&next);
+    }
+    // Nothing claimed it: hand the following routes the filename they expect in the registers.
+    load_string_to_result(ctx, filename, callee)?;
+    Ok(())
 }
 
 /// Turns a boxed `fopen()` result already in the result register into the bytes it holds.

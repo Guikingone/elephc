@@ -2,7 +2,7 @@
 title: "intdiv() — internals"
 description: "Compiler internals for intdiv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 308
+  order: 322
 ---
 
 ## `intdiv()` — internals

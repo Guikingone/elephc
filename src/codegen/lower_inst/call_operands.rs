@@ -104,6 +104,14 @@ pub(in crate::codegen) fn resolve_nullable_int_operand_to_result(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int_nullable");
             Ok(())
         }
+        // A `?int` PARAMETER lives as a (value, tag) pair, which is the representation php's own
+        // `?int $length = null` signature produces for anything that forwards it. Reading the tag
+        // is the whole conversion; without this arm the forward did not compile at all.
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(value)?;
+            emit_tagged_scalar_to_int_or(ctx, crate::codegen::NULL_SENTINEL);
+            Ok(())
+        }
         // A STATICALLY null argument — `fgets($h, null)`, or a `$n = null` the checker narrowed —
         // carries no integer to load, so it answers the sentinel here. Without this arm it reached
         // `resolve_int_operand_to_result`, whose exhaustive `ty` arm refused `Void` outright: the
@@ -120,6 +128,25 @@ pub(in crate::codegen) fn resolve_nullable_int_operand_to_result(
         }
         _ => resolve_int_operand_to_result(ctx, value, context),
     }
+}
+
+/// Turns a tagged scalar already in the result registers into a plain integer.
+///
+/// The int result register holds the value when the tag says "int", so only the null case needs
+/// anything: it answers `null_answer`, the word the CALLING builtin reads as "no bound". That word
+/// is not universal — `fgets` and `stream_get_contents` compare against `NULL_SENTINEL` while
+/// `stream_copy_to_stream`'s copier reads `-1` — so it is a parameter rather than a constant.
+pub(in crate::codegen) fn emit_tagged_scalar_to_int_or(
+    ctx: &mut FunctionContext<'_>,
+    null_answer: i64,
+) {
+    let is_null = ctx.next_label("tagged_int_null");
+    let done = ctx.next_label("tagged_int_done");
+    crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &is_null);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&is_null);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), null_answer);
+    ctx.emitter.label(&done);
 }
 
 /// Moves the canonical integer result register into the target's first argument register.

@@ -2,7 +2,7 @@
 title: "socket_get_status()"
 description: "Retrieves header/meta data from streams/file pointers (alias of stream_get_meta_data)."
 sidebar:
-  order: 221
+  order: 235
 ---
 
 ## socket_get_status()

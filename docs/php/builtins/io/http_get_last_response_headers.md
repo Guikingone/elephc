@@ -2,7 +2,7 @@
 title: "http_get_last_response_headers()"
 description: "Returns the last HTTP response headers, or null when no request was made."
 sidebar:
-  order: 202
+  order: 215
 ---
 
 ## http_get_last_response_headers()

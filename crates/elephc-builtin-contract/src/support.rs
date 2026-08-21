@@ -227,6 +227,22 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     // parse: the interpreter would need a Directory cell kind with property reads and method
     // dispatch of its own, the way `hash_init()` needed one for `HashContext`.
     "dir",
+    // The `gz*` stream surface is a compiler-injected prelude, so `eval()` has no binding for
+    // it: MEASURED, `eval('gzopen(...)')` in a program that never calls one itself reports
+    // "eval() fragment uses an unsupported construct". `dir` above is the same case.
+    "gzclose",
+    "gzeof",
+    "gzfile",
+    "gzgetc",
+    "gzgets",
+    "gzopen",
+    "gzpassthru",
+    "gzputs",
+    "gzread",
+    "gzrewind",
+    "gzseek",
+    "gztell",
+    "gzwrite",
     "hexdec",
     // php 8.4's response-header pair reads engine state the interpreter does not own: the
     // compiler answers both from `_http_resp_header_end` / `_http_resp_buf`, which are
@@ -235,6 +251,7 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "http_get_last_response_headers",
     "join",
     "octdec",
+    "readgzfile",
     "serialize",
     "strncasecmp",
     "strncmp",
@@ -288,12 +305,12 @@ mod tests {
 
         assert_eq!(eval_registry, 484);
         assert_eq!(eval_internal, 40);
-        assert_eq!(eval_pending, 34);
+        assert_eq!(eval_pending, 48);                                   // + the 14 `gz*` prelude functions
         // 544 on the merged catalogue: this branch counted 543 and main 531, and main also
         // PROMOTES get_object_vars out of the external surface into the registry. Neither
         // branch's number survives the merge; this one is measured on the result.
         assert_eq!(aot_registry, 544);
-        assert_eq!(aot_external, 11);
+        assert_eq!(aot_external, 25);                                   // + the 14 `gz*` prelude functions
         assert_eq!(aot_unsupported, 3);
     }
 
@@ -341,7 +358,7 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 463);
-        assert_eq!(unsupported, 74);
+        assert_eq!(unsupported, 88);                                    // + the 14 `gz*` prelude functions
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

@@ -2,7 +2,7 @@
 title: "bcfloor() — internals"
 description: "Compiler internals for bcfloor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 284
+  order: 298
 ---
 
 ## `bcfloor()` — internals

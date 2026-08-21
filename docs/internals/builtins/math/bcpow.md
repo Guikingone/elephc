@@ -2,7 +2,7 @@
 title: "bcpow() — internals"
 description: "Compiler internals for bcpow(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 287
+  order: 301
 ---
 
 ## `bcpow()` — internals

@@ -2,7 +2,7 @@
 title: "http_clear_last_response_headers()"
 description: "Clears the last HTTP response headers captured by an http:// stream."
 sidebar:
-  order: 201
+  order: 214
 ---
 
 ## http_clear_last_response_headers()

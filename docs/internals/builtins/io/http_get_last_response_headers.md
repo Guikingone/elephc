@@ -2,7 +2,7 @@
 title: "http_get_last_response_headers() — internals"
 description: "Compiler internals for http_get_last_response_headers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 202
+  order: 215
 ---
 
 ## `http_get_last_response_headers()` — internals

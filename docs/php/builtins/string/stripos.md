@@ -2,7 +2,7 @@
 title: "stripos()"
 description: "Finds the numeric position of the first case-insensitive occurrence of a substring."
 sidebar:
-  order: 467
+  order: 481
 ---
 
 ## stripos()

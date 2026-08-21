@@ -43,6 +43,19 @@ sidebar:
 | [`getprotobynumber()`](./io/getprotobynumber.md) | `(int $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`getservbyname()`](./io/getservbyname.md) | `(string $service, string $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`getservbyport()`](./io/getservbyport.md) | `(int $port, string $protocol): mixed` | `mixed` | ✓ | ✓ |
+| [`gzclose()`](./io/gzclose.md) | `(mixed $stream): bool` | `bool` | ✓ | — |
+| [`gzeof()`](./io/gzeof.md) | `(mixed $stream): bool` | `bool` | ✓ | — |
+| [`gzfile()`](./io/gzfile.md) | `(string $filename, int $use_include_path = 0): mixed` | `mixed` | ✓ | — |
+| [`gzgetc()`](./io/gzgetc.md) | `(mixed $stream): mixed` | `mixed` | ✓ | — |
+| [`gzgets()`](./io/gzgets.md) | `(mixed $stream, int $length = null): mixed` | `mixed` | ✓ | — |
+| [`gzopen()`](./io/gzopen.md) | `(string $filename, string $mode, int $use_include_path = 0): mixed` | `mixed` | ✓ | — |
+| [`gzpassthru()`](./io/gzpassthru.md) | `(mixed $stream): int` | `int` | ✓ | — |
+| [`gzputs()`](./io/gzputs.md) | `(mixed $stream, string $data, int $length = null): mixed` | `mixed` | ✓ | — |
+| [`gzread()`](./io/gzread.md) | `(mixed $stream, int $length): mixed` | `mixed` | ✓ | — |
+| [`gzrewind()`](./io/gzrewind.md) | `(mixed $stream): bool` | `bool` | ✓ | — |
+| [`gzseek()`](./io/gzseek.md) | `(mixed $stream, int $offset, int $whence = 0): int` | `int` | ✓ | — |
+| [`gztell()`](./io/gztell.md) | `(mixed $stream): mixed` | `mixed` | ✓ | — |
+| [`gzwrite()`](./io/gzwrite.md) | `(mixed $stream, string $data, int $length = null): mixed` | `mixed` | ✓ | — |
 | [`hash_file()`](./io/hash_file.md) | `(string $algo, string $filename, bool $binary = false): mixed` | `mixed` | ✓ | ✓ |
 | [`http_clear_last_response_headers()`](./io/http_clear_last_response_headers.md) | `(): void` | `void` | ✓ | — |
 | [`http_get_last_response_headers()`](./io/http_get_last_response_headers.md) | `(): mixed` | `mixed` | ✓ | — |
@@ -61,6 +74,7 @@ sidebar:
 | [`ob_start()`](./io/ob_start.md) | `(mixed $callback = null, int $chunk_size = 0, int $flags = 112): bool` | `bool` | ✓ | ✓ |
 | [`opendir()`](./io/opendir.md) | `(string $directory, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`readdir()`](./io/readdir.md) | `(resource $dir_handle = null): mixed` | `mixed` | ✓ | ✓ |
+| [`readgzfile()`](./io/readgzfile.md) | `(string $filename, int $use_include_path = 0): mixed` | `mixed` | ✓ | — |
 | [`rewind()`](./io/rewind.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`rewinddir()`](./io/rewinddir.md) | `(resource $dir_handle = null): void` | `void` | ✓ | ✓ |
 | [`set_file_buffer()`](./io/set_file_buffer.md) | `(mixed $stream, int $size): int` | `int` | ✓ | ✓ |

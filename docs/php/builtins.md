@@ -208,6 +208,19 @@ sidebar:
 | [`getprotobynumber()`](./builtins/io/getprotobynumber.md) | `(int $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`getservbyname()`](./builtins/io/getservbyname.md) | `(string $service, string $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`getservbyport()`](./builtins/io/getservbyport.md) | `(int $port, string $protocol): mixed` | `mixed` | ✓ | ✓ |
+| [`gzclose()`](./builtins/io/gzclose.md) | `(mixed $stream): bool` | `bool` | ✓ | — |
+| [`gzeof()`](./builtins/io/gzeof.md) | `(mixed $stream): bool` | `bool` | ✓ | — |
+| [`gzfile()`](./builtins/io/gzfile.md) | `(string $filename, int $use_include_path = 0): mixed` | `mixed` | ✓ | — |
+| [`gzgetc()`](./builtins/io/gzgetc.md) | `(mixed $stream): mixed` | `mixed` | ✓ | — |
+| [`gzgets()`](./builtins/io/gzgets.md) | `(mixed $stream, int $length = null): mixed` | `mixed` | ✓ | — |
+| [`gzopen()`](./builtins/io/gzopen.md) | `(string $filename, string $mode, int $use_include_path = 0): mixed` | `mixed` | ✓ | — |
+| [`gzpassthru()`](./builtins/io/gzpassthru.md) | `(mixed $stream): int` | `int` | ✓ | — |
+| [`gzputs()`](./builtins/io/gzputs.md) | `(mixed $stream, string $data, int $length = null): mixed` | `mixed` | ✓ | — |
+| [`gzread()`](./builtins/io/gzread.md) | `(mixed $stream, int $length): mixed` | `mixed` | ✓ | — |
+| [`gzrewind()`](./builtins/io/gzrewind.md) | `(mixed $stream): bool` | `bool` | ✓ | — |
+| [`gzseek()`](./builtins/io/gzseek.md) | `(mixed $stream, int $offset, int $whence = 0): int` | `int` | ✓ | — |
+| [`gztell()`](./builtins/io/gztell.md) | `(mixed $stream): mixed` | `mixed` | ✓ | — |
+| [`gzwrite()`](./builtins/io/gzwrite.md) | `(mixed $stream, string $data, int $length = null): mixed` | `mixed` | ✓ | — |
 | [`hash_file()`](./builtins/io/hash_file.md) | `(string $algo, string $filename, bool $binary = false): mixed` | `mixed` | ✓ | ✓ |
 | [`http_clear_last_response_headers()`](./builtins/io/http_clear_last_response_headers.md) | `(): void` | `void` | ✓ | — |
 | [`http_get_last_response_headers()`](./builtins/io/http_get_last_response_headers.md) | `(): mixed` | `mixed` | ✓ | — |
@@ -226,6 +239,7 @@ sidebar:
 | [`ob_start()`](./builtins/io/ob_start.md) | `(mixed $callback = null, int $chunk_size = 0, int $flags = 112): bool` | `bool` | ✓ | ✓ |
 | [`opendir()`](./builtins/io/opendir.md) | `(string $directory, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`readdir()`](./builtins/io/readdir.md) | `(resource $dir_handle = null): mixed` | `mixed` | ✓ | ✓ |
+| [`readgzfile()`](./builtins/io/readgzfile.md) | `(string $filename, int $use_include_path = 0): mixed` | `mixed` | ✓ | — |
 | [`rewind()`](./builtins/io/rewind.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`rewinddir()`](./builtins/io/rewinddir.md) | `(resource $dir_handle = null): void` | `void` | ✓ | ✓ |
 | [`set_file_buffer()`](./builtins/io/set_file_buffer.md) | `(mixed $stream, int $size): int` | `int` | ✓ | ✓ |

@@ -2,7 +2,7 @@
 title: "bcdiv() — internals"
 description: "Compiler internals for bcdiv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 282
+  order: 296
 ---
 
 ## `bcdiv()` — internals

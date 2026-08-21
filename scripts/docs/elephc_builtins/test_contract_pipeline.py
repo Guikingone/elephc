@@ -37,7 +37,7 @@ class ContractPipelineTests(unittest.TestCase):
         cls.render_by_name = {record["name"]: record for record in registry}
 
     def test_all_non_registry_contract_routes_are_exported(self) -> None:
-        """Keep the six constructs, five preludes, and three eval-only routes explicit."""
+        """Keep the six constructs, nineteen preludes, and three eval-only routes explicit."""
         routes = Counter(
             (record.get("aot") or {}).get("kind")
             for record in self.records
@@ -49,7 +49,8 @@ class ContractPipelineTests(unittest.TestCase):
                 {
                     "language-construct": 5,
                     "dedicated-syntax": 1,
-                    "prelude": 5,
+                    # The 5 that were here plus the 14 `gz*` stream functions.
+                    "prelude": 19,
                     "none": 3,
                 }
             ),

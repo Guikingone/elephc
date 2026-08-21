@@ -2,7 +2,7 @@
 title: "buffer_new() — internals"
 description: "Compiler internals for buffer_new(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 346
+  order: 360
 ---
 
 ## `buffer_new()` — internals

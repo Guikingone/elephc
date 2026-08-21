@@ -654,6 +654,16 @@ pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         }
     }
     load_string_to_result(ctx, path, "file")?;
+    // A run-time compress URL reads through the shared opener and joins the split-only entry the
+    // filter route already feeds. Without this it reached the plain reader as a filename, where
+    // `fopen()` on the identical string decompresses.
+    let compress_bytes = if optional_const_string_operand(ctx, path)?.is_none() {
+        let landing = ctx.next_label("file_dyn_compress_bytes");
+        super::emit_dynamic_compress_read_route(ctx, path, "file", &landing)?;
+        Some(landing)
+    } else {
+        None
+    };
     // A `php://filter/...` filename reads through the chain first and only then splits into
     // lines: `__rt_file` performs its own read, so the filtered bytes enter through the
     // split-only second entry instead. The route's fall-through continues below with the path
@@ -668,6 +678,9 @@ pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     emit_file_flags_then_call(ctx, flags, "__rt_file")?;
     abi::emit_jump(ctx.emitter, &after);
     ctx.emitter.label(&filtered);
+    if let Some(landing) = compress_bytes {
+        ctx.emitter.label(&landing);
+    }
     // The filtered bytes are in the string result registers; a failed open left a null pointer,
     // which the splitter reads as an empty payload — the empty array php also answers when its
     // own read fails (the route has already warned in php's words).
