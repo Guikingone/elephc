@@ -1020,3 +1020,71 @@ greet();
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Lists the symbol names `nm` reports from a linked binary's symbol table.
+/// A fully stripped executable yields an empty list: `nm` either prints
+/// nothing, reports "no symbols", or exits non-zero depending on the platform,
+/// and all three shapes collapse to "no names" here.
+fn symbol_table_names(binary: &Path) -> Vec<String> {
+    let output = Command::new("nm")
+        .arg(binary)
+        .output()
+        .expect("failed to run nm on the compiled binary");
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.contains("no symbols"))
+        .filter_map(|line| line.split_whitespace().last().map(str::to_string))
+        .collect()
+}
+
+/// Verifies linked executables are stripped of their symbol table by default
+/// and that `--keep-symbols` retains it (runtime helper names become visible).
+#[test]
+fn test_cli_executables_strip_symbols_by_default_and_keep_symbols_retains_them() {
+    let dir = make_cli_test_dir("elephc_cli_strip");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1 + 2;").unwrap();
+
+    let stripped_build = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc for the default (stripped) build");
+    assert!(
+        stripped_build.status.success(),
+        "default build failed: {}",
+        String::from_utf8_lossy(&stripped_build.stderr)
+    );
+    let stripped_names = symbol_table_names(&dir.join("main"));
+    assert!(
+        !stripped_names.iter().any(|name| name.contains("__rt_")),
+        "default build must not keep runtime helper names in its symbol table: {:?}",
+        stripped_names
+    );
+
+    let kept_build = elephc_cli_command(&dir)
+        .arg("--keep-symbols")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc --keep-symbols");
+    assert!(
+        kept_build.status.success(),
+        "--keep-symbols build failed: {}",
+        String::from_utf8_lossy(&kept_build.stderr)
+    );
+    let kept_names = symbol_table_names(&dir.join("main"));
+    assert!(
+        kept_names.iter().any(|name| name.contains("__rt_")),
+        "--keep-symbols must retain runtime helper names in the symbol table"
+    );
+    assert!(
+        kept_names.len() > stripped_names.len(),
+        "--keep-symbols must keep strictly more symbols ({}) than the stripped default ({})",
+        kept_names.len(),
+        stripped_names.len()
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
