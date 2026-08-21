@@ -953,16 +953,33 @@ pub(super) fn emit_request_default_stream_context_handle(ctx: &mut FunctionConte
 pub(super) enum LiteralOpenMode {
     /// The mode string the call passed.
     Operand(ValueId),
-    /// A read-only open, fixed by a caller that has no `$mode` argument.
-    ReadOnly,
+    /// A mode fixed by a caller that has no `$mode` argument of its own.
+    ///
+    /// `file_get_contents()` and `readfile()` open `"r"`; `file_put_contents()` opens `"w"`, or
+    /// `"a"` when it was passed `FILE_APPEND`. This was `ReadOnly` and could only ever say the
+    /// first, so the write side had no way to reach the opener at all — and a user-registered
+    /// wrapper is only reachable THROUGH the opener.
+    Fixed(&'static str),
+}
+
+/// Whether a mode STRING opens for writing, by php-src's own rule.
+///
+/// php searches the whole mode string, so `w`, `a`, `x`, `c` and any `+` write, and `r` alone
+/// does not.
+fn mode_text_is_write(text: &str) -> bool {
+    text.contains('w')
+        || text.contains('a')
+        || text.contains('x')
+        || text.contains('c')
+        || text.contains('+')
 }
 
 impl LiteralOpenMode {
-    /// Whether this open writes. A caller-fixed read-only open never does.
+    /// Whether this open writes.
     fn is_write(self, ctx: &mut FunctionContext<'_>) -> Result<bool> {
         match self {
             LiteralOpenMode::Operand(mode) => literal_fopen_mode_is_write(ctx, mode),
-            LiteralOpenMode::ReadOnly => Ok(false),
+            LiteralOpenMode::Fixed(text) => Ok(mode_text_is_write(text)),
         }
     }
 
@@ -973,7 +990,7 @@ impl LiteralOpenMode {
     /// creates — that keeps a dynamic mode no worse than it was rather than guessing.
     fn is_append(self, ctx: &FunctionContext<'_>) -> Result<bool> {
         match self {
-            LiteralOpenMode::ReadOnly => Ok(false),
+            LiteralOpenMode::Fixed(text) => Ok(text.contains('a')),
             LiteralOpenMode::Operand(mode) => Ok(optional_const_string_operand(ctx, mode)?
                 .is_some_and(|text| text.contains('a'))),
         }
@@ -990,7 +1007,7 @@ impl LiteralOpenMode {
     /// common open, and an explicit `read=`/`write=` list ignores the mode entirely anyway.
     fn filter_directions(self, ctx: &FunctionContext<'_>) -> Result<(bool, bool)> {
         let text = match self {
-            LiteralOpenMode::ReadOnly => "r".to_string(),
+            LiteralOpenMode::Fixed(text) => text.to_string(),
             LiteralOpenMode::Operand(mode) => {
                 optional_const_string_operand(ctx, mode)?.unwrap_or_else(|| "r".to_string())
             }
@@ -1086,7 +1103,7 @@ pub(super) fn emit_literal_fopen_result(
             // accepted `"r+"` and `""` where php answers false.
             let mode_text = match mode {
                 LiteralOpenMode::Operand(operand) => optional_const_string_operand(ctx, operand)?,
-                LiteralOpenMode::ReadOnly => Some("r".to_string()),
+                LiteralOpenMode::Fixed(text) => Some(text.to_string()),
             };
             match mode_text {
                 Some(mode_text) => emit_literal_compress_wrapper_fopen_result(
@@ -1177,24 +1194,23 @@ pub(super) fn emit_literal_fopen_result(
 }
 
 /// Emits a runtime `fopen()` call for a literal path and the caller's mode operand.
-/// Loads the open mode into the string result registers, materializing `"r"` for a
-/// caller-fixed read-only open.
+/// Loads the open mode into the string result registers, materializing a caller-fixed mode.
 fn emit_literal_open_mode_string(
     ctx: &mut FunctionContext<'_>,
     mode: LiteralOpenMode,
 ) -> Result<()> {
     match mode {
         LiteralOpenMode::Operand(mode) => load_string_to_result(ctx, mode, "fopen mode"),
-        LiteralOpenMode::ReadOnly => {
-            let (label, len) = ctx.data.add_string(b"r");
+        LiteralOpenMode::Fixed(text) => {
+            let (label, len) = ctx.data.add_string(text.as_bytes());
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
                     abi::emit_symbol_address(ctx.emitter, "x1", &label);
-                    ctx.emitter.instruction(&format!("mov x2, #{}", len));      // the fixed read-only mode
+                    ctx.emitter.instruction(&format!("mov x2, #{}", len));      // the caller-fixed open mode
                 }
                 Arch::X86_64 => {
                     abi::emit_symbol_address(ctx.emitter, "rax", &label);
-                    ctx.emitter.instruction(&format!("mov rdx, {}", len));      // the fixed read-only mode
+                    ctx.emitter.instruction(&format!("mov rdx, {}", len));      // the caller-fixed open mode
                 }
             }
             Ok(())

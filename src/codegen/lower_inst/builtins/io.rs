@@ -246,6 +246,14 @@ pub(super) use string_validation::load_string_to_result;
 /// php-src's `CHECK_NULL_PATH` wording for an empty filename reaching a stream open.
 pub(super) const EMPTY_PATH_MESSAGE: &str = "Path must not be empty";
 
+/// `scandir()`'s own empty-directory wording, which is NOT the shared one.
+///
+/// MEASURED: php prints `scandir(): Argument #1 ($directory) must not be empty` here, while the
+/// openers print the bare `Path must not be empty`. Reusing the shared message would be a
+/// plausible-looking lie that no test comparing against php would forgive.
+pub(super) const SCANDIR_EMPTY_PATH_MESSAGE: &str =
+    "scandir(): Argument #1 ($directory) must not be empty";
+
 /// Throws php's `ValueError` when the filename is empty, before anything tries to open it.
 ///
 /// MEASURED on `php -n` 8.5.6: `fopen("")`, `file_get_contents("")`, `file_put_contents("", "x")`,
@@ -282,7 +290,7 @@ fn emit_literal_wrapper_file_get_contents_bytes(
     ctx: &mut FunctionContext<'_>,
     path: &str,
 ) -> Result<()> {
-    fopen_core::emit_literal_fopen_result(ctx, LiteralOpenMode::ReadOnly, path)?;
+    fopen_core::emit_literal_fopen_result(ctx, LiteralOpenMode::Fixed("r"), path)?;
     emit_open_read_close_tail(ctx, "fgc_wrapper")
 }
 
@@ -298,7 +306,7 @@ fn emit_literal_php_filter_file_get_contents_bytes(
     // turned a typo in a filter name into a silently unfiltered read.
     emit_literal_php_filter_fopen_result(
         ctx,
-        LiteralOpenMode::ReadOnly,
+        LiteralOpenMode::Fixed("r"),
         path,
         "file_get_contents",
     )?;

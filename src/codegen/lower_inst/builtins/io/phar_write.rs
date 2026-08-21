@@ -39,6 +39,21 @@ pub(crate) fn lower_file_put_contents(
                 data,
             );
         }
+        // A scheme that is NOT built in names a wrapper the program registered, and the opener is
+        // the only thing that can serve it. Everything else reached the one-shot filesystem
+        // writer, which took `uww://x` for a FILENAME and answered false with php's
+        // "No such file or directory" — while `file_get_contents()` on the same URL read it.
+        // php-src has one opener for both directions.
+        if path_literal.find("://").is_some_and(|scheme_end| {
+            let scheme = &path_literal[..scheme_end];
+            !crate::types::stream_constants::STREAM_WRAPPERS
+                .iter()
+                .any(|known| *known == scheme)
+                && scheme != "compress.zlib"
+                && scheme != "compress.bzip2"
+        }) {
+            return lower_literal_wrapper_file_put_contents(ctx, inst, path_literal, data);
+        }
     }
     let helper = if path_literal.is_none() {
         publish_dynamic_phar_write_function_pointer(ctx);
@@ -68,6 +83,82 @@ pub(crate) fn lower_file_put_contents(
     // php answers `int|false`, and the runtime's -1 is the failure sentinel; the box is what
     // lets `file_put_contents($p, $d) === false` — the manual's own failure test — fire.
     box_negative_int_or_false_result(ctx, "fpc");
+    store_if_result(ctx, inst)
+}
+
+/// Writes through a user-registered wrapper, which only the shared opener can reach.
+///
+/// The same open/write/close php performs internally, and the same shape
+/// `lower_literal_compress_zlib_file_put_contents` uses minus the deflate tail. php reports the
+/// INPUT byte count rather than whatever `stream_write()` claims to have consumed, so that is what
+/// travels back.
+fn lower_literal_wrapper_file_put_contents(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    uri: &str,
+    data: ValueId,
+) -> Result<()> {
+    let appending = match inst.operands.get(2).copied() {
+        Some(flags) => optional_const_i64_operand(ctx, flags)?.is_some_and(|f| f & 8 != 0),
+        None => false,
+    };
+    let done = ctx.next_label("fpc_wrapper_done");
+    let failed = ctx.next_label("fpc_wrapper_failed");
+    begin_fopen_context_scope(ctx, inst.operands.get(3).copied())?;
+    super::fopen_core::emit_literal_fopen_result(
+        ctx,
+        super::fopen_core::LiteralOpenMode::Fixed(if appending { "a" } else { "w" }),
+        uri,
+    )?;
+    finish_fopen_context_scope(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // the boxed open result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("b.ne {}", failed));               // a failed open answers php false
+            ctx.emitter.instruction("ldr x9, [x0, #8]");                        // the opaque stream handle
+            ctx.emitter.instruction("sub sp, sp, #32");
+            ctx.emitter.instruction("str x9, [sp, #0]");
+            load_string_to_result(ctx, data, "file_put_contents data")?;
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // the handle; the payload is already in x1/x2
+            abi::emit_call_label(ctx.emitter, "__rt_fwrite");                   // reaches the wrapper's stream_write()
+            ctx.emitter.instruction("str x0, [sp, #8]");                        // php reports the INPUT byte count
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_release");
+            ctx.emitter.instruction("ldr x0, [sp, #8]");                        // the count is this route's raw result
+            ctx.emitter.instruction("add sp, sp, #32");
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("mov x0, #-1");                             // the shared failure sentinel
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // the boxed open result tag
+            ctx.emitter.instruction("cmp r9, 9");                               // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("jne {}", failed));                // a failed open answers php false
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax + 8]");             // the opaque stream handle
+            ctx.emitter.instruction("sub rsp, 32");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], r9");
+            load_string_to_result(ctx, data, "file_put_contents data")?;
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // the handle
+            ctx.emitter.instruction("mov rsi, rax");                            // the data pointer; the length is already in rdx
+            abi::emit_call_label(ctx.emitter, "__rt_fwrite");                   // reaches the wrapper's stream_write()
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // php reports the INPUT byte count
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_release");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // the count is this route's raw result
+            ctx.emitter.instruction("add rsp, 32");
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("mov rax, -1");                             // the shared failure sentinel
+            ctx.emitter.label(&done);
+        }
+    }
+    box_negative_int_or_false_result(ctx, "fpc_wrapper");
     store_if_result(ctx, inst)
 }
 

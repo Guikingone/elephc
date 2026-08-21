@@ -133,6 +133,8 @@ pub(crate) fn lower_scandir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     // `$context` is the third parameter, accepted and ignored (see `lower_unlink`).
     super::super::ensure_arg_count_between(inst, "scandir", 1, 3)?;
     let path = expect_operand(inst, 0)?;
+    // php throws for an empty directory name, in wording of its own — see the constant.
+    super::emit_empty_path_value_error(ctx, path, super::SCANDIR_EMPTY_PATH_MESSAGE)?;
     load_string_to_result(ctx, path, "scandir")?;
     // $sorting_order rides beside the path pair, defaulting to SCANDIR_SORT_ASCENDING —
     // php sorts the listing unless SCANDIR_SORT_NONE asks it not to.

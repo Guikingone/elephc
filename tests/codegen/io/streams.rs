@@ -17340,3 +17340,45 @@ echo $bad === "" ? "all false" : "NOT FALSE: " . $bad;
     );
     assert_eq!(out, "all false");
 }
+
+/// Verifies `file_put_contents()` writes THROUGH a user-registered wrapper.
+///
+/// php-src's `file_put_contents` is `php_stream_open_wrapper` followed by a write, which is what
+/// makes a registered wrapper writable at all. elephc's lowering knew `phar://` and
+/// `compress.zlib://` and sent every other URL to a one-shot filesystem writer, which took
+/// `uww://x` for a FILENAME and answered false — while `file_get_contents()` on the same URL read
+/// it, because the READ side already delegated.
+///
+/// The byte count is php's: the INPUT length, not whatever `stream_write()` reports consuming.
+#[test]
+fn test_file_put_contents_writes_through_a_user_wrapper() {
+    let out = compile_and_run(
+        r#"<?php
+class SinkW {
+    public function stream_open($p, $m, $o, &$op): bool { return true; }
+    public function stream_write(string $data): int { echo "[", $data, "]"; return strlen($data); }
+    public function stream_eof(): bool { return true; }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register("sink", "SinkW");
+var_dump(file_put_contents("sink://x", "payload"));
+"#,
+    );
+    assert_eq!(out, "[payload]int(7)\n");
+}
+
+/// Verifies `scandir("")` carries php's OWN wording, not the shared empty-path message.
+///
+/// MEASURED: the openers print the bare `Path must not be empty`, and `scandir()` prints
+/// `scandir(): Argument #1 ($directory) must not be empty`. Reusing the shared message would be a
+/// plausible-looking lie — the guard is the same, the text is not.
+#[test]
+fn test_scandir_has_its_own_empty_path_wording() {
+    let out = compile_and_run(
+        r#"<?php
+try { scandir(""); echo "no throw"; }
+catch (\ValueError $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(out, "scandir(): Argument #1 ($directory) must not be empty");
+}
