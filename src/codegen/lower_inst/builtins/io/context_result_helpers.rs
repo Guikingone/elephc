@@ -288,7 +288,7 @@ fn emit_unbox_stream_context_options(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("cmp x9, #5");                              // runtime tag 5 = hash
             ctx.emitter.instruction(&format!("b.eq {}", hashed));
             emit_stream_context_options_type_error_ladder(ctx, "x9", "x1");     // php refuses a scalar here
-            ctx.emitter.instruction("mov x0, xzr");                             // null carries no options, which php allows
+            ctx.emitter.instruction("mov x0, xzr");                             // runtime tag 8 = null, the one shape `?array` accepts besides an array
             ctx.emitter.label(&hashed);
             ctx.emitter.label(&done);
             abi::emit_push_reg(ctx.emitter, "x10");                             // the packed flag, across the guard
@@ -303,7 +303,7 @@ fn emit_unbox_stream_context_options(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("cmp r10, 5");                              // runtime tag 5 = hash
             ctx.emitter.instruction(&format!("je {}", hashed));
             emit_stream_context_options_type_error_ladder(ctx, "r10", "rdi");   // php refuses a scalar here
-            ctx.emitter.instruction("xor eax, eax");                            // null carries no options, which php allows
+            ctx.emitter.instruction("xor eax, eax");                            // runtime tag 8 = null, the one shape `?array` accepts besides an array
             ctx.emitter.label(&hashed);
             ctx.emitter.label(&done);
             abi::emit_push_reg(ctx.emitter, "r11");                             // the packed flag, across the guard
@@ -311,19 +311,21 @@ fn emit_unbox_stream_context_options(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// php's `?array` signature refuses every scalar, and names the offending value in the message.
+/// php's `?array` signature refuses everything but an array and null, and names the offending
+/// value in the message.
 ///
 /// MEASURED on `php -n` 8.5.6 — the tail is composed from the VALUE, not merely its type:
 ///
 /// ```text
-/// 1        → int given          "x"      → string given
-/// 1.5      → float given        true     → true given
-/// $handle  → resource given     null     → accepted (`?array`)
+/// 1        → int given          "x"          → string given
+/// 1.5      → float given        true         → true given
+/// $handle  → resource given     new Thing()  → Thing given
+/// null     → accepted (`?array`)
 /// ```
 ///
-/// The five scalar words are static, so each is a whole pre-baked message selected by tag. An
-/// OBJECT reports its CLASS NAME (`stdClass given`), which needs composition; that arm stays on
-/// the permissive path rather than inventing a name for the class.
+/// The scalar words are static, so each is a whole pre-baked message selected by tag. An OBJECT
+/// names its CLASS, which is only known at run time, so that arm reads the name out of the dense
+/// `_class_name_entries` table `get_class()` reads and composes the message around it.
 fn emit_stream_context_options_type_error_ladder(
     ctx: &mut FunctionContext<'_>,
     tag_reg: &str,
@@ -331,6 +333,10 @@ fn emit_stream_context_options_type_error_ladder(
 ) {
     const PREFIX: &str =
         "stream_context_create(): Argument #1 ($options) must be of type ?array, ";
+    // Each arm below is emitted INLINE, with no branch over it: `emit_type_error` never returns
+    // (it ends in a jump to `__rt_throw_current`), so the instruction after a raise is only ever
+    // reached when that arm's tag did NOT match. The ladder reads as fall-through and is not.
+    //
     // (runtime tag, the word php prints). Tag 3 is split by the payload below.
     let scalars: &[(i64, &str)] = &[(0, "int"), (1, "string"), (2, "float"), (9, "resource")];
     for (tag, word) in scalars {
@@ -368,6 +374,71 @@ fn emit_stream_context_options_type_error_ladder(
     ctx.emitter.label(&is_false);
     super::super::exceptions::emit_type_error(ctx, &format!("{PREFIX}false given"));
     ctx.emitter.label(&not_bool);
+
+    // An object names its class, which no pre-baked message can carry.
+    let not_object = ctx.next_label("sctx_opt_not_object");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #6", tag_reg));           // runtime tag 6 = object
+            ctx.emitter.instruction(&format!("b.ne {}", not_object));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, 6", tag_reg));            // runtime tag 6 = object
+            ctx.emitter.instruction(&format!("jne {}", not_object));
+        }
+    }
+    emit_class_name_to_string_result(ctx, payload_reg);
+    super::super::exceptions::emit_message_concat_prefix(ctx, PREFIX);
+    super::super::exceptions::emit_message_concat_suffix(ctx, " given");
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");                      // the Throwable owns its message
+    super::super::exceptions::emit_type_error_from_string_result(ctx);
+    ctx.emitter.label(&not_object);
+}
+
+/// Loads an object's class name into the string-result pair, as `get_class()` would spell it.
+///
+/// Reads the dense `_class_name_entries` (ptr, len) rows by class id, bounded by
+/// `_class_name_count`. Only the throwing path reaches here, so the registers it borrows are
+/// already dead — but the bound is still checked, because a malformed id would otherwise turn an
+/// out-of-range row into a wild pointer inside an error message.
+fn emit_class_name_to_string_result(ctx: &mut FunctionContext<'_>, object_reg: &str) {
+    let (name_ptr, name_len) = abi::string_result_regs(ctx.emitter);
+    let fallback = ctx.next_label("sctx_opt_class_unnamed");
+    let ready = ctx.next_label("sctx_opt_class_named");
+    let (unnamed_label, unnamed_len) = ctx.data.add_string(b"object");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x13, [{}]", object_reg));     // the receiver's class id
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x14", "_class_name_count", 0);
+            ctx.emitter.instruction("cmp x13, x14");
+            ctx.emitter.instruction(&format!("b.hs {}", fallback));             // an id past the table names no class
+            abi::emit_symbol_address(ctx.emitter, "x14", "_class_name_entries");
+            ctx.emitter.instruction("add x14, x14, x13, lsl #4");               // select the 16-byte class-name row
+            ctx.emitter.instruction(&format!("ldp {}, {}, [x14]", name_ptr, name_len));
+            ctx.emitter.instruction(&format!("cbnz {}, {}", name_len, ready));  // a non-empty name is what php prints
+            ctx.emitter.label(&fallback);
+            abi::emit_symbol_address(ctx.emitter, name_ptr, &unnamed_label);
+            abi::emit_load_int_immediate(ctx.emitter, name_len, unnamed_len as i64);
+            ctx.emitter.label(&ready);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov r9, QWORD PTR [{}]", object_reg)); // the receiver's class id
+            ctx.emitter.instruction("cmp r9, QWORD PTR [rip + _class_name_count]");
+            ctx.emitter.instruction(&format!("jae {}", fallback));              // an id past the table names no class
+            ctx.emitter.instruction("lea r8, [rip + _class_name_entries]");
+            ctx.emitter.instruction("shl r9, 4");                               // scale the class id to the 16-byte row
+            ctx.emitter
+                .instruction(&format!("mov {}, QWORD PTR [r8 + r9]", name_ptr));
+            ctx.emitter
+                .instruction(&format!("mov {}, QWORD PTR [r8 + r9 + 8]", name_len));
+            ctx.emitter.instruction(&format!("test {}, {}", name_len, name_len));
+            ctx.emitter.instruction(&format!("jnz {}", ready));                 // a non-empty name is what php prints
+            ctx.emitter.label(&fallback);
+            abi::emit_symbol_address(ctx.emitter, name_ptr, &unnamed_label);
+            abi::emit_load_int_immediate(ctx.emitter, name_len, unnamed_len as i64);
+            ctx.emitter.label(&ready);
+        }
+    }
 }
 
 /// Drops an options value the unboxing marked as a packed array, once the guard has accepted it.

@@ -39,6 +39,11 @@ pub(super) fn emit_error(ctx: &mut FunctionContext<'_>, message: &str) {
 }
 
 /// Throws a catchable PHP `TypeError` carrying a static message.
+///
+/// NEVER RETURNS. Both targets end in an unconditional jump to `__rt_throw_current`, so a caller
+/// may emit one of these in the middle of a straight-line sequence and let the instructions after
+/// it be the NOT-taken path — several tag ladders are written that way. Nothing in the emitted
+/// shape says so, which is why it is said here.
 pub(super) fn emit_type_error(ctx: &mut FunctionContext<'_>, message: &str) {
     emit_static_exception(ctx, "TypeError", "_spl_type_error_class_id", message);
 }
@@ -304,6 +309,24 @@ pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) 
     Ok(())
 }
 
+/// Throws a catchable PHP `TypeError` whose message already sits in the string-result registers.
+///
+/// The static `emit_type_error()` covers the guards whose wording is fixed. The ones that reach
+/// here name the offending VALUE, which is only known at run time:
+///
+/// - `count()` prints the value's own spelling — `false`, not `bool` — picked from a table.
+/// - `count()` and `stream_context_create()` both name the offending CLASS when the value arrives
+///   as a boxed `Mixed`, composed with `emit_message_concat_prefix`/`_suffix` below.
+///
+/// Emitting each wording as a static throw instead would inline a whole throwable construction
+/// per wording at every call site.
+pub(super) fn emit_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
+    let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
+    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "TypeError");
+    emit_dynamic_throwable_object(ctx, "_spl_type_error_class_id");
+}
+
 /// Throws a catchable PHP `ValueError` whose message already sits in the string-result registers.
 ///
 /// The static `emit_value_error()` covers the builtin guards whose wording is fixed. A few of
@@ -313,26 +336,6 @@ pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) 
 /// persisted pointer/length pair. The uncaught diagnostic names `ValueError` just like the static
 /// path, so an unhandled oversized range still reports PHP's error class rather than the
 /// unwinder's generic fallback.
-/// Throws a catchable PHP `TypeError` whose message already sits in the string-result registers.
-///
-/// The static `emit_type_error()` covers the guards whose wording is fixed. `count()` is the one
-/// that cannot use it: php names the offending type in the message — and with the VALUE's own
-/// spelling, `false` rather than `bool` — so the text is picked at run time from a table and
-/// handed over as a pointer/length pair. Emitting the seven wordings as static throws instead
-/// would inline seven throwable constructions at every `count()` call site.
-/// Throws a catchable PHP `TypeError` whose message already sits in the string-result registers.
-///
-/// The static `emit_type_error()` covers the guards whose wording is fixed. PHP's `count()`
-/// refusal names the offending class — `must be of type Countable|array, Foo given` — and that
-/// class is only known at run time when the value arrives as a boxed `Mixed`, so the caller
-/// composes the message and hands it over as a persisted pointer/length pair.
-pub(super) fn emit_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
-    let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
-    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "TypeError");
-    emit_dynamic_throwable_object(ctx, "_spl_type_error_class_id");
-}
-
 pub(super) fn emit_value_error_from_string_result(ctx: &mut FunctionContext<'_>) {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
@@ -340,6 +343,44 @@ pub(super) fn emit_value_error_from_string_result(ctx: &mut FunctionContext<'_>)
     emit_dynamic_throwable_object(ctx, "_spl_value_error_class_id");
 }
 
+
+/// Prepends a static fragment to the message held in the string-result registers.
+///
+/// php's wordings that name a class are all the same shape — a fixed prefix, the class name, a
+/// fixed suffix — and the class name is only known at run time. The caller loads the name into the
+/// string-result pair, wraps it with these two, persists it, and hands it to one of the
+/// `*_from_string_result` throwers above.
+pub(super) fn emit_message_concat_prefix(ctx: &mut FunctionContext<'_>, prefix: &str) {
+    let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
+    let (right_ptr, right_len) = message_concat_right_operand_regs(ctx);
+    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
+    ctx.emitter
+        .instruction(&format!("mov {}, {}", right_ptr, text_ptr));              // move the built text into the concat right operand
+    ctx.emitter
+        .instruction(&format!("mov {}, {}", right_len, text_len));              // move its length into the concat right operand
+    abi::emit_symbol_address(ctx.emitter, text_ptr, &prefix_label);
+    abi::emit_load_int_immediate(ctx.emitter, text_len, prefix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+}
+
+/// Appends a static fragment to the message held in the string-result registers.
+pub(super) fn emit_message_concat_suffix(ctx: &mut FunctionContext<'_>, suffix: &str) {
+    let (right_ptr, right_len) = message_concat_right_operand_regs(ctx);
+    let (suffix_label, suffix_len) = ctx.data.add_string(suffix.as_bytes());
+    abi::emit_symbol_address(ctx.emitter, right_ptr, &suffix_label);
+    abi::emit_load_int_immediate(ctx.emitter, right_len, suffix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+}
+
+/// The register pair `__rt_concat` reads its right operand from.
+///
+/// It is NOT the pair it returns in, and the two differ per target, so both are spelled out.
+fn message_concat_right_operand_regs(ctx: &FunctionContext<'_>) -> (&'static str, &'static str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x3", "x4"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    }
+}
 
 /// Allocates one built-in throwable and transfers control to the standard unwinder.
 fn emit_static_exception(

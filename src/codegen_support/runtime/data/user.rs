@@ -3374,6 +3374,7 @@ mod tests {
             Some(&allowed_class_names),
             false,
             None,
+            true,                                   // these fixtures declare user methods
             Target {
                 platform: Platform::MacOS,
                 arch: Arch::AArch64,
@@ -3415,6 +3416,7 @@ mod tests {
             None,
             false,
             None,
+            true,                                   // these fixtures declare user methods
             Target {
                 platform: Platform::MacOS,
                 arch: Arch::AArch64,
@@ -3457,6 +3459,7 @@ mod tests {
             None,
             false,
             None,
+            true,                                   // these fixtures declare user methods
             Target {
                 platform: Platform::MacOS,
                 arch: Arch::AArch64,

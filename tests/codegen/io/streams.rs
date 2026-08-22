@@ -17708,3 +17708,42 @@ foreach (["1", "1.5", "\"x\"", "true", "false", "null"] as $j) {
         )
     );
 }
+
+
+/// Verifies an object `$options` raises php's TypeError NAMING ITS CLASS.
+///
+/// `stream_context_create()` declares `?array`, and php composes the tail from the value: for an
+/// object that is the class name `get_class()` returns — FULLY QUALIFIED, which is why a
+/// namespaced class is one of the three shapes here. MEASURED on `php -n` 8.5.6.
+///
+/// This arm cannot use a pre-baked message: the name is only known at run time, so it is read out
+/// of the dense `_class_name_entries` table and wrapped in php's prefix and suffix. Before that,
+/// an object was accepted in silence and the program continued with an empty context php would
+/// never have produced.
+#[test]
+fn test_stream_context_object_options_name_their_class() {
+    let out = compile_and_run(
+        r####"<?php
+namespace App\Deep;
+
+class Thing
+{
+}
+
+$heterogeneous = [new Thing(), 1];
+foreach ([\json_decode('{"a":1}'), $heterogeneous[0]] as $value) {
+    try {
+        \stream_context_create($value);
+        echo "accepted|";
+    } catch (\Throwable $t) {
+        echo \get_class($t), ": ", $t->getMessage(), "|";
+    }
+}
+"####,
+    );
+    let prefix = "TypeError: stream_context_create(): Argument #1 ($options) must be of type ?array, ";
+    assert_eq!(
+        out,
+        format!("{prefix}stdClass given|{prefix}App\\Deep\\Thing given|")
+    );
+}
