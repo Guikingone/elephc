@@ -126,12 +126,13 @@ fn test_unset_then_retype_array_to_string_leaves_a_clean_heap() {
 /// property, so every load lowered ABOVE the kill — `strlen($a)` here — keeps its `Str` IR type
 /// against boxed storage and becomes a detach nothing releases.
 ///
-/// Nulling at the slot's OWN type removes the leak but is NOT a valid fix: `release` of a raw
-/// `Str` is an unconditional `__rt_heap_free_safe` (strings are not refcounted —
-/// `codegen::lower_inst::ownership::release_loaded_string`), so it frees a buffer any copy of the
-/// local still points at. Measured: `$q = "a" . $n; $r = $q; $q = 1; return $r . "|" . $q;`
-/// returned four NUL bytes. The `Mixed` widening is what makes the release a decref instead, so
-/// the leak is the price of the safety and belongs to its own fix in the ownership model.
+/// Nulling at the slot's OWN type removes the leak but is NOT a valid fix: the null is an `I64`
+/// in the int result register, while a two-word `Str` slot is written from the STRING register
+/// pair, so the store writes stale registers instead of clearing the slot and the frame epilogue
+/// then frees the live pointer left behind. Measured:
+/// `$q = "a" . $n; $r = $q; $q = 1; return $r . "|" . $q;` returned four NUL bytes. Widening to
+/// `Mixed` is what makes the null actually land in the slot, so the leak is the price of that and
+/// belongs to its own fix in the ownership model. See `release_and_abandon_local_binding`.
 #[test]
 fn test_string_read_above_a_kill_still_answers_correctly() {
     let out = compile_and_run("<?php $a = \"n\" . $argc; $b = strlen($a); unset($a); $a = 5; echo $b, $a;");
@@ -633,22 +634,132 @@ fn test_retype_does_not_reach_a_same_position_assignment_in_another_file() {
 /// programs are accepted and no program silently changes meaning.
 #[test]
 fn test_same_name_same_position_collision_is_a_compile_error() {
+    let error = compile_files_error_message(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\necho \"|\";\n$q = 5;\necho $q;\n",
+            ),
+            (
+                "lib.php",
+                "<?php\n$q = \"a\" . $argc;\nif ($argc > 5) {\n$q = \"b\" . $argc;\n}\necho $q;\n",
+            ),
+        ],
+        "main.php",
+    )
+    .expect("an ambiguous (span, name) local-binding decision must not compile");
     assert!(
-        compile_files_fails(
-            &[
-                (
-                    "main.php",
-                    "<?php\nrequire 'lib.php';\necho \"|\";\n$q = 5;\necho $q;\n",
-                ),
-                (
-                    "lib.php",
-                    "<?php\n$q = \"a\" . $argc;\nif ($argc > 5) {\n$q = \"b\" . $argc;\n}\necho $q;\n",
-                ),
-            ],
-            "main.php",
-        ),
-        "an ambiguous (span, name) local-binding decision must not compile"
+        error.contains("Cannot re-bind $q here"),
+        "expected the ambiguity diagnostic, got: {error}"
     );
+    assert!(
+        error.contains("line 4 column 1"),
+        "the diagnostic must name the shared position, got: {error}"
+    );
+}
+
+/// The counter has to walk TRAIT bodies: a trait's methods are checked and lowered exactly like a
+/// class's, so a decision recorded inside one is consulted inside one.
+///
+/// Measured before the declaration arms were made exhaustive: the trait body was not counted, the
+/// collision went undetected, and the program compiled with one warning and printed `|5` instead
+/// of `a1|5`. Replacing `trait T` with `class C` in the identical pair DID error, which is what
+/// isolated the cause to the uncounted region.
+#[test]
+fn test_collision_inside_a_trait_body_is_a_compile_error() {
+    let error = compile_files_error_message(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\n$q = \"a\" . $argc;\n$q = 5;\necho \"|\", $q;\n",
+            ),
+            (
+                "lib.php",
+                "<?php\ntrait T {\npublic function go(int $n): string {\n$q = \"b\" . $n;\nreturn $q;\n}\n}\n",
+            ),
+        ],
+        "main.php",
+    )
+    .expect("a collision inside a trait body must not compile");
+    assert!(
+        error.contains("Cannot re-bind $q here"),
+        "expected the ambiguity diagnostic, got: {error}"
+    );
+}
+
+/// The same for ENUM method bodies, which the declaration arm also used to skip.
+#[test]
+fn test_collision_inside_an_enum_method_is_a_compile_error() {
+    let error = compile_files_error_message(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\n$q = \"a\" . $argc;\n$q = 5;\necho \"|\", $q;\n",
+            ),
+            (
+                "lib.php",
+                "<?php\nenum E: int {\npublic function go(int $n): string {\n$q = \"b\" . $n;\nreturn $q;\n}\ncase A = 1;\n}\n",
+            ),
+        ],
+        "main.php",
+    )
+    .expect("a collision inside an enum method must not compile");
+    assert!(
+        error.contains("Cannot re-bind $q here"),
+        "expected the ambiguity diagnostic, got: {error}"
+    );
+}
+
+/// Including one file TWICE with `require` splices its statements in twice, so a retype at its top
+/// level genuinely has two sites and is rejected.
+///
+/// The rejection is conservative rather than necessary — PHP runs this, printing `|5|5` — but
+/// allowing it would mean firing a decision at splices the checker never approved (only the LAST
+/// splice's binding state produced it). What the diagnostic must not do is blame "two files": it
+/// names duplicate inclusion as a cause and points at `require_once`.
+#[test]
+fn test_double_require_of_a_retyping_file_reports_duplicate_inclusion() {
+    let error = compile_files_error_message(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\nrequire 'lib.php';\n"),
+            (
+                "lib.php",
+                "<?php\n$q = \"a\" . $argc;\n$q = 5;\necho \"|\", $q;\n",
+            ),
+        ],
+        "main.php",
+    )
+    .expect("a file spliced twice gives its retype two sites, which must not compile");
+    assert!(
+        error.contains("Cannot re-bind $q here"),
+        "expected the ambiguity diagnostic, got: {error}"
+    );
+    assert!(
+        error.contains("included more than once"),
+        "the diagnostic must name duplicate inclusion as a cause, got: {error}"
+    );
+}
+
+/// Control: including the SAME file once compiles and runs, so the rejection above is about the
+/// double splice and not about the file's contents.
+///
+/// `require_once` is deliberately not the control. It splices once, but wraps the body in an
+/// include-once GUARD, which puts the retype at conditional depth and makes it the pre-existing
+/// hard `cannot reassign` error instead — so `_once` does not rescue this program, and the
+/// diagnostic does not claim it does.
+#[test]
+fn test_single_require_of_a_retyping_file_still_compiles() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\n"),
+            (
+                "lib.php",
+                "<?php\n$q = \"a\" . $argc;\n$q = 5;\necho \"|\", $q;\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "|5");
 }
 
 /// Control: the SAME two files with the library's assignment moved one column right compile and

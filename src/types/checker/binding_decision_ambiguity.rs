@@ -26,13 +26,20 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
-use crate::parser::ast::{CatchClause, Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{
+    CatchClause, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Program, Stmt, StmtKind,
+    TypeExpr,
+};
 use crate::span::Span;
 
-/// Rejects every recorded decision whose key matches more than one node in `program`.
+/// Rejects every recorded decision whose key matches more than one node OF ITS OWN ROLE.
 ///
-/// Both maps are keyed the same way and are checked together: a kill and a retype filed under one
-/// span for one name would be just as ambiguous as two of a kind.
+/// Both maps are keyed the same way and are walked in one pass, but each is checked against its
+/// own tally, never against the other's. That matches how lowering consults them and is not a
+/// weakening: `lower_assign` reads the retype decisions and fires only at a `StmtKind::Assign`,
+/// `unset_local` reads the kill decisions and fires only at an `unset` argument. A retype and a
+/// kill filed under one span for one name could therefore never make either site re-bind for the
+/// other's reason, so cross-role coincidence is not a hazard to detect.
 pub(super) fn reject_ambiguous_local_binding_decisions(
     program: &Program,
     kill_sites: &HashMap<Span, String>,
@@ -65,18 +72,24 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
     for (span, name, sites) in decisions {
         let count = sites.get(&(*span, name.clone())).copied().unwrap_or(0);
         if count > 1 {
+            // ONE message for both shapes, deliberately. Structural equality of the sites would
+            // hint at "same file included twice", but it does not PROVE it — two different files
+            // can hold identical code at identical positions — so a message that guessed would be
+            // wrong exactly where it sounded most confident. Naming both causes is accurate in
+            // every case and tells the reader what to look for.
             return Err(CompileError::new(
                 *span,
                 &format!(
-                    "Cannot re-bind ${} here: {} other statement at this exact source position \
-                     also names ${}. elephc identifies a local re-binding (an `unset` or an \
-                     incompatible reassignment) by source position, and a position carries no \
-                     file, so two files whose line {} column {} both name ${} cannot be told \
-                     apart. Move one of them to a different line or column, or keep the two \
-                     assignments type-compatible.",
+                    "Cannot re-bind ${} here: {} statements in this program sit at line {} \
+                     column {} and name ${}. elephc identifies a local re-binding (an `unset` or \
+                     an incompatible reassignment) by source position, and a position carries no \
+                     file, so it cannot tell them apart. Either two files have a statement at the \
+                     same line and column, or the same file is included more than once (every \
+                     `require`/`include` splices its statements in again). Keep the two \
+                     assignments type-compatible, or move one statement to a different line or \
+                     column.",
                     name,
-                    count - 1,
-                    name,
+                    count,
                     span.line,
                     span.col,
                     name,
@@ -210,34 +223,88 @@ fn count_stmt(stmt: &Stmt, tally: &mut Tally) {
                 count_block(finally_body, tally);
             }
         }
-        StmtKind::FunctionDecl { body, .. } => count_block(body, tally),
-        StmtKind::ClassDecl { methods, .. } => {
-            for method in methods {
-                count_block(&method.body, tally);
-            }
+        // EVERY declaration that can hold statements is walked. A trait's methods are checked and
+        // lowered exactly like a class's, so a decision recorded inside one is consulted inside one:
+        // skipping traits (and enums, and interface default bodies) let a `trait T` in an included
+        // file share a key with a retype in the main file and print `|5` for `a1|5`. The list below
+        // is derived from the `StmtKind` definition rather than from memory, and the match stays
+        // exhaustive so a new declaration variant has to be classified here rather than defaulting
+        // to "contains nothing".
+        StmtKind::FunctionDecl { params, body, .. } => {
+            count_param_defaults(params, tally);
+            count_block(body, tally);
         }
-        StmtKind::Break(_)
+        StmtKind::ClassDecl { properties, methods, constants, .. }
+        | StmtKind::InterfaceDecl { properties, methods, constants, .. }
+        | StmtKind::TraitDecl { properties, methods, constants, .. } => {
+            count_class_members(properties, methods, constants, tally);
+        }
+        StmtKind::EnumDecl { cases, methods, constants, .. } => {
+            for case in cases {
+                if let Some(value) = &case.value {
+                    count_expr(value, tally);
+                }
+            }
+            count_class_members(&[], methods, constants, tally);
+        }
+        // A packed class declares typed FIELDS only — no defaults, no bodies, no expressions.
+        StmtKind::PackedClassDecl { name: _, fields: _ }
+        // Externs are C declarations: types and names, never PHP statements.
+        | StmtKind::ExternFunctionDecl { .. }
+        | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ExternGlobalDecl { .. }
+        // Leaves: no sub-statements and no sub-expressions.
+        | StmtKind::Break(_)
         | StmtKind::Continue(_)
         | StmtKind::Global { vars: _ }
         | StmtKind::IncludeOnceMark { label: _ }
         | StmtKind::NamespaceDecl { name: _ }
         | StmtKind::UseDecl { imports: _ }
+        // Variant groups/marks carry function NAMES; the bodies live in their own `FunctionDecl`s.
         | StmtKind::FunctionVariantGroup { .. }
-        | StmtKind::FunctionVariantMark { .. }
-        | StmtKind::EnumDecl { .. }
-        | StmtKind::PackedClassDecl { .. }
-        | StmtKind::InterfaceDecl { .. }
-        | StmtKind::TraitDecl { .. }
-        | StmtKind::ExternFunctionDecl { .. }
-        | StmtKind::ExternClassDecl { .. }
-        | StmtKind::ExternGlobalDecl { .. } => {}
+        | StmtKind::FunctionVariantMark { .. } => {}
+    }
+}
+
+/// Counts the statement- and expression-bearing members shared by every class-like declaration.
+fn count_class_members(
+    properties: &[ClassProperty],
+    methods: &[ClassMethod],
+    constants: &[ClassConst],
+    tally: &mut Tally,
+) {
+    for property in properties {
+        if let Some(default) = &property.default {
+            count_expr(default, tally);
+        }
+    }
+    for method in methods {
+        count_param_defaults(&method.params, tally);
+        count_block(&method.body, tally);
+    }
+    for constant in constants {
+        count_expr(&constant.value, tally);
+    }
+}
+
+/// Counts the default-value expressions of a parameter list.
+fn count_param_defaults(
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    tally: &mut Tally,
+) {
+    for (_, _, default, _) in params {
+        if let Some(default) = default {
+            count_expr(default, tally);
+        }
     }
 }
 
 /// Counts one expression and everything nested inside it.
 ///
-/// A KILL decision is filed against the `unset` ARGUMENT's span, which is an ordinary variable
-/// expression — so every `Variable` node is a candidate site and is counted by name.
+/// A KILL decision is filed against the `unset` ARGUMENT's span. Only the arguments of an actual
+/// `unset` call are counted, not every `Variable` node: an ordinary read of the same name at the
+/// same position is not a site lowering could ever re-bind, and counting it would reject valid
+/// programs.
 fn count_expr(expr: &Expr, tally: &mut Tally) {
     // A KILL decision is filed against the `unset` ARGUMENT's span. Only arguments of an actual
     // `unset` call qualify, so a plain read of the same variable elsewhere is not a rival site.

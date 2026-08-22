@@ -1984,12 +1984,26 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ///
     /// The store is at `PhpType::Void`, and that is load-bearing rather than incidental. A slot's
     /// storage type is a whole-FRAME property, so storing `Void` WIDENS the slot (`Str` joined
-    /// with `Void` is `Mixed`) — which is exactly what makes the release above it a DECREF instead
-    /// of a free. `release` of a raw `Str` is an unconditional `__rt_heap_free_safe`
-    /// (`codegen::lower_inst::ownership::release_loaded_string`); strings carry no refcount, so
-    /// releasing an abandoned `Str` slot frees a buffer that any copy of the local still points
-    /// at. Measured, when this stored at the slot's own type instead:
-    /// `$q = "a" . $n; $r = $q; $q = 1; return $r . "|" . $q;` returned four NUL bytes.
+    /// with `Void` is `Mixed`) — and only a widened slot actually RECEIVES this null.
+    ///
+    /// `null` is materialized as an `I64`, so it lands in the int result register. A `Mixed` /
+    /// `TaggedScalar` slot is written from that same register, so it gets a real null. A `Str`
+    /// slot is two words written from the STRING result register pair instead — `(x1, x2)` on
+    /// aarch64 against `x0` for the int, entirely disjoint — and nothing coerces an `Int`/`Void`
+    /// source into that pair (`coerce_current_result_for_target_store` only handles a
+    /// `TaggedScalar` target). Storing at the slot's own `Str` type therefore writes two STALE
+    /// registers over the slot instead of clearing it, leaving a live pointer behind that the
+    /// frame epilogue's unconditional `__rt_heap_free_safe`
+    /// (`codegen::frame::emit_main_string_cleanup`) then frees — a buffer another local still
+    /// owns. Measured, when this stored at the slot's own type:
+    /// `$q = "a" . $n; $r = $q; $q = 1; return $r . "|" . $q;` returned four NUL bytes, with
+    /// allocations and frees still balanced because the freed block was a genuinely live one.
+    ///
+    /// Note what the mechanism is NOT: `$r = $q` does take its own copy. `acquire` on a `Str`
+    /// lowers to `__rt_str_persist`, which DUPLICATES every source except a block tagged
+    /// `CONCAT_TEMP_HEAP_KIND` (that one is retagged in place). Probed both ways — a concat
+    /// source and a `str_repeat` source fail identically, and `… $r = $q; $q = 1; return $r;`
+    /// with no later read is correct — so the copy is real and the fault is the uncleared slot.
     ///
     /// The widening has a known cost: every load of this slot the body already lowered keeps its
     /// `Str` IR type against what is now boxed storage, so each read ABOVE this point becomes a

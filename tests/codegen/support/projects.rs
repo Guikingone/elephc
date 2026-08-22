@@ -428,6 +428,50 @@ pub(crate) fn compile_files_fails(files: &[(&str, &str)], main_file: &str) -> bo
     compile_files_fails_with_defines(files, main_file, &[])
 }
 
+// Compiles a multi-file PHP project only as far as type checking and returns the diagnostic it
+// reported, or `None` when it type-checks. Lets a negative fixture assert WHICH error it got
+// instead of merely that something failed.
+/// Provides the Compile files error message helper used by the projects module.
+pub(crate) fn compile_files_error_message(
+    files: &[(&str, &str)],
+    main_file: &str,
+) -> Option<String> {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    for (path, content) in files {
+        let full_path = dir.join(path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&full_path, content).unwrap();
+    }
+
+    let php_path = dir.join(main_file);
+    let source = fs::read_to_string(&php_path).unwrap();
+    let base_dir = php_path.parent().unwrap();
+
+    let result = (|| -> Result<(), String> {
+        let tokens = elephc::lexer::tokenize(&source).map_err(|e| e.message.clone())?;
+        let ast = elephc::parser::parse(&tokens).map_err(|e| e.message.clone())?;
+        let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
+        let resolved =
+            elephc::resolver::resolve(ast, base_dir).map_err(|e| e.message.clone())?;
+        let resolved = elephc::autoload::collect_aliases(resolved);
+        let resolved = elephc::name_resolver::resolve(resolved).map_err(|e| e.message.clone())?;
+        let resolved = elephc::func_args::desugar(resolved).map_err(|e| e.message.clone())?;
+        let resolved = elephc::optimize::fold_constants(resolved);
+        elephc::types::check_with_target(&resolved, target()).map_err(|e| e.message.clone())?;
+        Ok(())
+    })();
+
+    let _ = fs::remove_dir_all(&dir);
+    result.err()
+}
+
 // Attempts compilation of a multi-file PHP project with conditional defines.
 // Returns true if the type-check pass fails. Does not assemble or link.
 // Used for negative test fixtures that require specific defines to trigger the failure.
