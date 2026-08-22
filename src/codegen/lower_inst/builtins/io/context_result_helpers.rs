@@ -216,6 +216,18 @@ pub(super) fn store_stream_context_options(
         return Ok(());
     }
     ctx.load_value_to_result(options)?;
+    // A `Mixed` operand is a BOXED cell, and the guard below reads a container header. Left boxed
+    // it read the box's header, concluded "not a packed array", and walked the box as a hash —
+    // measured as a ValueError on `stream_context_create(json_decode("[]", true))`, which php
+    // accepts. The payload is put in front of the guard here; whether it may be PUBLISHED is
+    // decided after the guard has spoken, because only the guard refuses a non-empty list.
+    let boxed_mixed = matches!(
+        ctx.raw_value_php_type(options)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    );
+    if boxed_mixed {
+        emit_unbox_stream_context_options(ctx);
+    }
     // php keeps only entries whose key is a STRING and whose value is an ARRAY, and raises a
     // catchable `ValueError` for anything else — `['ssl' => "abc"]`, `['ssl' => 1]`,
     // `['ssl' => null]` and `[0 => [...]]` all measured on `php -n` 8.5.6. elephc stored the
@@ -231,6 +243,12 @@ pub(super) fn store_stream_context_options(
         STREAM_CONTEXT_OPTIONS_SHAPE_MESSAGE,
     );
     abi::emit_pop_reg(ctx.emitter, result_reg);
+    if boxed_mixed {
+        // The guard has spoken. A packed array that survived it was EMPTY, and an empty list
+        // carries no options — publishing it is what made the next `set_option()` hash a key out
+        // of an indexed array's header.
+        emit_drop_packed_stream_context_options(ctx);
+    }
     // An INDEXED array is never an options map. php's shape is
     // `["wrappername"]["optionname"] = $value`, so a list can only be legal when EMPTY — measured,
     // `stream_context_create([])` is a valid context and `stream_context_create([1])` is a
@@ -249,6 +267,66 @@ pub(super) fn store_stream_context_options(
         Arch::X86_64 => store_stream_context_options_x86_64(ctx, clear_on_null),
     }
     Ok(())
+}
+
+/// Replaces a boxed `Mixed` options value with the container it holds, and remembers whether that
+/// container was a packed array.
+///
+/// The tag rides on the stack across the shape guard because the guard is what decides whether a
+/// packed array is legal at all: an empty one is, a non-empty one is php's `ValueError`.
+fn emit_unbox_stream_context_options(ctx: &mut FunctionContext<'_>) {
+    let hashed = ctx.next_label("sctx_mixed_hash");
+    let done = ctx.next_label("sctx_mixed_done");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // tag, lo, hi
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x9, x0");                              // the runtime tag
+            ctx.emitter.instruction("mov x0, x1");                              // the payload becomes the candidate
+            ctx.emitter.instruction("cmp x9, #4");                              // runtime tag 4 = packed array
+            ctx.emitter.instruction("cset x10, eq");                            // remember it for after the guard
+            ctx.emitter.instruction(&format!("b.eq {}", done));
+            ctx.emitter.instruction("cmp x9, #5");                              // runtime tag 5 = hash
+            ctx.emitter.instruction(&format!("b.eq {}", hashed));
+            ctx.emitter.instruction("mov x0, xzr");                             // anything else carries no options
+            ctx.emitter.label(&hashed);
+            ctx.emitter.label(&done);
+            abi::emit_push_reg(ctx.emitter, "x10");                             // the packed flag, across the guard
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, rax");                            // the runtime tag
+            ctx.emitter.instruction("mov rax, rdi");                            // the payload becomes the candidate
+            ctx.emitter.instruction("xor r11d, r11d");
+            ctx.emitter.instruction("cmp r10, 4");                              // runtime tag 4 = packed array
+            ctx.emitter.instruction("sete r11b");                               // remember it for after the guard
+            ctx.emitter.instruction(&format!("je {}", done));
+            ctx.emitter.instruction("cmp r10, 5");                              // runtime tag 5 = hash
+            ctx.emitter.instruction(&format!("je {}", hashed));
+            ctx.emitter.instruction("xor eax, eax");                            // anything else carries no options
+            ctx.emitter.label(&hashed);
+            ctx.emitter.label(&done);
+            abi::emit_push_reg(ctx.emitter, "r11");                             // the packed flag, across the guard
+        }
+    }
+}
+
+/// Drops an options value the unboxing marked as a packed array, once the guard has accepted it.
+fn emit_drop_packed_stream_context_options(ctx: &mut FunctionContext<'_>) {
+    let keep = ctx.next_label("sctx_mixed_keep");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x10");
+            ctx.emitter.instruction(&format!("cbz x10, {}", keep));
+            ctx.emitter.instruction("mov x0, xzr");                             // an empty list carries no options
+            ctx.emitter.label(&keep);
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "r11");
+            ctx.emitter.instruction("test r11, r11");
+            ctx.emitter.instruction(&format!("jz {}", keep));
+            ctx.emitter.instruction("xor eax, eax");                            // an empty list carries no options
+            ctx.emitter.label(&keep);
+        }
+    }
 }
 
 /// php-src's verbatim `ValueError` for a stream-context options array of the wrong shape.

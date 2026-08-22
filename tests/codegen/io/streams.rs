@@ -17648,3 +17648,33 @@ print_r(stream_context_get_options($d));
          Array\n(\n)\n"
     );
 }
+
+
+/// Verifies an options array arriving as a boxed `Mixed` value is judged like a literal one.
+///
+/// A map built at runtime — `json_decode($json, true)` — reaches these builtins as a boxed cell.
+/// The shape guard read the BOX's header instead of the array's, and compared each entry's value
+/// against the container tags without unboxing it, so a perfectly good options map was refused
+/// with php's own ValueError. The empty case is written FIRST because it is the one that could
+/// have revived a segfault: an empty list published into a slot every reader treats as a hash.
+///
+/// MEASURED on `php -n` 8.5.6, all three shapes.
+#[test]
+fn test_stream_context_options_arriving_as_a_boxed_mixed_value() {
+    let out = compile_and_run(
+        r####"<?php
+$empty = json_decode("[]", true);
+$c = stream_context_create($empty);
+stream_context_set_option($c, "http", "method", "POST");
+echo json_encode(stream_context_get_options($c)), "|";
+$map = json_decode('{"http":{"method":"GET"}}', true);
+echo json_encode(stream_context_get_options(stream_context_create($map))), "|";
+$list = json_decode("[1]", true);
+try { stream_context_create($list); } catch (Throwable $t) { echo get_class($t); }
+"####,
+    );
+    assert_eq!(
+        out,
+        "{\"http\":{\"method\":\"POST\"}}|{\"http\":{\"method\":\"GET\"}}|ValueError"
+    );
+}

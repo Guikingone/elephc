@@ -67,6 +67,17 @@ pub fn emit_stream_context_options_shape_ok(emitter: &mut Emitter) {
             emitter.instruction("cmn x0, #1");                                  // cursor -1 ends the walk
             emitter.instruction("b.eq __rt_scos_ok");                           // every entry passed
             emitter.instruction("cbz x1, __rt_scos_bad");                       // an INTEGER key has no string pointer
+            // A hash built at RUNTIME holds boxed Mixed values (tag 7), so the concrete kind is
+            // one indirection away. Comparing the box's tag against the container tags read every
+            // such entry as "not an array" — measured on `json_decode($json, true)`.
+            emitter.instruction("cmp x5, #7");                                  // runtime tag 7 = boxed Mixed
+            emitter.instruction("b.ne __rt_scos_concrete");
+            emitter.instruction("str x0, [sp, #8]");                            // the cursor shares x0 with the call result
+            emitter.instruction("mov x0, x3");                                  // the boxed value
+            abi::emit_call_label(emitter, "__rt_mixed_unbox");
+            emitter.instruction("mov x5, x0");                                  // the concrete tag
+            emitter.instruction("ldr x0, [sp, #8]");                            // restore the cursor
+            emitter.label("__rt_scos_concrete");
             emitter.instruction(&format!("cmp x5, #{VALUE_TAG_ARRAY}"));        // a packed array value is accepted
             emitter.instruction("b.eq __rt_scos_next");
             emitter.instruction(&format!("cmp x5, #{VALUE_TAG_HASH}"));         // as is an associative one
@@ -112,6 +123,15 @@ pub fn emit_stream_context_options_shape_ok(emitter: &mut Emitter) {
             emitter.instruction("je __rt_scos_ok_x86");                         // every entry passed
             emitter.instruction("test rdi, rdi");                               // an INTEGER key has no string pointer
             emitter.instruction("jz __rt_scos_bad_x86");
+            // See the AArch64 arm: a runtime-built hash holds boxed Mixed values.
+            emitter.instruction("cmp r9, 7");                                   // runtime tag 7 = boxed Mixed
+            emitter.instruction("jne __rt_scos_concrete_x86");
+            emitter.instruction("mov QWORD PTR [rbp - 16], rax");               // the cursor shares rax with the call result
+            emitter.instruction("mov rax, rcx");                                // the boxed value
+            abi::emit_call_label(emitter, "__rt_mixed_unbox");
+            emitter.instruction("mov r9, rax");                                 // the concrete tag
+            emitter.instruction("mov rax, QWORD PTR [rbp - 16]");               // restore the cursor
+            emitter.label("__rt_scos_concrete_x86");
             emitter.instruction(&format!("cmp r9, {VALUE_TAG_ARRAY}"));         // a packed array value is accepted
             emitter.instruction("je __rt_scos_next_x86");
             emitter.instruction(&format!("cmp r9, {VALUE_TAG_HASH}"));          // as is an associative one

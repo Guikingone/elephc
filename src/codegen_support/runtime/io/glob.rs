@@ -77,6 +77,10 @@ pub fn emit_glob(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x1", "_diag_glob_flags");
     emitter.instruction(&format!("mov x2, #{}", GLOB_INVALID_FLAGS_WARNING.len()));
     emitter.instruction("bl __rt_diag_warning");                                // warnings honour the @ suppression depth
+    // Straight to the RETURN label, deliberately: `globfree()` lives at `__rt_glob_free`, which
+    // merely falls through into `__rt_glob_ret`. Branching to the tail therefore never passes
+    // through that call, which matters because libc `glob()` has not run and the stack `glob_t`
+    // at [sp,#16] holds whatever the frame held before.
     emitter.instruction("b __rt_glob_ret");
 
     emitter.label("__rt_glob_flags_ok");

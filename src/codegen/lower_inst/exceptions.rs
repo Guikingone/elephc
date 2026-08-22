@@ -644,8 +644,10 @@ fn emit_raising_builtin_trace_frame(ctx: &mut FunctionContext<'_>) {
 
     for operand in operands {
         if emit_trace_argument(ctx, operand).is_err() {
-            // An operand whose shape has no php rendering ends the argument list rather than
-            // guessing at one. php would have printed it; a wrong value would be worse.
+            // An operand whose shape has no php rendering leaves the argument list SHORT — the
+            // frame still closes, so the trace reads `fn('a')` where php would have written
+            // `fn('a', <something>)`. That is a smaller lie than a value invented for the shape,
+            // and it is why `emit_trace_argument` refuses rather than guessing.
             break;
         }
     }
@@ -674,8 +676,9 @@ fn emit_trace_argument(ctx: &mut FunctionContext<'_>, operand: crate::ir::ValueI
         PhpType::Object(_) => 6,
         PhpType::Resource(_) | PhpType::Pointer(_) => 9,
         PhpType::Mixed => -1,
-        // Anything else has no rendering php would recognise, so the frame stops here rather
-        // than printing a value invented for it.
+        // Anything else has no rendering php would recognise. Refusing here abandons the rest of
+        // the argument list (the caller breaks out of the loop) rather than printing a value
+        // invented for the shape.
         _ => return Err(crate::codegen::CodegenIrError::unsupported("trace argument PHP type")),
     };
     ctx.load_value_to_result(operand)?;
