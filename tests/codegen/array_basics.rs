@@ -895,6 +895,81 @@ fn test_rsort() {
     assert_eq!(out, "321");
 }
 
+/// Verifies `sort()` orders an array of boxed `Mixed` elements the way php does.
+///
+/// This used to be a COMPILE error — `unsupported EIR backend feature: sort indexed-array element
+/// PHP type Mixed` — on php that runs. The shape is ordinary: any loop appending a `string|false`
+/// builtin result types the array as `array<Mixed>`.
+///
+/// The values are heterogeneous on purpose. An array typed Mixed whose values all happened to be
+/// strings would come out ordered under a comparator that never looked past the first word, so
+/// such a test would pass without the ordering being right.
+#[test]
+fn test_sort_orders_mixed_elements_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[] = 10; $a[] = "banana"; $a[] = 2; $a[] = "apple"; $a[] = true; $a[] = null;
+$b = $a;
+sort($a);
+echo json_encode($a), "\n";
+rsort($b);
+echo json_encode($b), "\n";
+"#,
+    );
+    // php's ordering here is not the intuitive one — `true` sorts LAST ascending and `null`
+    // last descending, because a bool operand converts both sides to bool before comparing.
+    // Measured on `php -n` 8.5.6 rather than reasoned about.
+    assert_eq!(
+        out,
+        "[null,2,10,\"apple\",\"banana\",true]\n[\"banana\",\"apple\",10,2,true,null]\n"
+    );
+}
+
+/// Verifies a `Mixed` sort follows php's numeric-string ordering, not a byte ordering.
+///
+/// `"9"` sorts after `"100"` under a plain string comparison and before it under php's, which
+/// compares two numeric strings as numbers. The comparator is `__rt_php_compare`, the same one
+/// `<=>` uses, so this is the property that says the sort did not shortcut to `strcmp`.
+#[test]
+fn test_sort_mixed_uses_phps_numeric_string_ordering() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[] = "10"; $a[] = "9"; $a[] = "100"; $a[] = 20;
+sort($a);
+echo json_encode($a), "\n";
+"#,
+    );
+    assert_eq!(out, "[\"9\",\"10\",20,\"100\"]\n");
+}
+
+/// Verifies the shape that first reported this: a `readdir()` loop, sorted.
+///
+/// `readdir()` answers `string|false`, so the accumulator is typed `array<Mixed>` and `sort()`
+/// refused to compile at all. The listing is what php answers, `.` and `..` included.
+#[test]
+fn test_sort_mixed_from_a_readdir_loop() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("sd");
+file_put_contents("sd/b.txt", "");
+file_put_contents("sd/a.txt", "");
+$h = opendir("sd");
+$seen = [];
+while (($e = readdir($h)) !== false) { $seen[] = $e; }
+closedir($h);
+sort($seen);
+echo implode(",", $seen);
+unlink("sd/a.txt");
+unlink("sd/b.txt");
+rmdir("sd");
+"#,
+    );
+    assert_eq!(out, ".,..,a.txt,b.txt");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Verifies array keys.
 #[test]
 fn test_array_keys() {

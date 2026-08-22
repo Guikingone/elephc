@@ -3405,11 +3405,16 @@ echo zval_type(zval_pack($r)), "\n";
 "#,
     );
     assert!(out.success, "program crashed: {}", out.stderr);
-    assert_eq!(out.stdout, "count-raises\nempty\n0\nnull\nN;\n1\n");
+    // Both try blocks run, so the output carries BOTH lines. This used to be two assertions on
+    // the same `out.stdout`, each holding one of them — the first left over from when the program
+    // had a single `try` — which meant the test could not pass whatever the compiler did.
+    // MEASURED on `php -n` 8.5.6: php prints exactly this, `zval_type` aside, which is elephc's
+    // own builtin and has no php counterpart.
     assert_eq!(
         out.stdout,
-        "count(): Argument #1 ($value) must be of type Countable|array, null given\nempty\n0\n\
-         null\nN;\n1\n"
+        "count-raises\n\
+         count(): Argument #1 ($value) must be of type Countable|array, null given\n\
+         empty\n0\nnull\nN;\n1\n"
     );
     assert_eq!(
         out.diagnostics.matches("Warning: Undefined array key 5").count(),

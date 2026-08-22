@@ -328,12 +328,16 @@ pub(super) fn lower_indexed_array_sort(
                 ctx.emitter.instruction("mov rdi, rax");                        // the sort helpers take rdi
             }
         }
-        let helper = if elem_ty == PhpType::Str {
-            str_helper.expect("string sort helper is required after validation")
+        if elem_ty == PhpType::Mixed {
+            emit_mixed_element_sort(ctx, name);
         } else {
-            int_helper
-        };
-        abi::emit_call_label(ctx.emitter, helper);
+            let helper = if elem_ty == PhpType::Str {
+                str_helper.expect("string sort helper is required after validation")
+            } else {
+                int_helper
+            };
+            abi::emit_call_label(ctx.emitter, helper);
+        }
         abi::emit_load_int_immediate(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
@@ -353,18 +357,49 @@ pub(super) fn lower_indexed_array_sort(
             ctx.load_value_to_reg(array, "rdi")?;
         }
     }
-    let helper = if elem_ty == PhpType::Str {
-        str_helper.expect("string sort helper is required after validation")
+    if elem_ty == PhpType::Mixed {
+        emit_mixed_element_sort(ctx, name);
     } else {
-        int_helper
-    };
-    abi::emit_call_label(ctx.emitter, helper);
+        let helper = if elem_ty == PhpType::Str {
+            str_helper.expect("string sort helper is required after validation")
+        } else {
+            int_helper
+        };
+        abi::emit_call_label(ctx.emitter, helper);
+    }
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
         0x7fff_ffff_ffff_fffe,
     );
     store_if_result(ctx, inst)
+}
+
+/// Sorts an indexed array of boxed `Mixed` cells through `__rt_usort` and a built-in comparator.
+///
+/// The array pointer is already in the first argument register, where the non-Mixed helpers want
+/// it; `__rt_usort` wants it SECOND, after the comparator address, so the two are placed in that
+/// order here. The capture environment is zero, which selects `__rt_usort`'s two-argument
+/// comparator ABI — the comparator takes a pair of cells and nothing else.
+fn emit_mixed_element_sort(ctx: &mut FunctionContext<'_>, name: &str) {
+    let comparator = if name == "rsort" {
+        "__rt_sort_mixed_desc"
+    } else {
+        "__rt_sort_mixed_asc"
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // the array becomes __rt_usort's second argument
+            abi::emit_symbol_address(ctx.emitter, "x0", comparator);
+            ctx.emitter.instruction("mov x2, #0");                              // no capture environment: the two-argument ABI
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rdi");                            // the array becomes __rt_usort's second argument
+            abi::emit_symbol_address(ctx.emitter, "rdi", comparator);
+            ctx.emitter.instruction("xor edx, edx");                            // no capture environment: the two-argument ABI
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_usort");
 }
 
 /// Calls the mutating shuffle helper for indexed arrays whose payload slots are pointer-sized.
@@ -673,8 +708,12 @@ pub(super) fn indexed_sort_element_type(ty: PhpType, name: &str, allow_strings: 
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
+            // `Mixed` rides the same route as a user comparator: an 8-byte boxed cell per slot,
+            // ordered by `__rt_php_compare`. Only the sorts that take a comparator can carry it,
+            // which is the same condition `allow_strings` already expresses — `asort`/`arsort`
+            // permute slots with no comparator at all.
             if matches!(elem, PhpType::Int | PhpType::Void | PhpType::Never)
-                || (allow_strings && elem == PhpType::Str)
+                || (allow_strings && matches!(elem, PhpType::Str | PhpType::Mixed))
             {
                 return Ok(elem);
             }

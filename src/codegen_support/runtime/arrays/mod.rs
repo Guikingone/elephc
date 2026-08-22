@@ -186,6 +186,7 @@ mod slice_bounds;
 mod sort_int;
 mod sort_str;
 mod undefined_array_key_warning;
+mod sort_mixed;
 mod usort;
 mod usort_str;
 pub(super) mod value_error;
@@ -533,6 +534,7 @@ pub use sort_str::{emit_natsort_str, emit_sort_str};
 /// Emit undefined integer array key warning helper.
 pub use undefined_array_key_warning::emit_undefined_array_key_warning;
 /// Emit user-defined sort helper.
+pub use sort_mixed::emit_sort_mixed;
 pub use usort::emit_usort;
 /// Emit user-defined string-array sort helper.
 pub use usort_str::emit_usort_str;
