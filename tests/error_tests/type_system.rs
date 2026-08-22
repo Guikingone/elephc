@@ -1804,3 +1804,86 @@ fn test_same_shape_local_still_marks_inside_a_function() {
         "boxed mixed storage",
     );
 }
+
+/// A CONCATENATION is exact evidence: `.` yields `string` for every operand pair, in the
+/// syntactic scan (`infer_expr_type_syntactic`) and in the typed walk (`Checker::binary_op_type`)
+/// alike, so a conflict the scan reads off one is a conflict the checker really rejects.
+///
+/// Without this the loop fixture `$a = 0; for (…) { $a = "s" . $i; }` was DISQUALIFIED as an
+/// inexact value and stayed a hard "cannot reassign $a from int to string" error, which is the
+/// one failure mode a lowering test cannot tell apart from a genuine pass.
+#[test]
+fn test_string_concatenation_is_exact_marking_evidence() {
+    expect_warning(
+        "<?php $a = 0; for ($i = 0; $i < $argc; $i++) { $a = \"s\" . $i; } echo $a;",
+        "boxed mixed storage",
+    );
+    expect_no_error("<?php $a = 0; for ($i = 0; $i < $argc; $i++) { $a = \"s\" . $i; } echo $a;");
+}
+
+/// The concatenation's OPERANDS need no exactness of their own: `.` casts both sides to string,
+/// so the result type is a property of the operator, not of what it is applied to.
+#[test]
+fn test_concatenation_of_inexactly_typed_operands_is_still_exact() {
+    expect_warning(
+        "<?php $o = [1, 2]; $a = 0; if ($argc > 1) { $a = count($o) . \"x\"; } echo $a;",
+        "boxed mixed storage",
+    );
+}
+
+/// A concatenation still only counts as evidence, never as a licence: a write the scan cannot
+/// model reaching the same name disqualifies it exactly as before.
+#[test]
+fn test_concatenation_evidence_does_not_survive_a_disqualifying_write() {
+    expect_error(
+        "<?php $a = 0; if ($argc > 1) { $a = \"s\" . $argc; } $a++;",
+        "cannot reassign",
+    );
+}
+
+/// Marking verification for every end-to-end fixture in `codegen::locals_retype` that claims the
+/// mixed-storage path.
+///
+/// A lowering fixture that quietly fell out of the marking would still compile and print the
+/// right answer for the branch the harness happens to take (`argc == 1`), so "it passes" proves
+/// nothing on its own. Each source below is the VERBATIM fixture text; the assertion is that the
+/// checker really marked it.
+#[test]
+fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
+    for source in [
+        "<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;",
+        "<?php $a = 41; if ($argc > 0) { $a = \"ciao\"; } echo $a;",
+        "<?php $a = 41; if ($argc > 5) { $a = \"ciao\"; } echo $a;",
+        "<?php $a = 0; for ($i = 0; $i < $argc; $i++) { $a = \"s\" . $i; } echo $a;",
+        "<?php if ($argc > 1) { $a = 42; } else { $a = \"hello\"; } echo strlen($a);",
+        "<?php\nif ($argc > 1) { $a = 42; } else { $a = \"hello\"; }\necho strlen($a), \"|\", strtoupper($a), \"|\", gettype($a), \"|\";\nvar_dump(is_string($a));",
+        "<?php $a = 123456789; for ($i = 1; $i < $argc; $i++) { $a = \"s\"; } var_dump($a);",
+        "<?php\nfunction q() { global $a; $a = 42; }\nif ($argc > 1) { $a = 0; } else { $a = \"hello\"; }\necho $a, \"|\";\nq();\necho $a, \"|\";\nvar_dump($a);",
+        "<?php\nclass W { public function w() { global $a; $a = 42; } }\nif ($argc > 1) { $a = 0; } else { $a = \"hello\"; }\necho $a, \"|\";\n(new W())->w();\necho $a, \"|\";\nvar_dump($a);",
+        "<?php $a = 0; for ($i = 0; $i < $argc + 3; $i++) { $a = \"s\" . $i; } echo $a;",
+        "<?php if ($argc > 1) { $a = 42; } else { $a = \"hello\" . $argc; } echo $a;",
+        "<?php\nif ($argc > 1) { $m = 1; } else { $m = \"z\"; }\n$f = function (int $n) use ($m) {\n    if ($n > 1) { $m = 0; } else { $m = \"s\"; }\n    return $m;\n};\nvar_dump($f($argc));\n$g = function () use ($m) { return $m; };\nvar_dump($g());",
+        "<?php\n$m = $argc > 1 ? 1 : \"z\";\n$f = function (int $n) use ($m) { if ($n > 1) { $m = 0; } else { $m = \"s\"; } return $m; };\nvar_dump($f($argc));\n$g = function () use ($m) { return $m; };\nvar_dump($g());",
+    ] {
+        let result = check_source_full(source)
+            .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{}", error.message, source));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("boxed mixed storage")),
+            "fixture never reached the mixed-storage path: {}",
+            source
+        );
+        assert!(
+            !result.mixed_storage_store_sites.is_empty()
+                && result
+                    .mixed_storage_store_sites
+                    .keys()
+                    .all(|span| span.identifies_a_node()),
+            "fixture must record store sites that name a node: {:?} for {}",
+            result.mixed_storage_store_sites,
+            source
+        );
+    }
+}

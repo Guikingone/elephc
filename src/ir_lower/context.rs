@@ -211,6 +211,12 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// incompatible type (`CheckResult::local_retype_sites`). Carried alongside
     /// `bind_kill_sites` so both travel together; consumed by the retype lowering.
     pub retype_sites: &'m HashMap<Span, String>,
+    /// Spans of the statement-form assignments to a local the CHECKER marked as branch-divergently
+    /// assigned (`CheckResult::mixed_storage_store_sites`), each mapped to the local it boxes. At
+    /// one of these spans `lower_assign` declares the slot `PhpType::Mixed` BEFORE the store and
+    /// stores at `Mixed`, so both dynamic outcomes live in one boxed slot. The third of the
+    /// checker's local-binding decision maps, keyed and consulted exactly like the other two.
+    pub mixed_storage_store_sites: &'m HashMap<Span, String>,
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
@@ -292,6 +298,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         string_incdec_locals: &'m HashSet<(String, String)>,
         bind_kill_sites: &'m HashMap<Span, String>,
         retype_sites: &'m HashMap<Span, String>,
+        mixed_storage_store_sites: &'m HashMap<Span, String>,
         loop_storage_scope: String,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         top_level_env: TypeEnv,
@@ -303,7 +310,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         source_path: Option<String>,
         web: bool,
     ) -> Self {
-        // Both maps are keyed BY SPAN and consulted at every `unset` argument and every
+        // All three maps are keyed BY SPAN and consulted at every `unset` argument and every
         // assignment. `Span::dummy()` identifies no node, so a decision filed under it would
         // answer for every compiler-generated node at once — abandoning a binding at each of the
         // hundreds of dummy-span assignments the synthetic-class and PDO/mysqli/curl preludes
@@ -316,6 +323,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         debug_assert!(
             !retype_sites.contains_key(&Span::dummy()),
             "a local-binding retype was recorded at a span that names no node",
+        );
+        debug_assert!(
+            !mixed_storage_store_sites.contains_key(&Span::dummy()),
+            "a mixed-storage store site was recorded at a span that names no node",
         );
         let return_type = return_ir_type(&return_php_type);
         Self {
@@ -341,6 +352,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             string_incdec_locals,
             bind_kill_sites,
             retype_sites,
+            mixed_storage_store_sites,
             loop_storage_scope,
             constants: constants.clone(),
             top_level_env,
@@ -2062,6 +2074,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 .retype_sites
                 .get(&span)
                 .is_some_and(|retyped| retyped == name)
+    }
+
+    /// Returns whether the checker marked `name` as branch-divergently assigned and recorded THIS
+    /// assignment as one of its store sites.
+    ///
+    /// Keyed by span AND name for the same two reasons as `is_recorded_retype_site`: a
+    /// `Span::dummy()` names no node, and equal spans in different included files are
+    /// indistinguishable without the local's name.
+    pub(crate) fn is_recorded_mixed_storage_site(&self, span: Span, name: &str) -> bool {
+        span.identifies_a_node()
+            && self
+                .mixed_storage_store_sites
+                .get(&span)
+                .is_some_and(|boxed| boxed == name)
     }
 
     /// Clears an owned hidden temp after its value has been loaded into SSA.

@@ -71,3 +71,52 @@ echo $a;
         "the re-bound string was stored through the OLD slot instead of a fresh one: {text}"
     );
 }
+
+/// A local the checker marked as branch-divergently assigned gets a boxed `mixed` slot before its
+/// FIRST store and keeps it through the array-representation fixed point.
+///
+/// The `if` here is a conversion-hiding region (`$b[0] = "x"` promotes `$b` to `array<mixed>`), so
+/// `lower_region_at_type_fixpoint` lowers the whole statement SPECULATIVELY, reads the discovered
+/// conversions, rolls everything back and lowers it again. `$a`'s first store — and therefore the
+/// `declare_local(.., Mixed)` that precedes it — happens inside that region, so this is the shape
+/// that pins the marked slot's stability under the pass:
+///
+/// - the marked name is never a canonicalization CANDIDATE: `convertible_array_locals` only picks
+///   names whose `local_types` entry is an `Array(_)`, and a marked name's is `Mixed` from its
+///   first store onwards, so no `Op::ArrayToMixed`/`Op::ArrayToHash` is ever hoisted onto it;
+/// - the rollback (`LoweringContext::restore`) puts back `local_slots`, `local_types` and the whole
+///   function, so the discarded pass leaves no slot behind and the real pass re-declares the same
+///   `Mixed` one from the same recorded span;
+/// - and no later store can narrow it: `widened_local_storage_type` answers `Mixed` for every
+///   `(Mixed, other)` pair, so the `int` arm's store widens nothing.
+///
+/// Both arms therefore read slot 2 as `mixed`, which is what makes the two dynamic outcomes share
+/// one binding.
+#[test]
+fn mixed_storage_local_keeps_its_boxed_slot_through_the_fixed_point() {
+    let module = super::lower_source(
+        r#"<?php
+$b = [1, $argc];
+if ($argc > 1) { $a = 0; $b[0] = "x"; } else { $a = "ciao"; }
+echo $a, "|", $b[0];
+"#,
+    );
+    let text = print_module(&module);
+    assert_eq!(
+        text.matches("php=mixed own=maybe_owned = load_local slot[2]")
+            .count(),
+        2,
+        "both arms must read the marked local out of one boxed slot: {text}"
+    );
+    assert!(
+        !text.contains("php=int = load_local slot[2]")
+            && !text.contains("php=string own=maybe_owned = load_local slot[2]"),
+        "the marked local's slot was narrowed to a concrete representation: {text}"
+    );
+    assert_eq!(
+        text.matches("array_to_mixed").count(),
+        1,
+        "exactly one conversion belongs here — `$b`'s, hoisted to the region entry; a second one \
+         would mean the marked local was canonicalized as if it were a convertible array: {text}"
+    );
+}

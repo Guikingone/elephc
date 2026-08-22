@@ -265,10 +265,11 @@ fn disqualify_root(facts: &mut Facts, expr: &Expr) {
 
 /// Returns whether `expr`'s syntactic type is EXACT rather than a fallback guess.
 ///
-/// Only literals and scalar casts qualify: for those the checker's own inference agrees by
-/// construction, so a pair this scan judges incompatible is a pair the checker would reject.
-/// Everything else — variables, calls, array literals, arithmetic — is either an approximation or
-/// depends on facts only the typed walk has, and is treated as unknown.
+/// Only shapes whose type is fixed by the SHAPE ITSELF qualify: literals, scalar casts and
+/// string concatenation. For those the checker's own inference agrees by construction, so a pair
+/// this scan judges incompatible is a pair the checker would reject. Everything else —
+/// variables, calls, array literals, arithmetic — is either an approximation or depends on facts
+/// only the typed walk has, and is treated as unknown.
 fn has_exact_syntactic_type(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::StringLiteral(_)
@@ -278,6 +279,16 @@ fn has_exact_syntactic_type(expr: &Expr) -> bool {
         | ExprKind::Null => true,
         // An `(array)` cast's ELEMENT type is not knowable syntactically, so it is excluded.
         ExprKind::Cast { target, .. } => !matches!(target, crate::parser::ast::CastType::Array),
+        // `.` casts BOTH operands to string and yields a string for every operand pair, so its
+        // result type is a property of the operator rather than of what it is applied to: the
+        // operands need no exactness of their own, and neither layer ever answers anything else
+        // (`infer_expr_type_syntactic` and `Checker::binary_op_type` both return `Str`
+        // unconditionally). Without this arm the commonest heterogeneous shape there is —
+        // `$a = 0; … $a = "s" . $i;` — stayed a hard "cannot reassign" error.
+        ExprKind::BinaryOp {
+            op: crate::parser::ast::BinOp::Concat,
+            ..
+        } => true,
         _ => false,
     }
 }

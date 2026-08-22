@@ -141,8 +141,9 @@ impl CheckResult {
     /// pass that clones, and it keeps statements carrying these spans singular.
     ///
     /// The mixed-storage store sites are included even though their consumer — declaring the slot
-    /// `Mixed` when the local has none yet — IS idempotent under duplication (the second clone
-    /// finds the slot already declared and does nothing). They are kept singular anyway because
+    /// `Mixed` when the local has none yet, and storing at `Mixed` rather than at the value's own
+    /// type — IS idempotent under duplication (the second clone finds the slot already declared,
+    /// and substitutes the same type). They are kept singular anyway because
     /// the ambiguity check that runs in the checker counts the nodes of the ORIGINAL program: a
     /// pass that cloned one of these statements afterwards would create a second site for a key
     /// that check already cleared, and "the decision names exactly one node" is the invariant the

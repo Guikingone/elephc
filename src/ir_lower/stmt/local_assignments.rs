@@ -59,7 +59,46 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     if ctx.is_recorded_retype_site(span, name) {
         ctx.rebind_local_for_retype(name, Some(span));
     }
+    // The checker's pre-scan marked `$name` as assigned incompatible types across a branch, so its
+    // frame storage is boxed `Mixed` for the WHOLE body (`checker::mixed_storage_scan`), and this
+    // is one of the assignments it recorded. Two things follow, and BOTH are needed.
+    //
+    // The slot is declared `Mixed` here, ahead of the store. Every write to a marked name is a
+    // recorded store site — anything else disqualifies the name — so this runs at the FIRST one,
+    // and `has_local_slot` makes it idempotent for the rest. (A name the frame binds on ENTRY
+    // keeps its incoming slot: only a by-value closure capture can be both marked and pre-bound,
+    // and its slot is already `Mixed`, because a capture seeded at any narrower type makes the
+    // checker reject the divergent assignment instead of marking it.) Letting the first store
+    // mint a slot at its own value's type is what made a marked program miscompile:
+    // `$a = 123456789; for (…) { $a = "s"; }` wrote a raw int into an `Int` slot that the loop
+    // body then widened, and a zero-trip loop read the surviving int back through the widened
+    // string view (`string(9) "123456789"`).
+    //
+    // And the store's PHP type is `Mixed`, not the value's own. `store_local` records it as the
+    // local's LOGICAL type, and every read of the name is lowered against that one: inside the
+    // arm that stored it, inside the copies DCE's tail-sinking makes of the code BELOW the branch,
+    // and after the join (`join_arm_types` keeps nothing for an `int`-against-`string`
+    // disagreement, so the merge inherits the last arm's fact). Leaving those facts concrete is
+    // what turned `if (…) { $a = 42; } else { $a = "hello"; } echo strlen($a);` into a compiler
+    // PANIC — "strlen cannot lower checked operand type Int" — from the copy of the `echo` sunk
+    // into the `int` arm. `Mixed` on every store makes every read a boxed read, which is exactly
+    // the type the checker bound for the name. This mirrors `boxed_incdec_storage_type`, the other
+    // whole-frame boxed-storage contract, which forces the same substitution inside `store_local`.
+    //
+    // Nothing is forced for a name backed by program-global storage: `store_local` overrides the
+    // type with `global_alias_type` (already `Mixed`) and stores through the global symbol, so a
+    // marked top-level local another body writes via `global $a` keeps exactly the representation
+    // it has today.
+    let mixed_storage_site = ctx.is_recorded_mixed_storage_site(span, name);
+    if mixed_storage_site && !ctx.has_local_slot(name) {
+        ctx.declare_local(name, PhpType::Mixed);
+    }
     let (lowered, php_type) = contextualize_local_assignment(ctx, name, value, lowered, span);
+    let php_type = if mixed_storage_site {
+        PhpType::Mixed
+    } else {
+        php_type
+    };
     ctx.store_local(name, lowered, php_type, Some(span));
     let callable_result = if direct_closure {
         ctx.take_pending_static_callable_result()

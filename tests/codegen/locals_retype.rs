@@ -826,3 +826,219 @@ echo $b, "|", $a[0], "|", $a[1];"#,
         out.stderr
     );
 }
+
+// ---------------------------------------------------------------------------
+// Branch-divergent locals compiled as boxed `mixed` frame storage.
+//
+// The checker's pre-scan (`types::checker::mixed_storage_scan`) marks the name and records
+// every one of its assignment spans; lowering declares the slot `Mixed` before the first of
+// them and stores every recorded assignment AT `Mixed`, so both dynamic outcomes live in one
+// boxed slot and every read of the name is a boxed read. Every fixture below is verified to
+// actually GO THROUGH that path by a sibling assertion in `error_tests::type_system` that the
+// program warns "compiled as boxed mixed storage" — a fixture that silently fell back to the
+// error path would otherwise look like a pass here.
+// ---------------------------------------------------------------------------
+
+/// Branch-divergent local: the else arm runs (argc == 1) and prints the string.
+#[test]
+fn test_branch_divergent_local_runs_else_arm() {
+    let out = compile_and_run("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;");
+    assert_eq!(out, "ciao");
+}
+
+/// Single-branch retype, branch taken: the Mixed slot holds the string.
+#[test]
+fn test_single_branch_retype_taken() {
+    let out = compile_and_run("<?php $a = 41; if ($argc > 0) { $a = \"ciao\"; } echo $a;");
+    assert_eq!(out, "ciao");
+}
+
+/// Single-branch retype, branch NOT taken: the Mixed slot still holds the boxed int.
+/// This is the load-bearing test — both dynamic outcomes flow through one slot.
+#[test]
+fn test_single_branch_retype_not_taken() {
+    let out = compile_and_run("<?php $a = 41; if ($argc > 5) { $a = \"ciao\"; } echo $a;");
+    assert_eq!(out, "41");
+}
+
+/// Heterogeneous loop-carried local: each iteration re-boxes; previous value released.
+///
+/// The RHS is a CONCATENATION rather than a literal on purpose: it allocates a fresh heap
+/// string per iteration, which is the release-pressure shape the boxed store path has to get
+/// right (see the heap-debug fixture below).
+#[test]
+fn test_loop_carried_heterogeneous_local() {
+    let out = compile_and_run("<?php $a = 0; for ($i = 0; $i < $argc; $i++) { $a = \"s\" . $i; } echo $a;");
+    assert_eq!(out, "s0");
+}
+
+/// A marked local reaching a CHECKED builtin, whose lowering demands one concrete operand
+/// representation.
+///
+/// Measured before the hook: the compiler PANICKED outright — "checked builtin strlen failed
+/// backend-neutral EIR lowering at 1:63: strlen cannot lower checked operand type Int". DCE
+/// tail-sinking copies the `echo` into BOTH arms, and the copy in the `int` arm was lowered
+/// while the local's logical type was still `Int`, which `strlen`'s checked fast path has no
+/// lowering for. Storing every recorded assignment at `Mixed` — not just declaring the slot
+/// that way — is what hands the builtin an operand it can lower on either path.
+#[test]
+fn test_branch_divergent_local_reaches_a_checked_builtin() {
+    let out = compile_and_run(
+        "<?php if ($argc > 1) { $a = 42; } else { $a = \"hello\"; } echo strlen($a);",
+    );
+    assert_eq!(out, "5");
+}
+
+/// The same shape through more builtin/inspection surfaces, so the boxed operand is not a
+/// one-builtin accident.
+#[test]
+fn test_branch_divergent_local_through_several_builtins() {
+    let out = compile_and_run(
+        r#"<?php
+if ($argc > 1) { $a = 42; } else { $a = "hello"; }
+echo strlen($a), "|", strtoupper($a), "|", gettype($a), "|";
+var_dump(is_string($a));"#,
+    );
+    assert_eq!(out, "5|HELLO|string|bool(true)\n");
+}
+
+/// A loop whose body never runs must leave the entry binding's VALUE AND TYPE intact.
+///
+/// Measured before the pre-declare hook: `var_dump` printed `string(9) "123456789"` — the
+/// entry store wrote a raw `int` into an `Int` slot that the loop body's string store later
+/// widened, so the surviving int payload was read back through the widened string view. With
+/// the slot declared `Mixed` up front the int is boxed at the entry store and reads back as
+/// one.
+#[test]
+fn test_zero_trip_loop_keeps_the_entry_binding_type() {
+    let out = compile_and_run(
+        "<?php $a = 123456789; for ($i = 1; $i < $argc; $i++) { $a = \"s\"; } var_dump($a);",
+    );
+    assert_eq!(out, "int(123456789)\n");
+}
+
+/// A marked TOP-LEVEL local that another body writes through `global $a`.
+///
+/// The per-body pre-scan cannot see `q()`'s `global $a` while scanning the top level, so the
+/// name is marked there. That is sound because a name any body binds with `global` is already
+/// program-global storage in `main` (`LoweringContext::uses_global_storage` consults
+/// `all_global_var_names`, which `collect_global_var_names` fills from every function, method
+/// and trait body), and that storage is ALREADY boxed `Mixed`
+/// (`LoweringContext::global_alias_type`). The marked store therefore lands in exactly the
+/// representation it would have had anyway, and `q()`'s write is visible to the reads on both
+/// sides of the call.
+#[test]
+fn test_marked_top_level_local_written_through_a_global_alias() {
+    let out = compile_and_run(
+        r#"<?php
+function q() { global $a; $a = 42; }
+if ($argc > 1) { $a = 0; } else { $a = "hello"; }
+echo $a, "|";
+q();
+echo $a, "|";
+var_dump($a);"#,
+    );
+    assert_eq!(out, "hello|42|int(42)\n");
+}
+
+/// The same cross-body write from a METHOD, which `collect_global_var_names` also walks.
+#[test]
+fn test_marked_top_level_local_written_through_a_method_global_alias() {
+    let out = compile_and_run(
+        r#"<?php
+class W { public function w() { global $a; $a = 42; } }
+if ($argc > 1) { $a = 0; } else { $a = "hello"; }
+echo $a, "|";
+(new W())->w();
+echo $a, "|";
+var_dump($a);"#,
+    );
+    assert_eq!(out, "hello|42|int(42)\n");
+}
+
+/// A loop-carried marked local whose every iteration allocates a fresh heap string: the
+/// previous boxed occupant must be released before the slot is overwritten, and the last one
+/// at frame teardown.
+#[test]
+fn test_loop_carried_heterogeneous_local_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php $a = 0; for ($i = 0; $i < $argc + 3; $i++) { $a = \"s\" . $i; } echo $a;",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "s3");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The branch-divergent shape holds a heap string on one path and a raw int on the other, so
+/// the frame teardown has to release exactly one of them.
+#[test]
+fn test_branch_divergent_local_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php if ($argc > 1) { $a = 42; } else { $a = \"hello\" . $argc; } echo $a;",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "hello1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A marked local captured BY VALUE by a closure that overwrites it, with the enclosing frame
+/// reading the same name through a SECOND capture afterwards.
+///
+/// This is the one shape where a marked name is already bound when its first recorded store is
+/// lowered: the capture arrives as a parameter, so the pre-declare finds a slot and only the
+/// `Mixed` store type applies. Both frames' `$m` are marked here (the outer `if`/`else` and the
+/// closure's), and the closure's store releases the previous occupant of the capture slot, so the
+/// enclosing box has to survive for the second capture to read.
+///
+/// Measured on the parent commit (built from `cacee00c3` in a side worktree): the same program
+/// ran to completion but leaked two blocks, 96 bytes.
+#[test]
+fn test_marked_local_captured_by_value_and_overwritten_in_a_closure() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+if ($argc > 1) { $m = 1; } else { $m = "z"; }
+$f = function (int $n) use ($m) {
+    if ($n > 1) { $m = 0; } else { $m = "s"; }
+    return $m;
+};
+var_dump($f($argc));
+$g = function () use ($m) { return $m; };
+var_dump($g());"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "string(1) \"s\"\nstring(1) \"z\"\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Only the CLOSURE's `$m` is marked here; the enclosing one is `mixed` by ordinary inference.
+/// Measured on the parent commit: one leaked block, 48 bytes.
+#[test]
+fn test_marked_local_in_a_closure_over_an_unmarked_mixed_capture() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$m = $argc > 1 ? 1 : "z";
+$f = function (int $n) use ($m) { if ($n > 1) { $m = 0; } else { $m = "s"; } return $m; };
+var_dump($f($argc));
+$g = function () use ($m) { return $m; };
+var_dump($g());"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "string(1) \"s\"\nstring(1) \"z\"\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
