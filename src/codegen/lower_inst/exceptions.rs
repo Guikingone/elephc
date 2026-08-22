@@ -452,7 +452,7 @@ fn emit_uncaught_exception_fatal_if_no_handler(
             // Drain buffered output first: PHP emits it before the report, and this path used to
             // exit without flushing, discarding everything a program had buffered. `bl` leaves sp
             // untouched, so the message slots read below are unaffected.
-            ctx.emitter.instruction("bl __rt_ob_flush_all");
+            ctx.emitter.instruction("bl __rt_ob_flush_all");                    // drain buffered output before the fatal report
             abi::emit_symbol_address(ctx.emitter, "x1", fatal_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", fatal_len as i64);
             ctx.emitter.instruction("mov x0, #1");                              // fd = stdout, where PHP writes this report
@@ -467,10 +467,10 @@ fn emit_uncaught_exception_fatal_if_no_handler(
             // dynamic form reads its message from temporary stack slots, which `and rsp, -16`
             // alone would move out from under it. r15 is callee-saved and the flush helper
             // touches no callee-saved register.
-            ctx.emitter.instruction("mov r15, rsp");
-            ctx.emitter.instruction("and rsp, -16");
-            ctx.emitter.instruction("call __rt_ob_flush_all");
-            ctx.emitter.instruction("mov rsp, r15");
+            ctx.emitter.instruction("mov r15, rsp");                            // stash the entry rsp in r15, which the flush helper preserves
+            ctx.emitter.instruction("and rsp, -16");                            // realign the stack to the 16-byte call boundary
+            ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain buffered output before the fatal report
+            ctx.emitter.instruction("mov rsp, r15");                            // restore the entry rsp once the flush returns
             abi::emit_symbol_address(ctx.emitter, "rsi", fatal_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", fatal_len as i64);
             ctx.emitter.instruction("mov edi, 1");                              // fd = stdout, where PHP writes this report
@@ -502,7 +502,7 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
             // Drain buffered output first: PHP emits it before the report, and this path used to
             // exit without flushing, discarding everything a program had buffered. `bl` leaves sp
             // untouched, so the message slots read below are unaffected.
-            ctx.emitter.instruction("bl __rt_ob_flush_all");
+            ctx.emitter.instruction("bl __rt_ob_flush_all");                    // drain buffered output before the fatal report
             ctx.emitter.instruction("mov x0, #1");                              // fd = stdout for the dynamic-error prefix
             abi::emit_symbol_address(ctx.emitter, "x1", &prefix_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", prefix_len as i64);
@@ -525,10 +525,10 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
             // dynamic form reads its message from temporary stack slots, which `and rsp, -16`
             // alone would move out from under it. r15 is callee-saved and the flush helper
             // touches no callee-saved register.
-            ctx.emitter.instruction("mov r15, rsp");
-            ctx.emitter.instruction("and rsp, -16");
-            ctx.emitter.instruction("call __rt_ob_flush_all");
-            ctx.emitter.instruction("mov rsp, r15");
+            ctx.emitter.instruction("mov r15, rsp");                            // stash the entry rsp in r15, which the flush helper preserves
+            ctx.emitter.instruction("and rsp, -16");                            // realign the stack to the 16-byte call boundary
+            ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain buffered output before the fatal report
+            ctx.emitter.instruction("mov rsp, r15");                            // restore the entry rsp so the message stack slots stay addressable
             abi::emit_symbol_address(ctx.emitter, "rsi", &prefix_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", prefix_len as i64);
             ctx.emitter.instruction("mov edi, 1");                              // fd = stdout for the dynamic-error prefix

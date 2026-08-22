@@ -174,6 +174,7 @@ impl Checker {
             declared_trait_constants: HashMap::new(),
             current_class: None,
             current_method: None,
+            current_function: None,
             current_method_is_static: false,
             current_by_ref_return: false,
             closure_depth: 0,

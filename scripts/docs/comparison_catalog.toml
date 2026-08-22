@@ -169,6 +169,15 @@ notes    = "Driver matrix documented on the PDO page"
 modules  = ["pdo"]
 
 [[extensions]]
+feature  = "mysqli"
+status   = "partial"
+php      = "https://www.php.net/manual/en/book.mysqli.php"
+docs     = "docs/php/mysqli.md"
+evidence = "tests/codegen/mysqli.rs"
+notes    = "Locked v1 subset over the elephc-pdo bridge; divergences on the mysqli page"
+modules  = ["mysqli"]
+
+[[extensions]]
 feature  = "Sessions"
 status   = "supported"
 php      = "https://www.php.net/manual/en/book.session.php"

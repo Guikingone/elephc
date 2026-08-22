@@ -37,27 +37,27 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.instruction("mov x0, #0");                                  // end cleanup ignores the placeholder parse result
             emitter.instruction("bl __rt_unserialize_end");                     // close this opened context exactly once
             emitter.instruction("ldr x9, [sp]");                                // reload rejected runtime tag
-            emitter.instruction("cmp x9, #0");
-            emitter.instruction("b.eq __rt_unser_type_int");
-            emitter.instruction("cmp x9, #1");
-            emitter.instruction("b.eq __rt_unser_type_string");
-            emitter.instruction("cmp x9, #2");
-            emitter.instruction("b.eq __rt_unser_type_float");
-            emitter.instruction("cmp x9, #3");
-            emitter.instruction("b.eq __rt_unser_type_bool");
-            emitter.instruction("cmp x9, #4");
-            emitter.instruction("b.eq __rt_unser_type_array");
-            emitter.instruction("cmp x9, #5");
-            emitter.instruction("b.eq __rt_unser_type_array");
-            emitter.instruction("cmp x9, #6");
-            emitter.instruction("b.eq __rt_unser_type_object");
-            emitter.instruction("cmp x9, #8");
-            emitter.instruction("b.eq __rt_unser_type_null");
-            emitter.instruction("cmp x9, #9");
-            emitter.instruction("b.eq __rt_unser_type_resource");
+            emitter.instruction("cmp x9, #0");                                  // tag 0 = PHP int
+            emitter.instruction("b.eq __rt_unser_type_int");                    // spell the rejected value as int
+            emitter.instruction("cmp x9, #1");                                  // tag 1 = PHP string
+            emitter.instruction("b.eq __rt_unser_type_string");                 // spell the rejected value as string
+            emitter.instruction("cmp x9, #2");                                  // tag 2 = PHP float
+            emitter.instruction("b.eq __rt_unser_type_float");                  // spell the rejected value as float
+            emitter.instruction("cmp x9, #3");                                  // tag 3 = PHP bool
+            emitter.instruction("b.eq __rt_unser_type_bool");                   // spell the rejected value as bool
+            emitter.instruction("cmp x9, #4");                                  // tag 4 = indexed PHP array
+            emitter.instruction("b.eq __rt_unser_type_array");                  // spell the rejected value as array
+            emitter.instruction("cmp x9, #5");                                  // tag 5 = associative PHP array
+            emitter.instruction("b.eq __rt_unser_type_array");                  // both array shapes spell as array
+            emitter.instruction("cmp x9, #6");                                  // tag 6 = PHP object
+            emitter.instruction("b.eq __rt_unser_type_object");                 // objects resolve their concrete class name
+            emitter.instruction("cmp x9, #8");                                  // tag 8 = PHP null
+            emitter.instruction("b.eq __rt_unser_type_null");                   // spell the rejected value as null
+            emitter.instruction("cmp x9, #9");                                  // tag 9 = PHP resource
+            emitter.instruction("b.eq __rt_unser_type_resource");               // spell the rejected value as resource
             crate::codegen_support::abi::emit_symbol_address(emitter, "x3", "_unser_type_unknown");
             emitter.instruction("mov x4, #7");                                  // byte length of unknown
-            emitter.instruction("b __rt_unser_type_ready");
+            emitter.instruction("b __rt_unser_type_ready");                     // unrecognized tags join with the unknown spelling
             for (label, symbol, len) in [
                 ("__rt_unser_type_int", "_unser_type_int", 3),
                 ("__rt_unser_type_string", "_unser_type_string", 6),
@@ -78,7 +78,7 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.instruction("ldr x10, [x9]");                               // object class id
             crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x11", "_class_name_count", 0);
             emitter.instruction("cmp x10, x11");                                // class id within the dense name table?
-            emitter.instruction("b.hs __rt_unser_type_object_generic");
+            emitter.instruction("b.hs __rt_unser_type_object_generic");         // out-of-range ids fall back to the object spelling
             crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_name_entries");
             emitter.instruction("add x11, x11, x10, lsl #4");                   // select the (ptr,len) class-name row
             emitter.instruction("ldp x3, x4, [x11]");                           // use the concrete PHP class name
@@ -139,27 +139,27 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.instruction("xor eax, eax");                                // end cleanup ignores the placeholder result
             emitter.instruction("call __rt_unserialize_end");                   // close this opened context exactly once
             emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                 // rejected runtime tag
-            emitter.instruction("cmp r8, 0");
-            emitter.instruction("je __rt_unser_type_int_x");
-            emitter.instruction("cmp r8, 1");
-            emitter.instruction("je __rt_unser_type_string_x");
-            emitter.instruction("cmp r8, 2");
-            emitter.instruction("je __rt_unser_type_float_x");
-            emitter.instruction("cmp r8, 3");
-            emitter.instruction("je __rt_unser_type_bool_x");
-            emitter.instruction("cmp r8, 4");
-            emitter.instruction("je __rt_unser_type_array_x");
-            emitter.instruction("cmp r8, 5");
-            emitter.instruction("je __rt_unser_type_array_x");
-            emitter.instruction("cmp r8, 6");
-            emitter.instruction("je __rt_unser_type_object_x");
-            emitter.instruction("cmp r8, 8");
-            emitter.instruction("je __rt_unser_type_null_x");
-            emitter.instruction("cmp r8, 9");
-            emitter.instruction("je __rt_unser_type_resource_x");
+            emitter.instruction("cmp r8, 0");                                   // tag 0 = PHP int
+            emitter.instruction("je __rt_unser_type_int_x");                    // spell the rejected value as int
+            emitter.instruction("cmp r8, 1");                                   // tag 1 = PHP string
+            emitter.instruction("je __rt_unser_type_string_x");                 // spell the rejected value as string
+            emitter.instruction("cmp r8, 2");                                   // tag 2 = PHP float
+            emitter.instruction("je __rt_unser_type_float_x");                  // spell the rejected value as float
+            emitter.instruction("cmp r8, 3");                                   // tag 3 = PHP bool
+            emitter.instruction("je __rt_unser_type_bool_x");                   // spell the rejected value as bool
+            emitter.instruction("cmp r8, 4");                                   // tag 4 = indexed PHP array
+            emitter.instruction("je __rt_unser_type_array_x");                  // spell the rejected value as array
+            emitter.instruction("cmp r8, 5");                                   // tag 5 = associative PHP array
+            emitter.instruction("je __rt_unser_type_array_x");                  // both array shapes spell as array
+            emitter.instruction("cmp r8, 6");                                   // tag 6 = PHP object
+            emitter.instruction("je __rt_unser_type_object_x");                 // objects resolve their concrete class name
+            emitter.instruction("cmp r8, 8");                                   // tag 8 = PHP null
+            emitter.instruction("je __rt_unser_type_null_x");                   // spell the rejected value as null
+            emitter.instruction("cmp r8, 9");                                   // tag 9 = PHP resource
+            emitter.instruction("je __rt_unser_type_resource_x");               // spell the rejected value as resource
             emitter.instruction("lea rdi, [rip + _unser_type_unknown]");        // unknown runtime tag spelling
             emitter.instruction("mov rsi, 7");                                  // byte length of unknown
-            emitter.instruction("jmp __rt_unser_type_ready_x");
+            emitter.instruction("jmp __rt_unser_type_ready_x");                 // unrecognized tags join with the unknown spelling
             for (label, symbol, len) in [
                 ("__rt_unser_type_int_x", "_unser_type_int", 3),
                 ("__rt_unser_type_string_x", "_unser_type_string", 6),
@@ -176,19 +176,19 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             }
             emitter.label("__rt_unser_type_object_x");
             emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                // rejected object payload
-            emitter.instruction("test r8, r8");
-            emitter.instruction("jz __rt_unser_type_object_generic_x");
+            emitter.instruction("test r8, r8");                                 // null payload has no class metadata
+            emitter.instruction("jz __rt_unser_type_object_generic_x");         // fall back to the generic object spelling
             emitter.instruction("mov r9, QWORD PTR [r8]");                      // object class id
             emitter.instruction("mov r10, QWORD PTR [rip + _class_name_count]"); // dense class-name table bound
-            emitter.instruction("cmp r9, r10");
-            emitter.instruction("jae __rt_unser_type_object_generic_x");
+            emitter.instruction("cmp r9, r10");                                 // class id within the dense name table?
+            emitter.instruction("jae __rt_unser_type_object_generic_x");        // out-of-range ids fall back to the object spelling
             emitter.instruction("lea r10, [rip + _class_name_entries]");        // class-name metadata base
             emitter.instruction("shl r9, 4");                                   // one pointer/length pair per class id
-            emitter.instruction("add r10, r9");
+            emitter.instruction("add r10, r9");                                 // select the (ptr,len) class-name row
             emitter.instruction("mov rdi, QWORD PTR [r10]");                    // concrete class-name pointer
             emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                // concrete class-name length
-            emitter.instruction("test rsi, rsi");
-            emitter.instruction("jnz __rt_unser_type_ready_x");
+            emitter.instruction("test rsi, rsi");                               // empty metadata falls back to object
+            emitter.instruction("jnz __rt_unser_type_ready_x");                 // use the concrete PHP class name
             emitter.label("__rt_unser_type_object_generic_x");
             emitter.instruction("lea rdi, [rip + _unser_type_object]");         // generic fallback type name
             emitter.instruction("mov rsi, 6");                                  // byte length of object
@@ -309,7 +309,7 @@ pub(super) fn emit_unserialize_object_string_error_helper(emitter: &mut Emitter)
             emitter.instruction("mov r10, QWORD PTR [r9]");                     // borrow static class-name pointer
             emitter.instruction("mov r11, QWORD PTR [r9 + 8]");                 // borrow static class-name length
             emitter.instruction("test r11, r11");                               // empty metadata falls back to object
-            emitter.instruction("jnz __rt_unser_object_string_name_ready_x");
+            emitter.instruction("jnz __rt_unser_object_string_name_ready_x");   // non-empty metadata is safe after context cleanup
             emitter.label("__rt_unser_object_string_name_fallback_x");
             emitter.instruction("lea r10, [rip + _unser_type_object]");         // generic object class spelling
             emitter.instruction("mov r11, 6");                                  // fallback name byte length

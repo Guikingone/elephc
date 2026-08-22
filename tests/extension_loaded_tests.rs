@@ -157,6 +157,110 @@ fn with_bcmath_reports_extension_loaded() {
     assert_eq!(run_binary(&bin), "yes");
 }
 
+/// Verifies a program that auto-detects PDO usage (no `--with-pdo`) reports the PDO
+/// extension from the injected PHP surface — and does NOT report mysqli, even though
+/// both surfaces link the same `elephc_pdo` archive. Guards the surface-based
+/// reporting split: the linked archive alone must not imply any PHP extension.
+#[test]
+fn pdo_usage_still_reports_pdo_without_mysqli() {
+    let dir = make_test_dir("ext_pdo_not_mysqli");
+    let src = "<?php new PDO('sqlite::memory:'); \
+        var_dump(extension_loaded('PDO')); \
+        var_dump(extension_loaded('mysqli'));";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    let out = run_binary(&bin);
+    assert_eq!(
+        out, "bool(true)\nbool(false)\n",
+        "PDO usage: PDO loaded from the injected surface, mysqli not loaded"
+    );
+}
+
+/// Verifies a mysqli-only program reports mysqli — and not PDO — even though both
+/// surfaces link the same `elephc_pdo` archive: reporting tracks the injected PHP
+/// surface, not the staticlib.
+#[test]
+fn mysqli_usage_reports_mysqli_not_pdo() {
+    let dir = make_test_dir("ext_mysqli_not_pdo");
+    let src = "<?php new mysqli(); \
+        var_dump(extension_loaded('mysqli')); \
+        var_dump(extension_loaded('PDO')); \
+        var_dump(extension_loaded('mysqlnd'));";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    let out = run_binary(&bin);
+    assert_eq!(
+        out, "bool(true)\nbool(false)\nbool(false)\n",
+        "mysqli usage: mysqli loaded, PDO not loaded, mysqlnd never reported"
+    );
+}
+
+/// Verifies `--with-mysqli` force-injects the mysqli surface for a program with no
+/// static mysqli reference, without dragging the PDO classes or extension along.
+#[test]
+fn with_mysqli_force_injects_without_static_new() {
+    let dir = make_test_dir("ext_with_mysqli");
+    let src = "<?php var_dump(class_exists('mysqli')); \
+        var_dump(extension_loaded('mysqli')); \
+        var_dump(extension_loaded('PDO')); \
+        var_dump(class_exists('PDO'));";
+    let bin = compile_with_flags(&dir, src, "app", &["--with-mysqli"]);
+    let out = run_binary(&bin);
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(false)\nbool(false)\n",
+        "--with-mysqli: mysqli class + extension present, PDO absent"
+    );
+}
+
+/// Verifies `--with-mysqli` roots the injected surface for reachability like
+/// `--with-pdo` (forced prelude group): with only an `extension_loaded` probe in
+/// the source — no static class/function reference and no dynamic hazard — the
+/// mysqli classes and methods must survive the compiler's dead-code
+/// elimination into the emitted code. (The LINKER may still strip functions
+/// nothing in this particular binary references — that is per-binary and
+/// reference-driven; the compiler-level keep is what `--with-mysqli`
+/// guarantees, and what a program with any dynamic-lookup hazard relies on.)
+#[test]
+fn with_mysqli_forces_surface_past_reachability() {
+    let dir = make_test_dir("ext_with_mysqli_dce");
+    let src = "<?php var_dump(extension_loaded('mysqli'));";
+    let bin = compile_with_flags(&dir, src, "app", &["--with-mysqli"]);
+    let out = run_binary(&bin);
+    assert_eq!(out, "bool(true)\n");
+    let php = dir.join("asm.php");
+    fs::write(&php, src).unwrap();
+    let mut cmd = Command::new(elephc_bin());
+    cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.current_dir(&dir);
+    cmd.args(["--with-mysqli", "--emit-asm"]).arg(&php);
+    let output = cmd.output().expect("failed to spawn elephc --emit-asm");
+    assert!(
+        output.status.success(),
+        "elephc --emit-asm failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(dir.join("asm.s")).expect("emitted assembly missing");
+    assert!(
+        asm.contains("_method_mysqli_query"),
+        "--with-mysqli: forced mysqli surface was dead-code-eliminated (mysqli::query missing from emitted code)"
+    );
+}
+
+/// Verifies a program using BOTH surfaces reports both extensions (they share one
+/// archive; the shared externs must be declared exactly once for this to compile).
+#[test]
+fn pdo_and_mysqli_usage_reports_both() {
+    let dir = make_test_dir("ext_pdo_and_mysqli");
+    let src = "<?php new PDO('sqlite::memory:'); new mysqli(); \
+        var_dump(extension_loaded('PDO')); \
+        var_dump(extension_loaded('mysqli'));";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    let out = run_binary(&bin);
+    assert_eq!(
+        out, "bool(true)\nbool(true)\n",
+        "both surfaces: PDO and mysqli both loaded"
+    );
+}
+
 /// Verifies extension-name matching is case-insensitive (PHP semantics): `--with-tls`
 /// makes `extension_loaded('openssl')` and `extension_loaded('OpenSSL')` both report true.
 #[test]

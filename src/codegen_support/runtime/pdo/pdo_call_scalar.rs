@@ -127,36 +127,36 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, x13");                                   // x11 = &argv[k]
     emitter.instruction("ldr x14, [x11, #0]");                                  // load the ElephcVal storage-class tag
     emitter.instruction("cmp x14, #1");                                         // SQLITE_INTEGER?
-    emitter.instruction("b.eq __rt_pdo_call_scalar_box_int");
+    emitter.instruction("b.eq __rt_pdo_call_scalar_box_int");                   // yes → box as a Mixed int
     emitter.instruction("cmp x14, #2");                                         // SQLITE_FLOAT?
-    emitter.instruction("b.eq __rt_pdo_call_scalar_box_float");
+    emitter.instruction("b.eq __rt_pdo_call_scalar_box_float");                 // yes → box as a Mixed float
     emitter.instruction("cmp x14, #3");                                         // SQLITE_TEXT?
-    emitter.instruction("b.eq __rt_pdo_call_scalar_box_str");
+    emitter.instruction("b.eq __rt_pdo_call_scalar_box_str");                   // yes → box as a Mixed string
     emitter.instruction("cmp x14, #4");                                         // SQLITE_BLOB?
-    emitter.instruction("b.eq __rt_pdo_call_scalar_box_str");
+    emitter.instruction("b.eq __rt_pdo_call_scalar_box_str");                   // yes → blobs box as Mixed strings too
     // -- tag 0 (SQLITE_NULL) or any unexpected code → PHP null (Mixed tag 8) --
     emitter.instruction("mov x0, #8");                                          // runtime tag 8 = Void/NULL
     emitter.instruction("mov x1, #0");                                          // value_lo unused
     emitter.instruction("mov x2, #0");                                          // value_hi unused
-    emitter.instruction("b __rt_pdo_call_scalar_box_call");
+    emitter.instruction("b __rt_pdo_call_scalar_box_call");                     // box the PHP null via the shared boxing tail
     // -- SQLITE_INTEGER → Mixed int (tag 0) --
     emitter.label("__rt_pdo_call_scalar_box_int");
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = int
     emitter.instruction("ldr x1, [x11, #8]");                                   // value_lo = ElephcVal.i
     emitter.instruction("mov x2, #0");                                          // value_hi unused
-    emitter.instruction("b __rt_pdo_call_scalar_box_call");
+    emitter.instruction("b __rt_pdo_call_scalar_box_call");                     // box the int via the shared boxing tail
     // -- SQLITE_FLOAT → Mixed float (tag 2); the f64 bit-pattern travels in lo --
     emitter.label("__rt_pdo_call_scalar_box_float");
     emitter.instruction("mov x0, #2");                                          // runtime tag 2 = float
     emitter.instruction("ldr x1, [x11, #16]");                                  // value_lo = ElephcVal.f raw f64 bit-pattern (integer reg, not FP)
     emitter.instruction("mov x2, #0");                                          // value_hi unused
-    emitter.instruction("b __rt_pdo_call_scalar_box_call");
+    emitter.instruction("b __rt_pdo_call_scalar_box_call");                     // box the float via the shared boxing tail
     // -- SQLITE_TEXT/BLOB → Mixed string (tag 1); from_value deep-copies the bytes --
     emitter.label("__rt_pdo_call_scalar_box_str");
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string (binary-safe: no separate blob tag)
     emitter.instruction("ldr x1, [x11, #24]");                                  // value_lo = ElephcVal.ptr (byte pointer)
     emitter.instruction("ldr x2, [x11, #32]");                                  // value_hi = ElephcVal.len (explicit byte length)
-    emitter.instruction("b __rt_pdo_call_scalar_box_call");
+    emitter.instruction("b __rt_pdo_call_scalar_box_call");                     // box the string via the shared boxing tail
     // -- box the (tag, lo, hi) triple and store it into args array slot k --
     emitter.label("__rt_pdo_call_scalar_box_call");
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = owned boxed Mixed argument
@@ -218,53 +218,53 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #288]");                                  // boxed return
     emitter.instruction("bl __rt_mixed_unbox");                                 // x0 = tag, x1 = lo, x2 = hi (tag-7 wrappers peeled)
     emitter.instruction("cmp x0, #0");                                          // Mixed int?
-    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_int");
+    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_int");                   // yes → emit an INT result
     emitter.instruction("cmp x0, #2");                                          // Mixed float?
-    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_float");
+    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_float");                 // yes → emit a FLOAT result
     emitter.instruction("cmp x0, #1");                                          // Mixed string?
-    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_string");
+    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_string");                // yes → stage the bytes and emit TEXT
     emitter.instruction("cmp x0, #3");                                          // Mixed bool?
-    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_bool");
+    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_bool");                  // yes → emit a BOOL result
     emitter.instruction("cmp x0, #4");                                          // Mixed indexed array?
-    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_array");
+    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_array");                 // yes → report an unsupported array
     emitter.instruction("cmp x0, #5");                                          // Mixed associative array?
-    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_array");
+    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_array");                 // yes → report an unsupported array
     emitter.instruction("cmp x0, #6");                                          // Mixed object?
-    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_object");
+    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_object");                // yes → report an unsupported object
     emitter.instruction("cmp x0, #10");                                         // Mixed callable descriptor?
-    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_object");
+    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_object");                // yes → report an unsupported callable
     // -- tag 8 (null) or an unknown tag → SQL NULL --
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("str xzr, [x11, #0]");                                  // out.tag = 0 (NULL)
-    emitter.instruction("b __rt_pdo_call_scalar_release_return");
+    emitter.instruction("b __rt_pdo_call_scalar_release_return");               // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_scalar_ret_int");
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("mov x10, #1");                                         // ElephcResult tag 1 = INT
     emitter.instruction("str x10, [x11, #0]");                                  // out.tag = 1
     emitter.instruction("str x1, [x11, #8]");                                   // out.i = lo (int64 value)
-    emitter.instruction("b __rt_pdo_call_scalar_release_return");
+    emitter.instruction("b __rt_pdo_call_scalar_release_return");               // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_scalar_ret_float");
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("mov x10, #2");                                         // ElephcResult tag 2 = FLOAT
     emitter.instruction("str x10, [x11, #0]");                                  // out.tag = 2
     emitter.instruction("str x1, [x11, #16]");                                  // out.f = lo (raw f64 bit-pattern → stored as f64)
-    emitter.instruction("b __rt_pdo_call_scalar_release_return");
+    emitter.instruction("b __rt_pdo_call_scalar_release_return");               // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_scalar_ret_bool");
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("mov x10, #5");                                         // ElephcResult tag 5 = BOOL
     emitter.instruction("str x10, [x11, #0]");                                  // out.tag = 5
     emitter.instruction("str x1, [x11, #8]");                                   // out.i = lo (0/1)
-    emitter.instruction("b __rt_pdo_call_scalar_release_return");
+    emitter.instruction("b __rt_pdo_call_scalar_release_return");               // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_scalar_ret_array");
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("mov x10, #6");                                         // ElephcResult tag 6 = unsupported PHP array
     emitter.instruction("str x10, [x11, #0]");                                  // report the array type to the bridge
-    emitter.instruction("b __rt_pdo_call_scalar_release_return");
+    emitter.instruction("b __rt_pdo_call_scalar_release_return");               // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_scalar_ret_object");
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("mov x10, #7");                                         // ElephcResult tag 7 = unsupported PHP object/callable
     emitter.instruction("str x10, [x11, #0]");                                  // report the object type to the bridge
-    emitter.instruction("b __rt_pdo_call_scalar_release_return");
+    emitter.instruction("b __rt_pdo_call_scalar_release_return");               // result written → release the owned boxed return
     // -- string: stage the bytes into the bridge BEFORE releasing the owned box --
     emitter.label("__rt_pdo_call_scalar_ret_string");
     emitter.instruction("mov x0, x1");                                          // stash arg0 = byte pointer (unbox lo)
@@ -274,7 +274,7 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("mov x10, #3");                                         // ElephcResult tag 3 = TEXT (bytes live in the stash)
     emitter.instruction("str x10, [x11, #0]");                                  // out.tag = 3
-    emitter.instruction("b __rt_pdo_call_scalar_release_return");
+    emitter.instruction("b __rt_pdo_call_scalar_release_return");               // result written → release the owned boxed return
 
     // -- release the owned boxed return, then the argument container --
     emitter.label("__rt_pdo_call_scalar_release_return");
@@ -368,36 +368,36 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, rax");                                        // r11 = &argv[k]
     emitter.instruction("mov r8, QWORD PTR [r11 + 0]");                         // load the ElephcVal storage-class tag
     emitter.instruction("cmp r8, 1");                                           // SQLITE_INTEGER?
-    emitter.instruction("je __rt_pdo_call_scalar_box_int_x86");
+    emitter.instruction("je __rt_pdo_call_scalar_box_int_x86");                 // yes → box as a Mixed int
     emitter.instruction("cmp r8, 2");                                           // SQLITE_FLOAT?
-    emitter.instruction("je __rt_pdo_call_scalar_box_float_x86");
+    emitter.instruction("je __rt_pdo_call_scalar_box_float_x86");               // yes → box as a Mixed float
     emitter.instruction("cmp r8, 3");                                           // SQLITE_TEXT?
-    emitter.instruction("je __rt_pdo_call_scalar_box_str_x86");
+    emitter.instruction("je __rt_pdo_call_scalar_box_str_x86");                 // yes → box as a Mixed string
     emitter.instruction("cmp r8, 4");                                           // SQLITE_BLOB?
-    emitter.instruction("je __rt_pdo_call_scalar_box_str_x86");
+    emitter.instruction("je __rt_pdo_call_scalar_box_str_x86");                 // yes → blobs box as Mixed strings too
     // -- tag 0 (SQLITE_NULL) or any unexpected code → PHP null (Mixed tag 8) --
     emitter.instruction("mov eax, 8");                                          // runtime tag 8 = Void/NULL
     emitter.instruction("xor edi, edi");                                        // value_lo unused
     emitter.instruction("xor esi, esi");                                        // value_hi unused
-    emitter.instruction("jmp __rt_pdo_call_scalar_box_call_x86");
+    emitter.instruction("jmp __rt_pdo_call_scalar_box_call_x86");               // box the PHP null via the shared boxing tail
     // -- SQLITE_INTEGER → Mixed int (tag 0) --
     emitter.label("__rt_pdo_call_scalar_box_int_x86");
     emitter.instruction("mov eax, 0");                                          // runtime tag 0 = int
     emitter.instruction("mov rdi, QWORD PTR [r11 + 8]");                        // value_lo = ElephcVal.i
     emitter.instruction("xor esi, esi");                                        // value_hi unused
-    emitter.instruction("jmp __rt_pdo_call_scalar_box_call_x86");
+    emitter.instruction("jmp __rt_pdo_call_scalar_box_call_x86");               // box the int via the shared boxing tail
     // -- SQLITE_FLOAT → Mixed float (tag 2); the f64 bit-pattern travels in lo --
     emitter.label("__rt_pdo_call_scalar_box_float_x86");
     emitter.instruction("mov eax, 2");                                          // runtime tag 2 = float
     emitter.instruction("mov rdi, QWORD PTR [r11 + 16]");                       // value_lo = ElephcVal.f raw f64 bit-pattern (integer reg, not xmm)
     emitter.instruction("xor esi, esi");                                        // value_hi unused
-    emitter.instruction("jmp __rt_pdo_call_scalar_box_call_x86");
+    emitter.instruction("jmp __rt_pdo_call_scalar_box_call_x86");               // box the float via the shared boxing tail
     // -- SQLITE_TEXT/BLOB → Mixed string (tag 1); from_value deep-copies the bytes --
     emitter.label("__rt_pdo_call_scalar_box_str_x86");
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string (binary-safe: no separate blob tag)
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // value_lo = ElephcVal.ptr (byte pointer)
     emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");                       // value_hi = ElephcVal.len (explicit byte length)
-    emitter.instruction("jmp __rt_pdo_call_scalar_box_call_x86");
+    emitter.instruction("jmp __rt_pdo_call_scalar_box_call_x86");               // box the string via the shared boxing tail
     // -- box the (tag, lo, hi) triple and store it into args array slot k --
     emitter.label("__rt_pdo_call_scalar_box_call_x86");
     emitter.instruction("call __rt_mixed_from_value");                          // rax = owned boxed Mixed argument
@@ -451,48 +451,48 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // boxed return (unbox reads RAX)
     emitter.instruction("call __rt_mixed_unbox");                               // rax = tag, rdi = lo, rdx = hi (tag-7 wrappers peeled)
     emitter.instruction("cmp rax, 0");                                          // Mixed int?
-    emitter.instruction("je __rt_pdo_call_scalar_ret_int_x86");
+    emitter.instruction("je __rt_pdo_call_scalar_ret_int_x86");                 // yes → emit an INT result
     emitter.instruction("cmp rax, 2");                                          // Mixed float?
-    emitter.instruction("je __rt_pdo_call_scalar_ret_float_x86");
+    emitter.instruction("je __rt_pdo_call_scalar_ret_float_x86");               // yes → emit a FLOAT result
     emitter.instruction("cmp rax, 1");                                          // Mixed string?
-    emitter.instruction("je __rt_pdo_call_scalar_ret_string_x86");
+    emitter.instruction("je __rt_pdo_call_scalar_ret_string_x86");              // yes → stage the bytes and emit TEXT
     emitter.instruction("cmp rax, 3");                                          // Mixed bool?
-    emitter.instruction("je __rt_pdo_call_scalar_ret_bool_x86");
+    emitter.instruction("je __rt_pdo_call_scalar_ret_bool_x86");                // yes → emit a BOOL result
     emitter.instruction("cmp rax, 4");                                          // Mixed indexed array?
-    emitter.instruction("je __rt_pdo_call_scalar_ret_array_x86");
+    emitter.instruction("je __rt_pdo_call_scalar_ret_array_x86");               // yes → report an unsupported array
     emitter.instruction("cmp rax, 5");                                          // Mixed associative array?
-    emitter.instruction("je __rt_pdo_call_scalar_ret_array_x86");
+    emitter.instruction("je __rt_pdo_call_scalar_ret_array_x86");               // yes → report an unsupported array
     emitter.instruction("cmp rax, 6");                                          // Mixed object?
-    emitter.instruction("je __rt_pdo_call_scalar_ret_object_x86");
+    emitter.instruction("je __rt_pdo_call_scalar_ret_object_x86");              // yes → report an unsupported object
     emitter.instruction("cmp rax, 10");                                         // Mixed callable descriptor?
-    emitter.instruction("je __rt_pdo_call_scalar_ret_object_x86");
+    emitter.instruction("je __rt_pdo_call_scalar_ret_object_x86");              // yes → report an unsupported callable
     // -- tag 8 (null) or an unknown tag → SQL NULL --
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], 0");                              // out.tag = 0 (NULL)
-    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");
+    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");         // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_scalar_ret_int_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], 1");                              // out.tag = 1 (INT)
     emitter.instruction("mov QWORD PTR [r11 + 8], rdi");                        // out.i = lo (int64 value)
-    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");
+    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");         // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_scalar_ret_float_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], 2");                              // out.tag = 2 (FLOAT)
     emitter.instruction("mov QWORD PTR [r11 + 16], rdi");                       // out.f = lo (raw f64 bit-pattern → stored as f64)
-    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");
+    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");         // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_scalar_ret_bool_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], 5");                              // out.tag = 5 (BOOL)
     emitter.instruction("mov QWORD PTR [r11 + 8], rdi");                        // out.i = lo (0/1)
-    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");
+    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");         // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_scalar_ret_array_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], 6");                              // out.tag = unsupported PHP array
-    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");
+    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");         // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_scalar_ret_object_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], 7");                              // out.tag = unsupported PHP object/callable
-    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");
+    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");         // result written → release the owned boxed return
     // -- string: stage the bytes into the bridge BEFORE releasing the owned box --
     emitter.label("__rt_pdo_call_scalar_ret_string_x86");
     emitter.instruction("mov rsi, rdx");                                        // stash arg1 = byte length (unbox hi), before rdx is reused
@@ -501,7 +501,7 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     emitter.bl_c("elephc_pdo_udf_stash_bytes"); // deep-copy the string bytes into the bridge's per-thread stash
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], 3");                              // out.tag = 3 (TEXT; bytes live in the stash)
-    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");
+    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");         // result written → release the owned boxed return
 
     // -- release the owned boxed return, then the argument container --
     emitter.label("__rt_pdo_call_scalar_release_return_x86");
@@ -518,7 +518,7 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0); // take ownership of the pending Throwable
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // clear the exception slot before release
     emitter.instruction("test rax, rax");                                       // was a Throwable actually published?
-    emitter.instruction("jz __rt_pdo_call_scalar_threw_released_x86");         // tolerate a defensive null exception slot
+    emitter.instruction("jz __rt_pdo_call_scalar_threw_released_x86");          // tolerate a defensive null exception slot
     emitter.instruction("call __rt_decref_any");                                // release the caught Throwable object
     emitter.label("__rt_pdo_call_scalar_threw_released_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer

@@ -317,10 +317,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.label("__rt_unser_at_array_close");
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // closing-brace position
     emitter.instruction("cmp r8, QWORD PTR [rbp - 24]");                        // require the closing delimiter byte
-    emitter.instruction("jae __rt_unser_at_array_fail");
+    emitter.instruction("jae __rt_unser_at_array_fail");                        // input ended before the closing '}'
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // source base
     emitter.instruction("cmp BYTE PTR [r9 + r8], 125");                         // exact `}`
-    emitter.instruction("jne __rt_unser_at_array_fail");
+    emitter.instruction("jne __rt_unser_at_array_fail");                        // anything but '}' fails the array
     emitter.instruction("mov rax, 24");                                         // box the hash: Mixed cell = tag + two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate the boxed Mixed cell
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the hash pointer
@@ -368,7 +368,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("call __rt_unserialize_class_allowed");                 // decide whether hydration is permitted
     emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // retain policy result until hook/property dispatch
     emitter.instruction("test rax, rax");                                       // blocked classes become incomplete objects
-    emitter.instruction("jz __rt_unser_obj_incomplete_x");
+    emitter.instruction("jz __rt_unser_obj_incomplete_x");                      // build the incomplete object instead
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload class-name start after helper call
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload class-name length after helper call
     emitter.instruction("mov rax, r10");                                        // class-name pointer (new_by_name arg)

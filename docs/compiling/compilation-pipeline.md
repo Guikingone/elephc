@@ -15,7 +15,7 @@ directly back to a stage here.
 ```text
 Physical source (.php or .lfc)
   -> read              read the source file from disk
-  -> classify          select tagged PHP or tagless LFC mode from its path
+  -> (classify)        select tagged PHP or tagless LFC mode from its path
   -> tokenize          Lexer: text -> tokens
   -> parse             Parser: tokens -> AST (Pratt expression parsing)
   -> magic-constants   lower __FILE__, __DIR__, __LINE__, __FUNCTION__, ...
@@ -24,6 +24,7 @@ Physical source (.php or .lfc)
   -> autoload-build    discover autoload rules
   -> resolve           resolve include/require and declarations
   -> pdo-prelude        inject the PDO prelude when used
+  -> mysqli-prelude     inject the mysqli prelude when used (shares the elephc_pdo bridge)
   -> tz-prelude         inject the timezone-introspection prelude when used
   -> list-id-prelude    inject the DateTimeZone identifier-list prelude when used
   -> var-export-prelude inject the var_export prelude when used
@@ -36,7 +37,7 @@ Physical source (.php or .lfc)
   -> autoload-run       run autoload insertion
   -> func-args          desugar func_num_args/get_args/get_arg to a hidden variadic
   -> opcache-manifest-bake complete and bake the post-autoload OPcache script manifest
-  -> opt-fold           AST constant folding
+  -> opt-fold           seed CLI superglobals + AST constant folding
   -> typecheck          Type checker / warnings
   -> exports-scan       collect #[Export] functions (cdylib)
   -> opt-prop           AST constant propagation
@@ -72,7 +73,7 @@ Physical source (.php or .lfc)
   passed with [`--define`](linking-and-conditional-compilation.md#conditional-compilation).
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
   resolved, declarations are discovered, and demand-loaded PHP preludes for PDO,
-  timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
+  mysqli, timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
   OPcache, image processing, incremental hash contexts, and the PHP version/SAPI
   surface are injected only when referenced. The web runtime prelude is injected
   with `--web`, and namespace/`use` rules rewrite references to fully-qualified
@@ -91,13 +92,13 @@ Physical source (.php or .lfc)
 ## Middle: AST optimization
 
 The AST optimizer runs PHP-preserving rewrites that are naturally expressed over
-syntax: **opt-fold** (constant folding), **opt-prop** (constant propagation),
+syntax: **opt-fold** (CLI superglobal seeding and constant folding), **opt-prop** (constant propagation),
 **opt-post** (constant control-flow pruning), **opt-norm** (control-flow
 normalization), **dce** (dead-code elimination), and **decl-reach**
 (whole-program declaration reachability). The last pass removes unreachable
 functions, classes, and methods and reconciles checked method/vtable metadata
 before EIR lowering. It remains conservative around `eval`, dynamic calls,
-`unserialize`, and Reflection. Forced preludes such as `--with-pdo`,
+`unserialize`, and Reflection. The forced preludes `--with-pdo`, `--with-mysqli`,
 `--with-tz`, and `--with-image` are roots; `--web` keeps only the web surface
 reachable from its bootstrap and user program. See
 [The Optimizer](../internals/the-optimizer.md). These always run; they are not
@@ -111,7 +112,8 @@ behind a flag.
   [The EIR Design](../internals/the-ir.md).
 - **ir-opt** — the [EIR optimization passes](optimization.md#eir-optimization-passes)
   run a fixed-point driver over each function: identity arithmetic folding,
-  local peephole rewrites, constant folding, common-subexpression elimination,
+  local peephole rewrites, immutable-local load classification, checked-integer
+  sinking, constant folding, common-subexpression elimination,
   loop-invariant code motion, CFG-aware dead-instruction elimination, dead-store
   elimination, and branch simplification. In
   debug/test builds the function is re-validated after every pass. This phase

@@ -69,8 +69,8 @@ resources than the initial reservation holds grows the table on the heap as usua
 | `fseek()` | `fseek(resource $handle, $offset [, $whence]): int` | Seek a stream. User wrappers route through `stream_seek()`. |
 | `ftell()` | `ftell(resource $handle): int` | Return the current stream position. User wrappers route through `stream_tell()`. |
 | `rewind()` | `rewind(resource $handle): bool` | Seek to the start of the stream. |
-| `fgetcsv()` | `fgetcsv(resource $handle, ?int $length = null, string $separator = ',', string $enclosure = '"', string $escape = ''): array` | Read and parse one CSV line. Custom separator, enclosure, and escape (PHP 8.4 default `''` = RFC 4180 doubling mode) are honored. User wrappers are read through `stream_read()`. |
-| `fputcsv()` | `fputcsv(resource $handle, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = "\n"): int` | Format and write one CSV line with custom separator, enclosure, escape, and end-of-line (PHP 8.1+ `eol`). User wrappers are written through `stream_write()`. |
+| `fgetcsv()` | `fgetcsv(mixed $stream, ?int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): array\|false` | Read and parse one CSV line, or `false` at end of file — the arm that terminates the manual's `while (($row = fgetcsv($h)) !== false)` loop; an empty CSV line still returns an array. Custom separator, enclosure and escape are honored. User wrappers are read through `stream_read()`. |
+| `fputcsv()` | `fputcsv(mixed $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = "\n"): int\|false` | Format and write one CSV line with custom separator, enclosure, escape and end-of-line (PHP 8.1+ `$eol`). User wrappers are written through `stream_write()`. |
 | `readline()` | `readline([$prompt]): string` | Read a line from standard input. |
 | `readfile()` | `readfile($filename, bool $use_include_path = false, $context = null): int\|false` | Open a path or wrapper URL, stream it to stdout, and return copied bytes; returns `false` when open fails. Remote URLs are read through the same wrapper `file_get_contents()` uses, and `$context` is honored. |
 | `fpassthru()` | `fpassthru(resource $handle): int` | Stream the remaining bytes of an open handle to stdout, returning `-1` on read failure. |
@@ -506,6 +506,12 @@ Supported wrapper methods include `stream_open`, `stream_read`, `stream_write`,
 `stream_stat`, `stream_lock`, `stream_truncate`, `stream_metadata`,
 `stream_set_option`, `stream_cast`, `url_stat`, and the directory methods
 `dir_opendir`, `dir_readdir`, `dir_rewinddir`, and `dir_closedir`.
+
+`url_stat` is consulted by the whole stat family — `stat()`, `lstat()`,
+`file_exists()`, `filesize()`, `filemtime()`, `is_file()`, `is_dir()`,
+`is_readable()`, `is_writable()`, `is_writeable()`, and `is_executable()` — each
+handing the wrapper the same `STREAM_URL_STAT_*` flag values reference PHP
+passes. See [System & I/O](system-and-io.md) for the per-builtin semantics.
 
 Wrapper methods should declare return types that match their PHP contracts.
 `stream_stat()` and `url_stat()` are exceptions: declare them without a return

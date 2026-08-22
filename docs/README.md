@@ -35,9 +35,11 @@ Everything about driving the compiler: the command-line flags and the full path 
 
 ## PHP Syntax
 
-Standard PHP features supported by elephc. Implemented PHP syntax is intended to match PHP behavior; known compatibility gaps are documented on the relevant reference pages and tracked in the roadmap.
+Standard PHP features supported by elephc. Implemented PHP syntax is intended to match PHP behavior; known compatibility gaps are documented on the relevant reference pages and tracked in the [roadmap](../ROADMAP.md).
 
 - [Types](php/types.md) — int, float, string, bool, array, null, mixed, callable, enum, union types, extension types, type casting
+- [Built-in functions](php/builtins.md) — the generated index of every built-in: signature, availability (AOT / `eval()`), and implementation links
+- [PHP compatibility](php/compatibility.md) — the generated builtin-coverage report against the pinned reference PHP version
 - [Operators](php/operators.md) — arithmetic, comparison, `instanceof`, logical, bitwise, string, assignment, ternary, null coalescing, error control
 - [Control Structures](php/control-structures.md) — if/else, while, for, foreach, switch, match, multi-level break/continue, try/catch/finally
 - [Functions](php/functions.md) — declarations, closures, arrow functions, named arguments, variadic, spread, pass-by-reference, first-class callables, static variables
@@ -58,6 +60,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Fibers](php/fibers.md) — cooperative coroutines (PHP 8.1+ Fiber): start, suspend, resume, FiberError
 - [Generators](php/generators.md) — `yield`, `yield from`, `Generator::send` / `throw` / `getReturn`, stackful coroutine codegen
 - [PDO (Databases)](php/pdo.md) — PDO connections, prepared statements, fetch modes, transactions, and PDOException for SQLite, PostgreSQL, and MySQL/MariaDB drivers
+- [mysqli (MySQL / MariaDB)](php/mysqli.md) — the mysqli subset over the same pure-Rust MySQL client: buffered results, prepared statements, multi_query, and mysqli_report error handling
 - [Date and Time](php/datetime.md) — `DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DateInterval`: construct, format, setters, `add`/`sub`, `diff`
 - [Calendar](php/calendar.md) — `ext/calendar`: Julian Day conversions for the Gregorian, Julian, French Republican and Jewish calendars, Easter, day/month names, `cal_*` dispatch
 - [Images](php/image.md) — GD image creation, I/O, color, drawing, text, transforms/filters, Exif/IPTC metadata, the Imagick (`Imagick`/`ImagickDraw`/`ImagickPixel`/`ImagickPixelIterator`/`ImagickKernel`) and Gmagick (`Gmagick`/`GmagickDraw`/`GmagickPixel`) object APIs, and Cairo 2D vector drawing (`CairoImageSurface`/`CairoContext`/`CairoMatrix`/patterns/gradients), plus `getimagesize`/`image_type_to_*`, backed by a pure-Rust codec/raster bridge (no system GD/ImageMagick/GraphicsMagick/cairo/libpng/libjpeg/libexif)

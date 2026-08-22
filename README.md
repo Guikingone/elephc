@@ -137,7 +137,7 @@ That tradeoff is intentional:
 - **No hidden external PHP runtime dependency**: the generated binary does not need PHP, the Zend Engine, or a loader extension. A program that needs dynamic `eval()` embeds its optional interpreter bridge directly in the standalone binary.
 - **Native-oriented extensions**: `extern`, `ptr`, `buffer<T>`, and `packed class` let PHP-shaped code cross into systems, FFI, game, and performance-sensitive workloads.
 
-That does not mean elephc has to live outside the existing PHP ecosystem. The current CLI path produces standalone executables, but the roadmap also includes shared/static library output and an experimental PHP extension bridge. That opens a practical middle path: keep a framework such as WordPress, Laravel, or Symfony running on PHP, then compile static, performance-sensitive modules into native libraries or PHP extensions.
+That does not mean elephc has to live outside the existing PHP ecosystem. The current CLI path produces standalone executables and shared libraries (`--emit cdylib`), and the roadmap adds static library output and an experimental PHP extension bridge. That opens a practical middle path: keep a framework such as WordPress, Laravel, or Symfony running on PHP, then compile static, performance-sensitive modules into native libraries or PHP extensions.
 
 So elephc is not a drop-in replacement for an entire dynamic framework today. The longer-term goal is more useful: make it possible to move the parts of PHP code that are static enough to compile into inspectable native code, while the rest of the application can stay in ordinary PHP.
 
@@ -178,8 +178,8 @@ To pin a project to a specific compiler, install that version and select it in
 the project directory:
 
 ```bash
-elvm install 0.26.4
-elvm use 0.26.4
+elvm install 0.26.5
+elvm use 0.26.5
 ```
 
 The second command writes `.elephc-version`. Commit that file so contributors
@@ -205,7 +205,7 @@ The binary is at `./target/release/elephc`.
 
 ### Manual download (alternative)
 
-Pre-built binaries are available on the [Releases](https://github.com/illegalstudio/elephc/releases) page. If macOS blocks the binary, run:
+Pre-built binaries are available on the [Releases](https://github.com/illegalstudio/elephc/releases) page. Every release ships per-platform tarballs — `elephc-<version>-aarch64-apple-darwin.tar.gz`, `elephc-<version>-x86_64-unknown-linux-gnu.tar.gz`, and `elephc-<version>-aarch64-unknown-linux-gnu.tar.gz` — each bundling the compiler and its bridge staticlibs; the Linux builds target glibc 2.35 or newer. If macOS blocks the binary, run:
 
 ```bash
 xattr -cr elephc
@@ -259,10 +259,18 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable an optional bridge (pdo, tls, crypto, bcmath, phar, tz, image, eval, web)
+# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, phar, tz, image, eval, regex, web)
 elephc app.php --with-pdo --with-crypto
+# Force-inject the mysqli surface (links the shared elephc_pdo bridge, without the PDO classes)
+elephc app.php --with-mysqli
 # --with-eval force-links Magician; normal eval use is detected automatically
 elephc app.php --with-eval
+
+# Build a shared library exporting #[Export] functions instead of an executable
+elephc --emit cdylib module.php
+
+# Pin the PHP compatibility profile and silence non-error output
+elephc --php-version 8.3 --quiet app.php
 
 # Declare, lock, and install the managed PCRE2 package for a regex project
 elephc native add pcre2
@@ -420,7 +428,7 @@ The full list of supported constructs, operators, and control structures is in t
 <details>
 <summary>Show the construct highlights</summary>
 
-- **OOP**: classes, abstract/final classes, typed/final/static properties and methods, PHP-style static property redeclarations, direct static array property writes, constructor property promotion, interfaces, `instanceof`, traits, enums, PHP 8 declaration attributes, limited attribute reflection (`ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()`, `ReflectionAttribute::newInstance()`), `readonly`, static/instance methods, case-insensitive class/interface/trait and method lookup, `self::`/`parent::`/`static::`, `::class` reflection (including `$object::class` on object expressions, returning the receiver's runtime class), class constants including PHP 8.3 typed class constants (exposed via `ReflectionClassConstant::hasType()`/`getType()`), `new self()` / `new static()` / `new parent()`, magic methods (`__toString`, `__get`, `__set`)
+- **OOP**: classes, abstract/final classes, typed/final/static properties and methods, PHP-style static property redeclarations, direct static array property writes, constructor property promotion, interfaces, `instanceof`, traits, enums, PHP 8 declaration attributes, limited attribute reflection (`ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()`, `ReflectionAttribute::newInstance()`), `readonly`, static/instance methods, case-insensitive class/interface/trait and method lookup, `self::`/`parent::`/`static::`, `::class` reflection (including `$object::class` on object expressions, returning the receiver's runtime class), class constants including PHP 8.3 typed class constants (exposed via `ReflectionClassConstant::hasType()`/`getType()`), `new self()` / `new static()` / `new parent()`, magic methods (`__toString`, `__get`, `__set`, `__isset`, `__unset`, `__call`, `__invoke`, `__clone`, `__destruct`), `clone`, `get_object_vars()` and `(array)` casts on objects
 - **Functions**: case-insensitive user and built-in function calls, default parameters, variadic/spread, pass by reference, named arguments, global variables, static locals, first-class callables, closures, arrow functions, static closures (`static function () { }`, `static fn () => ...`)
 - **Generators**: generator functions and closures, `yield`, key/value yields, `yield from`, `Generator::send()`, `throw()`, `getReturn()`, and `foreach` over `Iterator` / `IteratorAggregate`
 - **Fibers**: `Fiber`, `FiberError`, `Fiber::suspend()`, `Fiber::getCurrent()`, `start()`, `resume()`, `throw()`, `getReturn()`, state predicates, closure captures, guarded native stacks, and target-aware context switching on macOS ARM64, Linux ARM64, and Linux x86_64
@@ -431,7 +439,9 @@ The full list of supported constructs, operators, and control structures is in t
 - **Modules**: namespaces, use imports, include/require/include_once/require_once, compile-time Composer PSR-4/PSR-0/classmap/files autoloading, `spl_autoload_register()` rule extraction, PHP magic constants
 - **FFI**: extern functions, extern blocks, extern globals, extern classes, pointer builtins
 - **Database (PDO)**: `PDO`, `PDOStatement`, `PDOException` with SQLite, PostgreSQL, MySQL/MariaDB, optional FreeTDS PDO_DBLIB, pure-Rust PDO_FIREBIRD, system-driver-manager PDO_ODBC, Client SDK PDO_INFORMIX/PDO_IBM, Microsoft ODBC PDO_SQLSRV, Oracle Instant Client PDO_OCI, and official CCI PDO_CUBRID drivers, positional `?` and named `:name` binds, fetch modes, transactions, and `foreach` over result sets
+- **Database (mysqli)**: a documented `mysqli` / `mysqli_stmt` / `mysqli_result` subset for MySQL/MariaDB over the same pure-Rust client — buffered independent results, prepared statements, `multi_query`, `mysqli_report` error modes, and the full procedural `mysqli_*` alias surface
 - **Date/time**: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, the PHP 8.3 date exception hierarchy, DST-aware formatting via a bundled IANA timezone database, and `ext/calendar` Julian-Day functions
+- **Crypto**: `md5()`/`sha1()`/`hash()`/`hash_hmac()` hashing and OpenSSL-compatible symmetric ciphers (`openssl_encrypt()`/`openssl_decrypt()`, AES CBC/CTR/ECB/GCM) through a pure-Rust bridge with no system OpenSSL dependency
 - **Web server (`--web`)**: standalone prefork HTTP server binaries with compile-time `worker` (default), persistent `pool`, or fork-per-`request` isolation; request superglobals and `php://input`; `header()`/`http_response_code()` response control; and PHP-compatible sessions — `$_SESSION`, the complete `session_*()` API, file persistence, custom save handlers, strict mode, cookies and cache limiters, and trans-SID rewriting
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
 
@@ -446,9 +456,9 @@ The shared builtin catalog currently exposes 505 PHP-visible entries across arra
 Standard PHP constants are predefined — math, JSON, file/glob/lock flags, the full `STREAM_*` family, and magic constants like `__DIR__` and `__LINE__`.
 
 <details>
-<summary>Show all built-in constants</summary>
+<summary>Show the built-in constant highlights</summary>
 
-`INF`, `NAN`, `PHP_INT_MAX`, `PHP_INT_MIN`, `PHP_FLOAT_MAX`, `PHP_FLOAT_MIN`, `PHP_FLOAT_EPSILON`, `M_PI`, `M_E`, `M_SQRT2`, `M_PI_2`, `M_PI_4`, `M_LOG2E`, `M_LOG10E`, `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`, `STDIN`, `STDOUT`, `STDERR`, `PATHINFO_DIRNAME`, `PATHINFO_BASENAME`, `PATHINFO_EXTENSION`, `PATHINFO_FILENAME`, `PATHINFO_ALL`, `PHP_URL_SCHEME`, `PHP_URL_HOST`, `PHP_URL_PORT`, `PHP_URL_USER`, `PHP_URL_PASS`, `PHP_URL_PATH`, `PHP_URL_QUERY`, `PHP_URL_FRAGMENT`, `FNM_NOESCAPE`, `FNM_PATHNAME`, `FNM_PERIOD`, `FNM_CASEFOLD`, `LOCK_SH`, `LOCK_EX`, `LOCK_UN`, `LOCK_NB`, `JSON_HEX_TAG`, `JSON_HEX_AMP`, `JSON_HEX_APOS`, `JSON_HEX_QUOT`, `JSON_FORCE_OBJECT`, `JSON_NUMERIC_CHECK`, `JSON_UNESCAPED_SLASHES`, `JSON_PRETTY_PRINT`, `JSON_UNESCAPED_UNICODE`, `JSON_PARTIAL_OUTPUT_ON_ERROR`, `JSON_PRESERVE_ZERO_FRACTION`, `JSON_INVALID_UTF8_IGNORE`, `JSON_INVALID_UTF8_SUBSTITUTE`, `JSON_THROW_ON_ERROR`, `JSON_OBJECT_AS_ARRAY`, `JSON_BIGINT_AS_STRING`, `JSON_ERROR_NONE`, `JSON_ERROR_DEPTH`, `JSON_ERROR_STATE_MISMATCH`, `JSON_ERROR_CTRL_CHAR`, `JSON_ERROR_SYNTAX`, `JSON_ERROR_UTF8`, `JSON_ERROR_RECURSION`, `JSON_ERROR_INF_OR_NAN`, `JSON_ERROR_UNSUPPORTED_TYPE`, `JSON_ERROR_INVALID_PROPERTY_NAME`, `JSON_ERROR_UTF16`, `ARRAY_FILTER_USE_VALUE`, `ARRAY_FILTER_USE_KEY`, `ARRAY_FILTER_USE_BOTH`, `FILE_USE_INCLUDE_PATH`, `FILE_APPEND`, `FILE_NO_DEFAULT_CONTEXT`, `FILE_IGNORE_NEW_LINES`, `FILE_SKIP_EMPTY_LINES`, `GLOB_BRACE`, `GLOB_ERR`, `GLOB_MARK`, `GLOB_NOCHECK`, `GLOB_NOESCAPE`, `GLOB_NOSORT`, `GLOB_ONLYDIR`, the `STREAM_*` family (`STREAM_CLIENT_*`, `STREAM_SERVER_*`, `STREAM_CRYPTO_METHOD_*`, `STREAM_SHUT_*`, `STREAM_PF_*`, `STREAM_SOCK_*`, `STREAM_IPPROTO_*`, `STREAM_NOTIFY_*`, `STREAM_META_*`, `STREAM_FILTER_*`, `STREAM_OPTION_*`, `STREAM_BUFFER_*`, `STREAM_CAST_*`, `STREAM_URL_STAT_*`, plus `STREAM_USE_PATH` / `STREAM_IGNORE_URL` / `STREAM_IS_URL` / `STREAM_REPORT_ERRORS` / `STREAM_MUST_SEEK` / `STREAM_MKDIR_RECURSIVE` / `STREAM_OOB` / `STREAM_PEEK`), the `PSFS_*` stream-filter constants (`PSFS_PASS_ON`, `PSFS_FEED_ME`, `PSFS_ERR_FATAL`, `PSFS_FLAG_NORMAL`, `PSFS_FLAG_FLUSH_INC`, `PSFS_FLAG_FLUSH_CLOSE`), `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`
+`INF`, `NAN`, `PHP_INT_MAX`, `PHP_INT_MIN`, `PHP_FLOAT_MAX`, `PHP_FLOAT_MIN`, `PHP_FLOAT_EPSILON`, `M_PI`, `M_E`, `M_SQRT2`, `M_PI_2`, `M_PI_4`, `M_LOG2E`, `M_LOG10E`, `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`, `STDIN`, `STDOUT`, `STDERR`, `PATHINFO_DIRNAME`, `PATHINFO_BASENAME`, `PATHINFO_EXTENSION`, `PATHINFO_FILENAME`, `PATHINFO_ALL`, `PHP_URL_SCHEME`, `PHP_URL_HOST`, `PHP_URL_PORT`, `PHP_URL_USER`, `PHP_URL_PASS`, `PHP_URL_PATH`, `PHP_URL_QUERY`, `PHP_URL_FRAGMENT`, `FNM_NOESCAPE`, `FNM_PATHNAME`, `FNM_PERIOD`, `FNM_CASEFOLD`, `LOCK_SH`, `LOCK_EX`, `LOCK_UN`, `LOCK_NB`, `JSON_HEX_TAG`, `JSON_HEX_AMP`, `JSON_HEX_APOS`, `JSON_HEX_QUOT`, `JSON_FORCE_OBJECT`, `JSON_NUMERIC_CHECK`, `JSON_UNESCAPED_SLASHES`, `JSON_PRETTY_PRINT`, `JSON_UNESCAPED_UNICODE`, `JSON_PARTIAL_OUTPUT_ON_ERROR`, `JSON_PRESERVE_ZERO_FRACTION`, `JSON_INVALID_UTF8_IGNORE`, `JSON_INVALID_UTF8_SUBSTITUTE`, `JSON_THROW_ON_ERROR`, `JSON_OBJECT_AS_ARRAY`, `JSON_BIGINT_AS_STRING`, `JSON_ERROR_NONE`, `JSON_ERROR_DEPTH`, `JSON_ERROR_STATE_MISMATCH`, `JSON_ERROR_CTRL_CHAR`, `JSON_ERROR_SYNTAX`, `JSON_ERROR_UTF8`, `JSON_ERROR_RECURSION`, `JSON_ERROR_INF_OR_NAN`, `JSON_ERROR_UNSUPPORTED_TYPE`, `JSON_ERROR_INVALID_PROPERTY_NAME`, `JSON_ERROR_UTF16`, `ARRAY_FILTER_USE_VALUE`, `ARRAY_FILTER_USE_KEY`, `ARRAY_FILTER_USE_BOTH`, `FILE_USE_INCLUDE_PATH`, `FILE_APPEND`, `FILE_NO_DEFAULT_CONTEXT`, `FILE_IGNORE_NEW_LINES`, `FILE_SKIP_EMPTY_LINES`, `GLOB_BRACE`, `GLOB_ERR`, `GLOB_MARK`, `GLOB_NOCHECK`, `GLOB_NOESCAPE`, `GLOB_NOSORT`, `GLOB_ONLYDIR`, the `STREAM_*` family (`STREAM_CLIENT_*`, `STREAM_SERVER_*`, `STREAM_CRYPTO_METHOD_*`, `STREAM_SHUT_*`, `STREAM_PF_*`, `STREAM_SOCK_*`, `STREAM_IPPROTO_*`, `STREAM_NOTIFY_*`, `STREAM_META_*`, `STREAM_FILTER_*`, `STREAM_OPTION_*`, `STREAM_BUFFER_*`, `STREAM_CAST_*`, `STREAM_URL_STAT_*`, plus `STREAM_USE_PATH` / `STREAM_IGNORE_URL` / `STREAM_IS_URL` / `STREAM_REPORT_ERRORS` / `STREAM_MUST_SEEK` / `STREAM_MKDIR_RECURSIVE` / `STREAM_OOB` / `STREAM_PEEK`), the `PSFS_*` stream-filter constants (`PSFS_PASS_ON`, `PSFS_FEED_ME`, `PSFS_ERR_FATAL`, `PSFS_FLAG_NORMAL`, `PSFS_FLAG_FLUSH_INC`, `PSFS_FLAG_FLUSH_CLOSE`), `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__` — plus the `E_*`, `ENT_*`, `PREG_*`, `STR_PAD_*`, `COUNT_*`, `PHP_ROUND_HALF_*`, `PHP_SESSION_*`, `OPENSSL_*`, `CAL_*`, `SUNFUNCS_*`, and `MYSQLI_*` families and the `PHP_VERSION` / `PHP_SAPI` version constants
 
 </details>
 
@@ -563,8 +573,10 @@ src/
 ├── optimize/            # AST optimizer: folding, propagation, DCE, declaration reachability
 ├── names.rs             # Qualified/FQN name model + symbol mangling helpers
 ├── name_resolver/       # Namespace/use resolution to canonical names
-├── pdo_prelude.rs       # PDO standard-library prelude (PHP source) injection entry point
+├── pdo_prelude.rs       # PDO standard-library prelude (Rust-built AST) injection entry point
 ├── pdo_prelude/         # PDO driver detection, version gates, and driver subclasses
+├── mysqli_prelude.rs    # mysqli surface over the PDO bridge: injection entry point
+├── mysqli_prelude/      # mysqli class/procedural surface builders and usage detection
 ├── tz_prelude.rs        # Timezone-introspection prelude injection entry point
 ├── tz_prelude/          # Timezone-introspection prelude usage detection
 ├── list_id_prelude.rs   # DateTimeZone identifier-list prelude injection entry point
@@ -649,7 +661,7 @@ crates/
 
 ## Tests
 
-10,000+ Rust test cases across lexer, parser, codegen, runtime, and error reporting. Each codegen test compiles inline PHP source to a native binary, runs it, and asserts stdout.
+14,000+ Rust test cases across lexer, parser, codegen, runtime, and error reporting. Each codegen test compiles inline PHP source to a native binary, runs it, and asserts stdout.
 
 ```bash
 cargo test                      # all tests
@@ -664,7 +676,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 The **[docs/](docs/)** directory is a complete wiki covering every aspect of the compiler. Inside you'll find:
 
-- **PHP syntax reference** — types, operators, control structures, functions, classes, namespaces, and all 450+ built-in functions with signatures and examples
+- **PHP syntax reference** — types, operators, control structures, functions, classes, namespaces, and all 500+ built-in functions with signatures and examples
 - **Compiler extensions** — pointers, `buffer<T>`, `packed class`, FFI with `extern`, and conditional compilation with `ifdef` — the features that take PHP beyond the web
 - **Compiler internals** — a step-by-step walkthrough of the full pipeline, from lexing to Pratt parsing to type checking to code generation and runtime structure
 - **ARM64 primer** — an introduction to ARM64 assembly for people who've never seen it, plus a quick reference of the ARM64 instruction set used by elephc's AArch64 backend

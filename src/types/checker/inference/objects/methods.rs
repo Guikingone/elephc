@@ -372,6 +372,7 @@ impl Checker {
                         .unwrap_or(class_name);
                     if !self.can_access_member(declaring_class, visibility)
                         && !self.can_access_pdo_prelude_internal_method(class_name, &method_key)
+                        && !self.can_access_mysqli_prelude_internal_method(class_name, &method_key)
                     {
                         // PHP raises this as a catchable `Error` at runtime instead of a
                         // compile-time rejection. Record the throw site so EIR lowering
@@ -901,6 +902,7 @@ impl Checker {
                         .unwrap_or(class_name);
                     if !self.can_access_member(declaring_class, visibility)
                         && !self.can_access_pdo_exception_internal_factory(class_name, method)
+                        && !self.can_access_mysqli_prelude_internal_factory(class_name, method)
                     {
                         return Err(CompileError::new(
                             expr.span,
@@ -1317,6 +1319,47 @@ impl Checker {
         class_name == "PDOException"
             && php_symbol_key(method) == "__elephcfromerrorinfo"
             && matches!(self.current_class.as_deref(), Some("PDO" | "PDOStatement"))
+    }
+
+    /// Allows the mysqli prelude's internal static factories to stay private
+    /// (they are not part of PHP's mysqli surface): the buffered-result drain
+    /// factory is invoked by the connection's query/multi_query paths and by
+    /// `mysqli_stmt::get_result`, the prepared-statement factory by
+    /// `mysqli::prepare`, and the unprepared-statement factory by
+    /// `mysqli::stmt_init`.
+    fn can_access_mysqli_prelude_internal_factory(&self, class_name: &str, method: &str) -> bool {
+        let drain_factory = class_name == "mysqli_result"
+            && php_symbol_key(method) == "__elephcfromdrain"
+            && matches!(self.current_class.as_deref(), Some("mysqli" | "mysqli_stmt"));
+        let prepare_factory = class_name == "mysqli_stmt"
+            && php_symbol_key(method) == "__elephcfromprepare"
+            && self.current_class.as_deref() == Some("mysqli");
+        let init_factory = class_name == "mysqli_stmt"
+            && php_symbol_key(method) == "__elephcinit"
+            && self.current_class.as_deref() == Some("mysqli");
+        drain_factory || prepare_factory || init_factory
+    }
+
+    /// Allows tightly-scoped private helper calls within the mysqli prelude:
+    /// `mysqli_stmt::requireLinkNotBusy` (the two-step prepare/execute
+    /// commands-out-of-sync guard) reads the connection's private
+    /// pending-result probe, and the procedural `mysqli_stmt_bind_param`
+    /// alias — a compiler-owned free function, identified via
+    /// `current_function` — reaches the statement's private bind-values
+    /// helper (its by-ref variadic tail cannot be spread-forwarded into
+    /// `bind_param`). Neither helper is part of PHP's mysqli surface.
+    fn can_access_mysqli_prelude_internal_method(&self, class_name: &str, method_key: &str) -> bool {
+        let pending_probe = class_name == "mysqli"
+            && method_key == "__elephchaspendingresults"
+            && self.current_class.as_deref() == Some("mysqli_stmt")
+            && self.current_method.as_deref() == Some("requirelinknotbusy");
+        let bind_values = class_name == "mysqli_stmt"
+            && method_key == "__elephcbindparamvalues"
+            && self
+                .current_function
+                .as_deref()
+                .is_some_and(|name| php_symbol_key(name) == "mysqli_stmt_bind_param");
+        pending_probe || bind_values
     }
 }
 

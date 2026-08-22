@@ -15,6 +15,10 @@ use super::*;
 pub(super) struct BackendInputs<'a> {
     pub(super) filename: &'a str,
     pub(super) with_crates: &'a HashSet<String>,
+    /// PHP surfaces injected into this compilation ("PDO", "mysqli"), reported to
+    /// `extension_loaded()` alongside archive-derived bridge extensions. Needed
+    /// because the shared `elephc_pdo` archive cannot identify a surface by itself.
+    pub(super) linked_php_surfaces: &'a [String],
     pub(super) ir_module: ir::Module,
     pub(super) web: bool,
     pub(super) web_isolation: codegen::WebIsolation,
@@ -42,6 +46,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     let BackendInputs {
         filename,
         with_crates,
+        linked_php_surfaces,
         mut ir_module,
         web,
         web_isolation,
@@ -127,14 +132,22 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // Report the bridges actually linked into THIS compilation to
     // `extension_loaded()` / `get_loaded_extensions()`. Each planned bridge is
     // mapped through the single-source bridge table; bridges with no distinct
-    // PHP extension (tz -> date, eval) are skipped. Seeded into a codegen
-    // thread-local because extension folding happens during instruction lowering.
+    // PHP extension (tz -> date, eval) are skipped, and so is `elephc_pdo`,
+    // whose archive backs more than one PHP surface (its table row maps to
+    // None). The injected PHP surfaces ("PDO", "mysqli") are appended instead.
+    // Seeded into a codegen thread-local because extension folding happens
+    // during instruction lowering.
     let mut linked_extensions: Vec<String> = Vec::new();
     for lib in &planned_link_libraries {
         if let Some(ext) = linker::php_extension_for_lib(lib) {
             if !linked_extensions.iter().any(|existing| existing == ext) {
                 linked_extensions.push(ext.to_string());
             }
+        }
+    }
+    for surface in linked_php_surfaces {
+        if !linked_extensions.iter().any(|existing| existing == surface) {
+            linked_extensions.push(surface.clone());
         }
     }
     codegen::set_linked_extensions(linked_extensions);

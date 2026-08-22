@@ -104,7 +104,7 @@ pub fn emit_pdo_call_agg_final(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_pdo_call_agg_final_slot0_null");          // empty group → box PHP null
     emitter.instruction("bl __rt_incref");                                      // retain the accumulator for its args-array slot
     emitter.instruction("ldr x0, [sp, #248]");                                  // reload the accumulator pointer to store
-    emitter.instruction("b __rt_pdo_call_agg_final_slot0_store");
+    emitter.instruction("b __rt_pdo_call_agg_final_slot0_store");               // retained accumulator in x0 → store it into slot 0
     emitter.label("__rt_pdo_call_agg_final_slot0_null");
     emitter.instruction("mov x0, #8");                                          // runtime tag 8 = Void/NULL
     emitter.instruction("mov x1, #0");                                          // value_lo unused
@@ -163,35 +163,35 @@ pub fn emit_pdo_call_agg_final(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #288]");                                  // boxed return
     emitter.instruction("bl __rt_mixed_unbox");                                 // x0 = tag, x1 = lo, x2 = hi (tag-7 wrappers peeled)
     emitter.instruction("cmp x0, #0");                                          // Mixed int?
-    emitter.instruction("b.eq __rt_pdo_call_agg_final_ret_int");
+    emitter.instruction("b.eq __rt_pdo_call_agg_final_ret_int");                // yes → emit an INT result
     emitter.instruction("cmp x0, #2");                                          // Mixed float?
-    emitter.instruction("b.eq __rt_pdo_call_agg_final_ret_float");
+    emitter.instruction("b.eq __rt_pdo_call_agg_final_ret_float");              // yes → emit a FLOAT result
     emitter.instruction("cmp x0, #1");                                          // Mixed string?
-    emitter.instruction("b.eq __rt_pdo_call_agg_final_ret_string");
+    emitter.instruction("b.eq __rt_pdo_call_agg_final_ret_string");             // yes → stage the bytes and emit TEXT
     emitter.instruction("cmp x0, #3");                                          // Mixed bool?
-    emitter.instruction("b.eq __rt_pdo_call_agg_final_ret_bool");
+    emitter.instruction("b.eq __rt_pdo_call_agg_final_ret_bool");               // yes → emit a BOOL result
     // -- tag 8 (null) or any non-scalar → SQL NULL --
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("str xzr, [x11, #0]");                                  // out.tag = 0 (NULL)
-    emitter.instruction("b __rt_pdo_call_agg_final_release_return");
+    emitter.instruction("b __rt_pdo_call_agg_final_release_return");            // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_agg_final_ret_int");
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("mov x10, #1");                                         // ElephcResult tag 1 = INT
     emitter.instruction("str x10, [x11, #0]");                                  // out.tag = 1
     emitter.instruction("str x1, [x11, #8]");                                   // out.i = lo (int64 value)
-    emitter.instruction("b __rt_pdo_call_agg_final_release_return");
+    emitter.instruction("b __rt_pdo_call_agg_final_release_return");            // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_agg_final_ret_float");
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("mov x10, #2");                                         // ElephcResult tag 2 = FLOAT
     emitter.instruction("str x10, [x11, #0]");                                  // out.tag = 2
     emitter.instruction("str x1, [x11, #16]");                                  // out.f = lo (raw f64 bit-pattern → stored as f64)
-    emitter.instruction("b __rt_pdo_call_agg_final_release_return");
+    emitter.instruction("b __rt_pdo_call_agg_final_release_return");            // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_agg_final_ret_bool");
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("mov x10, #5");                                         // ElephcResult tag 5 = BOOL
     emitter.instruction("str x10, [x11, #0]");                                  // out.tag = 5
     emitter.instruction("str x1, [x11, #8]");                                   // out.i = lo (0/1)
-    emitter.instruction("b __rt_pdo_call_agg_final_release_return");
+    emitter.instruction("b __rt_pdo_call_agg_final_release_return");            // result written → release the owned boxed return
     // -- string: stage the bytes into the bridge BEFORE releasing the owned box --
     emitter.label("__rt_pdo_call_agg_final_ret_string");
     emitter.instruction("mov x0, x1");                                          // stash arg0 = byte pointer (unbox lo)
@@ -201,7 +201,7 @@ pub fn emit_pdo_call_agg_final(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("mov x10, #3");                                         // ElephcResult tag 3 = TEXT (bytes live in the stash)
     emitter.instruction("str x10, [x11, #0]");                                  // out.tag = 3
-    emitter.instruction("b __rt_pdo_call_agg_final_release_return");
+    emitter.instruction("b __rt_pdo_call_agg_final_release_return");            // result written → release the owned boxed return
 
     // -- release the owned boxed return, then join the accumulator-release cleanup --
     emitter.label("__rt_pdo_call_agg_final_release_return");
@@ -295,7 +295,7 @@ fn emit_pdo_call_agg_final_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_pdo_call_agg_final_slot0_null_x86");           // yes → box PHP null
     emitter.instruction("call __rt_incref");                                    // retain the accumulator for its args-array slot
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the accumulator pointer to store
-    emitter.instruction("jmp __rt_pdo_call_agg_final_slot0_store_x86");
+    emitter.instruction("jmp __rt_pdo_call_agg_final_slot0_store_x86");         // retained accumulator in rax → store it into slot 0
     emitter.label("__rt_pdo_call_agg_final_slot0_null_x86");
     emitter.instruction("mov rdi, 0");                                          // value_lo unused
     emitter.instruction("mov rsi, 0");                                          // value_hi unused
@@ -353,32 +353,32 @@ fn emit_pdo_call_agg_final_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // boxed return (unbox reads RAX)
     emitter.instruction("call __rt_mixed_unbox");                               // rax = tag, rdi = lo, rdx = hi
     emitter.instruction("cmp rax, 0");                                          // Mixed int?
-    emitter.instruction("je __rt_pdo_call_agg_final_ret_int_x86");
+    emitter.instruction("je __rt_pdo_call_agg_final_ret_int_x86");              // yes → emit an INT result
     emitter.instruction("cmp rax, 2");                                          // Mixed float?
-    emitter.instruction("je __rt_pdo_call_agg_final_ret_float_x86");
+    emitter.instruction("je __rt_pdo_call_agg_final_ret_float_x86");            // yes → emit a FLOAT result
     emitter.instruction("cmp rax, 1");                                          // Mixed string?
-    emitter.instruction("je __rt_pdo_call_agg_final_ret_string_x86");
+    emitter.instruction("je __rt_pdo_call_agg_final_ret_string_x86");           // yes → stage the bytes and emit TEXT
     emitter.instruction("cmp rax, 3");                                          // Mixed bool?
-    emitter.instruction("je __rt_pdo_call_agg_final_ret_bool_x86");
+    emitter.instruction("je __rt_pdo_call_agg_final_ret_bool_x86");             // yes → emit a BOOL result
     // -- tag 8 (null) or any non-scalar → SQL NULL --
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], 0");                              // out.tag = 0 (NULL)
-    emitter.instruction("jmp __rt_pdo_call_agg_final_release_return_x86");
+    emitter.instruction("jmp __rt_pdo_call_agg_final_release_return_x86");      // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_agg_final_ret_int_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], 1");                              // out.tag = 1 (INT)
     emitter.instruction("mov QWORD PTR [r11 + 8], rdi");                        // out.i = lo (int64 value)
-    emitter.instruction("jmp __rt_pdo_call_agg_final_release_return_x86");
+    emitter.instruction("jmp __rt_pdo_call_agg_final_release_return_x86");      // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_agg_final_ret_float_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], 2");                              // out.tag = 2 (FLOAT)
     emitter.instruction("mov QWORD PTR [r11 + 16], rdi");                       // out.f = lo (raw f64 bit-pattern → stored as f64)
-    emitter.instruction("jmp __rt_pdo_call_agg_final_release_return_x86");
+    emitter.instruction("jmp __rt_pdo_call_agg_final_release_return_x86");      // result written → release the owned boxed return
     emitter.label("__rt_pdo_call_agg_final_ret_bool_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], 5");                              // out.tag = 5 (BOOL)
     emitter.instruction("mov QWORD PTR [r11 + 8], rdi");                        // out.i = lo (0/1)
-    emitter.instruction("jmp __rt_pdo_call_agg_final_release_return_x86");
+    emitter.instruction("jmp __rt_pdo_call_agg_final_release_return_x86");      // result written → release the owned boxed return
     // -- string: stage the bytes into the bridge BEFORE releasing the owned box --
     emitter.label("__rt_pdo_call_agg_final_ret_string_x86");
     emitter.instruction("mov rsi, rdx");                                        // stash arg1 = byte length (unbox hi), before rdx is reused
@@ -387,7 +387,7 @@ fn emit_pdo_call_agg_final_linux_x86_64(emitter: &mut Emitter) {
     emitter.bl_c("elephc_pdo_udf_stash_bytes"); // deep-copy the string bytes into the bridge's stash
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], 3");                              // out.tag = 3 (TEXT; bytes live in the stash)
-    emitter.instruction("jmp __rt_pdo_call_agg_final_release_return_x86");
+    emitter.instruction("jmp __rt_pdo_call_agg_final_release_return_x86");      // result written → release the owned boxed return
 
     // -- release the owned boxed return, then join the accumulator-release cleanup --
     emitter.label("__rt_pdo_call_agg_final_release_return_x86");
@@ -404,7 +404,7 @@ fn emit_pdo_call_agg_final_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0); // take ownership of the pending Throwable
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // clear the exception slot before release
     emitter.instruction("test rax, rax");                                       // was a Throwable actually published?
-    emitter.instruction("jz __rt_pdo_call_agg_final_threw_released_x86");      // tolerate a defensive null exception slot
+    emitter.instruction("jz __rt_pdo_call_agg_final_threw_released_x86");       // tolerate a defensive null exception slot
     emitter.instruction("call __rt_decref_any");                                // release the caught Throwable object
     emitter.label("__rt_pdo_call_agg_final_threw_released_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
@@ -431,7 +431,7 @@ fn emit_pdo_call_agg_final_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r11], 0");                              // out.tag = 0 (NULL)
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the accumulator
     emitter.instruction("test rax, rax");                                       // nothing to free?
-    emitter.instruction("jz __rt_pdo_call_agg_final_no_invoker_done_x86");
+    emitter.instruction("jz __rt_pdo_call_agg_final_no_invoker_done_x86");      // yes → skip the accumulator release
     emitter.instruction("call __rt_decref_mixed");                              // free the accumulator's group ref (terminal)
     emitter.label("__rt_pdo_call_agg_final_no_invoker_done_x86");
     emitter.instruction("add rsp, 304");                                        // release the adapter frame

@@ -39,7 +39,7 @@ Overall builtin coverage: **486 / 2030** (24%).
 | `ldap` | 0 / 55 | 0% | 0 | 0 |
 | `libxml` | 0 / 8 | 0% | 0 | 0 |
 | `mbstring` | 2 / 65 | 3% | 2 | 2 |
-| `mysqli` | 0 / 106 | 0% | 0 | 0 |
+| `mysqli`† | 0 / 106 | 0% | 0 | 0 |
 | `openssl` | 4 / 66 | 6% | 4 | 4 |
 | `pcntl` | 0 / 25 | 0% | 0 | 0 |
 | `pcre` | 5 / 11 | 45% | 5 | 5 |
@@ -105,6 +105,7 @@ In addition, elephc implements 3 PHP language constructs that PHP does not count
 | Feature | Status | Notes |
 |---|---|---|
 | [PDO](./pdo.md) ([PHP](https://www.php.net/manual/en/book.pdo.php)) | ✅ Supported | Driver matrix documented on the PDO page |
+| [mysqli](./mysqli.md) ([PHP](https://www.php.net/manual/en/book.mysqli.php)) | 🟡 Partial | Locked v1 subset over the elephc-pdo bridge; divergences on the mysqli page |
 | [Sessions](./sessions.md) ([PHP](https://www.php.net/manual/en/book.session.php)) | ✅ Supported | In --web binaries |
 | [Streams](./streams.md) ([PHP](https://www.php.net/manual/en/book.stream.php)) | 🟡 Partial |  |
 | [SPL](./spl.md) ([PHP](https://www.php.net/manual/en/book.spl.php)) | 🟡 Partial |  |

@@ -102,9 +102,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [x9, #-8]");                                  // packed array metadata precedes the payload header
     emitter.instruction("ubfx x11, x11, #8, #7");                               // extract the runtime element tag
     emitter.instruction("cmp x11, #1");                                         // direct string payload?
-    emitter.instruction("b.eq __rt_unser_options_indexed_string");
+    emitter.instruction("b.eq __rt_unser_options_indexed_string");              // direct strings append without conversion
     emitter.instruction("cmp x11, #6");                                         // direct object pointer payload?
-    emitter.instruction("b.eq __rt_unser_options_indexed_object");
+    emitter.instruction("b.eq __rt_unser_options_indexed_object");              // objects convert through __toString
     emitter.instruction("cmp x11, #7");                                         // heterogeneous packed values use boxed Mixed cells
     emitter.instruction("b.eq __rt_unser_options_indexed_mixed");               // keep the conditional branch inside the options-decoder atom
     emitter.instruction("b __rt_unser_allowed_classes_entry_metadata_error");   // reject other homogeneous types through the shared error path
@@ -118,27 +118,27 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x12, #8]");                                   // boxed low payload
     emitter.instruction("ldr x2, [x12, #16]");                                  // boxed high payload
     emitter.instruction("cmp x13, #1");                                         // boxed string entry?
-    emitter.instruction("b.eq __rt_unser_options_append_borrowed");
+    emitter.instruction("b.eq __rt_unser_options_append_borrowed");             // append the boxed string's borrowed bytes
     emitter.instruction("cmp x13, #6");                                         // boxed object entry?
-    emitter.instruction("b.eq __rt_unser_options_boxed_object");
+    emitter.instruction("b.eq __rt_unser_options_boxed_object");                // unwrap the object for __toString conversion
     emitter.instruction("mov x3, x13");                                         // forward invalid boxed runtime tag
-    emitter.instruction("b __rt_unser_allowed_classes_entry_type_error");
+    emitter.instruction("b __rt_unser_allowed_classes_entry_type_error");       // other boxed types are invalid class names
     emitter.label("__rt_unser_options_indexed_string");
     emitter.instruction("add x9, x9, #24");                                     // direct payload begins after indexed header
     emitter.instruction("lsl x10, x10, #4");                                    // string pair stride is sixteen bytes
     emitter.instruction("add x9, x9, x10");                                     // select the current direct string pair
     emitter.instruction("ldp x1, x2, [x9]");                                    // borrow source string pointer and length
-    emitter.instruction("b __rt_unser_options_append_borrowed");
+    emitter.instruction("b __rt_unser_options_append_borrowed");                // append the borrowed string as an allowed name
     emitter.label("__rt_unser_options_indexed_object");
     emitter.instruction("add x12, x9, #24");                                    // skip indexed header to direct object slots
     emitter.instruction("ldr x0, [x12, x10, lsl #3]");                          // load selected direct object pointer
     emitter.instruction("cbnz x0, __rt_unser_options_indexed_object_ready");    // keep the conditional branch inside the options-decoder atom
     emitter.instruction("b __rt_unser_allowed_classes_entry_null_error");       // report a null object slot through the shared error path
     emitter.label("__rt_unser_options_indexed_object_ready");
-    emitter.instruction("b __rt_unser_options_convert_object");
+    emitter.instruction("b __rt_unser_options_convert_object");                 // convert the entry object via __toString
     emitter.label("__rt_unser_options_boxed_object");
     emitter.instruction("mov x0, x1");                                          // boxed low payload is the object pointer
-    emitter.instruction("b __rt_unser_options_convert_object");
+    emitter.instruction("b __rt_unser_options_convert_object");                 // convert the boxed object via __toString
 
     emitter.label("__rt_unser_options_hash_list_loop");
     emitter.instruction("ldr x0, [sp]");                                        // associative source hash
@@ -148,7 +148,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_unser_options_done");                        // normalized policy is ready
     emitter.instruction("str x0, [sp, #16]");                                   // preserve next iterator cursor
     emitter.instruction("cmp x5, #7");                                          // boxed Mixed hash value?
-    emitter.instruction("b.ne __rt_unser_options_hash_unboxed");
+    emitter.instruction("b.ne __rt_unser_options_hash_unboxed");                // direct typed values skip the unwrap
     emitter.instruction("cbnz x3, __rt_unser_options_hash_cell_ready");         // keep the conditional branch inside the options-decoder atom
     emitter.instruction("b __rt_unser_allowed_classes_entry_null_error");       // reject a null boxed hash cell through the shared error path
     emitter.label("__rt_unser_options_hash_cell_ready");
@@ -158,16 +158,16 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ldr x4, [x12, #16]");                                  // unwrap high payload
     emitter.label("__rt_unser_options_hash_unboxed");
     emitter.instruction("cmp x5, #1");                                          // string hash value?
-    emitter.instruction("b.eq __rt_unser_options_hash_string");
+    emitter.instruction("b.eq __rt_unser_options_hash_string");                 // strings append without conversion
     emitter.instruction("cmp x5, #6");                                          // object hash value?
-    emitter.instruction("b.eq __rt_unser_options_hash_object");
+    emitter.instruction("b.eq __rt_unser_options_hash_object");                 // objects convert through __toString
     emitter.instruction("mov x1, x3");                                          // forward invalid value payload for dynamic type naming
     emitter.instruction("mov x3, x5");                                          // forward invalid value runtime tag
-    emitter.instruction("b __rt_unser_allowed_classes_entry_type_error");
+    emitter.instruction("b __rt_unser_allowed_classes_entry_type_error");       // other value types are invalid class names
     emitter.label("__rt_unser_options_hash_string");
     emitter.instruction("mov x1, x3");                                          // normalize iterator string pointer to push ABI
     emitter.instruction("mov x2, x4");                                          // normalize iterator string length to push ABI
-    emitter.instruction("b __rt_unser_options_append_borrowed");
+    emitter.instruction("b __rt_unser_options_append_borrowed");                // append the borrowed hash-value string
     emitter.label("__rt_unser_options_hash_object");
     emitter.instruction("mov x0, x3");                                          // iterator low payload is the object pointer
 
@@ -203,7 +203,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_unser_options_list_continue");
     emitter.instruction("ldr x9, [sp, #24]");                                   // resume the matching source traversal
     emitter.instruction("cmp x9, #5");                                          // associative source?
-    emitter.instruction("b.eq __rt_unser_options_hash_list_loop");
+    emitter.instruction("b.eq __rt_unser_options_hash_list_loop");              // continue associative values
     emitter.instruction("b __rt_unser_options_indexed_list_loop");              // otherwise continue packed traversal
     emitter.label("__rt_unser_options_done");
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore caller frame and link register after nested helpers
@@ -235,15 +235,15 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // list base
     crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_unser_allowed_list_mixed");
     emitter.instruction("ldr x12, [x12]");                                      // heterogeneous allow-list representation?
-    emitter.instruction("cbnz x12, __rt_unser_class_allowed_mixed_cell");
+    emitter.instruction("cbnz x12, __rt_unser_class_allowed_mixed_cell");       // boxed cells need an extra dereference
     emitter.instruction("add x9, x9, #24");                                     // skip indexed-array header
     emitter.instruction("lsl x10, x11, #4");                                    // direct string element stride = pointer + length
-    emitter.instruction("add x9, x9, x10");
-    emitter.instruction("b __rt_unser_class_allowed_compare");
+    emitter.instruction("add x9, x9, x10");                                     // select the current direct-string pair
+    emitter.instruction("b __rt_unser_class_allowed_compare");                  // compare against the requested class name
     emitter.label("__rt_unser_class_allowed_mixed_cell");
-    emitter.instruction("add x9, x9, #24");
+    emitter.instruction("add x9, x9, #24");                                     // skip the indexed-array header to the cell slots
     emitter.instruction("lsl x10, x11, #3");                                    // boxed Mixed elements are pointers
-    emitter.instruction("ldr x9, [x9, x10]");
+    emitter.instruction("ldr x9, [x9, x10]");                                   // load the validated boxed string cell
     emitter.instruction("add x9, x9, #8");                                      // string payload pair follows Mixed tag
     emitter.label("__rt_unser_class_allowed_compare");
     emitter.instruction("ldr x1, [sp, #0]");                                    // requested class-name pointer
@@ -270,7 +270,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_unser_options_type_null_error");          // a null Mixed pointer reports null
     emitter.instruction("ldr x1, [x0, #8]");                                    // rejected runtime payload
     emitter.instruction("ldr x0, [x0]");                                        // rejected runtime tag
-    emitter.instruction("b __rt_unser_options_type_dispatch");
+    emitter.instruction("b __rt_unser_options_type_dispatch");                  // compose the options TypeError message
     emitter.label("__rt_unser_options_type_null_error");
     emitter.instruction("mov x0, #8");                                          // runtime null tag
     emitter.instruction("mov x1, #0");                                          // null has no payload
@@ -282,7 +282,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label_shared("__rt_unser_allowed_classes_entry_null_error");
     emitter.instruction("mov x3, #8");                                          // invalid list entry is null
     emitter.instruction("mov x1, #0");                                          // null has no payload
-    emitter.instruction("b __rt_unser_allowed_classes_entry_type_error");
+    emitter.instruction("b __rt_unser_allowed_classes_entry_type_error");       // share the entry TypeError cleanup path
     emitter.label_shared("__rt_unser_allowed_classes_entry_metadata_error");
     emitter.instruction("mov x3, x11");                                         // packed element metadata uses the runtime tag numbering
     emitter.instruction("mov x1, #0");                                          // homogeneous metadata has no single payload

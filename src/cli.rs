@@ -17,8 +17,10 @@ use crate::codegen::WebIsolation;
 use crate::codegen::platform::Target;
 use crate::native_deps::{native_help, parse_native_args, NativeCommand, NativeParseOutcome};
 
-/// Non-bridge runtime capabilities accepted by `--with-<name>`.
-const RUNTIME_CAPABILITY_FLAGS: &[&str] = &["regex"];
+/// Non-bridge runtime capabilities accepted by `--with-<name>`. `mysqli` is not
+/// a bridge of its own: it force-injects the mysqli prelude, which links the
+/// shared `elephc_pdo` archive (and never injects the PDO classes).
+const RUNTIME_CAPABILITY_FLAGS: &[&str] = &["regex", "mysqli"];
 
 /// Short usage line shown after every parameter error, alongside the `--help` hint.
 /// The full categorized reference lives in `HELP`.
@@ -125,7 +127,7 @@ Linking:
   --link LIB, -l LIB      Extra library to link
   --link-path DIR, -L DIR Extra library search path
   --framework NAME        macOS framework to link
-  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, bcmath, web, eval, regex)
+  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, bcmath, web, eval, regex, mysqli)
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
@@ -892,6 +894,21 @@ mod tests {
         ];
         let config = compile_config(&args);
         assert!(config.with_crates.contains("regex"));
+        assert!(!config.web);
+    }
+
+    /// Verifies `--with-mysqli` records the runtime capability that force-injects
+    /// the mysqli prelude (which links the shared `elephc_pdo` archive), without
+    /// touching web mode.
+    #[test]
+    fn with_mysqli_records_runtime_capability() {
+        let args = vec![
+            "elephc".into(),
+            "--with-mysqli".into(),
+            "app.php".into(),
+        ];
+        let config = compile_config(&args);
+        assert!(config.with_crates.contains("mysqli"));
         assert!(!config.web);
     }
 

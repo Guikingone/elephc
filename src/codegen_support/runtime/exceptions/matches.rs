@@ -180,10 +180,10 @@ fn emit_exception_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov edx, {}", ABSENT_MESSAGE.len()));         // its byte length
     emitter.instruction("mov edi, 2");                                          // fd = stderr, as every other fatal runtime path uses
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");
+    emitter.instruction("syscall");                                             // write the internal metadata diagnostic to stderr
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // exit with PHP's uncaught-throwable status
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
-    emitter.instruction("syscall");
+    emitter.instruction("syscall");                                             // exit rather than misreport the broken chain as a non-match
 }
 
 #[cfg(test)]

@@ -282,7 +282,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen_support/runtime/arrays/` (155 files)
+**Source:** `src/codegen_support/runtime/arrays/` (175 files, plus the `hash_sort/` target split, 2 files)
 
 ### Core allocation
 
@@ -310,14 +310,13 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 | `__rt_sort_int` / `__rt_rsort_int` | In-place sort ascending or descending | `x0` = array | — |
 | `__rt_str_persist` | Copy string from concat_buf to heap (skips .data/heap) | `x1`/`x2` = str | `x1`/`x2` = heap str |
 
-Common copy-producing array/hash routines now also have dedicated `_refcounted` siblings for nested heap-backed payloads. These variants retain borrowed values before pushing or inserting them into freshly allocated arrays/hash tables, covering array literals with spreads plus `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, and `array_fill_keys`.
+Common copy-producing array/hash routines now also have dedicated `_refcounted` siblings for nested heap-backed payloads. These variants retain borrowed values before pushing or inserting them into freshly allocated arrays/hash tables, covering array literals with spreads plus `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, and `array_fill_keys`.
 
 | Refcounted sibling | What it does |
 |---|---|
 | `__rt_array_reverse_refcounted` | Reverse an indexed array while retaining nested heap-backed elements |
 | `__rt_array_merge_refcounted` | Merge indexed arrays that carry nested heap-backed payloads |
 | `__rt_array_slice_refcounted` / `__rt_array_splice_refcounted` | Slice or splice while retaining nested heap-backed payloads |
-| `__rt_array_unique_refcounted` | Remove duplicates while preserving retained heap-backed elements |
 | `__rt_array_fill_refcounted` / `__rt_array_fill_keys_refcounted` | Build filled arrays/hashes from borrowed heap-backed values |
 | `__rt_array_pad_refcounted` | Pad an array with retained heap-backed values |
 | `__rt_array_diff_refcounted` / `__rt_array_intersect_refcounted` | Set-style comparisons that keep nested heap-backed values alive |
@@ -372,7 +371,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_slice` / `__rt_array_splice` | Extract slices and remove splice windows from indexed arrays |
 | `__rt_array_splice_str` | The `array_splice()` removal for indexed **string** arrays, whose payload slots are 16-byte `{pointer, length}` pairs rather than the 8-byte slots the other splice helpers move. The removed strings are MOVED into the result array: an indexed string array owns its persisted bytes exclusively, so retaining them would double free and copying them would leak |
 | `__rt_array_splice_insert` / `_refcounted` / `_boxed` / `_unboxed` / `_str` | Write `array_splice()`'s `$replacement` into the gap the removal opened, growing the destination first. The five variants differ in what one replacement slot becomes: copied verbatim, retained, wrapped in a fresh boxed `Mixed` cell, read back out of one as a plain integer, or duplicated with `__rt_str_persist` into a 16-byte string slot |
-| `__rt_array_unique` | Remove duplicate values |
+| `__rt_array_to_hash_unique` / `__rt_hash_to_hash_unique` | `array_unique()` for indexed and associative sources: dedupe by value through a second hash while preserving each survivor's original key (an indexed source therefore returns a sparse hash) |
 | `__rt_array_diff` / `__rt_array_intersect` | Set difference/intersection by value |
 | `__rt_array_diff_key` / `__rt_array_intersect_key` | Set operations by key |
 | `__rt_array_flip` | Swap indexed integer values into associative-array keys |
@@ -386,12 +385,13 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_column_mixed` | Extract column values as boxed Mixed cells for heterogeneous input payloads |
 | `__rt_range` | Generate integer range array |
 | `__rt_shuffle` / `__rt_array_rand` | Randomize order / pick random |
-| `__rt_random_u32` / `__rt_random_uniform` | Target-aware random primitives used by `rand()`, `random_int()`, `shuffle()`, and `array_rand()` |
+| `__rt_random_u32` / `__rt_random_uniform` / `__rt_random_u64` / `__rt_random_uniform64` | Target-aware random primitives used by `rand()`, `random_int()`, `shuffle()`, and `array_rand()` |
 | `__rt_asort` / `__rt_arsort` | Sort an indexed array by value, ascending or descending |
 | `__rt_hash_ksort` / `__rt_hash_krsort` | Sort an associative array by key, ascending or descending |
 | `__rt_hash_asort` / `__rt_hash_arsort` | Sort an associative array by value while preserving keys, ascending or descending |
 | `__rt_hash_sort_links` | Shared engine behind the four hash sorts: an allocation-free, stable bottom-up merge sort with `O(n log n)` comparisons that relinks the table's `prev`/`next`/`head`/`tail` chain, so buckets never move, key/value association is preserved, and no refcount changes |
 | `__rt_hash_sort_compare_entries` | Reads and compares the heads of two merge runs with exact `SORT_REGULAR` key semantics or PHP's general value comparison table |
+| `__rt_key_compare_regular` / `__rt_key_compare_exact_decimal_integers` / `__rt_key_parse_i64_decimal` | Key-comparison family behind the hash sorts: `SORT_REGULAR` key ordering with PHP's exact numeric-string rules, including overflow-safe decimal-integer comparison |
 | `__rt_hash_sort_triple` | Reads a hash entry's key or value as a `__rt_php_compare` `(tag, lo, hi)` triple, peeling boxed Mixed cells |
 | `__rt_natsort` / `__rt_natcasesort` | Natural-order sort, case-sensitive or case-insensitive |
 | `__rt_array_map` | Apply callback to each scalar element, return new array; an optional third argument carries a captured-closure environment for generated callback wrappers |
@@ -459,7 +459,7 @@ path for from a leaf helper.
 
 ## System routines
 
-**Source:** `src/codegen_support/runtime/system/` (44 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, `json_encode_str/`, and `unserialize/` subdirectories; 82 files recursively)
+**Source:** `src/codegen_support/runtime/system/` (43 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, `json_encode_str/`, and `unserialize/` subdirectories; 81 files recursively)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -631,7 +631,7 @@ a package.
 
 ## I/O routines
 
-**Source:** `src/codegen_support/runtime/io/` (118 files)
+**Source:** `src/codegen_support/runtime/io/` (121 files)
 
 These routines handle file and filesystem operations through target-aware libc/syscall helpers. PHP strings (pointer + length) must be converted to null-terminated C strings before passing to C or OS APIs — `__rt_cstr` handles the primary buffer and also emits `__rt_cstr2` for routines that need a second simultaneous C string.
 
@@ -653,7 +653,8 @@ The first table covers the file/filesystem core; the subsections after it cover 
 | `__rt_file_put_contents` | Write string to file (create/truncate) |
 | `__rt_file` | Read file into array of lines |
 | `__rt_file_exists` / `__rt_is_file` / `__rt_is_dir` | Existence and path-type checks backed by `stat()` |
-| `__rt_is_readable` / `__rt_is_writable` | Access checks backed by `access()` |
+| `__rt_is_readable` / `__rt_is_writable` | Access checks backed by `access()` on real paths |
+| `__rt_stat_mode_access` | The wrapper-aware permission predicate behind `is_readable()` / `is_writable()` / `is_executable()` on userspace-wrapper paths: selects exactly one owner/group/world triad from the `url_stat()`-reported uid/gid against the process identity (`getuid`/`getgid`/`getgroups`) |
 | `__rt_filesize` / `__rt_filemtime` / `__rt_fileatime` / `__rt_filectime` / `__rt_fileperms` / `__rt_fileowner` / `__rt_filegroup` / `__rt_fileinode` | Stat scalar metadata. Each returns a payload plus a success flag (`x1`/`rdx`) so codegen can box PHP `false` without confusing legitimate zero values — a size of `0` for an empty file, or a timestamp of `0`. |
 | `__rt_filetype` / `__rt_is_executable` / `__rt_is_link` | File type and permission predicates; `filetype()` uses `lstat()` so symlinks report `"link"` and missing paths box as `false`. |
 | `__rt_stat_array` / `__rt_lstat_array` / `__rt_fstat_array` | Build PHP-compatible stat arrays with numeric and string keys, returning a null pointer for codegen to box as `false` on failure |
@@ -821,7 +822,8 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type. Publ
 | `__rt_buffer_free` | Invalidate a resolved descriptor, recycle it unless its u32 generation is saturated, then release the detached payload | `x0` = opaque buffer handle | — |
 | `__rt_buffer_len` | Resolve the handle and read the logical element count from descriptor offset 8 | `x0` = opaque buffer handle | `x0` = length |
 | `__rt_buffer_bounds_fail` | Abort with `Fatal error: buffer index out of bounds` | — | does not return |
-| `__rt_buffer_size_overflow` | Abort when `length * stride` overflows or no descriptor can be issued | — | does not return |
+| `__rt_buffer_new_size_fail` | Abort with `Fatal error: buffer_new() length is negative or exceeds the maximum buffer size` when `length * stride` is invalid | — | does not return |
+| `__rt_buffer_registry_exhausted` | Abort with `Fatal error: buffer registry exhausted` when no descriptor slot can be issued | — | does not return |
 | `__rt_buffer_use_after_free` | Abort with `Fatal error: use of buffer after buffer_free()` | — | does not return |
 
 ## Mixed-type helpers
@@ -832,6 +834,7 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type. Publ
 | `__rt_mixed_cast_bool` | Unbox a mixed cell and cast to boolean | `x0` = mixed cell pointer | `x0` = 0 or 1 |
 | `__rt_mixed_cast_float` | Unbox a mixed cell and cast to float | `x0` = mixed cell pointer | `d0` = float |
 | `__rt_mixed_cast_string` | Unbox a mixed cell and cast to string | `x0` = mixed cell pointer | `x1`/`x2` = string |
+| `__rt_mixed_cast_array` | The `(array)` cast tag dispatch: arrays keep their COW payload, objects project to property hashes, null yields an empty array, and every other tag wraps into a one-element Mixed array | `x0` = mixed cell pointer | `x0` = array pointer |
 | `__rt_mixed_instanceof` | Unbox a mixed cell and test object payloads against class/interface metadata | `x0` = mixed cell pointer, `x1` = target id, `x2` = 0 class / 1 interface | `x0` = 0 or 1 |
 | `__rt_instanceof_lookup` | Resolve a dynamic class-string target against emitted class/interface name metadata | `x1`/`x2` = string | `x0` = found, `x1` = target id, `x2` = 0 class / 1 interface |
 | `__rt_mixed_is_empty` | Check emptiness of a mixed cell (PHP semantics) | `x0` = mixed cell pointer | `x0` = 0 or 1 |
@@ -845,12 +848,14 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type. Publ
 
 ## Object and stdClass routines
 
-**Source:** `src/codegen_support/runtime/objects/` (10 files)
+**Source:** `src/codegen_support/runtime/objects/` (15 files)
 
 These helpers support `stdClass`, `json_decode()` object results, boxed Mixed property/index access, object destructor dispatch, and dynamic `new $name()` instantiation. `stdClass` instances use a compact `[class_id][hash_ptr]` payload, with dynamic properties stored in a hash of boxed `Mixed` values.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
+| `__rt_object_to_hash` | Project an object's properties into a string-keyed hash — backs `get_object_vars()` and `(array)` object casts through serialize descriptors, with declaring-class protected/private filtering and `__PHP_Incomplete_Class` handling | object pointer + mode | hash pointer |
+| `__rt_throw_object_not_array` | Raise PHP's catchable `Cannot use object of type X as array` | object pointer | does not return |
 | `__rt_new_by_name` | Instantiate a class by its textual name through the `_classes_by_name` table (case-insensitive `__rt_strcasecmp` lookup), allocating and zeroing the object payload | class name string | object pointer, or 0 (null) on miss |
 | `__rt_call_object_destructor` | Look up the object's `__destruct` in the class_id-indexed `_class_destruct_ptrs` table and invoke it with `$this` borrowed before storage is released; guarded against re-entry | object pointer | — |
 | `__rt_stdclass_new` | Allocate an empty stdClass object with hash-backed dynamic property storage | stdClass class id from runtime data | object pointer |
@@ -1089,7 +1094,7 @@ Additionally, the runtime emits static data tables:
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_spl_autoload_exts_default`, `_spl_autoload_exts_ptr`, `_spl_autoload_exts_len` — mutable SPL autoload extension state
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
-- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_size_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
+- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
 - `_heap_dbg_bad_refcount_msg`, `_heap_dbg_double_free_msg`, `_heap_dbg_free_list_msg` — fatal heap-debug error strings enabled by `--heap-debug`
 - `_heap_dbg_*` summary labels — fixed strings used by `__rt_heap_debug_report` for alloc/free/live/leak output
 - `_resource_id_prefix` — prefix used by resource display helpers

@@ -105,8 +105,8 @@ pub fn superglobal_type() -> PhpType {
 /// as `AssocArray{Str, Mixed}` for these names, so the empty literal lands on hash
 /// storage rather than indexed storage.
 ///
-/// `$_REQUEST`, `$_ENV` and `$_SESSION` are deliberately absent from the seeded
-/// set — see `CLI_POPULATED_SUPERGLOBALS`.
+/// Only `$_SESSION` is deliberately absent from the seeded set — it does not
+/// exist until `session_start()` — see `CLI_POPULATED_SUPERGLOBALS`.
 pub fn seed_cli_populated_superglobals(
     program: crate::parser::ast::Program,
 ) -> crate::parser::ast::Program {

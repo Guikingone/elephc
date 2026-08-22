@@ -304,12 +304,15 @@ pub(crate) fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 /// (non-Zend) list returned by `get_loaded_extensions(false)`.
 ///
 /// KEEP IN SYNC with `crates/elephc-magician/src/interpreter/builtins/network_env/extension_loaded.rs`.
-/// This is only the always-present core set. Bridge-linked extensions (e.g. `PDO`, `hash`,
-/// `openssl`) are added on top per-compilation from the linked-bridge set via
+/// This is only the always-present core set. Extensions this compilation actually provides
+/// (e.g. `hash`, `openssl` from linked bridges, and the injected PHP surfaces `PDO` / `mysqli`
+/// riding the shared `elephc_pdo` archive) are added on top per-compilation via
 /// `crate::codegen::linked_extensions()` — see [`extension_is_loaded`] and
 /// `lower_get_loaded_extensions`. Magician mirrors this set but always adds `bcmath`, which it
 /// implements directly; AOT adds `bcmath` only when `elephc_bcmath` is linked. Other bridge-linked
-/// extensions such as `PDO` remain absent in eval because it has no AOT link manifest.
+/// extensions and injected surfaces such as `PDO` and `mysqli` remain absent in eval because it
+/// has no AOT link manifest (documented divergence: `extension_loaded('PDO')` and
+/// `extension_loaded('mysqli')` are `false` in eval).
 pub(crate) const CORE_LOADED_EXTENSIONS: &[&str] = &[
     "Core",
     "standard",
@@ -329,14 +332,16 @@ pub(crate) const CORE_LOADED_EXTENSIONS: &[&str] = &[
 /// KEEP IN SYNC with `crates/elephc-magician/src/interpreter/builtins/network_env/get_loaded_extensions.rs`.
 pub(crate) const ZEND_LOADED_EXTENSIONS: &[&str] = &["Zend OPcache"];
 
-/// Returns true when `name` matches an always-present core extension OR a bridge
-/// actually linked into this compilation (`crate::codegen::linked_extensions()`),
+/// Returns true when `name` matches an always-present core extension OR an extension
+/// this compilation actually provides (`crate::codegen::linked_extensions()`),
 /// compared case-insensitively.
 ///
 /// Mirrors PHP's case-insensitive extension-name comparison: only the canonical names match
 /// (e.g. "opcache" is not an alias for "Zend OPcache"). The linked set is populated by the
-/// pipeline before codegen from the bridges this program links (e.g. `PDO` under `--with-pdo`
-/// or `hash` when a program uses `hash()`), so a bridge-free program reports only the core set.
+/// pipeline before codegen from the bridges this program links (e.g. `hash` when a program
+/// uses `hash()`) plus the injected PHP surfaces (`PDO` under `--with-pdo` or detected PDO
+/// usage, `mysqli` for the mysqli surface — both ride the same `elephc_pdo` archive, so the
+/// archive alone identifies neither), so a bridge-free program reports only the core set.
 pub(in crate::codegen::lower_inst) fn extension_is_loaded(name: &str) -> bool {
     CORE_LOADED_EXTENSIONS
         .iter()

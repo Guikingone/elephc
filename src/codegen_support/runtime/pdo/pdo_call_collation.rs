@@ -185,7 +185,7 @@ pub fn emit_pdo_call_collation(emitter: &mut Emitter) {
     emitter.label("__rt_pdo_call_collation_threw_released");
     emitter.instruction("mov x10, #1");                                         // materialize the callback-error sentinel high bit
     emitter.instruction("lsl x10, x10, #63");                                   // i64::MIN tells the bridge to interrupt SQLite
-    emitter.instruction("str x10, [sp, #304]");                                // preserve the callback-error sentinel through cleanup
+    emitter.instruction("str x10, [sp, #304]");                                 // preserve the callback-error sentinel through cleanup
 
     // -- shared cleanup: release the argument container --
     emitter.label("__rt_pdo_call_collation_cleanup");
@@ -320,8 +320,8 @@ fn emit_pdo_call_collation_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_pdo_call_collation_threw_released_x86");       // tolerate a defensive null exception slot
     emitter.instruction("call __rt_decref_any");                                // release the swallowed Throwable object
     emitter.label("__rt_pdo_call_collation_threw_released_x86");
-    emitter.instruction("movabs r10, 0x8000000000000000");                     // i64::MIN tells the bridge to interrupt SQLite
-    emitter.instruction("mov QWORD PTR [rbp - 72], r10");                      // preserve the callback-error sentinel through cleanup
+    emitter.instruction("movabs r10, 0x8000000000000000");                      // i64::MIN tells the bridge to interrupt SQLite
+    emitter.instruction("mov QWORD PTR [rbp - 72], r10");                       // preserve the callback-error sentinel through cleanup
 
     // -- shared cleanup: release the argument container --
     emitter.label("__rt_pdo_call_collation_cleanup_x86");

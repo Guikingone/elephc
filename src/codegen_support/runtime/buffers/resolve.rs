@@ -48,7 +48,7 @@ pub fn emit_buffer_resolve(emitter: &mut Emitter) {
     emitter.instruction("cmp x12, x10");                                        // reject a handle from an earlier slot lifetime
     emitter.instruction("b.ne __rt_buffer_resolve_invalid");                    // stale aliases never revive after reuse
     emitter.instruction("mov x0, x11");                                         // return descriptor address
-    emitter.instruction("ret");
+    emitter.instruction("ret");                                                 // hand the validated descriptor back to the buffer operation
     emitter.label("__rt_buffer_resolve_invalid");
     emitter.instruction("b __rt_buffer_use_after_free");                        // one cross-atom branch after local conditional checks
 }
@@ -76,7 +76,7 @@ fn emit_buffer_resolve_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp QWORD PTR [r11 + 24], rax");                       // descriptor generation
     emitter.instruction("jne __rt_buffer_resolve_invalid_x");                   // stale aliases never revive after reuse
     emitter.instruction("mov rax, r11");                                        // return descriptor address
-    emitter.instruction("ret");
+    emitter.instruction("ret");                                                 // hand the validated descriptor back to the buffer operation
     emitter.label("__rt_buffer_resolve_invalid_x");
     emitter.instruction("jmp __rt_buffer_use_after_free");                      // one shared fatal branch after local conditional checks
 }

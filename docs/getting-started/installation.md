@@ -71,12 +71,12 @@ project directory:
 
 ```bash
 elvm ls-remote
-elvm install 0.26.4
-elvm use 0.26.4
+elvm install 0.26.5
+elvm use 0.26.5
 git add .elephc-version
 ```
 
-Replace `0.26.4` with the release your project needs. Commit the generated
+Replace `0.26.5` with the release your project needs. Commit the generated
 `.elephc-version` file so every contributor and CI job selects the same
 compiler. In a checkout that already contains the file, install its requested
 version with:

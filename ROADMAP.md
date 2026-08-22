@@ -1085,7 +1085,7 @@ and 0.x validation rather than by speculative pass work.
 - [x] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
 - [x] Delete frozen legacy AST → ASM emitter modules after shared ABI/runtime dependencies are disentangled
 - [x] Rename `src/codegen_ir/` to `src/codegen/`
-- [x] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
+- [x] Move historical codegen doc to `docs/internals/legacy-codegen.md` (later retired together with the legacy backend); refresh `docs/internals/the-codegen.md` to describe the IR pipeline
 - [x] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [x] Installation / packaging documentation for the supported host platforms — macOS Homebrew, source builds, release artifacts, native toolchain requirements, and managed native dependency prerequisites are covered in `docs/getting-started/installation.md`
@@ -1224,7 +1224,7 @@ future use cases.
 |---|---|---|
 | Buffer ergonomics v2 | Medium | Consider dynamic resize/push/pop, `foreach`, array conversion, and automatic cleanup for `buffer<T>` while keeping the hot-path POD contract explicit. |
 | String-capable FFI callbacks | Medium | Allow C callback signatures that pass or return strings once ownership and temporary C-string lifetimes are modeled safely across callback boundaries. |
-| Generator parity v2 | Medium | MVP delivered in v0.21.x for ARM64 and Linux x86_64. Remaining parity work: `yield` inside `try`/`catch`/`finally`, dynamic `yield from` arrays beyond the compile-time literal form, broader dynamic `yield from` Iterator targets, exception propagation through `Generator::throw` to caller-visible finally paths, and PHP-exact `Generator` interface inheritance with `Iterator`. See `docs/php/generators.md`. |
+| Generator parity v2 | Medium | MVP delivered in v0.21.x for ARM64 and Linux x86_64; `yield` inside `try`/`catch`/`finally` and exception propagation through `Generator::throw` landed with the v0.26.x closure work. Remaining parity work: dynamic `yield from` arrays beyond the compile-time literal form, broader dynamic `yield from` Iterator targets, and PHP-exact `Generator` interface inheritance with `Iterator`. See `docs/php/generators.md`. |
 | Fiber parity v2 | Medium | MVP delivered in v0.20.x for ARM64 and Linux x86_64. Remaining parity work: arithmetic auto-unboxing on `mixed` payloads received from `suspend()`, true variadic `start(...$args)` beyond seven args, dynamic callback targets, by-reference callback start parameters, configurable stack sizing, and PHP-exact `FiberError` hierarchy. See `docs/php/fibers.md`. |
 | Conditional include class-like variants | High | Keep class/interface/trait/enum duplicate detection strict for now. Supporting branch-selected class-like declarations would require runtime class metadata/layout dispatch, while modern PHP can avoid the ambiguity with namespaces. |
 

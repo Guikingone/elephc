@@ -69,6 +69,8 @@ pub mod parser;
 pub mod php_version;
 /// PDO (SQLite) standard-library prelude injection.
 pub mod pdo_prelude;
+/// mysqli (MySQL / MariaDB over the elephc_pdo bridge) prelude injection.
+pub mod mysqli_prelude;
 
 /// PHP language-profile selection and profile-dependence analysis.
 pub mod php_profile;

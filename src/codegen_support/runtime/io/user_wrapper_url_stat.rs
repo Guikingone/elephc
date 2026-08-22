@@ -368,9 +368,9 @@ pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
 
     // -- single integer field: select the stat-array key string --
     emitter.instruction("cmp x10, #1");                                         // selector 1 = 'mode'
-    emitter.instruction("b.eq __rt_uusf_mode");
+    emitter.instruction("b.eq __rt_uusf_mode");                                 // → load the mode key
     emitter.instruction("cmp x10, #2");                                         // selector 2 = 'mtime'
-    emitter.instruction("b.eq __rt_uusf_mtime");
+    emitter.instruction("b.eq __rt_uusf_mtime");                                // → load the mtime key
     abi::emit_symbol_address(emitter, "x1", "_stat_key_size");
     emitter.instruction("mov x2, #4");                                          // strlen("size")
     emitter.instruction("b __rt_uusf_havekey");                                 // proceed with the size key
@@ -419,11 +419,11 @@ pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the selector to pick the permission bit
     emitter.instruction("mov x10, #4");                                         // selector 3 (is_readable) wants the read bit
     emitter.instruction("mov x11, #2");                                         // selector 4 (is_writable) wants the write bit
-    emitter.instruction("cmp x9, #4");
-    emitter.instruction("csel x10, x11, x10, eq");
+    emitter.instruction("cmp x9, #4");                                          // is this the is_writable predicate?
+    emitter.instruction("csel x10, x11, x10, eq");                              // pick the write bit when it is
     emitter.instruction("mov x11, #1");                                         // selector 5 (is_executable) wants the execute bit
-    emitter.instruction("cmp x9, #5");
-    emitter.instruction("csel x10, x11, x10, eq");
+    emitter.instruction("cmp x9, #5");                                          // is this the is_executable predicate?
+    emitter.instruction("csel x10, x11, x10, eq");                              // pick the execute bit when it is
     emitter.instruction("ldr x0, [sp, #32]");                                   // mode
     emitter.instruction("ldr x1, [sp, #48]");                                   // reported owner uid
     emitter.instruction("ldr x2, [sp, #56]");                                   // reported owning gid
@@ -437,7 +437,7 @@ pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the selector to choose the sentinel
     emitter.instruction("mov x0, #-1");                                         // integer selectors report -1
     emitter.instruction("mov x10, #0");                                         // boolean selectors report false
-    emitter.instruction("cmp x9, #3");
+    emitter.instruction("cmp x9, #3");                                          // selectors 3..5 are the permission predicates
     emitter.instruction("csel x0, x10, x0, ge");                                // a -1 stored into a PHP bool would read as true
     emitter.instruction("mov x1, #0");                                          // failure flag: `filesize()` boxes PHP false rather than -1
 
@@ -507,9 +507,9 @@ fn emit_user_wrapper_url_stat_field_linux_x86_64(emitter: &mut Emitter) {
 
     // -- single integer field: select the stat-array key string --
     emitter.instruction("cmp r10, 1");                                          // selector 1 = 'mode'
-    emitter.instruction("je __rt_uusf_mode_x86");
+    emitter.instruction("je __rt_uusf_mode_x86");                               // → load the mode key
     emitter.instruction("cmp r10, 2");                                          // selector 2 = 'mtime'
-    emitter.instruction("je __rt_uusf_mtime_x86");
+    emitter.instruction("je __rt_uusf_mtime_x86");                              // → load the mtime key
     abi::emit_symbol_address(emitter, "rax", "_stat_key_size");                 // size key pointer (new_by_name-style rax/rdx string ABI)
     emitter.instruction("mov rdx, 4");                                          // strlen("size")
     emitter.instruction("jmp __rt_uusf_havekey_x86");                           // proceed with the size key
@@ -560,11 +560,11 @@ fn emit_user_wrapper_url_stat_field_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the selector to pick the permission bit
     emitter.instruction("mov ecx, 4");                                          // selector 3 (is_readable) wants the read bit
     emitter.instruction("mov r8d, 2");                                          // selector 4 (is_writable) wants the write bit
-    emitter.instruction("cmp r10, 4");
-    emitter.instruction("cmove ecx, r8d");
+    emitter.instruction("cmp r10, 4");                                          // is this the is_writable predicate?
+    emitter.instruction("cmove ecx, r8d");                                      // pick the write bit when it is
     emitter.instruction("mov r8d, 1");                                          // selector 5 (is_executable) wants the execute bit
-    emitter.instruction("cmp r10, 5");
-    emitter.instruction("cmove ecx, r8d");
+    emitter.instruction("cmp r10, 5");                                          // is this the is_executable predicate?
+    emitter.instruction("cmove ecx, r8d");                                      // pick the execute bit when it is
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // mode
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // reported owner uid
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reported owning gid
@@ -577,7 +577,7 @@ fn emit_user_wrapper_url_stat_field_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the selector to choose the sentinel
     emitter.instruction("mov rax, -1");                                         // integer selectors report -1
     emitter.instruction("xor edx, edx");                                        // boolean selectors report false
-    emitter.instruction("cmp r9, 3");
+    emitter.instruction("cmp r9, 3");                                           // selectors 3..5 are the permission predicates
     emitter.instruction("cmovge rax, rdx");                                     // a -1 stored into a PHP bool would read as true
     emitter.instruction("mov rdx, 0");                                          // failure flag: `filesize()` boxes PHP false rather than -1
 
