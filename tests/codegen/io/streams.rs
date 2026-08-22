@@ -17504,3 +17504,32 @@ fopen("", "r");
         out.stdout
     );
 }
+
+/// Verifies `file_put_contents()` JOINS an array payload, as php does.
+///
+/// php does not cast the array — `(string)$array` would be `"Array"` with a notice. It
+/// concatenates each element's ordinary string conversion with no separator, which is exactly
+/// `implode("", $data)`. MEASURED on `php -n` 8.5.6:
+///
+/// ```text
+/// ["a", "b", "c"]        "abc"    returns 3
+/// [1, 2.5, true, null]   "12.51"  returns 5   (true → "1", null → "")
+/// []                     ""       returns 0
+/// ```
+///
+/// elephc refused to compile it at all — `unsupported EIR backend feature: file_put_contents data
+/// for PHP type Array(Str)` — because the shared string loader has no array case, and rightly so:
+/// casting an array there would produce php's `"Array"`. The join belongs to this builtin.
+#[test]
+fn test_file_put_contents_joins_an_array_payload() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+echo file_put_contents("a.txt", ["a", "b", "c"]), "|", file_get_contents("a.txt"), "|";
+echo file_put_contents("b.txt", [1, 2.5, true, null]), "|", file_get_contents("b.txt"), "|";
+echo file_put_contents("c.txt", []), "|[", file_get_contents("c.txt"), "]";
+unlink("a.txt"); unlink("b.txt"); unlink("c.txt");
+"#,
+    );
+    assert_eq!(out, "3|abc|5|12.51|0|[]");
+    let _ = fs::remove_dir_all(&dir);
+}

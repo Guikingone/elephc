@@ -10,6 +10,43 @@
 use super::*;
 
 /// Lowers `file_put_contents(path, data)` through the target-aware runtime writer.
+/// Loads `file_put_contents()`'s `$data` into the string result registers.
+///
+/// php JOINS an array payload rather than casting it — MEASURED: `["a","b","c"]` writes `"abc"`
+/// and `[1, 2.5, true, null]` writes `"12.51"`, so each element takes the ordinary string
+/// conversion and the pieces are concatenated with no separator. `(string)$array` would answer
+/// `"Array"` with a notice, which is why this cannot live in the shared string loader.
+///
+/// `__rt_implode` leaves its result in the string result registers, which is where every caller
+/// here reads the payload from, so the array case needs nothing after it.
+pub(super) fn load_file_put_contents_payload(
+    ctx: &mut FunctionContext<'_>,
+    data: ValueId,
+) -> Result<()> {
+    if !matches!(
+        ctx.value_php_type(data)?.codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. }
+    ) {
+        return load_string_to_result(ctx, data, "file_put_contents data");
+    }
+    let (empty_label, _) = ctx.data.add_string(b"");
+    load_value_to_first_int_arg(ctx, data)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x0");                              // the array to join
+            abi::emit_symbol_address(ctx.emitter, "x1", &empty_label);          // php joins with no separator
+            ctx.emitter.instruction("mov x2, #0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdx, rax");                            // the array to join
+            abi::emit_symbol_address(ctx.emitter, "rdi", &empty_label);         // php joins with no separator
+            ctx.emitter.instruction("xor esi, esi");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_implode");                          // the pair lands in the string result registers
+    Ok(())
+}
+
 pub(crate) fn lower_file_put_contents(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -119,7 +156,7 @@ fn lower_literal_wrapper_file_put_contents(
             ctx.emitter.instruction("ldr x9, [x0, #8]");                        // the opaque stream handle
             ctx.emitter.instruction("sub sp, sp, #32");
             ctx.emitter.instruction("str x9, [sp, #0]");
-            load_string_to_result(ctx, data, "file_put_contents data")?;
+            load_file_put_contents_payload(ctx, data)?;
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // the handle; the payload is already in x1/x2
             abi::emit_call_label(ctx.emitter, "__rt_fwrite");                   // reaches the wrapper's stream_write()
             ctx.emitter.instruction("str x0, [sp, #8]");                        // php reports the INPUT byte count
@@ -141,7 +178,7 @@ fn lower_literal_wrapper_file_put_contents(
             ctx.emitter.instruction("mov r9, QWORD PTR [rax + 8]");             // the opaque stream handle
             ctx.emitter.instruction("sub rsp, 32");
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], r9");
-            load_string_to_result(ctx, data, "file_put_contents data")?;
+            load_file_put_contents_payload(ctx, data)?;
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // the handle
             ctx.emitter.instruction("mov rsi, rax");                            // the data pointer; the length is already in rdx
             abi::emit_call_label(ctx.emitter, "__rt_fwrite");                   // reaches the wrapper's stream_write()
@@ -210,7 +247,7 @@ fn lower_literal_compress_zlib_file_put_contents(
             ctx.emitter.instruction("ldr x9, [x0, #8]");                        // the opaque stream handle
             ctx.emitter.instruction("sub sp, sp, #32");
             ctx.emitter.instruction("str x9, [sp, #0]");
-            load_string_to_result(ctx, data, "file_put_contents data")?;
+            load_file_put_contents_payload(ctx, data)?;
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // the handle; the payload is already in x1/x2
             abi::emit_call_label(ctx.emitter, "__rt_fwrite");                   // deflates through _stream_write_filters
             ctx.emitter.instruction("str x0, [sp, #8]");                        // php reports the INPUT byte count
@@ -235,7 +272,7 @@ fn lower_literal_compress_zlib_file_put_contents(
             ctx.emitter.instruction("mov r9, QWORD PTR [rax + 8]");             // the opaque stream handle
             ctx.emitter.instruction("sub rsp, 32");
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], r9");
-            load_string_to_result(ctx, data, "file_put_contents data")?;
+            load_file_put_contents_payload(ctx, data)?;
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // the handle
             ctx.emitter.instruction("mov rsi, rax");                            // the data pointer; the length is already in rdx
             abi::emit_call_label(ctx.emitter, "__rt_fwrite");                   // deflates through _stream_write_filters
@@ -361,7 +398,7 @@ fn emit_file_put_contents_filter_route(
             ctx.emitter.instruction("ldr x9, [x0, #8]");                        // the opaque stream handle
             ctx.emitter.instruction("sub sp, sp, #32");
             ctx.emitter.instruction("str x9, [sp, #0]");
-            load_string_to_result(ctx, data, "file_put_contents data")?;
+            load_file_put_contents_payload(ctx, data)?;
             ctx.emitter.instruction("ldr x0, [sp, #0]");
             abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");          // x0 = the input byte count php reports
             ctx.emitter.instruction("str x0, [sp, #8]");
@@ -449,7 +486,7 @@ fn emit_file_put_contents_filter_route(
             ctx.emitter.instruction("mov r9, QWORD PTR [rax + 8]");             // the opaque stream handle
             ctx.emitter.instruction("sub rsp, 32");
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], r9");
-            load_string_to_result(ctx, data, "file_put_contents data")?;
+            load_file_put_contents_payload(ctx, data)?;
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
             ctx.emitter.instruction("mov rsi, rax");                            // the data pointer; the length is already in rdx
             abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");          // rax = the input byte count php reports

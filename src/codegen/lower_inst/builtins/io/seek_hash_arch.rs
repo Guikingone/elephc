@@ -259,7 +259,7 @@ pub(super) fn lower_file_put_contents_arm64(
     }
     load_string_to_result(ctx, path, "file_put_contents filename")?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-    load_string_to_result(ctx, data, "file_put_contents data")?;
+    super::phar_write::load_file_put_contents_payload(ctx, data)?;
     ctx.emitter.instruction("mov x3, x1");                                      // pass the data pointer in the runtime helper's second string slot
     ctx.emitter.instruction("mov x4, x2");                                      // pass the data length in the runtime helper's second string slot
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
@@ -289,7 +289,7 @@ pub(super) fn lower_file_put_contents_x86_64(
     }
     load_string_to_result(ctx, path, "file_put_contents filename")?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-    load_string_to_result(ctx, data, "file_put_contents data")?;
+    super::phar_write::load_file_put_contents_payload(ctx, data)?;
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the data pointer while the filename remains on the temporary stack
     ctx.emitter.instruction("mov rsi, rdx");                                    // pass the data length while the filename remains on the temporary stack
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
