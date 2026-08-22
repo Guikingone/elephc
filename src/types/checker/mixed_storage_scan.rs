@@ -16,6 +16,12 @@
 //!   to stability, function bodies once per call-site specialization).
 //! - Disabled under `--strict-locals`: the scan returns without marking anything and a divergent
 //!   assignment errors exactly as it does today.
+//! - The same walk also answers a question that has nothing to do with marking: does this body
+//!   call `eval()` at all? It is recorded in `Checker::body_contains_eval` and consulted by
+//!   `Checker::local_binding_is_killable`. The walk is the natural place for it because it is
+//!   the only per-body pass that runs BEFORE the first statement is checked (a point-in-time
+//!   "have we crossed an eval yet" flag cannot see an eval BELOW the `unset` it has to veto),
+//!   and because it runs in BOTH modes — the collect above is not gated on `--strict-locals`.
 
 use std::collections::BTreeMap;
 
@@ -50,8 +56,24 @@ struct NameFacts {
     disqualified: bool,
 }
 
-/// Per-name evidence for the body being scanned, ordered so warnings are deterministic.
-type Facts = BTreeMap<String, NameFacts>;
+/// Everything one scan of one body collects.
+#[derive(Default)]
+struct Facts {
+    /// Per-name evidence for the body being scanned, ordered so warnings are deterministic.
+    names: BTreeMap<String, NameFacts>,
+    /// Whether an `eval()` call appears ANYWHERE in this body, above or below any other
+    /// statement. Body-scoped rather than point-in-time on purpose: see
+    /// [`Checker::local_binding_is_killable`], which has to veto an `unset` that sits ABOVE the
+    /// only `eval` in the body.
+    ///
+    /// A closure written inside this body does NOT contribute: [`collect_expr`] never descends
+    /// into a closure body, which gets its own scan (and its own flag) at its own entry point.
+    /// That is the same per-body rule every other field of the scan follows, and it is sound for
+    /// the same reason: an `eval` inside the closure addresses the CLOSURE's scope by name, and
+    /// the one shape that lets it reach an enclosing local — a `use (&$x)` capture — already
+    /// makes `$x` reference-aliased and therefore neither killable nor re-bindable out here.
+    contains_eval: bool,
+}
 
 impl Checker {
     /// Marks the locals of `body` that are assigned incompatible types across a branch, so their
@@ -71,8 +93,14 @@ impl Checker {
         // set, but clear it here too so the scan owns the whole decision for this body.
         self.mixed_storage_locals.clear();
 
-        let mut facts = Facts::new();
+        let mut facts = Facts::default();
         collect_block(self, body, 0, &mut facts);
+
+        // Recorded for EVERY body and in BOTH modes, because it does not gate marking: it gates
+        // `Checker::local_binding_is_killable`, which the `unset` kill and the straight-line
+        // retype both consult and which `--strict-locals` does not switch off (the kill is
+        // mode-independent). Installed before the early return below for exactly that reason.
+        self.body_contains_eval = facts.contains_eval;
 
         // This visit RE-DECIDES every assignment site in this body, so a decision a SUPERSEDED
         // walk recorded for one of them is dropped first. The checker walks a body more than
@@ -84,7 +112,7 @@ impl Checker {
         // Qualified by NAME as well as span, because a `Span` has no file identity: the same
         // (line, column) in an included file is an EQUAL span, and this walk must not drop the
         // decision recorded for that unrelated assignment.
-        for (name, name_facts) in &facts {
+        for (name, name_facts) in &facts.names {
             for site in &name_facts.assigns {
                 if self
                     .mixed_storage_store_sites
@@ -103,7 +131,7 @@ impl Checker {
         // Collected before pushing so the warnings come out in source order regardless of the
         // name ordering the evidence map imposes.
         let mut marks: Vec<(Span, String, String)> = Vec::new();
-        for (name, name_facts) in &facts {
+        for (name, name_facts) in &facts.names {
             let Some((existing, site)) = self.first_rejected_assignment(name, name_facts) else {
                 continue;
             };
@@ -120,7 +148,7 @@ impl Checker {
         marks.sort_by_key(|(span, name, _)| (span.line, span.col, name.clone()));
         for (span, name, message) in marks {
             self.warnings.push(CompileWarning::new(span, &message));
-            for site in &facts[&name].assigns {
+            for site in &facts.names[&name].assigns {
                 self.mixed_storage_store_sites.insert(site.span, name.clone());
             }
             self.mixed_storage_locals.insert(name);
@@ -215,7 +243,7 @@ impl Checker {
 
 /// Records one statement-form assignment to `name`.
 fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: Span) {
-    let entry = facts.entry(name.to_string()).or_default();
+    let entry = facts.names.entry(name.to_string()).or_default();
     // A value this scan cannot type EXACTLY is not evidence, it is a guess.
     // `infer_expr_type_syntactic` answers `Int` for everything it does not recognise — a plain
     // `$a = $b`, a user function call, a property read — so trusting it here would mark locals in
@@ -235,7 +263,7 @@ fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: 
 
 /// Marks `name` as never eligible for mixed storage in this body.
 fn disqualify(facts: &mut Facts, name: &str) {
-    facts.entry(name.to_string()).or_default().disqualified = true;
+    facts.names.entry(name.to_string()).or_default().disqualified = true;
 }
 
 /// Disqualifies the local at the root of an lvalue/reference access chain.
@@ -519,6 +547,13 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
         | ExprKind::PreDecrement(name)
         | ExprKind::PostDecrement(name) => disqualify(facts, name),
         ExprKind::FunctionCall { name, args } => {
+            if is_eval_call(name.as_str()) {
+                // Recorded from ANYWHERE in the body — nested inside a condition, an argument,
+                // a loop, whatever — because the fact it feeds is body-scoped. `eval` is a
+                // language construct in PHP's grammar, so it only ever reaches the checker as
+                // this call shape (it cannot be a variable function or a callable string).
+                facts.contains_eval = true;
+            }
             if is_unset_call(name.as_str()) {
                 // A name mentioned in ANY `unset` is left to the kill path (or to today's error).
                 for arg in args {
@@ -721,4 +756,13 @@ fn callee_may_bind_arguments_by_ref(checker: &Checker, name: &Name) -> bool {
 /// Returns whether a called name is PHP's `unset`, the only builtin that ends a local binding.
 fn is_unset_call(name: &str) -> bool {
     name.trim_start_matches('\\').eq_ignore_ascii_case("unset")
+}
+
+/// Returns whether a called name is PHP's `eval`.
+///
+/// Matched through `php_symbol_key` rather than a plain comparison, so it answers the same way
+/// every other `eval` recogniser in the compiler does (`ir_lower::expr::closures::is_eval_call_name`,
+/// `ir_lower::program::eval_aot`).
+fn is_eval_call(name: &str) -> bool {
+    crate::names::php_symbol_key(name.trim_start_matches('\\')) == "eval"
 }

@@ -1229,3 +1229,37 @@ fn test_eval_local_retype_matches_aot() {
     let out = compile_and_run("<?php eval('$a = 1; $a = \"ciao\"; echo $a;');");
     assert_eq!(out, "ciao");
 }
+
+/// An `unset` in a body that calls `eval()` keeps the binding, so the fragment's write lands
+/// where the later read looks.
+///
+/// The eval scope addresses caller locals BY NAME; the kill drops the name's frame slot and mints
+/// a fresh one at the next store. Measured with the kill still firing here, this program printed
+/// NOTHING (PHP prints `5`), and it printed nothing SILENTLY — no warning, no error. The gate
+/// that fixes it is body-scoped rather than point-in-time, because the `eval` below the `unset`
+/// has not raised any barrier yet at the moment the kill is judged.
+#[test]
+fn test_unset_in_an_eval_body_keeps_the_binding() {
+    let out = compile_and_run("<?php $a = 1; unset($a); eval('$a = 5;'); echo $a;");
+    assert_eq!(out, "5");
+}
+
+/// The eval fragment still sees a local the body assigned before it, with the kill gated out of
+/// the way: `unset` degrades to the plain null-store it did before kills were lowered.
+#[test]
+fn test_unset_in_an_eval_body_still_nulls_the_local() {
+    let out = compile_and_run(
+        "<?php $a = \"s\" . $argc; unset($a); eval('echo isset($a) ? \"set\" : \"unset\";');",
+    );
+    assert_eq!(out, "unset");
+}
+
+/// Control: the branch-divergent shape is NOT gated by the eval rule and keeps working, because
+/// boxed `Mixed` storage is what the eval scope wants in the first place.
+#[test]
+fn test_branch_divergent_local_survives_an_eval_body() {
+    let out = compile_and_run(
+        "<?php if ($argc > 1) { $b = 1; } else { $b = \"z\"; } eval('echo $b; $b = \"w\";'); echo \"|\", $b;",
+    );
+    assert_eq!(out, "z|w");
+}

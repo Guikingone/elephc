@@ -290,6 +290,14 @@ pub(crate) struct Checker {
     /// type, as span -> local NAME. Filled in Task 3; carried in `CheckResult` from here so the
     /// two decision maps travel together, keyed the same way.
     pub local_retype_sites: HashMap<Span, String>,
+    /// Whether the body being checked calls `eval()` ANYWHERE, above or below the statement being
+    /// checked. Recorded by `mixed_storage_scan::run_mixed_storage_scan` before the body's first
+    /// statement is checked, and consulted by [`Checker::local_binding_is_killable`].
+    ///
+    /// Distinct from `eval_barrier_active`, which is POINT-IN-TIME ("have we crossed an eval
+    /// yet") and therefore cannot answer this question: an `unset` above the body's only `eval`
+    /// sees no barrier at all. Per-body, like every other field in [`SavedLocalBindingScope`].
+    pub body_contains_eval: bool,
     /// Names of the CURRENT body's locals that the syntactic pre-scan marked as whole-frame boxed
     /// `Mixed` storage, because they are assigned incompatible types across a branch.
     ///
@@ -316,14 +324,37 @@ pub(crate) struct SavedLocalBindingScope {
     statics: HashSet<String>,
     typed: HashSet<String>,
     mixed_storage: HashSet<String>,
+    contains_eval: bool,
 }
 
 impl Checker {
     /// True when `name`'s current binding may be killed (by `unset`) or re-bound to an
     /// incompatible type (by assignment) at the current program point. See
     /// `.plans/local-retype-and-strict-locals.md` — depth-0 + non-aliased rule.
+    ///
+    /// A body that calls `eval()` anywhere answers `false` for EVERY name, so both the kill and
+    /// the straight-line retype step aside there and the body keeps its pre-feature behaviour
+    /// (`unset` is a typing no-op; an incompatible reassignment is the hard error). Ending a
+    /// binding is not a typing detail down in EIR — it drops the name's frame slot and mints a
+    /// fresh one — while the eval scope addresses caller locals BY NAME, so the fragment then
+    /// reads or writes a slot the rest of the body no longer uses. Measured on HEAD before this
+    /// gate, all three printing NOTHING where PHP prints a value:
+    /// `$a = 1; unset($a); eval('$a = 5;'); echo $a;` (PHP: `5`),
+    /// `$a = "old" . $argc; unset($a); $a = 7; eval('echo $a;');` (PHP: `7`), and — with no
+    /// `unset` in sight — `$a = "old"; $a = 7; eval('echo $a;');` (PHP: `7`).
+    ///
+    /// Body-scoped, not point-in-time: `eval_barrier_active` is only set once the walk has
+    /// PASSED an eval, and every repro above puts the eval BELOW the site being judged. The flag
+    /// consulted here is filled by the pre-scan, which sees the whole body first.
+    ///
+    /// The branch-divergent (`Mixed`-storage) shape is deliberately NOT gated: it never ends a
+    /// binding, it gives the local one boxed `Mixed` slot for the entire frame — which is the
+    /// representation the eval scope wants anyway — so
+    /// `if (…) { $b = 1; } else { $b = "z"; } eval('echo $b; $b = "w";'); echo "|", $b;` prints
+    /// PHP's `z|w` with and without this gate.
     pub(crate) fn local_binding_is_killable(&self, name: &str) -> bool {
-        self.local_conditional_depth == 0
+        !self.body_contains_eval
+            && self.local_conditional_depth == 0
             // NO entry means "not a binding this body created", which is NOT killable. The
             // environment a body starts from is seeded with names nothing in it assigned:
             // superglobals in every scope, `$argc`/`$argv` and extern C globals at top level,
@@ -368,10 +399,17 @@ impl Checker {
             // nothing about a same-named local in the callee, and leaking the set inward would
             // box a callee local the pre-scan never marked.
             mixed_storage: std::mem::take(&mut self.mixed_storage_locals),
+            contains_eval: self.body_contains_eval,
         };
         self.local_conditional_depth = 0;
         self.local_binding_depth = param_names.into_iter().map(|name| (name, 0)).collect();
         self.typed_local_names = typed_param_names.into_iter().collect();
+        // Cleared rather than inherited: a caller that runs `eval` says nothing about the body
+        // about to be checked. `run_mixed_storage_scan` fills it in for real, and BOTH callers of
+        // this method run that scan immediately afterwards — `with_local_storage_context` and
+        // `check_top_level_program`. The clear is what makes a body whose scan somehow did not
+        // run default to "no eval" rather than to the enclosing body's answer.
+        self.body_contains_eval = false;
         saved
     }
 
@@ -383,6 +421,7 @@ impl Checker {
         self.static_local_names = saved.statics;
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
+        self.body_contains_eval = saved.contains_eval;
     }
 
     /// Drops every per-name fact the checker carries for a local whose binding just ended.

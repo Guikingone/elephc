@@ -1893,3 +1893,103 @@ fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
         );
     }
 }
+
+/// A body that calls `eval()` anywhere keeps every local binding: the `unset` kill becomes a
+/// typing no-op, so no kill site is recorded for lowering to act on.
+///
+/// The eval scope addresses caller locals BY NAME, while the kill drops the name's frame slot.
+/// Measured before this gate: `$a = 1; unset($a); eval('$a = 5;'); echo $a;` printed NOTHING
+/// where PHP prints `5`. The flag has to be BODY-scoped rather than point-in-time — the `eval`
+/// here sits BELOW the `unset`, so nothing has raised an eval barrier yet when the kill is judged.
+#[test]
+fn test_unset_in_an_eval_body_records_no_kill_site() {
+    let result = check_source_full("<?php $a = 1; unset($a); eval('$a = 5;'); echo $a;")
+        .expect("an eval body must still type-check");
+    assert!(
+        result.local_bind_kill_sites.is_empty(),
+        "an eval-calling body must record no kill site: {:?}",
+        result.local_bind_kill_sites
+    );
+}
+
+/// Control for the test above: the identical program WITHOUT the `eval` still records its kill,
+/// so the gate is about eval rather than a checker that stopped killing.
+#[test]
+fn test_unset_without_eval_still_records_a_kill_site() {
+    let result = check_source_full("<?php $a = 1; unset($a); $a = 5; echo $a;")
+        .expect("a plain kill-then-rebind must type-check");
+    assert_eq!(
+        result.local_bind_kill_sites.len(),
+        1,
+        "the same shape without eval must still record its kill site: {:?}",
+        result.local_bind_kill_sites
+    );
+}
+
+/// The binding the kill no longer ends is still there, so a later INCOMPATIBLE assignment is the
+/// pre-feature hard error rather than a fresh binding.
+///
+/// Measured before the gate: this compiled with no diagnostic at all and printed NOTHING where
+/// PHP prints `7`.
+#[test]
+fn test_kill_then_rebind_in_an_eval_body_is_an_error() {
+    expect_error(
+        "<?php $a = \"old\" . $argc; unset($a); $a = 7; eval('echo $a;');",
+        "cannot reassign $a",
+    );
+}
+
+/// The straight-line RETYPE is gated by the same rule, and for the same reason: it too abandons
+/// the name's slot and mints a fresh one.
+///
+/// This shape has no `unset` in it at all, and it was the second silent miscompile found while
+/// fixing the first: measured before the gate, `$a = "old"; $a = 7; eval('echo $a;');` compiled
+/// with only the retype warning and printed NOTHING where PHP prints `7`.
+#[test]
+fn test_retype_in_an_eval_body_is_an_error() {
+    expect_error(
+        "<?php $a = \"old\"; $a = 7; eval('echo $a;');",
+        "cannot reassign $a",
+    );
+    expect_error(
+        "<?php $a = \"old\" . $argc; $a = 7; eval('echo $a;');",
+        "cannot reassign $a",
+    );
+}
+
+/// An `eval` in a CLOSURE body poisons that closure's scope only. The closure gets its own body
+/// walk, so the enclosing body's flag is untouched and its kill still happens.
+///
+/// Sound for the reason every other per-body fact is: the fragment addresses the CLOSURE's scope
+/// by name, and the one capture form that could reach an enclosing local — `use (&$x)` — already
+/// makes that local reference-aliased and therefore neither killable nor re-bindable out here.
+#[test]
+fn test_eval_inside_a_closure_does_not_gate_the_enclosing_body() {
+    let result = check_source_full(
+        "<?php $f = function () { eval('$z = 1;'); }; $a = 1; unset($a); $a = \"s\"; echo $a; $f();",
+    )
+    .expect("the enclosing body must still type-check");
+    assert_eq!(
+        result.local_bind_kill_sites.len(),
+        1,
+        "an eval confined to a closure body must leave the enclosing kill in place: {:?}",
+        result.local_bind_kill_sites
+    );
+}
+
+/// The branch-divergent (`Mixed`-storage) shape is deliberately NOT gated by the eval flag: it
+/// never ends a binding, it gives the local one boxed `Mixed` slot for the whole frame — which is
+/// exactly the representation the eval scope wants.
+#[test]
+fn test_branch_divergent_marking_survives_an_eval_body() {
+    let result = check_source_full(
+        "<?php if ($argc > 1) { $b = 1; } else { $b = \"z\"; } eval('echo $b; $b = \"w\";'); echo \"|\", $b;",
+    )
+    .expect("a marked local in an eval body must still type-check");
+    assert_eq!(
+        result.mixed_storage_store_sites.len(),
+        2,
+        "both branch assignments must still be recorded in an eval body: {:?}",
+        result.mixed_storage_store_sites
+    );
+}
