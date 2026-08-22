@@ -285,3 +285,32 @@ pub fn inject_if_used(program: crate::parser::ast::Program) -> crate::parser::as
     combined.extend(program);
     combined
 }
+
+#[cfg(test)]
+mod build_oracle_tests {
+    /// Verifies the BUILT declarations are the same AST the PHP form parses to.
+    ///
+    /// This is what makes the conversion trustworthy, and it runs on every test run rather than
+    /// on request: a builder nothing compares drifts, and a PHP reference nothing reads rots into
+    /// dead code. The comparison strips spans, because the two constructions cannot agree on
+    /// source positions and never needed to.
+    #[test]
+    fn built_declarations_match_the_php_form() {
+        let tokens = crate::lexer::tokenize(super::GZ_PRELUDE_SRC).expect("the PHP form must tokenize");
+        let parsed = crate::parser::parse_internal(&tokens).expect("the PHP form must parse");
+        let built = super::build::gz_declarations();
+        assert_eq!(
+            built.len(),
+            parsed.len(),
+            "declaration count: built {} vs parsed {}",
+            built.len(),
+            parsed.len()
+        );
+        for (built_stmt, parsed_stmt) in built.iter().zip(parsed.iter()) {
+            assert_eq!(
+                crate::synthetic_class::transcribe::strip_spans(&format!("{built_stmt:?}")),
+                crate::synthetic_class::transcribe::strip_spans(&format!("{parsed_stmt:?}")),
+            );
+        }
+    }
+}

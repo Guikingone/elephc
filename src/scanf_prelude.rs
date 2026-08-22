@@ -62,9 +62,16 @@
 //!   tracks and `__elephc_scanf_ref()` now returns beside the values. Input exhausted before any
 //!   conversion succeeded answers `-1` here where the array form answers `null`.
 
+pub(crate) mod build;
 mod detect;
 
 /// The elephc-PHP scanf prelude: php's scanner plus the `sscanf`/`fscanf` entry points.
+/// The PHP this engine used to be injected as, kept only as the migration oracle's reference.
+///
+/// `#[cfg(test)]` is the point: `build::scanf_declarations()` produces the same AST this — plus
+/// the generated wrappers — parses to, and `ELEPHC_ORACLE_WHICH=scanf` compares them node by node.
+/// No real compile tokenizes it any more.
+#[cfg(test)]
 pub(crate) const SCANF_PRELUDE_SRC: &str = r#"<?php
 
 function __elephc_scanf_is_space(string $c): bool
@@ -588,6 +595,13 @@ pub(crate) const SCANF_MAX_VARS: usize = 8;
 /// back two variables. The engine already tracks exactly that number; it is the first element of
 /// what `__elephc_scanf_ref()` returns. Input exhausted before any conversion succeeded is `-1`,
 /// where the array form answers `null`. Both measured on `php -n` 8.5.6.
+/// Test-only view of the generated wrappers, for the migration transcription and the oracle.
+#[cfg(test)]
+pub(crate) fn scanf_vars_wrappers_for_test() -> String {
+    scanf_vars_wrappers()
+}
+
+#[cfg(test)]
 fn scanf_vars_wrappers() -> String {
     let mut out = String::new();
     for count in 1..=SCANF_MAX_VARS {
@@ -661,9 +675,10 @@ pub fn inject_if_used(
     if !detect::program_references_scanf(&program) {
         return program;
     }
-    let source = format!("{}{}", SCANF_PRELUDE_SRC, scanf_vars_wrappers());
-    let tokens = crate::lexer::tokenize(&source).expect("scanf prelude must tokenize");
-    let mut combined = crate::parser::parse_internal(&tokens).expect("scanf prelude must parse");
+    // BUILT, not parsed. `build::scanf_declarations` produces the same AST the PHP under
+    // `#[cfg(test)]` below — engine plus generated wrappers — parses to, and the migration oracle
+    // compares them node by node, so neither the tokenizer nor the parser runs over this surface.
+    let mut combined = build::scanf_declarations();
     // These declarations are reachable ONLY through a call the backend emits for `sscanf()` and
     // `fscanf()`. No walk over PHP source can see that edge, so without recording the group here
     // — and forcing it where the pass runs — reachability prunes the engine and the backend then
@@ -671,4 +686,34 @@ pub fn inject_if_used(
     inventory.record_program(PRELUDE_GROUP_ID, &combined);
     combined.extend(program);
     combined
+}
+
+#[cfg(test)]
+mod build_oracle_tests {
+    /// Verifies the BUILT declarations are the same AST the PHP form parses to.
+    ///
+    /// This is what makes the conversion trustworthy, and it runs on every test run rather than
+    /// on request: a builder nothing compares drifts, and a PHP reference nothing reads rots into
+    /// dead code. The comparison strips spans, because the two constructions cannot agree on
+    /// source positions and never needed to.
+    #[test]
+    fn built_declarations_match_the_php_form() {
+        let source = format!("{}{}", super::SCANF_PRELUDE_SRC, super::scanf_vars_wrappers());
+        let tokens = crate::lexer::tokenize(&source).expect("the PHP form must tokenize");
+        let parsed = crate::parser::parse_internal(&tokens).expect("the PHP form must parse");
+        let built = super::build::scanf_declarations();
+        assert_eq!(
+            built.len(),
+            parsed.len(),
+            "declaration count: built {} vs parsed {}",
+            built.len(),
+            parsed.len()
+        );
+        for (built_stmt, parsed_stmt) in built.iter().zip(parsed.iter()) {
+            assert_eq!(
+                crate::synthetic_class::transcribe::strip_spans(&format!("{built_stmt:?}")),
+                crate::synthetic_class::transcribe::strip_spans(&format!("{parsed_stmt:?}")),
+            );
+        }
+    }
 }
