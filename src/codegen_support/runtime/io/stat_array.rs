@@ -117,6 +117,8 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
     emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment for the next runtime helper
     emitter.comment("--- runtime: stat (associative array) ---");
     emitter.label_global("__rt_stat_array");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack frame
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));      // save frame pointer and return address
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
@@ -268,6 +270,8 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stat (associative array) ---");
     emitter.label_global("__rt_stat_array");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction(&format!("sub rsp, {}", frame));                        // reserve stat buffer + hash slot

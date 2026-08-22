@@ -43,6 +43,8 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: scandir ---");
     emitter.label_global("__rt_scandir");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // The array is allocated BEFORE `opendir`, and a null `DIR*` returns it empty
     // rather than entering the loop: `readdir(NULL)` is undefined and segfaulted on
@@ -206,6 +208,8 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: scandir ---");
     emitter.label_global("__rt_scandir");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while scandir() uses directory and result-array spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the C path, result array, and DIR* locals

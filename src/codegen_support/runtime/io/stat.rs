@@ -37,6 +37,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_exists ---");
     emitter.label_global("__rt_file_exists");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
@@ -65,6 +67,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_file ---");
     emitter.label_global("__rt_is_file");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
@@ -104,6 +108,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_dir ---");
     emitter.label_global("__rt_is_dir");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
@@ -143,6 +149,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_readable ---");
     emitter.label_global("__rt_is_readable");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
@@ -173,6 +181,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_writable ---");
     emitter.label_global("__rt_is_writable");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
@@ -203,6 +213,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: filesize ---");
     emitter.label_global("__rt_filesize");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::IntOrFalse);
 
     // -- set up stack frame --
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
@@ -242,6 +254,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: filemtime ---");
     emitter.label_global("__rt_filemtime");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::IntOrFalse);
 
     // -- set up stack frame --
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
@@ -285,6 +299,8 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_exists ---");
     emitter.label_global("__rt_file_exists");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emit_linux_stat_call(emitter, frame_size);
     emitter.instruction("cmp eax, 0");                                          // a successful libc stat() call returns zero as a C int
     emitter.instruction("sete al");                                             // convert the syscall success flag into a boolean byte
@@ -296,6 +312,8 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_file ---");
     emitter.label_global("__rt_is_file");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emit_linux_stat_call(emitter, frame_size);
     emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading the stat buffer
     emitter.instruction("jne __rt_is_file_no");                                 // a failing stat call means the path is not a regular file
@@ -315,6 +333,8 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_dir ---");
     emitter.label_global("__rt_is_dir");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emit_linux_stat_call(emitter, frame_size);
     emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading the stat buffer
     emitter.instruction("jne __rt_is_dir_no");                                  // a failing stat call means the path is not a directory
@@ -334,16 +354,22 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_readable ---");
     emitter.label_global("__rt_is_readable");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emit_linux_access_check(emitter, 4);
 
     emitter.blank();
     emitter.comment("--- runtime: is_writable ---");
     emitter.label_global("__rt_is_writable");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emit_linux_access_check(emitter, 2);
 
     emitter.blank();
     emitter.comment("--- runtime: filesize ---");
     emitter.label_global("__rt_filesize");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::IntOrFalse);
     emit_linux_stat_call(emitter, frame_size);
     // This half already CHECKED the syscall — it just reported the failure as `0`, which is a
     // legitimate size for an empty file and therefore indistinguishable from success. `rdx`
@@ -364,6 +390,8 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: filemtime ---");
     emitter.label_global("__rt_filemtime");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::IntOrFalse);
     emit_linux_stat_call(emitter, frame_size);
     // This half already CHECKED the syscall — it just reported the failure as `0`, which is a
     // legitimate timestamp and indistinguishable from success. `rdx` carries the int|false flag

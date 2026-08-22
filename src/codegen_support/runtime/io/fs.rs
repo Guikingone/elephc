@@ -30,6 +30,8 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: unlink ---");
     emitter.label_global("__rt_unlink");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
@@ -65,6 +67,8 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mkdir ---");
     emitter.label_global("__rt_mkdir");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #48");                                     // allocate frame for mode, flag, buffer and scan index
@@ -124,6 +128,8 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: rmdir ---");
     emitter.label_global("__rt_rmdir");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
@@ -178,6 +184,8 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: rename ---");
     emitter.label_global("__rt_rename");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
@@ -253,16 +261,22 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: unlink ---");
     emitter.label_global("__rt_unlink");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emit_single_path_libc_bool_helper(emitter, "unlink", None);
 
     emitter.blank();
     emitter.comment("--- runtime: mkdir ---");
     emitter.label_global("__rt_mkdir");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emit_mkdir_libc_helper(emitter);
 
     emitter.blank();
     emitter.comment("--- runtime: rmdir ---");
     emitter.label_global("__rt_rmdir");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emit_single_path_libc_bool_helper(emitter, "rmdir", None);
 
     emitter.blank();
@@ -273,6 +287,8 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: rename ---");
     emitter.label_global("__rt_rename");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while rename uses temporary path slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source and destination path temporaries
     emitter.instruction("sub rsp, 32");                                         // reserve aligned stack space for the saved destination and source C-string pointers

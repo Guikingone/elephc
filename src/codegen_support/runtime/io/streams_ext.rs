@@ -75,6 +75,8 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment for the next runtime helper
     emitter.comment("--- runtime: readfile ---");
     emitter.label_global("__rt_readfile");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(-2));
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate frame + read buffer
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_off));         // save frame pointer and return address (low offset for imm range)
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
@@ -316,6 +318,8 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: readfile ---");
     emitter.label_global("__rt_readfile");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(-2));
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish stable frame base
     emitter.instruction(&format!("sub rsp, {}", buf_size + 16));                // reserve frame for buffer + counters

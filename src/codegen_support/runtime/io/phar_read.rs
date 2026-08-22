@@ -208,6 +208,8 @@ pub fn emit_phar_read(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_get_contents_maybe_phar ---");
     emitter.label_global("__rt_file_get_contents_maybe_phar");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::StringPair);
     // `zip://archive.zip#entry` reaches the very same entry reader: the bridge is
     // handed the whole URL and picks the shape apart by its scheme, so the only
     // thing this gate owes the zip wrapper is recognising its (shorter) prefix.
@@ -462,6 +464,8 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_get_contents_maybe_phar ---");
     emitter.label_global("__rt_file_get_contents_maybe_phar");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::StringPair);
     // See the AArch64 counterpart: the bridge takes the whole URL and picks the
     // shape apart by scheme, so this gate only owes zip:// its (shorter) prefix.
     emitter.instruction("cmp rdx, 6");                                          // at least "zip://" long?

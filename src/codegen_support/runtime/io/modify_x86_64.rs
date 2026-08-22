@@ -288,6 +288,8 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: touch ---");
     emitter.label_global("__rt_touch");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     let plat = emitter.platform;
     let open_flags = plat.o_wronly_creat();
     let utime_now = plat.utime_now_nsec();

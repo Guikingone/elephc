@@ -16,6 +16,89 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// fopen: open a file and return its file descriptor.
 /// Input:  x1/x2=filename string, x3/x4=mode string
 /// Output: x0=file descriptor (or negative on error)
+/// Emits "answer `failure` immediately while `file://` is unregistered", for a helper that takes a
+/// BARE path.
+///
+/// php locates a wrapper for every path, and a bare one resolves to the plain-files wrapper — so
+/// `stream_wrapper_unregister("file")` stops `file_exists()`, `filesize()`, `unlink()`,
+/// `opendir()` and the rest, not only `fopen()`. MEASURED on `php -n` 8.5.6: eighteen operations
+/// answer false while it is unregistered, and `realpath()` and `glob()` do NOT, because neither
+/// goes through a stream wrapper.
+///
+/// Emitted BEFORE the helper's frame, so the unblocked path costs a load, a test and a branch.
+/// Shared rather than written out per helper: eighteen copies of a mask test is eighteen chances
+/// for the bit to stop agreeing with the table, which is how the `fopen` guard came to test
+/// `https` for five releases.
+/// What a guarded helper hands back while `file://` is unregistered.
+///
+/// The two shapes are not interchangeable: a PREDICATE answers in x0/rax alone, while the
+/// `int|false` helpers answer a PAIR — the value and a SUCCESS FLAG the caller's boxer reads to
+/// choose between an integer and php `false`. Setting only the value leaves that flag holding
+/// whatever the register carried, and the refusal boxes as the integer -1 rather than `false`.
+#[derive(Clone, Copy)]
+pub(crate) enum DisabledWrapperAnswer {
+    /// x0/rax alone; `false` for a predicate is zero.
+    Predicate(i64),
+    /// x0/rax plus a cleared success flag in x1/rdx, which the caller boxes as php `false`.
+    IntOrFalse,
+    /// elephc's string ABI — x1/x2 on AArch64, rax/rdx on x86_64 — with a NULL pointer, which is
+    /// how `file_get_contents` and its relatives spell php `false`. A third shape, because the
+    /// pointer does not live in the same register as a predicate's answer.
+    StringPair,
+}
+
+pub(crate) fn emit_refuse_when_file_wrapper_disabled(
+    emitter: &mut Emitter,
+    answer: DisabledWrapperAnswer,
+) {
+    // A GAS numeric local label, so the emitter needs no unique-name bookkeeping and two helpers
+    // guarded in the same file cannot collide. `1f` is the next `1:` forward.
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x9", "_disabled_builtin_wrappers");
+            emitter.instruction("ldr x10, [x9]");                               // disabled built-in mask
+            emitter.instruction(&format!("tst x10, #{}", file_wrapper_mask_bit()));
+            emitter.instruction("b.eq 1f");                                     // file:// is registered: carry on
+            match answer {
+                DisabledWrapperAnswer::Predicate(value) => {
+                    emitter.instruction(&format!("mov x0, #{value}"));          // php answers this while it is not
+                }
+                DisabledWrapperAnswer::IntOrFalse => {
+                    emitter.instruction("mov x0, #0");                          // the payload is unused for a refusal
+                    emitter.instruction("mov x1, #0");                          // clear the flag: the caller boxes php false
+                }
+                DisabledWrapperAnswer::StringPair => {
+                    emitter.instruction("mov x1, #0");                          // a null pointer is php false here
+                    emitter.instruction("mov x2, #0");
+                }
+            }
+            emitter.instruction("ret");
+            emitter.label("1");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "r9", "_disabled_builtin_wrappers");
+            emitter.instruction("mov r10, QWORD PTR [r9]");                     // disabled built-in mask
+            emitter.instruction(&format!("test r10, {}", file_wrapper_mask_bit()));
+            emitter.instruction("jz 1f");                                       // file:// is registered: carry on
+            match answer {
+                DisabledWrapperAnswer::Predicate(value) => {
+                    emitter.instruction(&format!("mov rax, {value}"));          // php answers this while it is not
+                }
+                DisabledWrapperAnswer::IntOrFalse => {
+                    emitter.instruction("xor eax, eax");                        // the payload is unused for a refusal
+                    emitter.instruction("xor edx, edx");                        // clear the flag: the caller boxes php false
+                }
+                DisabledWrapperAnswer::StringPair => {
+                    emitter.instruction("xor eax, eax");                        // a null pointer is php false here
+                    emitter.instruction("xor edx, edx");
+                }
+            }
+            emitter.instruction("ret");
+            emitter.label("1");
+        }
+    }
+}
+
 /// The disabled-wrapper mask bit that stands for `file://`.
 ///
 /// DERIVED from `STREAM_WRAPPERS`, never written as a literal. `__rt_fopen` used to test bit 0

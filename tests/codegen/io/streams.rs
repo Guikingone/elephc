@@ -17534,7 +17534,63 @@ unlink("a.txt"); unlink("b.txt"); unlink("c.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies `stream_wrapper_unregister("file")` actually stops opens.
+/// Verifies `stream_wrapper_unregister("file")` stops the WHOLE bare-path surface.
+///
+/// php locates a wrapper for every path, and a bare one resolves to the plain-files wrapper — so
+/// unregistering it stops eighteen operations, not just `fopen()`. MEASURED one by one on
+/// `php -n` 8.5.6.
+///
+/// The two that must NOT change are as much of the property as the eighteen: `realpath()` and
+/// `glob()` keep working, because neither goes through a stream wrapper. A guard added to them
+/// would be a divergence in the other direction, and only naming them here refuses it.
+///
+/// The guard already existed for `fopen` and could never fire: `__rt_fopen` tested BIT 0 of the
+/// disabled mask under a comment asserting index 0 was `file`, which is at index 5 — bit 0 is
+/// `https`. The bit is derived from `STREAM_WRAPPERS` now.
+#[test]
+fn test_unregistering_the_file_wrapper_stops_the_bare_path_surface() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("uw.txt", "abc");
+file_put_contents("ug.txt", "x");
+stream_wrapper_unregister("file");
+$blocked = "";
+if (@fopen("uw.txt", "r") !== false)          { $blocked .= "fopen "; }
+if (@file_get_contents("uw.txt") !== false)   { $blocked .= "file_get_contents "; }
+if (@file("uw.txt") !== false)                { $blocked .= "file "; }
+if (@readfile("uw.txt") !== false)            { $blocked .= "readfile "; }
+if (@file_put_contents("uz.txt", "x") !== false) { $blocked .= "file_put_contents "; }
+if (@file_exists("uw.txt") !== false)         { $blocked .= "file_exists "; }
+if (@is_file("uw.txt") !== false)             { $blocked .= "is_file "; }
+if (@is_dir(".") !== false)                   { $blocked .= "is_dir "; }
+if (@is_readable("uw.txt") !== false)         { $blocked .= "is_readable "; }
+if (@filesize("uw.txt") !== false)            { $blocked .= "filesize "; }
+if (@filemtime("uw.txt") !== false)           { $blocked .= "filemtime "; }
+if (@stat("uw.txt") !== false)                { $blocked .= "stat "; }
+if (@unlink("ug.txt") !== false)              { $blocked .= "unlink "; }
+if (@rename("uw.txt", "uh.txt") !== false)    { $blocked .= "rename "; }
+if (@mkdir("ud") !== false)                   { $blocked .= "mkdir "; }
+if (@rmdir("ud") !== false)                   { $blocked .= "rmdir "; }
+if (@opendir(".") !== false)                  { $blocked .= "opendir "; }
+if (@scandir(".") !== false)                  { $blocked .= "scandir "; }
+if (@touch("ut.txt") !== false)               { $blocked .= "touch "; }
+// These two do NOT go through a stream wrapper in php, so they must keep working.
+$kept = "";
+if (@realpath("uw.txt") === false)            { $kept .= "realpath "; }
+if (@glob("*.txt") === false)                 { $kept .= "glob "; }
+stream_wrapper_restore("file");
+echo $blocked === "" ? "blocked" : "STILL WORKING: $blocked";
+echo "|";
+echo $kept === "" ? "kept" : "WRONGLY BLOCKED: $kept";
+echo "|", @file_get_contents("uw.txt") !== false ? "restored" : "STILL BLOCKED";
+unlink("uw.txt"); unlink("ug.txt");
+"#,
+    );
+    assert_eq!(out, "blocked|kept|restored");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `fopen` alone, kept because it is the entry the derived mask bit first fixed.
 ///
 /// The guard existed on both arches and could never fire: `__rt_fopen` tested BIT 0 of the
 /// disabled-wrapper mask, under a comment asserting "Index 0 is `file` in the built-in wrapper
