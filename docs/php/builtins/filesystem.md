@@ -32,7 +32,7 @@ sidebar:
 | [`fnmatch()`](./filesystem/fnmatch.md) | `(string $pattern, string $filename, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`getcwd()`](./filesystem/getcwd.md) | `(): string` | `string` | ✓ | ✓ |
 | [`getenv()`](./filesystem/getenv.md) | `(string $name): mixed` | `mixed` | ✓ | ✓ |
-| [`glob()`](./filesystem/glob.md) | `(string $pattern): mixed` | `mixed` | ✓ | ✓ |
+| [`glob()`](./filesystem/glob.md) | `(string $pattern, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`is_dir()`](./filesystem/is_dir.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_executable()`](./filesystem/is_executable.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_file()`](./filesystem/is_file.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |

@@ -11,7 +11,8 @@
 use std::fmt::Write;
 
 use crate::support::{
-    compile_and_run, compile_and_run_capture_with_regex, compile_and_run_with_regex,
+    compile_and_run, compile_and_run_capture, compile_and_run_capture_with_regex,
+    compile_and_run_with_regex,
 };
 
 /// Verifies AOT builtin lookup stays case-insensitive without eval being present.
@@ -605,4 +606,82 @@ echo implode(",", $d);');
         out,
         "1,90,91,92,4,5|2,3:1,90,91,92,4,5|2,3:0|1,7,8,2,3:1,9,3"
     );
+}
+
+/// Verifies `glob()`'s flags behave the same inside `eval()` as they do compiled.
+///
+/// The eval interpreter walks the filesystem itself rather than calling libc `glob()`, so this is
+/// a genuinely second implementation of php's behaviour. Every expectation was read off `php -n`
+/// 8.5.6 first, including the two that are not the obvious answers: with `GLOB_BRACE` the sort
+/// runs per expansion — `{c*,a*}` answers `c.log` before `a.txt` — and duplicates are kept.
+#[test]
+fn test_eval_glob_flags_match_the_compiled_surface() {
+    let out = compile_and_run(
+        r#"<?php
+mkdir("eg");
+mkdir("eg/sub");
+file_put_contents("eg/a.txt", "a");
+file_put_contents("eg/b.md", "b");
+file_put_contents("eg/c.log", "c");
+
+eval('echo implode(",", glob("eg/*", GLOB_ONLYDIR)), "\n";');
+eval('echo implode(",", glob("eg/*", GLOB_MARK)), "\n";');
+eval('echo implode(",", glob("eg/*", GLOB_MARK | GLOB_ONLYDIR)), "\n";');
+eval('echo implode(",", glob("eg/zz*", GLOB_NOCHECK)), "\n";');
+eval('echo count(glob("eg/zz*", GLOB_NOCHECK | GLOB_ONLYDIR)), "\n";');
+// The sort is per brace expansion, and the expansions keep the order they were written in.
+eval('echo implode(",", glob("eg/{c*,a*}", GLOB_BRACE)), "\n";');
+// Overlapping alternatives list the same match twice; php does not deduplicate.
+eval('echo implode(",", glob("eg/{*.txt,*}", GLOB_BRACE)), "\n";');
+eval('echo implode(",", glob("eg/{a.txt,{b.md,c.log}}", GLOB_BRACE)), "\n";');
+eval('echo implode(",", glob("eg/{zz,a.txt}", GLOB_BRACE | GLOB_NOCHECK)), "\n";');
+eval('echo count(glob("eg/*", GLOB_NOSORT)), "\n";');
+
+unlink("eg/a.txt");
+unlink("eg/b.md");
+unlink("eg/c.log");
+rmdir("eg/sub");
+rmdir("eg");
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "eg/sub\n\
+         eg/a.txt,eg/b.md,eg/c.log,eg/sub/\n\
+         eg/sub/\n\
+         eg/zz*\n\
+         0\n\
+         eg/c.log,eg/a.txt\n\
+         eg/a.txt,eg/a.txt,eg/b.md,eg/c.log,eg/sub\n\
+         eg/a.txt,eg/b.md,eg/c.log\n\
+         eg/zz,eg/a.txt\n\
+         4\n"
+    );
+}
+
+/// Verifies `eval()` refuses a glob flag php does not expose, exactly as the compiled path does.
+///
+/// 1024 is glibc's own `GLOB_BRACE`; php answers `false` to it on every platform because it is not
+/// one of php's bits. The two engines read those bits from the same table, so they cannot come to
+/// disagree about which values are valid.
+#[test]
+fn test_eval_glob_refuses_a_flag_php_does_not_expose() {
+    let out = compile_and_run_capture(
+        r#"<?php
+mkdir("er");
+file_put_contents("er/a.txt", "a");
+eval('var_dump(glob("er/*", 1024));');
+eval('var_dump(glob("er/*", -1));');
+eval('var_dump(count(glob("er/*", GLOB_AVAILABLE_FLAGS)));');
+unlink("er/a.txt");
+rmdir("er");
+"#,
+    );
+
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nint(0)\n");
+    let expected = "Warning: glob(): At least one of the passed flags is invalid or not \
+                    supported on this platform\n";
+    assert_eq!(out.diagnostics, expected.repeat(2));
 }

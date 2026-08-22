@@ -174,9 +174,36 @@ pub(crate) fn lower_glob(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     // php's signature is array|false, so the listing is boxed like scandir's. The runtime
     // never produces the false today — a pattern with no matches answers the empty array,
     // exactly as php does — but the union is what the checker now declares.
-    super::super::ensure_arg_count(inst, "glob", 1)?;
+    ensure_arg_count_between(inst, "glob", 1, 2)?;
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "glob")?;
+    // `$flags` rides beside the pattern pair, the way `fnmatch`'s does. php's OWN numbering
+    // travels here unchanged; `__rt_glob` validates it and translates it to the platform's libc
+    // bits, because php 8.5 ships its own glob and its constants are the bits of no libc.
+    match inst.operands.get(1).copied() {
+        None => match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction("mov x3, #0"),             // php's default is no flags
+            Arch::X86_64 => ctx.emitter.instruction("xor ecx, ecx"),
+        },
+        Some(flags) => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => abi::emit_push_reg_pair(ctx.emitter, "x1", "x2"),
+                Arch::X86_64 => abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx"),
+            }
+            require_int(ctx.load_value_to_result(flags)?.codegen_repr(), "glob flags")?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x9, x0");                      // hold the flags while the pattern pair returns
+                    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+                    ctx.emitter.instruction("mov x3, x9");
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rcx, rax");
+                    abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+                }
+            }
+        }
+    }
     abi::emit_call_label(ctx.emitter, "__rt_glob");
     box_listing_or_false_result(ctx, "glob");
     store_if_result(ctx, inst)

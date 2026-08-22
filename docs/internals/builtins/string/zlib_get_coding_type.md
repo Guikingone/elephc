@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/gz_prelude.rs`:249](https://github.com/illegalstudio/elephc/blob/main/src/gz_prelude.rs#L249) (`zlib_get_coding_type`)
+- **Lowering**: [`src/gz_prelude.rs`:257](https://github.com/illegalstudio/elephc/blob/main/src/gz_prelude.rs#L257) (`zlib_get_coding_type`)
 - **Function symbol**: `zlib_get_coding_type()`
 
 

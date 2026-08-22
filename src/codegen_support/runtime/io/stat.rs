@@ -110,6 +110,9 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.label_global("__rt_is_dir");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
     super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
+    // `glob()` reaches the filesystem through NO stream wrapper — php keeps it working while the
+    // plain-files wrapper is unregistered — so its GLOB_ONLYDIR filter enters below the guard.
+    emitter.label_global("__rt_is_dir_core");
 
     // -- set up stack frame --
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
@@ -335,6 +338,9 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_is_dir");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
     super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
+    // `glob()` reaches the filesystem through NO stream wrapper — php keeps it working while the
+    // plain-files wrapper is unregistered — so its GLOB_ONLYDIR filter enters below the guard.
+    emitter.label_global("__rt_is_dir_core");
     emit_linux_stat_call(emitter, frame_size);
     emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading the stat buffer
     emitter.instruction("jne __rt_is_dir_no");                                  // a failing stat call means the path is not a directory

@@ -41,7 +41,7 @@ fn declared_builtin_registry_derives_filesystem_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("glob"),
-            Some(["pattern"].as_slice())
+            Some(["pattern", "flags"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("linkinfo"),

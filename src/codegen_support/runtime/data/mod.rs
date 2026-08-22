@@ -67,6 +67,14 @@ pub(crate) const SOCKET_FAILED_FSOCKOPEN_PREFIX: &str = "Warning: fsockopen(): "
 /// clipped warning is a far better outcome than a corrupted heap.
 pub(crate) const RT_DIAG_BUF_BYTES: usize = 4096;
 
+/// The whole warning php raises when `glob()` is handed a flag it does not expose.
+///
+/// php validates `$flags` against `GLOB_AVAILABLE_FLAGS` and answers `false`. Measured on `php -n`
+/// 8.5.6: `glob("*", 64)`, `glob("*", 1024)` — glibc's own `GLOB_BRACE` — and `glob("*", -1)` all
+/// take this path, because php 8.5 ships its own glob and none of those are php's bits.
+pub(crate) const GLOB_INVALID_FLAGS_WARNING: &str =
+    "Warning: glob(): At least one of the passed flags is invalid or not supported on this platform\n";
+
 /// Head of the connect-failure line, after the `Warning: <fn>(): ` the three prefixes carry.
 pub(crate) const SOCKET_FAILED_UNABLE: &str = "Unable to connect to ";
 

@@ -270,7 +270,7 @@ fn default_json(default: DefaultSpec) -> Value {
 }
 
 /// Returns the documentation spelling for a neutral PHP type.
-fn type_name(ty: TypeSpec) -> &'static str {
+fn type_name(ty: TypeSpec) -> String {
     match ty {
         TypeSpec::Int => "int",
         TypeSpec::Float => "float",
@@ -283,7 +283,12 @@ fn type_name(ty: TypeSpec) -> &'static str {
         // used to give, moved one step downstream into the docs.
         TypeSpec::Ptr => "pointer",
         TypeSpec::Callable => "callable",
+        // php spells an explicit null in a union, and the distinction is load-bearing: a scalar
+        // parameter declared `?int $x = null` accepts an omitted argument AND a written null,
+        // where a plain `int` accepts only the first.
+        TypeSpec::Nullable(inner) => return format!("?{}", type_name(*inner)),
     }
+    .to_string()
 }
 
 /// Returns the lowercase documentation spelling for a contract area.

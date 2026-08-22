@@ -105,7 +105,7 @@ sidebar:
 | [`stream_isatty()`](./io/stream_isatty.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_register_wrapper()`](./io/stream_register_wrapper.md) | `(string $protocol, string $class, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`stream_resolve_include_path()`](./io/stream_resolve_include_path.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_select()`](./io/stream_select.md) | `(array $read, array $write, array $except, int $seconds, int $microseconds = null): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_select()`](./io/stream_select.md) | `(array $read, array $write, array $except, ?int $seconds, int $microseconds = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_set_blocking()`](./io/stream_set_blocking.md) | `(resource $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
 | [`stream_set_chunk_size()`](./io/stream_set_chunk_size.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
 | [`stream_set_read_buffer()`](./io/stream_set_read_buffer.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |

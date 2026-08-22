@@ -8,7 +8,7 @@ sidebar:
 ## stream_select()
 
 ```php
-function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds = null): mixed
+function stream_select(array $read, array $write, array $except, ?int $seconds, int $microseconds = null): mixed
 ```
 
 Runs the equivalent of the select() system call on the given arrays of streams.
@@ -17,7 +17,7 @@ Runs the equivalent of the select() system call on the given arrays of streams.
 - `$read` (`array`), passed by reference
 - `$write` (`array`), passed by reference
 - `$except` (`array`), passed by reference
-- `$seconds` (`int`)
+- `$seconds` (`?int`)
 - `$microseconds` (`int`), default `null`, optional
 
 **Returns**: `mixed`

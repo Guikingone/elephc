@@ -552,6 +552,40 @@ impl Platform {
         }
     }
 
+    /// Returns the host libc's `glob()` flag bits, which are NOT php's.
+    ///
+    /// php 8.5 ships its own glob implementation, so `GLOB_ERR` and friends carry php's numbering
+    /// on every platform. `__rt_glob` calls the system `glob()`, so each php bit has to be
+    /// translated to the bit the local libc gives that meaning. The two differ almost everywhere:
+    /// php's `GLOB_NOESCAPE` is 4096, which macOS's glob.h defines as `GLOB_LIMIT`, and glibc
+    /// agrees with php on `GLOB_NOCHECK` alone.
+    ///
+    /// `GLOB_ONLYDIR` is absent on purpose: macOS has no such flag, and glibc documents its own as
+    /// a hint that may still return non-directories. php filters, so `__rt_glob` filters.
+    pub fn glob_libc_flags(&self) -> GlobLibcFlags {
+        match self {
+            // /usr/include/glob.h in the macOS SDK.
+            Platform::MacOS => GlobLibcFlags {
+                err: 0x0004,
+                mark: 0x0008,
+                nocheck: 0x0010,
+                nosort: 0x0020,
+                brace: 0x0080,
+                noescape: 0x2000,
+            },
+            // glibc's bits/glob.h, as mirrored by the `libc` crate.
+            Platform::Linux => GlobLibcFlags {
+                err: 1 << 0,
+                mark: 1 << 1,
+                nosort: 1 << 2,
+                nocheck: 1 << 4,
+                noescape: 1 << 6,
+                brace: 1 << 10,
+            },
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// Returns the value of `LC_CTYPE` for `setlocale()`.
     pub fn lc_ctype(&self) -> u32 {
         match self {
@@ -561,6 +595,25 @@ impl Platform {
         }
     }
 
+}
+
+/// The host libc's `glob()` flag bits, one field per flag php exposes and libc implements.
+///
+/// php's `GLOB_ONLYDIR` has no field: no libc bit means what php means by it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlobLibcFlags {
+    /// libc `GLOB_ERR`.
+    pub err: i64,
+    /// libc `GLOB_MARK`.
+    pub mark: i64,
+    /// libc `GLOB_NOCHECK`.
+    pub nocheck: i64,
+    /// libc `GLOB_NOSORT`.
+    pub nosort: i64,
+    /// libc `GLOB_BRACE`.
+    pub brace: i64,
+    /// libc `GLOB_NOESCAPE`.
+    pub noescape: i64,
 }
 
 impl Arch {

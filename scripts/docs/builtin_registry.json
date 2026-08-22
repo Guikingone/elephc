@@ -32595,6 +32595,13 @@
           "name": "pattern",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 1,
@@ -32622,6 +32629,13 @@
           "name": "pattern",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 1,
@@ -32714,6 +32728,13 @@
           "name": "pattern",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "mixed",
@@ -33275,7 +33296,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzclose",
-      "codegen_line": 89,
+      "codegen_line": 97,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -33506,7 +33527,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzdecode",
-      "codegen_line": 226,
+      "codegen_line": 234,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -33751,7 +33772,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzencode",
-      "codegen_line": 157,
+      "codegen_line": 165,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -33827,7 +33848,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzeof",
-      "codegen_line": 93,
+      "codegen_line": 101,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -33896,7 +33917,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzfile",
-      "codegen_line": 256,
+      "codegen_line": 264,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -33965,7 +33986,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzgetc",
-      "codegen_line": 97,
+      "codegen_line": 105,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34034,7 +34055,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzgets",
-      "codegen_line": 101,
+      "codegen_line": 109,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34280,7 +34301,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzopen",
-      "codegen_line": 85,
+      "codegen_line": 93,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34356,7 +34377,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzpassthru",
-      "codegen_line": 123,
+      "codegen_line": 131,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34432,7 +34453,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzputs",
-      "codegen_line": 119,
+      "codegen_line": 127,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34515,7 +34536,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzread",
-      "codegen_line": 108,
+      "codegen_line": 116,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34584,7 +34605,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzrewind",
-      "codegen_line": 127,
+      "codegen_line": 135,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34660,7 +34681,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzseek",
-      "codegen_line": 131,
+      "codegen_line": 139,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34736,7 +34757,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gztell",
-      "codegen_line": 135,
+      "codegen_line": 143,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -34975,7 +34996,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "gzwrite",
-      "codegen_line": 112,
+      "codegen_line": 120,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -57471,7 +57492,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "readgzfile",
-      "codegen_line": 260,
+      "codegen_line": 268,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -69218,7 +69239,7 @@
           "default": null,
           "name": "seconds",
           "optional": false,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -69272,7 +69293,7 @@
           "default": null,
           "name": "seconds",
           "optional": false,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -69391,7 +69412,7 @@
           "default": null,
           "name": "seconds",
           "optional": false,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -79046,7 +79067,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "zlib_decode",
-      "codegen_line": 234,
+      "codegen_line": 242,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -79129,7 +79150,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "zlib_encode",
-      "codegen_line": 173,
+      "codegen_line": 181,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],
@@ -79197,7 +79218,7 @@
       "checker_line": null,
       "codegen_file": "src/gz_prelude.rs",
       "codegen_function": "zlib_get_coding_type",
-      "codegen_line": 249,
+      "codegen_line": 257,
       "notes": [
         "Implemented by a compiler-injected PHP prelude."
       ],

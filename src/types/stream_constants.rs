@@ -207,14 +207,23 @@ pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
     // PHP constants: `php -n -r 'var_dump(defined("STREAM_FROM_START"));'` is
     // false. Declaring them let a program name a constant php does not have and
     // still compile. Same for STREAM_META_MODIFIED and STREAM_OPTION_CHUNK_SIZE.
-    // glob() flags (POSIX-portable values).
-    ("GLOB_ERR", 4),
-    ("GLOB_MARK", 8),
-    ("GLOB_NOCHECK", 16),
-    ("GLOB_NOSORT", 32),
-    ("GLOB_BRACE", 128),
-    ("GLOB_NOESCAPE", 4096),
-    ("GLOB_ONLYDIR", 1073741824),
+    // glob() flags. These are php's OWN numbers, not the host libc's: php 8.5 ships its own
+    // glob, so the values are identical on every target. Measured across the three per-target
+    // oracle manifests — including `GLOB_ONLYDIR = 1 << 30` on Linux, where glibc's own
+    // `GLOB_ONLYDIR` is `1 << 13`. `__rt_glob` translates them to the platform's libc bits;
+    // handing them to libc unchanged would select GLOB_LIMIT for GLOB_NOESCAPE on macOS.
+    ("GLOB_ERR", elephc_builtin_contract::glob_flags::GLOB_ERR),
+    ("GLOB_MARK", elephc_builtin_contract::glob_flags::GLOB_MARK),
+    ("GLOB_NOCHECK", elephc_builtin_contract::glob_flags::GLOB_NOCHECK),
+    ("GLOB_NOSORT", elephc_builtin_contract::glob_flags::GLOB_NOSORT),
+    ("GLOB_BRACE", elephc_builtin_contract::glob_flags::GLOB_BRACE),
+    ("GLOB_NOESCAPE", elephc_builtin_contract::glob_flags::GLOB_NOESCAPE),
+    ("GLOB_ONLYDIR", elephc_builtin_contract::glob_flags::GLOB_ONLYDIR),
+    // The OR of the seven above, which is what php validates `$flags` against.
+    (
+        "GLOB_AVAILABLE_FLAGS",
+        elephc_builtin_contract::glob_flags::GLOB_AVAILABLE_FLAGS,
+    ),
 ];
 
 #[cfg(test)]

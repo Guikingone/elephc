@@ -812,6 +812,126 @@ rmdir("gd");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies every `glob()` flag php exposes, against the behaviour php was measured to have.
+///
+/// php 8.5 ships its own glob, so `GLOB_*` are php's numbers and the bits of NO libc: php's
+/// `GLOB_NOESCAPE` is 4096, which macOS's own glob.h defines as `GLOB_LIMIT`, and glibc agrees
+/// with php on `GLOB_NOCHECK` alone. `__rt_glob` translates each one to the platform's bit, so a
+/// flag that reached libc untranslated would show up here as the WRONG behaviour rather than as
+/// an error — which is exactly why each flag is exercised for its own visible effect.
+#[test]
+fn test_glob_flags_match_php() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("gf");
+mkdir("gf/sub");
+file_put_contents("gf/a.txt", "a");
+file_put_contents("gf/c.log", "c");
+
+// GLOB_MARK appends a slash to directories, and to nothing else.
+echo implode(",", glob("gf/*", GLOB_MARK)), "\n";
+// GLOB_ONLYDIR keeps directories only. It is php's private 1 << 30 and no libc bit.
+echo implode(",", glob("gf/*", GLOB_ONLYDIR)), "\n";
+// It applies AFTER the rest: the pattern GLOB_NOCHECK invents is filtered out too.
+echo implode(",", glob("gf/*", GLOB_MARK | GLOB_ONLYDIR)), "\n";
+echo implode(",", glob("gf/zz*", GLOB_NOCHECK)), "\n";
+echo count(glob("gf/zz*", GLOB_NOCHECK | GLOB_ONLYDIR)), "\n";
+// GLOB_BRACE expands the alternatives; without it the braces are literal.
+echo implode(",", glob("gf/{a.txt,c.log}", GLOB_BRACE)), "\n";
+echo count(glob("gf/{a.txt,c.log}")), "\n";
+// GLOB_NOSORT still finds everything; only the order is the filesystem's.
+$unsorted = glob("gf/*", GLOB_NOSORT);
+sort($unsorted);
+echo implode(",", $unsorted), "\n";
+// A flag held in a variable travels the same path as a constant.
+$flags = GLOB_ONLYDIR;
+echo implode(",", glob("gf/*", $flags)), "\n";
+
+unlink("gf/a.txt");
+unlink("gf/c.log");
+rmdir("gf/sub");
+rmdir("gf");
+"#,
+    );
+    assert_eq!(
+        out,
+        "gf/a.txt,gf/c.log,gf/sub/\n\
+         gf/sub\n\
+         gf/sub/\n\
+         gf/zz*\n\
+         0\n\
+         gf/a.txt,gf/c.log\n\
+         0\n\
+         gf/a.txt,gf/c.log,gf/sub\n\
+         gf/sub\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `glob()` refuses a flag php does not expose: a warning, and `false`.
+///
+/// The values here are the point. 1024 is glibc's own `GLOB_BRACE` and 8192 is macOS's own
+/// `GLOB_NOESCAPE`; php answers `false` to both on every platform, because neither is one of
+/// php's bits. A runtime that forwarded `$flags` to libc unchanged would ACCEPT them and do
+/// something — silently, and differently on each target.
+#[test]
+fn test_glob_refuses_a_flag_php_does_not_expose() {
+    let out = compile_and_run_capture(
+        r#"<?php
+mkdir("gr");
+file_put_contents("gr/a.txt", "a");
+var_dump(glob("gr/*", 64));
+var_dump(glob("gr/*", 1024));
+var_dump(glob("gr/*", 8192));
+var_dump(glob("gr/*", -1));
+var_dump(@glob("gr/*", 64));
+var_dump(count(glob("gr/*", GLOB_AVAILABLE_FLAGS)));
+unlink("gr/a.txt");
+rmdir("gr");
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nint(0)\n",
+        "every refused call answers php's false, and GLOB_AVAILABLE_FLAGS is accepted"
+    );
+    let expected = "Warning: glob(): At least one of the passed flags is invalid or not \
+                    supported on this platform\n";
+    assert_eq!(
+        out.diagnostics,
+        expected.repeat(4),
+        "four warnings: the fifth call is suppressed with @, the sixth is a valid flag set"
+    );
+}
+
+/// Verifies `glob()` keeps working while the plain-files wrapper is unregistered — with a flag.
+///
+/// php routes `glob()` through no stream wrapper, so `stream_wrapper_unregister("file")` does not
+/// stop it. That is why the `GLOB_ONLYDIR` filter calls `__rt_is_dir_core` and not `__rt_is_dir`:
+/// the latter carries the refusal, and reusing it would have made every entry test as "not a
+/// directory" and quietly emptied the listing.
+#[test]
+fn test_glob_onlydir_survives_the_unregistered_file_wrapper() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("gu");
+mkdir("gu/sub");
+file_put_contents("gu/a.txt", "a");
+stream_wrapper_unregister("file");
+echo implode(",", glob("gu/*", GLOB_ONLYDIR)), "|";
+echo implode(",", glob("gu/*")), "|";
+stream_wrapper_restore("file");
+echo is_dir("gu/sub") ? "restored" : "still blocked";
+unlink("gu/a.txt");
+rmdir("gu/sub");
+rmdir("gu");
+"#,
+    );
+    assert_eq!(out, "gu/sub|gu/a.txt,gu/sub|restored");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies tempnam creates a unique file in the given directory and that it
 /// exists immediately, then cleans up the temporary file.
 #[test]

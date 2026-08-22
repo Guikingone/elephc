@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/gz_prelude.rs`:127](https://github.com/illegalstudio/elephc/blob/main/src/gz_prelude.rs#L127) (`gzrewind`)
+- **Lowering**: [`src/gz_prelude.rs`:135](https://github.com/illegalstudio/elephc/blob/main/src/gz_prelude.rs#L135) (`gzrewind`)
 - **Function symbol**: `gzrewind()`
 
 

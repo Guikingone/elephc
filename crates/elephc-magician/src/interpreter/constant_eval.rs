@@ -187,7 +187,12 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "PHP_EXTRA_VERSION" => Some(EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION)),
         "PHP_SAPI" => Some(EvalPredefinedConstant::String(EVAL_PHP_SAPI)),
         "DIRECTORY_SEPARATOR" => Some(EvalPredefinedConstant::String("/")),
-        _ => None,
+        // glob()'s flags come from the crate both engines share, so the interpreter cannot come
+        // to hold a different number from the compiler's.
+        name => elephc_builtin_contract::glob_flags::GLOB_FLAGS
+            .iter()
+            .find(|(declared, _)| *declared == name)
+            .map(|(_, value)| EvalPredefinedConstant::Int(*value)),
     }
 }
 
