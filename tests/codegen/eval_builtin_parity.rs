@@ -12,7 +12,7 @@ use std::fmt::Write;
 
 use crate::support::{
     compile_and_run, compile_and_run_capture, compile_and_run_capture_with_regex,
-    compile_and_run_with_regex,
+    compile_and_run_in_dir, compile_and_run_with_regex,
 };
 
 /// Verifies AOT builtin lookup stays case-insensitive without eval being present.
@@ -684,4 +684,61 @@ rmdir("er");
     let expected = "Warning: glob(): At least one of the passed flags is invalid or not \
                     supported on this platform\n";
     assert_eq!(out.diagnostics, expected.repeat(2));
+}
+
+/// Verifies a builtin the program names can be called through a variable.
+///
+/// Only 36 of 577 builtins could before: `$fn = "feof"; $fn($h);` was `Fatal error: Call to
+/// undefined function <dynamic>()` where php simply calls it. The 488 others shared one blanket
+/// refusal — "typed backend operation has no runtime-selected wrapper contract" — which is a
+/// policy default rather than a finding about any of them.
+///
+/// The resource argument is the point of the stream names here: the refusal was documented as
+/// covering resources, and it does not.
+#[test]
+fn test_a_named_builtin_is_callable_through_a_variable() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("dc.txt", "abc");
+$h = fopen("dc.txt", "r");
+$fn = "feof";
+echo var_export($fn($h), true), "|";
+foreach (["ftell", "feof"] as $each) {
+    echo var_export($each($h), true), "|";
+}
+$upper = "strtoupper";
+echo $upper("ab"), "|";
+$pick = time() > 0 ? "strrev" : "trim";
+echo $pick("abc");
+fclose($h);
+unlink("dc.txt");
+"#,
+    );
+    assert_eq!(out, "false|0|false|AB|cba");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Verifies a builtin NAME is a valid callback for the higher-order array builtins.
+///
+/// `array_map("strtoupper", $a)` was `Undefined function: strtoupper` — a checker diagnostic — as
+/// were `array_filter` and `usort` with any builtin name, while `call_user_func("strtoupper", …)`
+/// worked. One lookup was the difference: the callback branch resolved through
+/// `check_function_call`, which knows USER functions only.
+#[test]
+fn test_a_builtin_name_is_a_valid_array_callback() {
+    let out = compile_and_run(
+        r#"<?php
+print_r(array_map("strtoupper", ["a", "b"]));
+$words = ["pear", "fig", "apple"];
+usort($words, "strcmp");
+print_r($words);
+echo call_user_func("strrev", "abc"), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Array\n(\n    [0] => A\n    [1] => B\n)\n\
+         Array\n(\n    [0] => apple\n    [1] => fig\n    [2] => pear\n)\n\
+         cba\n"
+    );
 }
