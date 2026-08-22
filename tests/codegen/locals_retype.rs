@@ -658,6 +658,91 @@ fn test_same_name_same_position_collision_is_a_compile_error() {
     );
 }
 
+/// A collision that STRIPS another body's mixed-storage decisions is caught too, not just one
+/// that leaves two live keys behind.
+///
+/// `lib.php`'s function marks `$a` as branch-divergent and records its two store sites at lines
+/// 4 and 6, column 1. `main.php` has two ordinary top-level `$a = …;` statements at the very same
+/// positions, and the final top-level scan RE-DECIDES every assignment it sees — dropping any
+/// decision already filed under that `(span, name)`. Measured before retired keys were checked:
+/// both store sites were removed, `mixed_storage_local_names()` lost `$a` (so constant
+/// propagation was no longer blocked for it), the checker still typed the local `Mixed`, and the
+/// compiler PANICKED with `strlen cannot lower checked operand type Int` on valid PHP.
+#[test]
+fn test_stripped_mixed_storage_decisions_are_a_compile_error() {
+    let error = compile_files_error_message(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\n\n$a = 42;\necho \"|\";\n$a = 99;\necho $a;\n",
+            ),
+            (
+                "lib.php",
+                "<?php\nfunction f($n) {\n    if ($n > 1) {\n$a = 42;\n    } else {\n$a = \"hello\";\n    }\n    echo strlen($a), \"|\";\n}\nf($argc);\n",
+            ),
+        ],
+        "main.php",
+    )
+    .expect("a collision that strips a mixed-storage decision must not compile");
+    assert!(
+        error.contains("Cannot re-bind $a here"),
+        "expected the ambiguity diagnostic, got: {error}"
+    );
+}
+
+/// The PARTIAL-strip variant of the fixture above: only the FIRST store site collides.
+///
+/// It compiled before, and printed the right answer — but only by widening luck: lowering saw one
+/// of the two recorded store sites, so the local's slot was never pre-declared boxed at its first
+/// store. The surviving site kept the NAME in `mixed_storage_local_names()`, which is why this one
+/// did not panic like the fixture above. One matched key naming two nodes is the hazard R5 rejects
+/// whether or not this particular program survived it.
+#[test]
+fn test_partially_stripped_mixed_storage_decisions_are_a_compile_error() {
+    let error = compile_files_error_message(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\n\n$a = 5;\necho $a, \"|\";\n"),
+            (
+                "lib.php",
+                "<?php\nfunction f($n) {\n    $q = 2;\n$a = 123456789;\n    for ($i = 1; $i < $n; $i++) {\n$a = \"s\";\n    }\n    var_dump($a);\n    return $q;\n}\nf($argc);\n",
+            ),
+        ],
+        "main.php",
+    )
+    .expect("a collision that strips one of two mixed-storage decisions must not compile");
+    assert!(
+        error.contains("Cannot re-bind $a here"),
+        "expected the ambiguity diagnostic, got: {error}"
+    );
+    assert!(
+        error.contains("line 4 column 1"),
+        "the diagnostic must name the shared position, got: {error}"
+    );
+}
+
+/// The KILL and RETYPE maps keep their existing behaviour: a stripped decision there degrades to
+/// the pre-feature lowering path, which is correct, so it is not promoted to an error.
+///
+/// Here `lib.php` line 3 column 1 is a real retype of `$q` and `main.php` line 3 column 1 is an
+/// ordinary compatible assignment to `$q`; the top-level walk re-decides the shared key and drops
+/// the library's retype. Lowering then falls back to widening the old slot instead of minting a
+/// fresh one — exactly what the program did before retype sites were lowered at all — and prints
+/// PHP's answer. Rejecting it for uniformity would turn a correct program into a compile error,
+/// which is why the retired-key check covers the mixed-storage map alone: losing a MIXED decision
+/// changes what the CHECKER typed (the name leaves `mixed_storage_local_names()` while the local
+/// stays `Mixed`), and that disagreement is what panics the compiler.
+#[test]
+fn test_stripped_retype_decision_still_compiles_and_runs() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\n$q = 2;\necho \"|\", $q;\n"),
+            ("lib.php", "<?php\n$q = \"a\" . $argc;\n$q = 5;\necho $q;\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "5|2");
+}
+
 /// The counter has to walk TRAIT bodies: a trait's methods are checked and lowered exactly like a
 /// class's, so a decision recorded inside one is consulted inside one.
 ///

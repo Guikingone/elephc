@@ -206,6 +206,7 @@ impl Checker {
             body_contains_eval: false,
             mixed_storage_locals: HashSet::new(),
             mixed_storage_store_sites: HashMap::new(),
+            retired_mixed_storage_store_sites: HashSet::new(),
         }
     }
 }

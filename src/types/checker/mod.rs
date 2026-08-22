@@ -310,6 +310,25 @@ pub(crate) struct Checker {
     /// the first stored value. Cumulative across bodies, and keyed like the other two decision
     /// maps — see `CheckResult::local_bind_kill_sites` for why the name is half the key.
     pub mixed_storage_store_sites: HashMap<Span, String>,
+    /// Every `(span, name)` key `run_mixed_storage_scan` ever REMOVED from
+    /// `mixed_storage_store_sites`, kept for the checker's whole lifetime.
+    ///
+    /// The removal is a re-decision: a scan drops the decisions already filed against the sites
+    /// it is about to re-decide, so only the last walk's answer survives. A `Span` carries no
+    /// file identity, though, so the removal loop of ONE body also matches an equal `(span, name)`
+    /// recorded for a DIFFERENT body — and the decision then vanishes with nothing left for
+    /// `binding_decision_ambiguity` to check. Recording the retired keys is what keeps that
+    /// collision visible: a key that was legitimately re-decided names exactly one node, while a
+    /// key retired by collision names two or more.
+    ///
+    /// Only the mixed-storage map needs this. Losing a KILL or RETYPE decision costs a lowering
+    /// optimization — the site falls back to the null-store / slot-widening path it used before
+    /// those decisions were lowered, which is correct — but losing a MIXED-storage decision
+    /// changes what the rest of the compiler believes: `CheckResult::mixed_storage_local_names`
+    /// is derived from this map's VALUES, so a stripped name stops blocking constant propagation
+    /// while the checker still types the local `Mixed`. That disagreement panicked the compiler
+    /// (`strlen cannot lower checked operand type Int`) on valid PHP.
+    pub retired_mixed_storage_store_sites: HashSet<(Span, String)>,
 }
 
 /// The per-body local-binding eligibility state, saved while a nested body is checked.
@@ -590,6 +609,7 @@ pub fn check_types_with_options(
         &checker.local_bind_kill_sites,
         &checker.local_retype_sites,
         &checker.mixed_storage_store_sites,
+        &checker.retired_mixed_storage_store_sites,
     )?;
 
     Ok(CheckResult {

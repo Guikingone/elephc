@@ -112,6 +112,13 @@ impl Checker {
         // Qualified by NAME as well as span, because a `Span` has no file identity: the same
         // (line, column) in an included file is an EQUAL span, and this walk must not drop the
         // decision recorded for that unrelated assignment.
+        //
+        // The name is not enough on its own, though: the same NAME at the same POSITION in two
+        // files is still one key, so this loop can drop a decision another body recorded and
+        // leave `reject_ambiguous_local_binding_decisions` with nothing to reject. Every removed
+        // key is therefore retired into `retired_mixed_storage_store_sites`, which that pass
+        // checks against the node tally exactly as it checks a live one — see the field's own
+        // documentation for why the kill and retype maps do not need the same treatment.
         for (name, name_facts) in &facts.names {
             for site in &name_facts.assigns {
                 if self
@@ -120,6 +127,8 @@ impl Checker {
                     .is_some_and(|recorded| recorded == name)
                 {
                     self.mixed_storage_store_sites.remove(&site.span);
+                    self.retired_mixed_storage_store_sites
+                        .insert((site.span, name.clone()));
                 }
             }
         }

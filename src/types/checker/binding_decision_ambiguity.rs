@@ -23,6 +23,12 @@
 //!   the checker and lowering stay in lock-step on exactly which programs are accepted.
 //! - The scan counts MATCHING NODES, not decisions. One decision matching two nodes is the hazard;
 //!   one node visited by several checker walks is not (the walks re-decide one AST node).
+//! - RETIRED mixed-storage keys are checked alongside the live ones. A re-decision REMOVES the
+//!   decisions filed against the sites it is about to re-decide, and the removal matches by
+//!   `(span, name)` — so one body's scan can strip another body's decision and leave this pass
+//!   nothing to look at. Checking the retired keys restores the invariant: a key that was
+//!   legitimately re-decided names ONE node and passes, while a key retired by collision names
+//!   two or more and is rejected here, exactly as a live one would be.
 
 use std::collections::{HashMap, HashSet};
 
@@ -49,13 +55,34 @@ use crate::span::Span;
 /// wrong. A span shared by a retype and a mixed store site for one name cannot happen — a marked
 /// name binds `Mixed`, so its assignments always merge and never record a retype — and if it
 /// somehow did, both decisions would still name that one assignment.
+///
+/// `retired_mixed_storage_store_sites` carries the mixed-storage keys a later scan REMOVED. They
+/// are checked against the assignment tally like the live ones, because a removal matched by
+/// `(span, name)` cannot tell "this walk re-decided its own site" from "another body's site
+/// happens to sit at the same line and column with the same local name". The first names one node
+/// and passes; the second names two and is the hazard — measured, before this was checked, as a
+/// compiler PANIC (`strlen cannot lower checked operand type Int`) on valid PHP, because
+/// `CheckResult::mixed_storage_local_names` is derived from the map that had just been emptied.
+///
+/// The kill and retype maps are re-decided the same way and are deliberately NOT given a retired
+/// set. Losing one of those costs only precision in LOWERING — the site falls back to the
+/// null-store / slot-widening path it used before those decisions were lowered at all, which is
+/// correct — whereas losing a mixed-storage decision changes what the rest of the compiler
+/// believes about a local the checker still types `Mixed`. Rejecting the safe case for uniformity
+/// would turn working programs into compile errors
+/// (`test_stripped_retype_decision_still_compiles_and_runs` pins one).
 pub(super) fn reject_ambiguous_local_binding_decisions(
     program: &Program,
     kill_sites: &HashMap<Span, String>,
     retype_sites: &HashMap<Span, String>,
     mixed_storage_store_sites: &HashMap<Span, String>,
+    retired_mixed_storage_store_sites: &HashSet<(Span, String)>,
 ) -> Result<(), CompileError> {
-    if kill_sites.is_empty() && retype_sites.is_empty() && mixed_storage_store_sites.is_empty() {
+    if kill_sites.is_empty()
+        && retype_sites.is_empty()
+        && mixed_storage_store_sites.is_empty()
+        && retired_mixed_storage_store_sites.is_empty()
+    {
         return Ok(());
     }
     // Only spans a decision was filed against are worth counting, and there are a handful of them
@@ -65,6 +92,11 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
             .keys()
             .chain(retype_sites.keys())
             .chain(mixed_storage_store_sites.keys())
+            .chain(
+                retired_mixed_storage_store_sites
+                    .iter()
+                    .map(|(span, _)| span),
+            )
             .copied()
             .collect(),
         assigns: HashMap::new(),
@@ -80,6 +112,14 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
     let decisions = retype_sites
         .iter()
         .chain(mixed_storage_store_sites.iter())
+        // A retired mixed-storage key names the same node kind a live one does, so it is checked
+        // against the same tally. A key that is both live and retired (re-decided, then recorded
+        // again) is simply checked twice, with the same answer.
+        .chain(
+            retired_mixed_storage_store_sites
+                .iter()
+                .map(|(span, name)| (span, name)),
+        )
         .map(|(span, name)| (span, name, &tally.assigns))
         .chain(
             kill_sites
