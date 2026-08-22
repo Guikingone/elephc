@@ -576,14 +576,15 @@ fn test_private_method_access_uncaught_is_fatal() {
     );
     assert!(!output.success, "expected a fatal exit");
     // Byte-identical to reference PHP 8.5.6 up to its ` in <file>:<line>` suffix.
-    // STDOUT: PHP writes its uncaught report there, and elephc now matches — measured by capturing
-    // the two streams into separate files, where stderr came back empty.
+    // php writes its uncaught report to STDOUT and elephc matches, but the harness splits php
+    // diagnostics back out of `stdout` by kind prefix — `Fatal error:` is one — so the report
+    // lands in `diagnostics`. Reading `stdout` for it always found the empty string.
     assert!(
         output
-            .stdout
+            .diagnostics
             .contains("Fatal error: Uncaught Error: Call to private method C::secret() from global scope"),
         "expected a fatal diagnostic naming the class and message, got: {}",
-        output.stdout
+        output.diagnostics
     );
 }
 
@@ -595,13 +596,13 @@ fn test_readonly_property_write_uncaught_is_fatal() {
     );
     assert!(!output.success, "expected a fatal exit");
     // Byte-identical to reference PHP 8.5.6 up to its ` in <file>:<line>` suffix.
-    // See above: the report is on stdout.
+    // See above: the harness routes the report to `diagnostics`.
     assert!(
         output
-            .stdout
+            .diagnostics
             .contains("Fatal error: Uncaught Error: Cannot modify readonly property Box::$x"),
         "expected a fatal diagnostic naming the class and message, got: {}",
-        output.stdout
+        output.diagnostics
     );
 }
 
@@ -893,4 +894,72 @@ echo '|', intdiv(7, 2), '|', fdiv(1, 0), '|', (1 * $n) << (3 * $n), '|', (-8 * $
 "#,
     );
     assert_eq!(out, "1|1|4|3|3|INF|8|-4");
+}
+
+/// Verifies php's `Stack trace:` block for a throw with no frame above `{main}`.
+///
+/// The harness splits php diagnostics out of stdout by KIND PREFIX; the trace lines carry none,
+/// so they stay in `stdout` while the `Fatal error:` line moves to `located_diagnostics`.
+///
+/// MEASURED on `php -n` 8.5.6: the block, `#0 {main}`, and a `  thrown in FILE on line N` tail
+/// whose line is the CONSTRUCTION line — the same one the message carries, even when the `throw`
+/// is on a later line, which is why `$e = new …; throw $e;` reports the `new`.
+#[test]
+fn test_uncaught_report_carries_phps_stack_trace_block() {
+    let output = compile_and_run_capture("<?php\nthrow new RuntimeException(\"boom\");\n");
+    assert!(!output.success);
+    assert!(
+        output.stdout.contains("Stack trace:") && output.stdout.contains("#0 {main}"),
+        "expected php's trace block, got: {}",
+        output.stdout
+    );
+
+    // The trace php reports is the one captured where the Throwable was CONSTRUCTED.
+    let later = compile_and_run_capture("<?php\n$e = new RuntimeException(\"boom\");\nthrow $e;\n");
+    assert!(later.stdout.contains("#0 {main}"));
+}
+
+/// Verifies a raising BUILTIN is php's frame `#0`, named with its arguments.
+///
+/// php prints `#0 FILE(2): fopen('', 'r')` — the internal call is a frame, and its arguments are
+/// rendered, strings quoted. Anything less than the argument list would be a different trace.
+#[test]
+fn test_uncaught_report_names_the_raising_builtin_and_its_arguments() {
+    let output = compile_and_run_capture("<?php\nfopen(\"\", \"r\");\n");
+    assert!(!output.success);
+    assert!(
+        output.stdout.contains("fopen('', 'r')"),
+        "expected the builtin frame with its arguments, got: {}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("#1 {main}"),
+        "the builtin frame is #0, so {{main}} is #1: {}",
+        output.stdout
+    );
+}
+
+/// Verifies the block STAYS AWAY when a user frame could be missing from it.
+///
+/// This is the property that keeps the feature honest. elephc records the builtin frame that
+/// raised and nothing else, so a module that declares a function or a method can put a frame on
+/// the stack that the recorded list would not name — and `#0 {main}` would then assert the stack
+/// was empty. Printing nothing is the only truthful alternative, and this test is what stops the
+/// gate being dropped for looking redundant.
+#[test]
+fn test_uncaught_report_omits_a_trace_it_cannot_complete() {
+    let output = compile_and_run_capture(
+        "<?php\nfunction f() { throw new RuntimeException(\"boom\"); }\nf();\n",
+    );
+    assert!(!output.success);
+    assert!(
+        output.located_diagnostics.contains("Uncaught RuntimeException: boom"),
+        "the message itself is unaffected: {}",
+        output.located_diagnostics
+    );
+    assert!(
+        !output.stdout.contains("Stack trace:"),
+        "a module with a user function must print no trace rather than a short one: {}",
+        output.stdout
+    );
 }

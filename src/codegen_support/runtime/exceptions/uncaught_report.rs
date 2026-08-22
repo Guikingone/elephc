@@ -176,6 +176,9 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_NEWLINE_LEN));         // terminating newline
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
+    emitter.instruction(&format!("ldr x0, [x9, #{}]", THROWABLE_CREATION_LINE_OFFSET));
+    emitter.instruction("bl __rt_trace_write_block");                           // php's Stack trace: block, when the frame list is complete
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.syscall(1);
 
@@ -282,6 +285,9 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // terminate the uncaught-exception diagnostic with a newline
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_value", 0);
+    emitter.instruction(&format!("mov rdi, QWORD PTR [r10 + {}]", THROWABLE_CREATION_LINE_OFFSET));
+    emitter.instruction("call __rt_trace_write_block");                         // php's Stack trace: block, when the frame list is complete
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
     emitter.instruction("syscall");                                             // exit the process after reporting the throwable

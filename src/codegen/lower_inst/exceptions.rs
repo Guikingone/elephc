@@ -384,7 +384,7 @@ fn emit_static_exception_at(
         class_name, message, suffix
     );
     let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
-    emit_uncaught_exception_fatal_if_no_handler(ctx, &fatal_label, fatal_len);
+    emit_uncaught_exception_fatal_if_no_handler(ctx, &fatal_label, fatal_len, creation_line);
 
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
@@ -443,6 +443,7 @@ fn emit_uncaught_exception_fatal_if_no_handler(
     ctx: &mut FunctionContext<'_>,
     fatal_label: &str,
     fatal_len: usize,
+    creation_line: u32,
 ) {
     let throw_label = ctx.next_label("static_exception_throw");
     match ctx.emitter.target.arch {
@@ -453,10 +454,13 @@ fn emit_uncaught_exception_fatal_if_no_handler(
             // exit without flushing, discarding everything a program had buffered. `bl` leaves sp
             // untouched, so the message slots read below are unaffected.
             ctx.emitter.instruction("bl __rt_ob_flush_all");                    // drain buffered output before the fatal report
+            emit_raising_builtin_trace_frame(ctx);                              // php's frame #0 is the builtin that raised
             abi::emit_symbol_address(ctx.emitter, "x1", fatal_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", fatal_len as i64);
             ctx.emitter.instruction("mov x0, #1");                              // fd = stdout, where PHP writes this report
             ctx.emitter.syscall(4);
+            abi::emit_load_int_immediate(ctx.emitter, "x0", i64::from(creation_line));
+            ctx.emitter.instruction("bl __rt_trace_write_block");               // this path never reaches the shared report
             abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
         }
         Arch::X86_64 => {
@@ -471,11 +475,14 @@ fn emit_uncaught_exception_fatal_if_no_handler(
             ctx.emitter.instruction("and rsp, -16");                            // realign the stack to the 16-byte call boundary
             ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain buffered output before the fatal report
             ctx.emitter.instruction("mov rsp, r15");                            // restore the entry rsp once the flush returns
+            emit_raising_builtin_trace_frame(ctx);                              // php's frame #0 is the builtin that raised
             abi::emit_symbol_address(ctx.emitter, "rsi", fatal_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", fatal_len as i64);
             ctx.emitter.instruction("mov edi, 1");                              // fd = stdout, where PHP writes this report
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the specific fatal message
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", i64::from(creation_line));
+            ctx.emitter.instruction("call __rt_trace_write_block");             // this path never reaches the shared report
             abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
         }
     }
@@ -598,4 +605,92 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
     }
+}
+
+
+/// Records the builtin whose call is raising as php's frame `#0`.
+///
+/// php names an internal function and its arguments — `#0 p.php(2): fopen('', 'r')` — and the
+/// instruction being lowered IS that call, so its runtime target names it, its span gives the
+/// call-site line, and its operands are the values. The buffer is reset first because php captures
+/// a trace at CONSTRUCTION: a builtin exception that was caught earlier must not leave its frame
+/// behind for this one.
+///
+/// Nothing is preserved across these calls. The sequence that follows throws.
+fn emit_raising_builtin_trace_frame(ctx: &mut FunctionContext<'_>) {
+    let Some((name, line, operands)) = ctx.current_builtin_frame() else {
+        return;
+    };
+    let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
+    abi::emit_call_label(ctx.emitter, "__rt_trace_reset");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", i64::from(line));
+            abi::emit_symbol_address(ctx.emitter, "x1", &name_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", name_len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", i64::from(line));
+            abi::emit_symbol_address(ctx.emitter, "rsi", &name_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", name_len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_trace_frame_open");
+
+    for operand in operands {
+        if emit_trace_argument(ctx, operand).is_err() {
+            // An operand whose shape has no php rendering ends the argument list rather than
+            // guessing at one. php would have printed it; a wrong value would be worse.
+            break;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_trace_frame_close");
+}
+
+/// Renders one call argument into the open trace frame.
+fn emit_trace_argument(ctx: &mut FunctionContext<'_>, operand: crate::ir::ValueId) -> Result<()> {
+    use crate::types::PhpType;
+
+    // The runtime tags `__rt_trace_arg` branches on: 0 int, 1 string, 2 float, 3 bool, 8 null,
+    // 9 resource. A `Mixed` operand carries its own tag and is unboxed instead of guessed at.
+    let tag = match ctx.value_php_type(operand)?.codegen_repr() {
+        PhpType::Str => 1,
+        PhpType::Float => 2,
+        PhpType::Bool | PhpType::False => 3,
+        PhpType::Void | PhpType::Never => 8,
+        PhpType::Int => 0,
+        PhpType::Mixed => -1,
+        _ => 9,
+    };
+    ctx.load_value_to_result(operand)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            if tag < 0 {
+                ctx.emitter.instruction("bl __rt_mixed_unbox");                 // x0/x1/x2 = tag/lo/hi already
+            } else if tag == 1 {
+                // A string already sits in the pair `__rt_trace_arg` reads: x1 pointer, x2 length.
+                abi::emit_load_int_immediate(ctx.emitter, "x0", tag);
+            } else {
+                ctx.emitter.instruction("mov x1, x0");                          // a scalar arrives in the int result register
+                ctx.emitter.instruction("mov x2, #0");                          // and carries no high word
+                abi::emit_load_int_immediate(ctx.emitter, "x0", tag);
+            }
+        }
+        Arch::X86_64 => {
+            if tag < 0 {
+                ctx.emitter.instruction("call __rt_mixed_unbox");               // rax/rdi/rdx = tag/lo/hi
+                ctx.emitter.instruction("mov rsi, rdi");
+                ctx.emitter.instruction("mov rdi, rax");
+            } else if tag == 1 {
+                ctx.emitter.instruction("mov rsi, rax");                        // pointer; rdx already holds the length
+                abi::emit_load_int_immediate(ctx.emitter, "rdi", tag);
+            } else {
+                ctx.emitter.instruction("mov rsi, rax");                        // a scalar arrives in the int result register
+                ctx.emitter.instruction("xor edx, edx");                        // and carries no high word
+                abi::emit_load_int_immediate(ctx.emitter, "rdi", tag);
+            }
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_trace_arg");
+    Ok(())
 }

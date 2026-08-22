@@ -400,6 +400,29 @@ impl<'a> FunctionContext<'a> {
         Some((file, span.line))
     }
 
+    /// Returns the builtin call being lowered, as php would name it in a stack-trace frame.
+    ///
+    /// A builtin that raises is a FRAME in php's trace — `#0 p.php(2): fopen('', 'r')` — and the
+    /// instruction being lowered is that very call, so its runtime target names it and its span
+    /// gives the call-site line php prints.
+    pub(super) fn current_builtin_frame(&self) -> Option<(&'static str, u32, Vec<ValueId>)> {
+        let inst = self.function.instruction(self.current_inst?)?;
+        let line = inst.span?.line;
+        let crate::ir::Immediate::RuntimeCall(target) = inst.immediate.as_ref()? else {
+            return None;
+        };
+        // Only a plain typed builtin names itself the way php does; the array/cell helpers are
+        // internal shapes php has never heard of, and a profiled call wraps one of the same.
+        let name = match target {
+            crate::ir::RuntimeCallTarget::Function(target)
+            | crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. } => {
+                target.as_eir()
+            }
+            _ => return None,
+        };
+        Some((name, line, inst.operands.clone()))
+    }
+
     /// Returns the frame flag that records whether this slot currently stores a cell pointer.
     pub(super) fn ref_cell_state_offset(&self, slot: LocalSlotId) -> Option<usize> {
         self.ref_cell_state_offsets.get(&slot).copied()

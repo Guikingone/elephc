@@ -57,6 +57,7 @@ use super::{
 };
 use super::super::system;
 use super::RT_DIAG_BUF_BYTES;
+use super::super::exceptions::{TRACE_BUF_BYTES, TRACE_LITERALS};
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
@@ -401,6 +402,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // the line ends with a bare newline, which keeps a partially-covered build well-formed.
     out.push_str(&comm_directive("_rt_diag_buf", RT_DIAG_BUF_BYTES, target));
     out.push_str(&comm_directive("_rt_diag_buf_len", 8, target));
+    // php's `Stack trace:` text, assembled as each frame is recorded. The count rides beside it
+    // because php numbers the `{main}` sentinel AFTER the real frames.
+    out.push_str(&comm_directive("_rt_trace_buf", TRACE_BUF_BYTES, target));
+    out.push_str(&comm_directive("_rt_trace_len", 8, target));
+    out.push_str(&comm_directive("_rt_trace_count", 8, target));
+    out.push_str(&comm_directive("_rt_trace_argc", 8, target));
+    for (symbol, text) in TRACE_LITERALS {
+        out.push_str(&format!(
+            ".globl {symbol}\n{symbol}:\n    .ascii \"{}\"\n",
+            text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+        ));
+    }
+    out.push_str(".p2align 3\n");
     out.push_str(&comm_directive("_rt_diag_loc_ptr", 8, target));
     out.push_str(&comm_directive("_rt_diag_loc_len", 8, target));
     // elephc_web_capture: per-request output-capture mode flag read by

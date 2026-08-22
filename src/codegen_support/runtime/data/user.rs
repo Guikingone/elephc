@@ -65,6 +65,7 @@ pub(crate) fn emit_runtime_data_user(
     allowed_class_names: Option<&HashSet<String>>,
     emit_eval_reflection_metadata: bool,
     source_path: Option<&str>,
+    has_user_frames: bool,
     target: Target,
 ) -> String {
     let mut out = String::new();
@@ -714,6 +715,8 @@ pub(crate) fn emit_runtime_data_user(
     emit_static_callable_method_data(&mut out, &sorted_classes);
     out.push_str(".p2align 3\n");
     emit_script_source_file_data(&mut out, source_path);
+    out.push_str(".p2align 3\n");
+    emit_trace_exactness_flag(&mut out, has_user_frames);
     if emit_eval_reflection_metadata {
         out.push_str(".p2align 3\n");
         emit_eval_reflection_source_file_data(&mut out, source_path);
@@ -1348,6 +1351,23 @@ fn emit_script_source_file_data(out: &mut String, source_path: Option<&str>) {
     out.push_str(".p2align 3\n");
     out.push_str(".globl _script_source_file_len\n_script_source_file_len:\n");
     out.push_str(&format!("    .quad {}\n", source_path.len()));
+}
+
+/// Emits whether a recorded stack trace can be trusted to be COMPLETE for this module.
+///
+/// php's trace names every frame. elephc records the builtin frame that raised, and nothing else,
+/// so the moment a module can put a user frame on the stack the recorded list may be short — and a
+/// short trace is not an approximation. `#0 {main}` where php names a function asserts the stack
+/// was empty, which is a wrong answer rather than a missing one, so the report prints nothing at
+/// all in that case, exactly as it did before.
+///
+/// The condition is therefore "this module declares no user function and no user class". It is
+/// deliberately coarse: it is easy to state, impossible to get subtly wrong, and it holds for the
+/// scripts whose whole trace IS a builtin frame plus `{main}`.
+fn emit_trace_exactness_flag(out: &mut String, has_user_frames: bool) {
+    let exact = usize::from(!has_user_frames);
+    out.push_str(".globl _rt_trace_exact\n_rt_trace_exact:\n");
+    out.push_str(&format!("    .quad {}\n", exact));
 }
 
 /// Emits the source filename used by eval Reflection source-location hooks.

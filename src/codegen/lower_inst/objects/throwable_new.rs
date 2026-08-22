@@ -118,6 +118,10 @@ const THROWABLE_COMPACT_PAYLOAD_SIZE: u64 = 56;
 /// it is thrown — `$e = new RuntimeException(...)` on line 2 followed by `throw $e;` on line 5
 /// reports line 2 — so the value belongs here rather than on the throw terminator.
 pub(super) fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id: u64, creation_line: u32) {
+    // php captures a trace when a Throwable is CONSTRUCTED. Resetting here is what stops an
+    // earlier builtin exception — caught, and so never reported — from leaving its frame behind
+    // for this one to print as its own. Nothing is live yet: the allocation starts below.
+    abi::emit_call_label(ctx.emitter, "__rt_trace_reset");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             // -- allocate and stamp the compact Throwable payload --
