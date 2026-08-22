@@ -303,7 +303,15 @@ impl Checker {
     /// `.plans/local-retype-and-strict-locals.md` — depth-0 + non-aliased rule.
     pub(crate) fn local_binding_is_killable(&self, name: &str) -> bool {
         self.local_conditional_depth == 0
-            && self.local_binding_depth.get(name).copied().unwrap_or(0) == 0
+            // NO entry means "not a binding this body created", which is NOT killable. The
+            // environment a body starts from is seeded with names nothing in it assigned:
+            // superglobals in every scope, `$argc`/`$argv` and extern C globals at top level,
+            // by-value closure captures. None of those live in a frame slot this body owns, so
+            // abandoning them would strand storage the program still reaches by name.
+            // PARAMETERS are the one seeded shape that IS frame storage, and they are seeded
+            // with an explicit depth 0 by `enter_local_binding_scope` — an untyped parameter
+            // stays kill-eligible (`test_typed_param_not_killable` pins both halves).
+            && self.local_binding_depth.get(name).copied() == Some(0)
             && !self.active_ref_params.contains(name)
             && !self.ref_aliased_locals.contains(name)
             && !self.active_globals.contains(name)
@@ -312,14 +320,21 @@ impl Checker {
     }
 
     /// Enters a fresh local-binding eligibility scope for one function/method/closure/top-level
-    /// body, seeding the parameters that carry a declared type hint.
+    /// body, seeding the parameters (all of them at binding depth 0, and the type-hinted ones
+    /// additionally as declared).
     ///
     /// Eligibility is a property of a single frame: the caller's aliasing, `static` names and
     /// binding depths say nothing about the body about to be checked, and a body entered from
     /// inside an `if` still starts at conditional depth 0 of its OWN statements. The returned
     /// value must be handed back to [`Checker::exit_local_binding_scope`].
+    ///
+    /// `param_names` is EVERY parameter, typed or not. A parameter is bound unconditionally on
+    /// entry, so depth 0 is its true binding depth; recording it explicitly is what lets a
+    /// MISSING depth entry mean "seeded, not bound here — not killable" in
+    /// [`Checker::local_binding_is_killable`].
     pub(crate) fn enter_local_binding_scope(
         &mut self,
+        param_names: Vec<String>,
         typed_param_names: Vec<String>,
     ) -> SavedLocalBindingScope {
         let saved = SavedLocalBindingScope {
@@ -330,6 +345,7 @@ impl Checker {
             typed: std::mem::take(&mut self.typed_local_names),
         };
         self.local_conditional_depth = 0;
+        self.local_binding_depth = param_names.into_iter().map(|name| (name, 0)).collect();
         self.typed_local_names = typed_param_names.into_iter().collect();
         saved
     }

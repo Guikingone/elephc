@@ -390,19 +390,23 @@ impl Checker {
     ///
     /// `typed_param_names` seeds the body's declared-type exclusion set with the parameters
     /// that carry a type hint: a declared type is a contract, so those locals are never
-    /// kill/retype eligible. The rest of the per-body local-binding eligibility state
-    /// (conditional depth, binding depths, reference aliases, `static` names) is reset here
-    /// too — it describes one frame and must not leak between caller and callee.
+    /// kill/retype eligible. `param_names` is every parameter, typed or not, and seeds their
+    /// binding depth at 0 (see [`Checker::enter_local_binding_scope`]). The rest of the
+    /// per-body local-binding eligibility state (conditional depth, binding depths, reference
+    /// aliases, `static` names) is reset here too — it describes one frame and must not leak
+    /// between caller and callee.
     pub(crate) fn with_local_storage_context<T, F>(
         &mut self,
         ref_param_names: Vec<String>,
+        param_names: Vec<String>,
         typed_param_names: Vec<String>,
         f: F,
     ) -> Result<T, CompileError>
     where
         F: FnOnce(&mut Self) -> Result<T, CompileError>,
     {
-        let saved_local_binding_scope = self.enter_local_binding_scope(typed_param_names);
+        let saved_local_binding_scope =
+            self.enter_local_binding_scope(param_names, typed_param_names);
         let saved_ref_params = self.active_ref_params.clone();
         let saved_globals = self.active_globals.clone();
         let saved_statics = self.active_statics.clone();

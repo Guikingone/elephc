@@ -776,6 +776,14 @@ fn merge_local_assignment_type(
     env: &mut TypeEnv,
     stmt_form: bool,
 ) -> Result<(), CompileError> {
+    // This visit RE-DECIDES the site, so any decision a superseded walk recorded for it is
+    // dropped first. The checker walks a body more than once (top level twice, method bodies
+    // to stability, a function body once per call-site re-specialization) and only the LAST
+    // walk's decisions may reach EIR lowering — a retype recorded against a type the final
+    // walk no longer infers would otherwise make lowering re-bind a compatible assignment.
+    // Mirrors the `unset` kill sites in `inference::expr::effects`, and the per-scope clear
+    // `loop_storage_types` does before each re-walk.
+    checker.local_retype_sites.remove(&span);
     if let Some(existing) = env.get(name) {
         let merged_ty = checker.merged_assignment_type(existing, ty);
         if merged_ty.is_none() {

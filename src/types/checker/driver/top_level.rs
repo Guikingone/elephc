@@ -36,7 +36,7 @@ impl Checker {
         // Top level is a body like any other, and this pass runs TWICE. Without a reset the
         // second pass would start with the first pass's aliases and binding depths already in
         // place, so the same `unset` could be eligible in one pass and not the other.
-        let saved_local_binding_scope = self.enter_local_binding_scope(Vec::new());
+        let saved_local_binding_scope = self.enter_local_binding_scope(Vec::new(), Vec::new());
         let mut global_env = self.seed_global_env();
         let mut all_errors = Vec::with_capacity(program.len());
         // `(statement index, name, span)` for every null probe this pass tolerated, so the

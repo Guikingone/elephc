@@ -394,6 +394,15 @@ impl Checker {
         for capture in capture_refs {
             self.ref_aliased_locals.insert(capture.clone());
         }
+        // Every closure parameter is bound unconditionally on entry, so all of them are
+        // recorded at binding depth 0. A `use ($x)` CAPTURE is deliberately absent: it is
+        // seeded into the body's environment from the enclosing frame, and a missing entry
+        // means "not bound here", which is not kill/retype eligible.
+        let closure_param_names: Vec<String> = params
+            .iter()
+            .map(|(name, _, _, _)| name.clone())
+            .chain(variadic.iter().map(|name| (*name).clone()))
+            .collect();
         // A closure parameter with a declared type hint is a contract inside the body.
         let typed_variadic = match &expr.kind {
             ExprKind::Closure {
@@ -425,13 +434,17 @@ impl Checker {
         self.loop_storage_types
             .retain(|(scope, _), _| scope != &loop_storage_scope);
         self.current_loop_storage_scope = loop_storage_scope;
-        let body_result =
-            self.with_local_storage_context(closure_ref_params, closure_typed_params, |checker| {
+        let body_result = self.with_local_storage_context(
+            closure_ref_params,
+            closure_param_names,
+            closure_typed_params,
+            |checker| {
                 for stmt in body {
                     checker.check_stmt(stmt, &mut closure_sig.env)?;
                 }
                 Ok(())
-            });
+            },
+        );
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.closure_depth -= 1;

@@ -127,6 +127,15 @@ impl Checker {
             .filter(|(_, is_ref)| **is_ref)
             .map(|(name, _)| name.clone())
             .collect();
+        // Every parameter is bound unconditionally on entry, so all of them are recorded at
+        // binding depth 0 (a missing entry means "seeded, not bound here", which is not
+        // kill/retype eligible).
+        let param_names: Vec<String> = decl
+            .params
+            .iter()
+            .cloned()
+            .chain(decl.variadic.iter().cloned())
+            .collect();
         // A parameter with a declared type hint is a contract: it never becomes kill/retype
         // eligible inside the body, in either mode.
         let typed_param_names: Vec<String> = decl
@@ -153,8 +162,11 @@ impl Checker {
         // a called function saves and restores the enclosing name), so friend
         // channels can identify compiler-owned procedural aliases.
         let previous_function = self.current_function.replace(function_key.clone());
-        let body_check_result =
-            self.with_local_storage_context(ref_param_names, typed_param_names, |checker| {
+        let body_check_result = self.with_local_storage_context(
+            ref_param_names,
+            param_names,
+            typed_param_names,
+            |checker| {
                 for stmt in &decl.body {
                     if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
                         errors.extend(error.flatten());
@@ -172,7 +184,8 @@ impl Checker {
                     );
                 }
                 Ok(())
-            });
+            },
+        );
         self.current_function = previous_function;
         self.resolving_functions.remove(&function_key);
         self.current_loop_storage_scope = previous_loop_storage_scope;

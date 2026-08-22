@@ -1474,3 +1474,69 @@ fn test_retype_after_conditional_unset_warns() {
 fn test_ref_aliased_retype_still_errors() {
     expect_error("<?php $a = 0; $r =& $a; $a = \"x\";", "cannot reassign");
 }
+
+/// A kill site a SUPERSEDED checker pass recorded must not survive into `CheckResult`.
+///
+/// The checker walks the top level twice (`check_types_impl`: an initial pass, then a final one
+/// after method bodies stabilize). Here the first pass cannot yet know that `$g` holds a closure
+/// with a BY-REFERENCE parameter — `make()`'s return type is only inferred by
+/// `type_check_methods_until_stable`, which runs between the two passes — so it records no
+/// reference alias for `$a`, judges `unset($a)` killable, and records a kill site. The final pass
+/// does know, refuses the kill, and leaves `$a` bound (which is why `$a = 5` merges silently
+/// instead of erroring). Only the final pass's decision may reach EIR lowering: acting on the
+/// stale one would abandon the frame slot the closure still holds a reference to.
+#[test]
+fn test_superseded_pass_kill_site_does_not_reach_the_result() {
+    let result = check_source_full(
+        "<?php class C { public function make() { return function (&$x) { $x = 2; }; } } \
+         $o = new C(); $a = 1; $g = $o->make(); $g($a); unset($a); $a = 5; echo $a;",
+    )
+    .expect("fixture should type-check");
+    assert!(
+        result.local_bind_kill_sites.is_empty(),
+        "a superseded pass's kill site survived into CheckResult: {:?}",
+        result.local_bind_kill_sites
+    );
+}
+
+/// The same program with the late-discovered alias REMOVED still records its kill site, so the
+/// test above is pinning cross-pass staleness rather than a checker that stopped killing.
+#[test]
+fn test_final_pass_kill_site_still_reaches_the_result() {
+    let result = check_source_full(
+        "<?php class C { public function make() { return function ($x) { return $x; }; } } \
+         $o = new C(); $a = 1; $g = $o->make(); $g($a); unset($a); $a = 5; echo $a;",
+    )
+    .expect("fixture should type-check");
+    assert_eq!(
+        result.local_bind_kill_sites.len(),
+        1,
+        "the by-VALUE closure parameter leaves $a killable, so its kill site must be recorded"
+    );
+}
+
+/// Superglobals are seeded into every environment with no binding depth: they are not bindings
+/// the body created, so `unset` must not kill them — EIR lowering would otherwise abandon (and
+/// re-mint as a frame slot) storage that lives in an `_eir_global_*` symbol.
+#[test]
+fn test_seeded_superglobal_not_killable() {
+    expect_error("<?php unset($_SERVER); $_SERVER = 5;", "cannot reassign");
+}
+
+/// Same rule for the top-level-seeded `$argv`/`$argc`. Measured before the fix: the kill was
+/// recorded, lowering abandoned the slot holding the runtime-built argv array, and the program
+/// leaked it (`HEAP DEBUG: live_blocks=2`).
+#[test]
+fn test_seeded_argv_not_killable() {
+    expect_error("<?php unset($argv); $argv = 5;", "cannot reassign");
+}
+
+/// A by-VALUE closure capture is seeded from the enclosing frame, so it is not killable inside
+/// the closure body either.
+#[test]
+fn test_by_value_capture_not_killable_inside_closure() {
+    expect_error(
+        "<?php $a = 1; $f = function () use ($a) { unset($a); $a = \"x\"; return $a; }; echo $f();",
+        "cannot reassign",
+    );
+}

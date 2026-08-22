@@ -149,6 +149,15 @@ impl Checker {
                         .filter(|(_, _, _, is_ref)| *is_ref)
                         .map(|(name, _, _, _)| name.clone())
                         .collect();
+                    // Every parameter is bound unconditionally on entry, so all of them are
+                    // recorded at binding depth 0 (a missing entry means "seeded, not bound
+                    // here", which is not kill/retype eligible).
+                    let method_param_names: Vec<String> = method
+                        .params
+                        .iter()
+                        .map(|(name, _, _, _)| name.clone())
+                        .chain(method.variadic.iter().cloned())
+                        .collect();
                     // A parameter with a declared type hint is a contract: never kill/retype
                     // eligible inside the body, in either mode.
                     let method_typed_params: Vec<String> = method
@@ -167,6 +176,7 @@ impl Checker {
                     let mut method_errors = Vec::new();
                     self.with_local_storage_context(
                         method_ref_params,
+                        method_param_names,
                         method_typed_params,
                         |checker| {
                             for s in &method.body {

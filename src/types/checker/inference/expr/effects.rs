@@ -319,6 +319,17 @@ impl Checker {
                             self.local_binding_depth.remove(var);
                             self.clear_local_binding_metadata(var);
                             self.local_bind_kill_sites.insert(arg.span);
+                        } else {
+                            // This visit RE-DECIDES the site. The checker walks a body more
+                            // than once (top level twice, method bodies to stability, a
+                            // function body once per call-site re-specialization), and only
+                            // the LAST walk's decisions may reach EIR lowering — the same
+                            // rule `loop_storage_types` follows by clearing its scope before
+                            // each re-walk. A kill recorded by a superseded walk whose
+                            // successor refuses (a callee's by-reference parameter that only
+                            // became visible later, say) would otherwise make lowering
+                            // abandon a slot the final check kept alive.
+                            self.local_bind_kill_sites.remove(&arg.span);
                         }
                     }
                 }
