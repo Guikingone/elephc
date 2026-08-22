@@ -32,3 +32,17 @@ mod performance;
 fn eliminate_dead_code(program: Program) -> Program {
     super::eliminate_dead_code(program, HashSet::new())
 }
+
+/// Runs constant propagation over a hand-built AST that no checker ever saw.
+///
+/// Shadows [`super::propagate_constants`] for the test tree only, on the same reasoning as
+/// `eliminate_dead_code` above: these fixtures have no `CheckResult`, so no local was marked as
+/// boxed `mixed` storage and the empty set is the honest argument — while the real callers keep
+/// having to pass `CheckResult::mixed_storage_local_names()` explicitly, which is what stops a
+/// production caller from quietly substituting a literal into a boxed local's read.
+///
+/// The volatility fixtures that need a non-empty set call `PostTypecheckOptimizer::propagate`
+/// directly instead of going through this.
+fn propagate_constants(program: Program) -> Program {
+    super::propagate_constants(program, HashSet::new())
+}

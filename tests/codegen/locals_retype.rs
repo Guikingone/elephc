@@ -920,13 +920,14 @@ fn test_zero_trip_loop_keeps_the_entry_binding_type() {
 /// A marked TOP-LEVEL local that another body writes through `global $a`.
 ///
 /// The per-body pre-scan cannot see `q()`'s `global $a` while scanning the top level, so the
-/// name is marked there. That is sound because a name any body binds with `global` is already
-/// program-global storage in `main` (`LoweringContext::uses_global_storage` consults
-/// `all_global_var_names`, which `collect_global_var_names` fills from every function, method
-/// and trait body), and that storage is ALREADY boxed `Mixed`
-/// (`LoweringContext::global_alias_type`). The marked store therefore lands in exactly the
-/// representation it would have had anyway, and `q()`'s write is visible to the reads on both
-/// sides of the call.
+/// name is marked there. The invariant that makes it sound is NOT that lowering sees every
+/// `global` — it does not, see `test_marked_and_unmarked_agree_through_the_collect_global_hole`
+/// below — it is that MARKING CHANGES NOTHING for a `global`-aliased name. Where
+/// `collect_global_var_names` does see the declaration, `LoweringContext::uses_global_storage`
+/// puts the top-level name in program-global storage that `global_alias_type` already types
+/// `Mixed`, so `store_local` overrides the marked `Mixed` with the identical type and writes the
+/// shared symbol; where it does not see it, the marked and unmarked programs are wrong in exactly
+/// the same pre-existing way. Either way the marked program behaves like the unmarked one.
 #[test]
 fn test_marked_top_level_local_written_through_a_global_alias() {
     let out = compile_and_run(
@@ -954,6 +955,100 @@ echo $a, "|";
 var_dump($a);"#,
     );
     assert_eq!(out, "hello|42|int(42)\n");
+}
+
+/// The other direction: MAIN writes the marked `global`-aliased name and the callee READS it,
+/// both before and after a re-store that changes the runtime type.
+///
+/// The callee's `global $a` reads the shared symbol, so it has to observe the boxed value main
+/// put there — the string on the first call and the int on the second. Reading through a
+/// concrete view on either side would print the other type's payload.
+///
+/// Heap: this shape leaks 48 bytes, and that has nothing to do with the marking — the boxed
+/// occupant of `_eir_global_a` is not released at program exit. An unmarked program leaks the same
+/// block (`test_marked_and_unmarked_global_alias_reads_leak_alike`), and so does this one built
+/// from the parent commit. Output correctness is what this fixture pins.
+#[test]
+fn test_marked_top_level_local_read_back_through_a_global_alias() {
+    let out = compile_and_run(
+        r#"<?php
+function q() { global $a; var_dump($a); }
+if ($argc > 1) { $a = 0; } else { $a = "hello"; }
+q();
+$a = 42;
+q();"#,
+    );
+    assert_eq!(out, "string(5) \"hello\"\nint(42)\n");
+}
+
+/// Control for the leak note above: a `global`-aliased read with NO marking anywhere leaks the
+/// same way, so the leak belongs to program-global storage rather than to boxed locals.
+///
+/// Asserted as an EQUIVALENCE rather than a byte count. Both programs put one boxed string in
+/// `_eir_global_a` and neither releases it at exit (measured: `live_blocks=1 live_bytes=48` for
+/// each, on this commit and on the parent alike). Whoever fixes that fixes both, and this test
+/// keeps passing; what it refuses is one of them leaking while the other does not.
+#[test]
+fn test_marked_and_unmarked_global_alias_reads_leak_alike() {
+    let marked = compile_and_run_with_heap_debug(
+        r#"<?php
+function q() { global $a; var_dump($a); }
+if ($argc > 1) { $a = 0; } else { $a = "hello"; }
+q();"#,
+    );
+    let unmarked = compile_and_run_with_heap_debug(
+        r#"<?php
+function q() { global $a; var_dump($a); }
+$a = "hello" . $argc;
+q();"#,
+    );
+    assert!(marked.success, "marked program failed: {}", marked.stderr);
+    assert!(unmarked.success, "unmarked program failed: {}", unmarked.stderr);
+    assert_eq!(marked.stdout, "string(5) \"hello\"\n");
+    assert_eq!(unmarked.stdout, "string(6) \"hello1\"\n");
+
+    /// Extracts the `leak summary: …` line so the two runs can be compared directly.
+    fn leak_summary(stderr: &str) -> &str {
+        stderr
+            .lines()
+            .find(|line| line.contains("HEAP DEBUG: leak summary:"))
+            .unwrap_or("<no leak summary>")
+    }
+    assert_eq!(
+        leak_summary(&marked.stderr),
+        leak_summary(&unmarked.stderr),
+        "marking must not change what a global-aliased local leaks"
+    );
+}
+
+/// `collect_global_var_names_in_body` never descends into EXPRESSIONS, so a `global $a` inside a
+/// closure literal is invisible to it and main keeps `$a` in a frame slot instead of the shared
+/// symbol — the closure's write does not reach main. That is a PRE-EXISTING hole, and this pins
+/// that marking does not change it: the marked program and the unmarked control print the same
+/// shape. If the hole is ever closed, both sides move together or this test says so.
+#[test]
+fn test_marked_and_unmarked_agree_through_the_collect_global_hole() {
+    let marked = compile_and_run(
+        r#"<?php
+$w = function () { global $a; $a = 42; };
+if ($argc > 1) { $a = 0; } else { $a = "hello"; }
+echo $a, "|";
+$w();
+echo $a, "|";"#,
+    );
+    let unmarked = compile_and_run(
+        r#"<?php
+$w = function () { global $a; $a = 42; };
+$a = "hello";
+echo $a, "|";
+$w();
+echo $a, "|";"#,
+    );
+    assert_eq!(
+        marked, unmarked,
+        "marking must not change what a closure-declared `global` does to a top-level local"
+    );
+    assert_eq!(marked, "hello|hello|");
 }
 
 /// A loop-carried marked local whose every iteration allocates a fresh heap string: the
@@ -1020,6 +1115,80 @@ var_dump($g());"#,
         "expected a clean heap, got: {}",
         out.stderr
     );
+}
+
+/// A marked local re-assigned to a LITERAL after the divergent branch, then read by a checked
+/// builtin.
+///
+/// The literal makes the read a constant-propagation target. `PostTypecheckOptimizer::propagate`
+/// runs after the checker and knows nothing about the type it bound, so it substituted `99` for
+/// the read of `$a` — handing lowering a concrete `Int` where the checker said `mixed`, and
+/// `strlen`'s checked fast path PANICKED the compiler ("strlen cannot lower checked operand type
+/// Int"). Measured identically on the parent commit: this shape was already broken by Task 6's
+/// marking. The pass is now told which names the checker boxed and records no fact for them.
+#[test]
+fn test_marked_local_reassigned_to_a_literal_reaches_a_checked_builtin() {
+    let out = compile_and_run(
+        r#"<?php
+if ($argc > 1) { $a = 42; } else { $a = "hello"; }
+$a = 99;
+echo strlen($a);"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// The same shape through the builtins whose lowering failed in OTHER ways: `strtoupper` failed
+/// EIR validation with an `OperandTypeMismatch { expected: "Str", actual: I64 }` rather than
+/// panicking, and `str_repeat` failed in the backend.
+#[test]
+fn test_marked_local_reassigned_to_a_literal_through_several_builtins() {
+    let out = compile_and_run(
+        r#"<?php
+if ($argc > 1) { $a = 42; } else { $a = "hello"; }
+$a = 99;
+echo str_repeat($a, 2), "|", strlen($a), "|", strtoupper($a), "|", gettype($a), "|";
+var_dump($a);"#,
+    );
+    assert_eq!(out, "9999|2|99|integer|int(99)\n");
+}
+
+/// The same shape inside a FUNCTION body, and read by the non-builtin consumers a propagated
+/// literal would also have narrowed: a `switch` subject, a comparison and an arithmetic operand.
+#[test]
+fn test_marked_local_reassigned_to_a_literal_inside_a_function_body() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $n) {
+    if ($n > 1) { $a = 42; } else { $a = "hello"; }
+    $a = 7;
+    return strlen($a) . "|" . strtoupper($a) . "|" . gettype($a);
+}
+echo f($argc), "\n";
+if ($argc > 1) { $c = 1; } else { $c = "x"; }
+$c = 3;
+switch ($c) { case 3: echo "three|"; break; default: echo "other|"; }
+echo ($c == 3 ? "eq" : "ne"), "|", $c + 1, "|";
+var_dump($c);"#,
+    );
+    assert_eq!(out, "1|7|integer\nthree|eq|4|int(3)\n");
+}
+
+/// The concat-widened form of the same shape.
+///
+/// This one is on THIS change's account rather than Task 6's: before string concatenation became
+/// exact marking evidence the program was a clean `cannot reassign $a from int to string` error,
+/// so widening the whitelist is what admitted it into the crash family in the first place.
+#[test]
+fn test_concat_marked_local_reassigned_to_a_literal_reaches_a_checked_builtin() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 0;
+if ($argc > 1) { $a = "s" . $argc; }
+$a = 5;
+echo strlen($a), "|", strtoupper($a), "|";
+var_dump($a);"#,
+    );
+    assert_eq!(out, "1|5|int(5)\n");
 }
 
 /// Only the CLOSURE's `$m` is marked here; the enclosing one is `mixed` by ordinary inference.

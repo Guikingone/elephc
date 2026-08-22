@@ -27,7 +27,7 @@ mod fold;
 mod propagate;
 pub mod reachability;
 
-use binding_decisions::with_local_binding_decision_spans;
+use binding_decisions::{with_local_binding_decision_spans, with_mixed_storage_locals};
 use control::*;
 use effect_analysis::{
     collect_instance_dispatch_metadata, compute_program_callable_effects, method_effect_key,
@@ -92,9 +92,15 @@ pub fn fold_constants(program: Program) -> Program {
 }
 
 /// Propagates scalar constants across statements and control flow.
+///
+/// `mixed_storage_locals` comes from `CheckResult::mixed_storage_local_names()`. It is a REQUIRED
+/// argument for the same reason `eliminate_dead_code`'s span set is: a caller that silently passed
+/// an empty set would re-enable substitution on a local the checker boxed, and the divergence
+/// surfaces as a compiler PANIC inside a checked builtin's lowering — nothing a reader would trace
+/// back to this call. The test tree shadows this with a no-set wrapper for hand-built ASTs.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
-pub fn propagate_constants(program: Program) -> Program {
-    PostTypecheckOptimizer::new(&program).propagate(program)
+pub fn propagate_constants(program: Program, mixed_storage_locals: HashSet<String>) -> Program {
+    PostTypecheckOptimizer::new(&program).propagate(program, mixed_storage_locals)
 }
 
 /// Normalizes control flow structures (ifs, switches, try/catch) for easier optimization.
@@ -199,7 +205,14 @@ impl PostTypecheckOptimizer {
     }
 
     /// Propagates constants while using the shared callable-effect summary.
-    pub fn propagate(&self, program: Program) -> Program {
+    ///
+    /// `mixed_storage_locals` is `CheckResult::mixed_storage_local_names()`: the locals the
+    /// checker's pre-scan compiled as boxed `mixed` frame storage. It is a REQUIRED argument for
+    /// the same reason `eliminate_dead_code`'s span set is — a caller that silently passed an
+    /// empty set would re-enable substitution on a boxed local, and the divergence surfaces as a
+    /// compiler PANIC in a checked builtin's fast path rather than as anything a reader would
+    /// connect back to this call.
+    pub fn propagate(&self, program: Program, mixed_storage_locals: HashSet<String>) -> Program {
         reset_reference_volatile();
         // Request superglobals are writable from any scope under `--web`, so they
         // can never carry propagated facts.
@@ -210,9 +223,11 @@ impl PostTypecheckOptimizer {
         // known-pure user callables stop clearing the environment. Substitution
         // into by-ref argument positions is masked by `propagate_args`, which
         // keeps those arguments lvalues.
-        with_callable_effect_analysis(&self.callable_effects, || {
-            with_by_ref_signatures(self.by_ref_signatures.clone(), || {
-                propagate_block(program, HashMap::new()).0
+        with_mixed_storage_locals(mixed_storage_locals, || {
+            with_callable_effect_analysis(&self.callable_effects, || {
+                with_by_ref_signatures(self.by_ref_signatures.clone(), || {
+                    propagate_block(program, HashMap::new()).0
+                })
             })
         })
     }
@@ -229,8 +244,9 @@ impl PostTypecheckOptimizer {
 
     /// Eliminates dead code using the shared callable-effect summary.
     ///
-    /// `binding_decision_spans` is the union of `CheckResult::local_bind_kill_sites` and
-    /// `local_retype_sites`. DCE's tail-sinking is the one post-typecheck pass that CLONES
+    /// `binding_decision_spans` is the union of the checker's three span-keyed local-binding
+    /// decision maps — `CheckResult::local_bind_kill_sites`, `local_retype_sites` and
+    /// `mixed_storage_store_sites`. DCE's tail-sinking is the one post-typecheck pass that CLONES
     /// statements, and a clone carries the original's span — which would hand one span-keyed
     /// checker decision to two syntactic sites. Passing the spans in lets the pass keep those
     /// statements singular; see `control::dce::binding_decisions`.

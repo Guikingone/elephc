@@ -156,6 +156,20 @@ impl CheckResult {
             .copied()
             .collect()
     }
+
+    /// Every local NAME the mixed-storage marking compiled as boxed `mixed` frame storage.
+    ///
+    /// Handed to the post-typecheck constant propagator, which must not replace a read of one of
+    /// these with a literal: the local is bound `mixed` for its whole frame and EIR lowering
+    /// stores and reads it through that one type, so a literal of a concrete type hands lowering a
+    /// view the checker never approved. See `optimize::binding_decisions`.
+    ///
+    /// This is the NAMES, not the spans, because the consumer is name-keyed. It is also a
+    /// program-wide union rather than per-body: the AST passes have no body identity to key on,
+    /// and over-approximating only costs constant propagation on a name some other body boxed.
+    pub fn mixed_storage_local_names(&self) -> HashSet<String> {
+        self.mixed_storage_store_sites.values().cloned().collect()
+    }
 }
 
 /// Runs type checking using the host platform (auto-detected from the build environment).
