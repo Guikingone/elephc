@@ -150,6 +150,15 @@ impl Checker {
                 value_by_ref,
                 body,
             } => {
+                // `foreach ($arr as &$v)` takes a reference into each element, so the ITERABLE
+                // is reference-aliased for the rest of the body and its binding can no longer
+                // be killed or re-bound — releasing its storage would strand the element
+                // references. `$v` itself needs no marking: it is bound inside the loop, so the
+                // conditional-depth rule already excludes it. Recorded before the iterable is
+                // inferred so an iterable that fails to type is still treated as aliased.
+                if *value_by_ref {
+                    self.record_reference_alias_root(array);
+                }
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
                 if let PhpType::Array(elem_ty) = &arr_ty {
                     if let Some(k) = key_var {

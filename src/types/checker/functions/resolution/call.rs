@@ -382,6 +382,13 @@ impl Checker {
                 param_types.push((decl.params[arg_idx].clone(), ty));
                 arg_idx += 1;
             } else {
+                // A by-REFERENCE variadic (`&...$xs`) binds every collected argument by
+                // reference, so each names a local that is aliased for the rest of the body.
+                // `decl.params` excludes the variadic, which is why this cannot be handled by
+                // the regular-parameter branch above.
+                if decl.variadic_by_ref {
+                    self.record_reference_alias_root(arg);
+                }
                 // Argument collected into the variadic parameter: enforce its declared element
                 // type (`int ...$xs`) against every passed argument, matching PHP.
                 if let Some(declared) = &decl.variadic_type {

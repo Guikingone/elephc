@@ -188,15 +188,28 @@ impl Checker {
                         )?;
                     }
                 }
-            } else if let (Some(vname), Some(expected_ty)) =
-                (effective_sig.variadic.as_ref(), variadic_elem_ty.as_ref())
-            {
-                self.require_compatible_arg_type(
-                    expected_ty,
-                    &actual_ty,
-                    arg.span,
-                    &format!("Function '{}' variadic parameter ${}", name, vname),
-                )?;
+            } else {
+                // An argument collected by a by-REFERENCE variadic (`&...$xs`) is bound by
+                // reference exactly like a regular by-ref parameter's. Its flag sits at
+                // `regular_param_count` in `ref_params` (the signature's last slot).
+                if effective_sig
+                    .ref_params
+                    .get(regular_param_count)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    self.record_reference_alias_root(arg);
+                }
+                if let (Some(vname), Some(expected_ty)) =
+                    (effective_sig.variadic.as_ref(), variadic_elem_ty.as_ref())
+                {
+                    self.require_compatible_arg_type(
+                        expected_ty,
+                        &actual_ty,
+                        arg.span,
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                    )?;
+                }
             }
             param_idx += 1;
         }

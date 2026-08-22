@@ -1387,3 +1387,39 @@ fn test_branch_created_list_unpack_target_not_killable() {
         "cannot reassign",
     );
 }
+
+/// A local passed to a by-REFERENCE variadic (`&...$xs`) is aliased just like one bound to a
+/// regular by-ref parameter: the callee can write back through the collected slot.
+#[test]
+fn test_by_ref_variadic_call_arg_not_killable() {
+    expect_error(
+        "<?php function f(&...$xs) { $xs[0] = 9; } $a = 1; f($a); unset($a); $a = \"s\";",
+        "cannot reassign",
+    );
+}
+
+/// A by-VALUE variadic collects copies, so its arguments stay kill-eligible.
+#[test]
+fn test_by_value_variadic_call_arg_stays_killable() {
+    expect_no_error(
+        "<?php function f(...$xs) { return count($xs); } $a = 1; f($a); unset($a); $a = \"s\"; echo $a;",
+    );
+}
+
+/// `foreach ($arr as &$v)` takes references into `$arr`'s elements, so `$arr` is aliased and
+/// its binding can no longer be killed.
+#[test]
+fn test_by_ref_foreach_iterable_not_killable() {
+    expect_error(
+        "<?php $arr = [1, 2, 3]; foreach ($arr as &$v) { } unset($arr); $arr = \"gone\";",
+        "cannot reassign",
+    );
+}
+
+/// A by-VALUE `foreach` iterates copies, so the iterable stays kill-eligible.
+#[test]
+fn test_by_value_foreach_iterable_stays_killable() {
+    expect_no_error(
+        "<?php $arr = [1, 2, 3]; foreach ($arr as $v) { } unset($arr); $arr = \"gone\"; echo $arr;",
+    );
+}
