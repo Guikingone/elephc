@@ -867,11 +867,11 @@ fn test_error_stream_socket_recvfrom_address_not_variable() {
 /// the SLOT a string wherever the runtime writes one, and it is the same diagnostic every other
 /// by-reference output gives for the same mistake.
 #[test]
-fn test_error_stream_socket_recvfrom_address_not_string() {
-    expect_error(
-        "<?php $n = 1; stream_socket_recvfrom(STDIN, 32, 0, $n);",
-        "cannot reassign $n from int to string",
-    );
+fn test_error_stream_socket_recvfrom_address_accepts_a_retyped_variable() {
+    // php lets a by-reference out-parameter change what its caller's variable holds: measured,
+    // `$n = 1; stream_socket_recvfrom(STDIN, 32, 0, $n);` draws no complaint about `$n` at all.
+    // This asserted a refusal instead, which is what elephc used to do.
+    expect_no_error("<?php $n = 1; stream_socket_recvfrom(STDIN, 32, 0, $n);");
 }
 
 /// Verifies the invalid-call diagnostic for error stream socket get name wrong args.

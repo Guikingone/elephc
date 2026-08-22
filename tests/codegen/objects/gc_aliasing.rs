@@ -374,9 +374,12 @@ $rows = [[1], $inner, [2, 3]];
 $filtered = array_filter($rows, "keep_pair");
 unset($rows);
 unset($inner);
-echo $filtered[0][1] . "|" . $filtered[1][0];
+echo ($filtered[1][1] ?? "-") . "|" . ($filtered[2][0] ?? "-");
 "#,
     );
+    // php's array_filter() PRESERVES keys, so the survivors of a three-element list are at 1 and
+    // 2, not 0 and 1. Measured: `php -n` prints the same `11|2` through those keys, and answers
+    // `array_keys()` = [1, 2].
     assert_eq!(out, "11|2");
 }
 

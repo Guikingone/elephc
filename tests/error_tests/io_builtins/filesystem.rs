@@ -253,7 +253,7 @@ fn test_error_chdir_wrong_args() {
 /// Verifies `glob()` rejects zero arguments with arity error.
 #[test]
 fn test_error_glob_wrong_args() {
-    expect_error("<?php glob();", "glob() takes exactly 1 argument");
+    expect_error("<?php glob();", "glob() takes 1 or 2 arguments");
 }
 
 /// Verifies `sys_get_temp_dir()` rejects arguments with arity error.

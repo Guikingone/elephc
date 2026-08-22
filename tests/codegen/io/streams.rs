@@ -10430,26 +10430,29 @@ fclose($h);
     assert_eq!(out, "integer=0");
 }
 
-/// Pins that a by-ref out-parameter whose variable already holds an incompatible type reports
-/// elephc's ordinary reassignment error.
+/// Pins that a by-ref out-parameter writes into a variable that already held another type.
 ///
 /// The write used to go straight into the caller's slot without consulting its representation:
 /// an `int` landing in a `string` slot overwrote the pointer half with a small integer, and the
-/// program segfaulted on the next read. Binding the out-parameter through the normal assignment
-/// merge is what turns that silent corruption into a diagnostic.
+/// program segfaulted on the next read. That is what the guard in `store_int_output_to_local`
+/// exists for, and it has not loosened — what changed is that the SLOT now widens.
+///
+/// A scalar reassignment widens the local, so the checker binds `$would` as boxed, and the
+/// lowering gives it that storage from its FIRST store (`widened_scalar_locals`) rather than at
+/// the write, which a by-reference write could not do: it emits no store for a lazy widening to
+/// hook onto. MEASURED: `php -n` 8.5.6 prints `int(0)`.
 #[test]
-fn test_by_ref_out_parameter_rejects_an_incompatible_variable() {
-    let error = compile_expect_type_error(
+fn test_by_ref_out_parameter_writes_into_a_widened_variable() {
+    let out = compile_and_run(
         r#"<?php
 $would = "untouched";
 $h = fopen("php://memory", "r+");
 flock($h, LOCK_SH, $would);
+var_dump($would);
+fclose($h);
 "#,
     );
-    assert!(
-        error.contains("cannot reassign $would from string to int"),
-        "expected a reassignment diagnostic, got: {error}"
-    );
+    assert_eq!(out, "int(0)\n");
 }
 
 /// Verifies `fopen()` honours a `php://` scheme in a path built at RUN TIME, not only in a

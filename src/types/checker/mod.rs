@@ -272,6 +272,9 @@ pub(crate) struct Checker {
     /// already visits every expression with a typed environment, so no second AST walk is
     /// needed. See `crate::ir_lower::context::LoweringContext::boxed_incdec_storage_type`.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// `(function-like scope, local name)` pairs for locals a reassignment widened across scalar
+    /// types, so EIR lowering gives them boxed storage from their first store.
+    pub widened_scalar_locals: HashSet<(String, String)>,
 }
 
 /// Records an access violation that must lower to a catchable `Error` throw.
@@ -385,6 +388,7 @@ pub fn check_types(
         builtin_call_types: checker.builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,
+        widened_scalar_locals: checker.widened_scalar_locals,
     })
 }
 

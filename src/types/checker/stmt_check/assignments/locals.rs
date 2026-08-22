@@ -747,7 +747,7 @@ fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a 
 /// The merge operation supports widening (e.g., `Int | Float` from separate assignments)
 /// and preserves type specificity where possible.
 pub(crate) fn merge_local_assignment_type(
-    checker: &Checker,
+    checker: &mut Checker,
     name: &str,
     ty: &PhpType,
     span: Span,
@@ -755,6 +755,15 @@ pub(crate) fn merge_local_assignment_type(
 ) -> Result<(), CompileError> {
     if let Some(existing) = env.get(name) {
         let merged_ty = checker.merged_assignment_type(existing, ty);
+        // A scalar reassignment widens the slot, and the slot type is a whole-frame property:
+        // the lowering has to know before it declares the local, not when the write happens.
+        if matches!(merged_ty, Some(crate::types::PhpType::Mixed))
+            && !matches!(existing, crate::types::PhpType::Mixed)
+            && !matches!(ty, crate::types::PhpType::Mixed)
+        {
+            let scope = checker.current_loop_storage_scope.clone();
+            checker.widened_scalar_locals.insert((scope, name.to_string()));
+        }
         if merged_ty.is_none() {
             return Err(CompileError::new(
                 span,

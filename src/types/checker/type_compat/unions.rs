@@ -231,6 +231,16 @@ impl Checker {
                 _ => PhpType::Resource(None),
             });
         }
+        // EXPERIMENT: widen a scalar reassignment to Mixed instead of refusing it.
+        if matches!(
+            existing,
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
+        ) && matches!(
+            new_ty,
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
+        ) {
+            return Some(PhpType::Mixed);
+        }
         None
     }
 

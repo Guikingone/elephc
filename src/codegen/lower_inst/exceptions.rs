@@ -651,16 +651,27 @@ fn emit_raising_builtin_trace_frame(ctx: &mut FunctionContext<'_>) {
 fn emit_trace_argument(ctx: &mut FunctionContext<'_>, operand: crate::ir::ValueId) -> Result<()> {
     use crate::types::PhpType;
 
-    // The runtime tags `__rt_trace_arg` branches on: 0 int, 1 string, 2 float, 3 bool, 8 null,
-    // 9 resource. A `Mixed` operand carries its own tag and is unboxed instead of guessed at.
+    // The runtime tags `__rt_trace_arg` branches on: 0 int, 1 string, 2 float, 3 bool, 4 indexed
+    // array, 5 hash, 6 object, 8 null, 9 resource. A `Mixed` operand carries its own tag and is
+    // unboxed instead of guessed at.
+    //
+    // Every shape is named. A blanket `_ => 9` sent arrays and objects through the RESOURCE
+    // branch, which renders `Resource id #N` where php renders `Array` — and hands
+    // `__rt_resource_id_of` a pointer that is not a resource handle.
     let tag = match ctx.value_php_type(operand)?.codegen_repr() {
         PhpType::Str => 1,
         PhpType::Float => 2,
         PhpType::Bool | PhpType::False => 3,
         PhpType::Void | PhpType::Never => 8,
         PhpType::Int => 0,
+        PhpType::Array(_) => 4,
+        PhpType::AssocArray { .. } => 5,
+        PhpType::Object(_) => 6,
+        PhpType::Resource(_) | PhpType::Pointer(_) => 9,
         PhpType::Mixed => -1,
-        _ => 9,
+        // Anything else has no rendering php would recognise, so the frame stops here rather
+        // than printing a value invented for it.
+        _ => return Err(crate::codegen::CodegenIrError::unsupported("trace argument PHP type")),
     };
     ctx.load_value_to_result(operand)?;
     match ctx.emitter.target.arch {

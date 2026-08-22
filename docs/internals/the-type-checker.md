@@ -112,14 +112,33 @@ Declared boundaries are looser than plain reassignment. A `Mixed` value is accep
 
 `Checker::check_stmt` installs `Stmt::strict_types` on `Checker::strict_types` and restores the outer value afterwards, so the setting always reflects the file the *call site* was written in — matching PHP, where a strict file calling into a coercive one is strict and a coercive file calling a function declared in a strict one is not. `Checker::require_strict_types_param_binding` then runs *before* `types_compatible`, because the widenings PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible` accepts on its own. `Checker::with_internal_callback_binding` suspends the flag while validating a callback that an internal function invokes (`array_map`, `usort`, …), which PHP calls from an engine frame that never carries the directive.
 
-This means elephc rejects code that PHP would allow:
+A reassignment ACROSS scalar types is allowed, and widens the local:
 
 ```php
 $x = 42;
-$x = "hello";  // ← Type error: cannot reassign $x from Int to Str
+$x = "hello";  // ← the slot widens to a runtime-tagged value, as PHP has
+var_dump($x);  // string(5) "hello", byte for byte what `php -n` prints
 ```
 
-This is intentional — it lets the compiler know exactly what `$x` is at every point, without needing runtime type tags.
+This used to be rejected, and the rejection was described here as intentional: it let the compiler
+know exactly what `$x` was at every point, without needing runtime type tags. The trade is now made
+per SLOT instead of per program — only a local that is actually reassigned across scalar types
+carries a tag, and every other local keeps its concrete representation.
+
+Widening does not extend to a change of SHAPE. `$x = "a"; $x = [1];` is still refused: a scalar
+slot and a container are not two spellings of one storage.
+
+```php
+$x = "a";
+$x = [1];      // ← Type error: cannot reassign $x from string to array<int>
+```
+
+One consequence is worth naming. A by-reference out-parameter binds through the same merge, so
+`$would = "untouched"; flock($h, LOCK_SH, $would);` passes the checker — but the IR local keeps the
+type its first assignment gave it, because a by-reference write emits no store for that type to
+follow, and the backend refuses with `by-ref integer output written into a string slot`. PHP
+answers `int(0)`. That is a diagnosed divergence rather than a silent one: the guard exists because
+an int written into a string slot once overwrote the pointer half and segfaulted on the next read.
 
 ## Statement checks
 
@@ -594,9 +613,10 @@ This is passed to the [code generator](the-codegen.md), which uses it to:
 ## Error examples
 
 ```php
-$x = 42;
-$x = "hello";
-// Error: Type error: cannot reassign $x from Int to Str
+$x = "a";
+$x = [1];
+// Error: Type error: cannot reassign $x from string to array<int>
+// (a reassignment between two SCALARS widens the slot instead — see above)
 
 strlen(42);
 // Error: strlen() expects string, got Int

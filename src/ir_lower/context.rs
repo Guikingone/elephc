@@ -209,6 +209,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// target. Those locals get boxed `Mixed` frame storage from their first store, so
     /// every read of the slot is already a boxed load instead of an owned string detach.
     pub string_incdec_locals: &'m HashSet<(String, String)>,
+    /// Locals a scalar reassignment widened, which need boxed storage from their first store.
+    pub widened_scalar_locals: &'m HashSet<(String, String)>,
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
@@ -288,6 +290,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         builtin_call_types: &'m HashMap<Span, PhpType>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
+        widened_scalar_locals: &'m HashSet<(String, String)>,
         loop_storage_scope: String,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         top_level_env: TypeEnv,
@@ -322,6 +325,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             builtin_call_types,
             loop_storage_types,
             string_incdec_locals,
+            widened_scalar_locals,
             loop_storage_scope,
             constants: constants.clone(),
             top_level_env,
@@ -683,10 +687,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// first store — including the incoming-parameter store — keeps every access on the
     /// ordinary boxed-Mixed path instead.
     fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
-        if !matches!(php_type.codegen_repr(), PhpType::Str) {
+        let repr = php_type.codegen_repr();
+        let key = (self.loop_storage_scope.clone(), name.to_string());
+        // A local the checker widened across scalar types needs the same treatment for the same
+        // reason, and from any scalar rather than only from `Str`: an int written into a string
+        // slot overwrites its pointer half, and a by-reference out-parameter writes without ever
+        // emitting a store for a lazy widening to hook onto.
+        if matches!(
+            repr,
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
+        ) && self.widened_scalar_locals.contains(&key)
+        {
+            return PhpType::Mixed;
+        }
+        if !matches!(repr, PhpType::Str) {
             return php_type;
         }
-        let key = (self.loop_storage_scope.clone(), name.to_string());
         if self.string_incdec_locals.contains(&key) {
             return PhpType::Mixed;
         }

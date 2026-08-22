@@ -137,8 +137,14 @@ fn test_error_mixed_rejected_at_array_return_boundary() {
 /// Verifies that reassigning a typed variable to a different type is rejected.
 /// Input: `$x = 42; $x = "hello";` — `$x` is int, reassignment to string fails.
 #[test]
-fn test_error_type_mismatch_reassign() {
-    expect_error("<?php $x = 42; $x = \"hello\";", "cannot reassign $x");
+fn test_scalar_reassignment_widens_instead_of_refusing() {
+    // `$x = 42; $x = "hello"; var_dump($x);` prints `string(5) "hello"` on `php -n` 8.5.6. elephc
+    // refused it, which `docs/internals/the-type-checker.md` described as intentional; the slot
+    // now widens to a runtime-tagged value instead, and the program answers what php answers.
+    expect_no_error("<?php $x = 42; $x = \"hello\";");
+    expect_no_error("<?php $x = \"hello\"; $x = 42;");
+    // A container is a different question: widening a scalar slot is not widening a shape.
+    expect_error("<?php $x = \"a\"; $x = [1];", "cannot reassign $x");
 }
 
 /// Verifies that arithmetic on a string operand produces an error.

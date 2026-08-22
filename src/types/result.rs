@@ -90,6 +90,9 @@ pub struct CheckResult {
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
     /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// `(function-like scope, local name)` pairs for locals a reassignment widened across scalar
+    /// types, so EIR lowering can give them boxed storage from their first store.
+    pub widened_scalar_locals: HashSet<(String, String)>,
 }
 
 /// Runs type checking using the host platform (auto-detected from the build environment).
