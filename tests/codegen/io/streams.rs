@@ -17747,3 +17747,79 @@ foreach ([\json_decode('{"a":1}'), $heterogeneous[0]] as $value) {
         format!("{prefix}stdClass given|{prefix}App\\Deep\\Thing given|")
     );
 }
+
+
+/// Verifies the sibling context functions word their `$options` refusal the way php does.
+///
+/// The three differ, MEASURED on `php -n` 8.5.6: `stream_context_get_default()` declares `?array`
+/// and accepts null, `stream_context_set_default()` declares `array` and refuses it, and each
+/// names ITSELF in the message. The class name is there too, so a declared object is refused with
+/// php's TypeError rather than with the ValueError about the options FORM, which is what elephc
+/// used to answer — a different error, for a different mistake.
+///
+/// The first values arrive through `json_decode()` and a heterogeneous array, which makes them
+/// boxed `Mixed`; the last two are DECLARED, which is the arm the boxed path cannot reach.
+#[test]
+fn test_default_context_options_refusals_carry_each_functions_wording() {
+    let out = compile_and_run(
+        r####"<?php
+class Thing
+{
+}
+
+foreach ([json_decode("1"), json_decode("null"), [new Thing(), 1][0]] as $value) {
+    try { stream_context_get_default($value); echo "get=ok|"; }
+    catch (Throwable $t) { echo "get=", $t->getMessage(), "|"; }
+    try { stream_context_set_default($value); echo "set=ok|"; }
+    catch (Throwable $t) { echo "set=", $t->getMessage(), "|"; }
+}
+try { stream_context_set_default(new Thing()); echo "declared=ok|"; }
+catch (Throwable $t) { echo "declared=", $t->getMessage(), "|"; }
+try { stream_context_set_default(null); echo "null=ok|"; }
+catch (Throwable $t) { echo "null=", $t->getMessage(), "|"; }
+"####,
+    );
+    let get = "stream_context_get_default(): Argument #1 ($options) must be of type ?array, ";
+    let set = "stream_context_set_default(): Argument #1 ($options) must be of type array, ";
+    assert_eq!(
+        out,
+        format!(
+            "get={get}int given|set={set}int given|\
+             get=ok|set={set}null given|\
+             get={get}Thing given|set={set}Thing given|\
+             declared={set}Thing given|null={set}null given|"
+        )
+    );
+}
+
+/// Verifies `stream_context_set_options()` carries none of the singular spelling's deprecation.
+///
+/// php 8.3 added the plural name AND deprecated the two-argument singular one in the same release,
+/// so the notice exists to send callers to the plural. elephc printed it for both, because the two
+/// share a lowering that decided from the ARITY — and both are two-argument calls.
+#[test]
+fn test_the_plural_context_set_options_is_not_deprecated() {
+    let out = compile_and_run_capture(
+        r####"<?php
+$c = stream_context_create();
+stream_context_set_options($c, ["http" => ["method" => "POST"]]);
+echo json_encode(stream_context_get_options($c)), "|";
+stream_context_set_option($c, ["http" => ["method" => "PUT"]]);
+echo json_encode(stream_context_get_options($c)), "|";
+"####,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"http\":{\"method\":\"POST\"}}|{\"http\":{\"method\":\"PUT\"}}|"
+    );
+    // ONE notice, from the singular call only.
+    assert_eq!(
+        out.diagnostics
+            .matches("Deprecated: Calling stream_context_set_option()")
+            .count(),
+        1,
+        "expected exactly the singular spelling's notice, got diagnostics={}",
+        out.diagnostics
+    );
+}

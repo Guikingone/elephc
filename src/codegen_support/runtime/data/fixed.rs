@@ -1864,7 +1864,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _meta_wrapper_phar\n_meta_wrapper_phar:\n    .ascii \"phar\"\n");
     out.push_str(".globl _meta_wrapper_php\n_meta_wrapper_php:\n    .ascii \"PHP\"\n");
     out.push_str(".globl _meta_wrapper_data\n_meta_wrapper_data:\n    .ascii \"RFC2397\"\n");
-    out.push_str(".globl _meta_wrapper_zlib\n_meta_wrapper_zlib:\n    .ascii \"compress.zlib\"\n");
+    // php-src labels the wrapper `ZLIB`, not by the `compress.zlib://` scheme that reaches
+    // it — the same way `data:` is labelled `RFC2397`. MEASURED on `php -n` 8.5.6.
+    out.push_str(".globl _meta_wrapper_zlib\n_meta_wrapper_zlib:\n    .ascii \"ZLIB\"\n");
     out.push_str(".globl _meta_wrapper_bzip2\n_meta_wrapper_bzip2:\n    .ascii \"compress.bzip2\"\n");
     out.push_str(".globl _meta_wrapper_glob\n_meta_wrapper_glob:\n    .ascii \"glob\"\n");
     out.push_str(".globl _meta_wrapper_user\n_meta_wrapper_user:\n    .ascii \"user-space\"\n");

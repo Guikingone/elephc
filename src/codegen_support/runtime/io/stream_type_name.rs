@@ -45,6 +45,109 @@ pub fn emit_stream_type_name(emitter: &mut Emitter) {
         Arch::X86_64 => emit_stream_type_name_x86_64(emitter),
     }
     emit_stream_seek_unsupported(emitter);
+    emit_stream_lock_unsupported(emitter);
+}
+
+/// Emits `__rt_stream_lock_unsupported(handle) -> 1` when the WRAPPER has no lock op.
+///
+/// php-src's `flock()` goes through `php_stream_lock`, which only a stream whose ops carry a
+/// locking one answers. MEASURED on `php -n` 8.5.6:
+///
+/// ```text
+/// php://memory  php://temp  php://output  php://input  data://   => false
+/// a plain file  php://stdin  php://stdout  php://fd/N  zlib      => true
+/// ```
+///
+/// The four `php://` sub-streams that refuse are the ones that are not descriptors: two hold their
+/// bytes in memory and two are the output and input layers. elephc backs the first two with
+/// `tmpfile()` — a real descriptor, which locks — so the refusal cannot come from the backend and
+/// is read off the recorded wrapper identity instead, the same way the zip wrapper's missing seek
+/// op is. The sub-wrapper is told apart by the byte after `php://`, as `__rt_stream_type_name`
+/// does: `stdin`, `stdout`, `stderr`, `fd` and `filter` all reach a real descriptor and lock.
+fn emit_stream_lock_unsupported(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: does this stream's WRAPPER refuse to lock at all ---");
+    emitter.label_global("__rt_stream_lock_unsupported");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #16");                             // frame for the saved linkage
+            emitter.instruction("stp x29, x30, [sp, #0]");                      // save frame pointer and return address
+            emitter.instruction("mov x29, sp");                                 // establish the helper frame pointer
+            emitter.instruction("bl __rt_stream_state");                        // resolve the owning stream state
+            emitter.instruction("cbz x0, __rt_slu_no");                         // a stale handle refuses nothing here
+            emitter.instruction(&format!(
+                "ldr x9, [x0, #{STREAM_WRAPPER_ID_OFFSET}]"
+            ));                                                                 // which wrapper opened it
+            emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_DATA}"));        // a decoded literal has no descriptor
+            emitter.instruction("b.eq __rt_slu_yes");
+            emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_PHP}"));
+            emitter.instruction("b.ne __rt_slu_no");                            // every other wrapper reaches a descriptor
+            emitter.instruction(&format!("ldr x10, [x0, #{STREAM_URI_PTR_OFFSET}]")); // the recorded URI
+            emitter.instruction(&format!("ldr x11, [x0, #{STREAM_URI_LEN_OFFSET}]")); // and its length
+            emitter.instruction("cbz x10, __rt_slu_no");                        // no URI: keep the descriptor's answer
+            emitter.instruction("cmp x11, #7");                                 // "php://" plus the byte that names it
+            emitter.instruction("b.lt __rt_slu_no");
+            emitter.instruction("ldrb w12, [x10, #6]");                         // the first byte of the php:// wrapper name
+            emitter.instruction("cmp w12, #0x6D");                              // 'm' as in memory
+            emitter.instruction("b.eq __rt_slu_yes");
+            emitter.instruction("cmp w12, #0x74");                              // 't' as in temp
+            emitter.instruction("b.eq __rt_slu_yes");
+            emitter.instruction("cmp w12, #0x6F");                              // 'o' as in output
+            emitter.instruction("b.eq __rt_slu_yes");
+            emitter.instruction("cmp w12, #0x69");                              // 'i' as in input
+            emitter.instruction("b.eq __rt_slu_yes");
+            emitter.label("__rt_slu_no");
+            emitter.instruction("mov x0, #0");                                  // stdin, stdout, stderr, fd, filter and every other wrapper
+            emitter.instruction("b __rt_slu_ret");
+            emitter.label("__rt_slu_yes");
+            emitter.instruction("mov x0, #1");                                  // php has no descriptor here, so flock() is false
+            emitter.label("__rt_slu_ret");
+            emitter.instruction("ldp x29, x30, [sp, #0]");                      // restore frame pointer and return address
+            emitter.instruction("add sp, sp, #16");                             // release the helper frame
+            emitter.instruction("ret");                                         // report whether locking is refused
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // establish the helper frame pointer
+            emitter.instruction("call __rt_stream_state");                      // resolve the owning stream state
+            emitter.instruction("test rax, rax");                               // a stale handle refuses nothing here
+            emitter.instruction("jz __rt_slu_no_x86");
+            emitter.instruction(&format!(
+                "mov r10, QWORD PTR [rax + {STREAM_WRAPPER_ID_OFFSET}]"
+            ));                                                                 // which wrapper opened it
+            emitter.instruction(&format!("cmp r10, {WRAPPER_ID_DATA}"));        // a decoded literal has no descriptor
+            emitter.instruction("je __rt_slu_yes_x86");
+            emitter.instruction(&format!("cmp r10, {WRAPPER_ID_PHP}"));
+            emitter.instruction("jne __rt_slu_no_x86");                         // every other wrapper reaches a descriptor
+            emitter.instruction(&format!(
+                "mov r11, QWORD PTR [rax + {STREAM_URI_PTR_OFFSET}]"
+            ));                                                                 // the recorded URI
+            emitter.instruction(&format!(
+                "mov rcx, QWORD PTR [rax + {STREAM_URI_LEN_OFFSET}]"
+            ));                                                                 // and its length
+            emitter.instruction("test r11, r11");                               // no URI: keep the descriptor's answer
+            emitter.instruction("jz __rt_slu_no_x86");
+            emitter.instruction("cmp rcx, 7");                                  // "php://" plus the byte that names it
+            emitter.instruction("jl __rt_slu_no_x86");
+            emitter.instruction("movzx r8d, BYTE PTR [r11 + 6]");               // the first byte of the php:// wrapper name
+            emitter.instruction("cmp r8d, 0x6D");                               // 'm' as in memory
+            emitter.instruction("je __rt_slu_yes_x86");
+            emitter.instruction("cmp r8d, 0x74");                               // 't' as in temp
+            emitter.instruction("je __rt_slu_yes_x86");
+            emitter.instruction("cmp r8d, 0x6F");                               // 'o' as in output
+            emitter.instruction("je __rt_slu_yes_x86");
+            emitter.instruction("cmp r8d, 0x69");                               // 'i' as in input
+            emitter.instruction("je __rt_slu_yes_x86");
+            emitter.label("__rt_slu_no_x86");
+            emitter.instruction("xor eax, eax");                                // stdin, stdout, stderr, fd, filter and every other wrapper
+            emitter.instruction("jmp __rt_slu_ret_x86");
+            emitter.label("__rt_slu_yes_x86");
+            emitter.instruction("mov rax, 1");                                  // php has no descriptor here, so flock() is false
+            emitter.label("__rt_slu_ret_x86");
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer
+            emitter.instruction("ret");                                         // report whether locking is refused
+        }
+    }
 }
 
 /// Emits `__rt_stream_seek_unsupported(handle) -> 1` when the WRAPPER has no seek op.

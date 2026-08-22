@@ -1801,3 +1801,34 @@ var_dump(isset($neverIndexed["k"]));
     );
     assert_eq!(out, "bool(false)\n");
 }
+
+
+/// Verifies a string-keyed array of resources stores resources, not integers.
+///
+/// `codegen_repr()` collapses `Resource` to `Int` — one machine word each — and the hash's value
+/// TAG was chosen through that collapse, so `["a" => STDOUT]` became a table of integers.
+///
+/// The declared type covers it up on the read side: `$a["a"]` answered "resource" out of a table
+/// holding an int. `var_dump()` and foreach read the STORED tag, so both are here. An INDEXED
+/// array was never affected — it has its own `__rt_array_set_resource` path that stamps tag 9 —
+/// which is why the list case is pinned beside the hash case.
+#[test]
+fn test_string_keyed_array_of_resources_stores_resources() {
+    let out = compile_and_run(
+        r####"<?php
+$assoc = ["out" => STDOUT];
+foreach ($assoc as $name => $handle) {
+    echo $name, "=", gettype($handle), ",", var_export(is_resource($handle), true), "|";
+}
+$list = [STDOUT];
+foreach ($list as $handle) {
+    echo "list=", gettype($handle), "|";
+}
+var_dump(["out" => STDOUT]);
+"####,
+    );
+    assert_eq!(
+        out,
+        "out=resource,true|list=resource|array(1) {\n  [\"out\"]=>\n  resource(2) of type (stream)\n}\n"
+    );
+}

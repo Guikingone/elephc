@@ -200,19 +200,82 @@ fn emit_merge_loaded_stream_context_options_into_scratch(
     }
 }
 
+/// Which php function's `$options` argument is being published, and how php words its refusal.
+///
+/// php composes the message from the FUNCTION NAME, the ARGUMENT NUMBER and the declared type, and
+/// all three vary across the family — MEASURED on `php -n` 8.5.6:
+///
+/// ```text
+/// stream_context_create(1)          ... Argument #1 ($options) must be of type ?array, int given
+/// stream_context_get_default(1)     ... Argument #1 ($options) must be of type ?array, int given
+/// stream_context_set_default(1)     ... Argument #1 ($options) must be of type array, int given
+/// stream_context_set_default(null)  ... Argument #1 ($options) must be of type array, null given
+/// stream_context_get_default(null)  accepted
+/// ```
+#[derive(Clone, Copy)]
+pub(super) struct StreamContextOptionsParam {
+    /// The php function name, as it appears at the head of the message.
+    function: &'static str,
+    /// The 1-based argument position php prints.
+    argument: u32,
+    /// Whether php declares `?array` rather than `array`, which decides null ALONE.
+    accepts_null: bool,
+}
+
+impl StreamContextOptionsParam {
+    /// `stream_context_create(?array $options = null)`.
+    pub(super) const CREATE: Self = Self {
+        function: "stream_context_create",
+        argument: 1,
+        accepts_null: true,
+    };
+    /// `stream_context_get_default(?array $options = null)`.
+    pub(super) const GET_DEFAULT: Self = Self {
+        function: "stream_context_get_default",
+        argument: 1,
+        accepts_null: true,
+    };
+    /// `stream_context_set_default(array $options)` — the one that refuses null.
+    pub(super) const SET_DEFAULT: Self = Self {
+        function: "stream_context_set_default",
+        argument: 1,
+        accepts_null: false,
+    };
+
+    /// Returns everything php prints before the offending value's own spelling.
+    fn type_error_prefix(self) -> String {
+        format!(
+            "{}(): Argument #{} ($options) must be of type {}array, ",
+            self.function,
+            self.argument,
+            if self.accepts_null { "?" } else { "" }
+        )
+    }
+}
+
 /// Stores an options heap pointer in the runtime's single stream-context slot.
 pub(super) fn store_stream_context_options(
     ctx: &mut FunctionContext<'_>,
     options: ValueId,
     clear_on_null: bool,
+    param: StreamContextOptionsParam,
 ) -> Result<()> {
     if matches!(
         ctx.raw_value_php_type(options)?.codegen_repr(),
         PhpType::Void | PhpType::Never
     ) {
+        if !param.accepts_null {
+            // `array $options`, not `?array`: php refuses the literal null too.
+            let prefix = param.type_error_prefix();
+            super::super::exceptions::emit_type_error(ctx, &format!("{prefix}null given"));
+            return Ok(());
+        }
         if clear_on_null {
             clear_stream_context_options(ctx);
         }
+        return Ok(());
+    }
+    if emit_declared_stream_context_options_refusal(ctx, options, param)? {
         return Ok(());
     }
     ctx.load_value_to_result(options)?;
@@ -226,7 +289,7 @@ pub(super) fn store_stream_context_options(
         PhpType::Mixed | PhpType::Union(_)
     );
     if boxed_mixed {
-        emit_unbox_stream_context_options(ctx);
+        emit_unbox_stream_context_options(ctx, param);
     }
     // php keeps only entries whose key is a STRING and whose value is an ARRAY, and raises a
     // catchable `ValueError` for anything else — `['ssl' => "abc"]`, `['ssl' => 1]`,
@@ -274,7 +337,10 @@ pub(super) fn store_stream_context_options(
 ///
 /// The tag rides on the stack across the shape guard because the guard is what decides whether a
 /// packed array is legal at all: an empty one is, a non-empty one is php's `ValueError`.
-fn emit_unbox_stream_context_options(ctx: &mut FunctionContext<'_>) {
+fn emit_unbox_stream_context_options(
+    ctx: &mut FunctionContext<'_>,
+    param: StreamContextOptionsParam,
+) {
     let hashed = ctx.next_label("sctx_mixed_hash");
     let done = ctx.next_label("sctx_mixed_done");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // tag, lo, hi
@@ -287,7 +353,7 @@ fn emit_unbox_stream_context_options(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("b.eq {}", done));
             ctx.emitter.instruction("cmp x9, #5");                              // runtime tag 5 = hash
             ctx.emitter.instruction(&format!("b.eq {}", hashed));
-            emit_stream_context_options_type_error_ladder(ctx, "x9", "x1");     // php refuses a scalar here
+            emit_stream_context_options_type_error_ladder(ctx, "x9", "x1", param); // php refuses a scalar here
             ctx.emitter.instruction("mov x0, xzr");                             // runtime tag 8 = null, the one shape `?array` accepts besides an array
             ctx.emitter.label(&hashed);
             ctx.emitter.label(&done);
@@ -302,7 +368,7 @@ fn emit_unbox_stream_context_options(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("je {}", done));
             ctx.emitter.instruction("cmp r10, 5");                              // runtime tag 5 = hash
             ctx.emitter.instruction(&format!("je {}", hashed));
-            emit_stream_context_options_type_error_ladder(ctx, "r10", "rdi");   // php refuses a scalar here
+            emit_stream_context_options_type_error_ladder(ctx, "r10", "rdi", param); // php refuses a scalar here
             ctx.emitter.instruction("xor eax, eax");                            // runtime tag 8 = null, the one shape `?array` accepts besides an array
             ctx.emitter.label(&hashed);
             ctx.emitter.label(&done);
@@ -330,9 +396,10 @@ fn emit_stream_context_options_type_error_ladder(
     ctx: &mut FunctionContext<'_>,
     tag_reg: &str,
     payload_reg: &str,
+    param: StreamContextOptionsParam,
 ) {
-    const PREFIX: &str =
-        "stream_context_create(): Argument #1 ($options) must be of type ?array, ";
+    let prefix = param.type_error_prefix();
+    let prefix = prefix.as_str();
     // Each arm below is emitted INLINE, with no branch over it: `emit_type_error` never returns
     // (it ends in a jump to `__rt_throw_current`), so the instruction after a raise is only ever
     // reached when that arm's tag did NOT match. The ladder reads as fall-through and is not.
@@ -351,7 +418,7 @@ fn emit_stream_context_options_type_error_ladder(
                 ctx.emitter.instruction(&format!("jne {}", skip));
             }
         }
-        super::super::exceptions::emit_type_error(ctx, &format!("{PREFIX}{word} given"));
+        super::super::exceptions::emit_type_error(ctx, &format!("{prefix}{word} given"));
         ctx.emitter.label(&skip);
     }
     // A bool names its own value.
@@ -370,10 +437,27 @@ fn emit_stream_context_options_type_error_ladder(
             ctx.emitter.instruction(&format!("jz {}", is_false));
         }
     }
-    super::super::exceptions::emit_type_error(ctx, &format!("{PREFIX}true given"));
+    super::super::exceptions::emit_type_error(ctx, &format!("{prefix}true given"));
     ctx.emitter.label(&is_false);
-    super::super::exceptions::emit_type_error(ctx, &format!("{PREFIX}false given"));
+    super::super::exceptions::emit_type_error(ctx, &format!("{prefix}false given"));
     ctx.emitter.label(&not_bool);
+
+    if !param.accepts_null {
+        // `array $options`: a boxed null is refused here exactly like a declared one above.
+        let not_null = ctx.next_label("sctx_opt_not_null");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {}, #8", tag_reg));       // runtime tag 8 = null
+                ctx.emitter.instruction(&format!("b.ne {}", not_null));
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {}, 8", tag_reg));        // runtime tag 8 = null
+                ctx.emitter.instruction(&format!("jne {}", not_null));
+            }
+        }
+        super::super::exceptions::emit_type_error(ctx, &format!("{prefix}null given"));
+        ctx.emitter.label(&not_null);
+    }
 
     // An object names its class, which no pre-baked message can carry.
     let not_object = ctx.next_label("sctx_opt_not_object");
@@ -393,6 +477,67 @@ fn emit_stream_context_options_type_error_ladder(
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");                      // the Throwable owns its message
     super::super::exceptions::emit_type_error_from_string_result(ctx);
     ctx.emitter.label(&not_object);
+}
+
+/// Refuses an `$options` operand whose DECLARED type can never be an options array.
+///
+/// The runtime ladder beside this one reads a boxed `Mixed`'s tag; a declared type is known while
+/// lowering, so each of these is one whole pre-baked message and no tag is read at all. Before it
+/// existed, `stream_context_set_default(new stdClass())` reached the SHAPE guard and came back as
+/// php's `ValueError` about the options FORM — a different error, for a different mistake.
+///
+/// A declared `Bool` is the one shape that still needs a runtime test: php prints the VALUE,
+/// `true` or `false`, and only the value knows which.
+///
+/// Returns `true` when it emitted a refusal, in which case the caller must emit nothing more.
+fn emit_declared_stream_context_options_refusal(
+    ctx: &mut FunctionContext<'_>,
+    options: ValueId,
+    param: StreamContextOptionsParam,
+) -> Result<bool> {
+    let prefix = param.type_error_prefix();
+    let word = match ctx.raw_value_php_type(options)?.codegen_repr() {
+        // The shapes that can legitimately hold an options map, or that carry a runtime tag the
+        // ladder reads instead.
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Mixed
+        | PhpType::Union(_)
+        | PhpType::Iterable
+        | PhpType::TaggedScalar => return Ok(false),
+        PhpType::Int => "int".to_string(),
+        PhpType::Float => "float".to_string(),
+        PhpType::Str => "string".to_string(),
+        PhpType::Resource(_) => "resource".to_string(),
+        PhpType::Callable => "Closure".to_string(),
+        PhpType::False => "false".to_string(),
+        PhpType::Object(class) => class,
+        PhpType::Bool => {
+            let is_false = ctx.next_label("sctx_opt_declared_false");
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            ctx.load_value_to_result(options)?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter
+                        .instruction(&format!("cbz {}, {}", result_reg, is_false));
+                }
+                Arch::X86_64 => {
+                    ctx.emitter
+                        .instruction(&format!("test {}, {}", result_reg, result_reg));
+                    ctx.emitter.instruction(&format!("jz {}", is_false));
+                }
+            }
+            super::super::exceptions::emit_type_error(ctx, &format!("{prefix}true given"));
+            ctx.emitter.label(&is_false);
+            super::super::exceptions::emit_type_error(ctx, &format!("{prefix}false given"));
+            return Ok(true);
+        }
+        // Anything else keeps the behaviour it had: this guard exists to REPLACE a wrong error
+        // with php's, not to turn an unlisted shape into a refusal it never had.
+        _ => return Ok(false),
+    };
+    super::super::exceptions::emit_type_error(ctx, &format!("{prefix}{word} given"));
+    Ok(true)
 }
 
 /// Loads an object's class name into the string-result pair, as `get_class()` would spell it.

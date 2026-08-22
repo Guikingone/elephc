@@ -182,7 +182,7 @@ pub(crate) fn lower_stream_context_create(
 ) -> Result<()> {
     ensure_arg_count_between(inst, "stream_context_create", 0, 2)?;
     if let Some(options) = inst.operands.first().copied() {
-        store_stream_context_options(ctx, options, true)?;
+        store_stream_context_options(ctx, options, true, StreamContextOptionsParam::CREATE)?;
     } else {
         clear_stream_context_options(ctx);
     }
@@ -323,7 +323,11 @@ pub(crate) fn lower_stream_context_get_default(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_arg_count_between(inst, "stream_context_get_default", 0, 1)?;
-    emit_default_stream_context(ctx, inst.operands.first().copied())?;
+    emit_default_stream_context(
+        ctx,
+        inst.operands.first().copied(),
+        StreamContextOptionsParam::GET_DEFAULT,
+    )?;
     store_if_result(ctx, inst)
 }
 
@@ -333,7 +337,11 @@ pub(crate) fn lower_stream_context_set_default(
     inst: &Instruction,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "stream_context_set_default", 1)?;
-    emit_default_stream_context(ctx, inst.operands.first().copied())?;
+    emit_default_stream_context(
+        ctx,
+        inst.operands.first().copied(),
+        StreamContextOptionsParam::SET_DEFAULT,
+    )?;
     store_if_result(ctx, inst)
 }
 
@@ -345,9 +353,10 @@ pub(crate) fn lower_stream_context_set_default(
 fn emit_default_stream_context(
     ctx: &mut FunctionContext<'_>,
     options: Option<ValueId>,
+    param: StreamContextOptionsParam,
 ) -> Result<()> {
     if let Some(options) = options {
-        store_stream_context_options(ctx, options, true)?;
+        store_stream_context_options(ctx, options, true, param)?;
     } else {
         clear_stream_context_options(ctx);
     }
@@ -442,17 +451,50 @@ fn stream_context_wrapper_is_array(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
 }
 
+/// Which of php's two names for the array form the caller wrote.
+///
+/// php 8.3 added `stream_context_set_options()` and deprecated the two-argument
+/// `stream_context_set_option()` in the same release. The two do identical work, so they share one
+/// lowering — but only one of them carries the notice, and only the NAME distinguishes them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StreamContextSetOptionSpelling {
+    /// `stream_context_set_option()`, whose two-argument form php deprecates.
+    Singular,
+    /// `stream_context_set_options()`, the replacement php recommends and never deprecates.
+    Plural,
+}
+
+impl StreamContextSetOptionSpelling {
+    /// Returns the php function name, which every diagnostic from this lowering must carry.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Singular => "stream_context_set_option",
+            Self::Plural => "stream_context_set_options",
+        }
+    }
+}
+
 /// Lowers `stream_context_set_option(context, options)` and the four-argument form.
+///
+/// `spelling` is the name the CALLER wrote. php has two: `stream_context_set_option()`, whose
+/// two-argument form is deprecated, and `stream_context_set_options()`, which php 8.3 added as the
+/// replacement and which is NOT deprecated. They share this lowering because they do the same
+/// work, but the arity alone cannot tell them apart — both are two-argument calls — so the notice
+/// followed the plural spelling too, and every use of the recommended name told the caller to use
+/// the recommended name.
 pub(crate) fn lower_stream_context_set_option(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    spelling: StreamContextSetOptionSpelling,
 ) -> Result<()> {
-    ensure_arg_count_between(inst, "stream_context_set_option", 2, 4)?;
+    ensure_arg_count_between(inst, spelling.name(), 2, 4)?;
     match inst.operands.len() {
         2 => {
             let context = expect_operand(inst, 0)?;
             let options = expect_operand(inst, 1)?;
-            emit_stream_context_set_option_two_arg_deprecation(ctx);
+            if spelling == StreamContextSetOptionSpelling::Singular {
+                emit_stream_context_set_option_two_arg_deprecation(ctx);
+            }
             // php prints the deprecation from the ARITY and only then judges the shape, so a
             // two-argument call with a STRING wrapper gets the notice AND the refusal. Only a
             // DECLARED string takes that branch: a `Mixed` operand is almost always an options

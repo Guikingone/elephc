@@ -529,10 +529,33 @@ pub(crate) fn lower_fdatasync(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `flock(stream, operation, would_block?)` through the libc flock wrapper.
+///
+/// php reaches `flock()` through `php_stream_lock`, which only a stream whose ops carry a locking
+/// one answers — so `php://memory`, `php://temp`, `php://output`, `php://input` and `data:` are
+/// all `false`, MEASURED on `php -n` 8.5.6. elephc backs the first two with `tmpfile()`, a REAL
+/// descriptor that locks, so `flock()` answered true for every one of them. The wrapper is asked
+/// first, before the descriptor is even resolved — the same order `ftell()` uses above.
 pub(crate) fn lower_flock(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "flock", 2, 3)?;
     let stream = expect_operand(inst, 0)?;
     let operation = expect_operand(inst, 1)?;
+    let unlockable_label = ctx.next_label("flock_wrapper_cannot_lock");
+    load_stream_handle_to_result(ctx, stream, "flock")?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // the handle owns the wrapper identity
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_lock_unsupported");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbnz x0, {}", unlockable_label));        // php has no descriptor to lock here
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // php has no descriptor to lock here
+            ctx.emitter
+                .instruction(&format!("jnz {}", unlockable_label));
+        }
+    }
     load_stream_fd_to_result(ctx, stream, "flock")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     require_int(ctx.load_value_to_result(operation)?.codegen_repr(), "flock operation")?;
@@ -585,6 +608,12 @@ pub(crate) fn lower_flock(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         ctx.emitter.instruction("mov rsi, rdx");                                // pass the lock operation to the wrapper method
     }
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_flock");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done_label)), // skip the wrapper refusal below
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)),
+    }
+    ctx.emitter.label(&unlockable_label);
+    emit_bool_result(ctx, false);                                               // php answers false, and warns about nothing
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
