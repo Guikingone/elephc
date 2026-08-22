@@ -284,52 +284,11 @@ pub(super) fn emit_closed_stream_type_error(ctx: &mut FunctionContext<'_>, funct
             function_name
         )
     };
-    let (label, len) = ctx.data.add_string(message.as_bytes());
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", 32);
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
-            abi::emit_load_symbol_to_reg(
-                ctx.emitter,
-                "x9",
-                "_spl_type_error_class_id",
-                0,
-            );
-            ctx.emitter.instruction("str x9, [x0]");                            // store the TypeError class id in the object header
-            abi::emit_symbol_address(ctx.emitter, "x9", &label);
-            ctx.emitter.instruction("str x9, [x0, #8]");                        // store the immutable diagnostic message pointer
-            ctx.emitter.instruction(&format!("mov x9, #{}", len));              // materialize the diagnostic byte length
-            ctx.emitter.instruction("str x9, [x0, #16]");                       // store the diagnostic message length
-            ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
-            abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
-            abi::emit_jump(ctx.emitter, "__rt_throw_current");
-        }
-        Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rax", 32);
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(
-                "mov r10, 0x{:x}",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(6)
-            ));                                                                 // canonical heap magic plus kind 6 throwable object
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
-            abi::emit_load_symbol_to_reg(
-                ctx.emitter,
-                "r10",
-                "_spl_type_error_class_id",
-                0,
-            );
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the TypeError class id in the object header
-            abi::emit_symbol_address(ctx.emitter, "r10", &label);
-            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the immutable diagnostic message pointer
-            ctx.emitter.instruction(&format!("mov r10, {}", len));              // materialize the diagnostic byte length
-            ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the diagnostic message length
-            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
-            abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
-            abi::emit_jump(ctx.emitter, "__rt_throw_current");
-        }
-    }
+    // The shared emitter, not a second copy of it. This used to hand-roll the same allocation,
+    // class id, message pair, code and `__rt_throw_current` jump — and the one thing it left out
+    // was the creation line, so php reported ` in FILE:LINE` for this TypeError and elephc
+    // reported nothing. A duplicate of the throw machinery could only ever drift from it.
+    super::super::exceptions::emit_type_error(ctx, &message);
 }
 
 /// Dispatches a stream TypeError to the concrete PHP type name from the Mixed tag.

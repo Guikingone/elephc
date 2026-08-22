@@ -384,6 +384,22 @@ impl<'a> FunctionContext<'a> {
         self.current_inst_promoted_ref_cells.clear();
     }
 
+    /// The `(file, line)` php would name for a throwable raised while lowering this instruction.
+    ///
+    /// php reports the CALL SITE for a builtin's `TypeError`/`ValueError` — `fopen("", "r")` on
+    /// line 4 reports line 4 — because the builtin IS the frame; there is no internal one to name.
+    /// Codegen-raised throwables used to carry no location at all on the theory that php would
+    /// name something else, which measuring disproved.
+    ///
+    /// `None` when the module has no source path or the instruction carries no span, which keeps
+    /// the previous bare wording for anything genuinely unattributable.
+    pub(super) fn current_source_location(&self) -> Option<(String, u32)> {
+        let file = self.module.source_path.clone()?;
+        let inst = self.current_inst?;
+        let span = self.function.instruction(inst)?.span?;
+        Some((file, span.line))
+    }
+
     /// Returns the frame flag that records whether this slot currently stores a cell pointer.
     pub(super) fn ref_cell_state_offset(&self, slot: LocalSlotId) -> Option<usize> {
         self.ref_cell_state_offsets.get(&slot).copied()

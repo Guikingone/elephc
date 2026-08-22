@@ -348,7 +348,12 @@ fn emit_static_exception(
     class_id_symbol: &str,
     message: &str,
 ) {
-    emit_static_exception_at(ctx, class_name, class_id_symbol, message, None);
+    // php names the CALL SITE for a builtin's TypeError/ValueError, so the instruction being
+    // lowered is the location — see `FunctionContext::current_source_location`. These used to pass
+    // `None` and the uncaught report came out with no ` in FILE:LINE` at all, while every warning
+    // beside it carried one.
+    let location = ctx.current_source_location();
+    emit_static_exception_at(ctx, class_name, class_id_symbol, message, location);
 }
 
 /// Same, for an emitter that KNOWS the source location the throwable belongs to.

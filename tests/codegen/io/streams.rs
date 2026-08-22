@@ -17447,3 +17447,60 @@ unlink("big.txt");
     assert_eq!(out, "10000");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies a builtin's uncaught `TypeError`/`ValueError` names the line it was raised on.
+///
+/// php reports the CALL SITE — `fopen("", "r")` on line 4 reports line 4 — because the builtin IS
+/// the frame; there is no internal one to name. Codegen-raised throwables carried NO location at
+/// all, on a theory written into the emitter ("PHP would name the internal call site anyway") that
+/// measuring disproves. Every WARNING beside them already carried `in FILE on line N`, and a user
+/// `throw` carried its line, so the gap was exactly the builtin refusals.
+///
+/// `getLine()` is asserted alongside the uncaught report because they come from the same slot: an
+/// emitter that appends the suffix to the message but leaves the creation line at zero would pass
+/// half of this.
+#[test]
+fn test_a_builtin_throwable_names_its_call_site() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$pad = 1;
+try {
+    fopen("", "r");
+} catch (\ValueError $e) {
+    echo "caught line ", $e->getLine(), "|";
+}
+try {
+    $h = fopen("php://memory", "r+");
+    fclose($h);
+    stream_filter_remove($h);
+} catch (\TypeError $e) {
+    echo "caught line ", $e->getLine();
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "caught line 4|caught line 11");
+}
+
+/// Verifies the UNCAUGHT report carries the same location, in php's spelling.
+///
+/// The catchable half above and this one read the same slot; pinning only the first would let an
+/// emitter that fills `getLine()` and forgets the report's ` in FILE:LINE` suffix pass.
+#[test]
+fn test_an_uncaught_builtin_throwable_reports_its_line() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$pad = 1;
+$pad = 2;
+fopen("", "r");
+"#,
+    );
+    assert!(!out.success, "program unexpectedly succeeded");
+    assert!(
+        out.diagnostics.contains("Uncaught ValueError: Path must not be empty")
+            && out.diagnostics.contains(":4"),
+        "expected php's located uncaught report, got diagnostics={} stdout={}",
+        out.diagnostics,
+        out.stdout
+    );
+}
