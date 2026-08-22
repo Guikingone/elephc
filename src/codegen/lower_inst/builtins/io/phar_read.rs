@@ -58,7 +58,7 @@ pub(crate) fn lower_file_get_contents(
 /// `persist_literal_bytes` is set when a `$offset`/`$length` window follows: the literal `phar://`
 /// shortcut answers with a pointer into read-only `.data`, which the in-place range trim must never
 /// move or free, so those bytes are copied into an owned string first.
-fn emit_file_get_contents_bytes(
+pub(super) fn emit_file_get_contents_bytes(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     persist_literal_bytes: bool,

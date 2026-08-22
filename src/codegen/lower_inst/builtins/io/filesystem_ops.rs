@@ -115,11 +115,88 @@ pub(crate) fn lower_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     // two name THEMSELVES — so a failed copy reported `file_get_contents(missing.txt)`.
     emit_open_diag_name(ctx, Some(("_diag_open_failed_copy_prefix", "Warning: copy(".len(),
                                    "_uww_name_copy", "copy".len())));
-    let result = lower_binary_path_call_with_context(ctx, inst, "copy", "__rt_copy");
+    let result = if copy_source_needs_the_lowering(ctx, inst)? {
+        emit_copy_from_lowered_source(ctx, inst)
+    } else {
+        lower_binary_path_call_with_context(ctx, inst, "copy", "__rt_copy")
+    };
     // Unconditionally: the slots are global, and a name left behind would make the next
     // `file_get_contents()` in the program call itself `copy`.
     emit_open_diag_name(ctx, None);
     result
+}
+
+/// Whether `copy()`'s source names a wrapper only the LOWERING resolves.
+///
+/// The runtime helper `__rt_copy` reaches every REGISTERED wrapper on its own; these built-in
+/// schemes are opened while lowering `file_get_contents()` and are invisible to it. A run-time
+/// path is left alone: this route needs the literal to recognise the scheme, and a dynamic one
+/// already reaches whatever the runtime knows.
+fn copy_source_needs_the_lowering(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<bool> {
+    let Some(source) = inst.operands.first().copied() else {
+        return Ok(false);
+    };
+    let Some(literal) = optional_const_string_operand(ctx, source)? else {
+        return Ok(false);
+    };
+    Ok(literal.starts_with("data:")
+        || literal.starts_with("php://filter/")
+        || literal.starts_with("compress.zlib://")
+        || literal.starts_with("compress.bzip2://")
+        || literal.starts_with("phar://")
+        || literal.starts_with("zip://"))
+}
+
+/// Emits `copy()` as the wrapper-aware read followed by the write `__rt_copy` already performs.
+///
+/// Mirrors `__rt_copy` exactly once the bytes are in hand, including the two rules its own body
+/// carries: a NULL pointer is a failed source open and must leave the destination untouched, and a
+/// zero-byte write is a SUCCESS because php copies an empty file.
+fn emit_copy_from_lowered_source(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let destination = expect_operand(inst, 1)?;
+    let failed = ctx.next_label("copy_source_failed");
+    let done = ctx.next_label("copy_done");
+    let context_scope = super::phar_read::emit_file_get_contents_bytes(ctx, inst, true)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {}", failed));            // a failed open writes nothing
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // the bytes, across the path load
+            load_string_to_result(ctx, destination, "copy")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x3", "x4");                    // the data pair the writer reads
+            abi::emit_call_label(ctx.emitter, "__rt_file_put_contents");
+            ctx.emitter.instruction("cmp x0, #0");
+            ctx.emitter.instruction("cset x0, ge");                             // a zero-byte write copied an empty file
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("mov x0, #0");
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // a failed open writes nothing
+            ctx.emitter.instruction(&format!("jz {}", failed));
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // the bytes, across the path load
+            load_string_to_result(ctx, destination, "copy")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");                  // the data pair the writer reads
+            abi::emit_call_label(ctx.emitter, "__rt_file_put_contents");
+            ctx.emitter.instruction("cmp rax, 0");
+            ctx.emitter.instruction("setge al");                                // a zero-byte write copied an empty file
+            ctx.emitter.instruction("movzx rax, al");
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("xor eax, eax");
+            ctx.emitter.label(&done);
+        }
+    }
+    if context_scope {
+        finish_fopen_context_scope(ctx);
+    }
+    store_if_result(ctx, inst)
 }
 
 /// Publishes the name php should print in open-failure warnings, or clears it.

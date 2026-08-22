@@ -29,8 +29,9 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// php's stat fields in documented order: `(string key symbol, key length)`.
 ///
-/// The index into this table IS the numeric key php pairs the string key with, so
-/// `__rt_user_wrapper_stat_array` walks it once and inserts both halves of every entry.
+/// The index into this table IS the numeric key php stores the field under as well. php fills every
+/// NUMERIC key first and only then the named ones — MEASURED — so `__rt_user_wrapper_stat_array`
+/// walks the table TWICE rather than inserting both halves of an entry together.
 const STAT_FIELDS: &[(&str, usize)] = &[
     ("_stat_key_dev", 3),
     ("_stat_key_ino", 3),
@@ -441,12 +442,14 @@ fn emit_stat_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #0");                                          // value type = Int
     emitter.instruction("bl __rt_hash_new");
     emitter.instruction("str x0, [sp, #24]");                                   // the hash under construction
-    for (index, (key_symbol, key_length)) in STAT_FIELDS.iter().enumerate() {
+    // Every NUMERIC key first, then every named one: php's order, and not the pairwise one the
+    // field list reads like. Each pass re-reads the field, because reading it is a CALL and
+    // holding thirteen values across the first pass would cost a frame to save nothing.
+    for index in 0..STAT_FIELDS.len() {
         emitter.instruction("ldr x0, [sp, #16]");                               // the wrapper's array
         emitter.instruction(&format!("mov x1, #{}", index));                    // the field to read
         emitter.instruction("bl __rt_uws_field");                               // x0 = the integer (0 when unnamed)
-        emitter.instruction("str x0, [sp, #32]");                               // hold it across both insertions
-        // -- numeric key --
+        emitter.instruction("str x0, [sp, #32]");                               // hold it across the insertion
         emitter.instruction("ldr x0, [sp, #24]");                               // the hash
         emitter.instruction(&format!("mov x1, #{}", index));                    // key_lo = the numeric key
         emitter.instruction("mov x2, #-1");                                     // key_hi = -1 marks an integer key
@@ -455,7 +458,12 @@ fn emit_stat_array_aarch64(emitter: &mut Emitter) {
         emitter.instruction("mov x5, #0");                                      // value tag = Int
         emitter.instruction("bl __rt_hash_set");
         emitter.instruction("str x0, [sp, #24]");                               // persist the possibly-grown hash
-        // -- string key --
+    }
+    for (index, (key_symbol, key_length)) in STAT_FIELDS.iter().enumerate() {
+        emitter.instruction("ldr x0, [sp, #16]");                               // the wrapper's array
+        emitter.instruction(&format!("mov x1, #{}", index));                    // the field to read
+        emitter.instruction("bl __rt_uws_field");                               // x0 = the integer (0 when unnamed)
+        emitter.instruction("str x0, [sp, #32]");                               // hold it across the insertion
         emitter.instruction("ldr x0, [sp, #24]");
         abi::emit_symbol_address(emitter, "x1", key_symbol);
         emitter.instruction(&format!("mov x2, #{}", key_length));
@@ -499,12 +507,12 @@ fn emit_stat_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 0");                                          // value type = Int
     emitter.instruction("call __rt_hash_new");
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // the hash under construction
-    for (index, (key_symbol, key_length)) in STAT_FIELDS.iter().enumerate() {
+    // See the AArch64 arm: every NUMERIC key first, then every named one.
+    for index in 0..STAT_FIELDS.len() {
         emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // the wrapper's array
         emitter.instruction(&format!("mov rsi, {}", index));                    // the field to read
         emitter.instruction("call __rt_uws_field");                             // rax = the integer (0 when unnamed)
-        emitter.instruction("mov QWORD PTR [rbp - 24], rax");                   // hold it across both insertions
-        // -- numeric key --
+        emitter.instruction("mov QWORD PTR [rbp - 24], rax");                   // hold it across the insertion
         emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                   // the hash
         emitter.instruction(&format!("mov rsi, {}", index));                    // key_lo = the numeric key
         emitter.instruction("mov rdx, -1");                                     // key_hi = -1 marks an integer key
@@ -513,7 +521,12 @@ fn emit_stat_array_x86_64(emitter: &mut Emitter) {
         emitter.instruction("mov r9, 0");                                       // value tag = Int
         emitter.instruction("call __rt_hash_set");
         emitter.instruction("mov QWORD PTR [rbp - 16], rax");                   // persist the possibly-grown hash
-        // -- string key --
+    }
+    for (index, (key_symbol, key_length)) in STAT_FIELDS.iter().enumerate() {
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // the wrapper's array
+        emitter.instruction(&format!("mov rsi, {}", index));                    // the field to read
+        emitter.instruction("call __rt_uws_field");                             // rax = the integer (0 when unnamed)
+        emitter.instruction("mov QWORD PTR [rbp - 24], rax");                   // hold it across the insertion
         emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");
         abi::emit_symbol_address(emitter, "rsi", key_symbol);
         emitter.instruction(&format!("mov rdx, {}", key_length));

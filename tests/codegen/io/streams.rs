@@ -18377,3 +18377,92 @@ echo ",", var_export(file_get_contents("keep.txt"), true), "|";
         out.diagnostics
     );
 }
+
+
+/// Verifies `stat()` lists every NUMERIC key before the named ones, as php does.
+///
+/// php fills all thirteen numeric keys first and only then the named ones. The builder's own doc
+/// spelled the order as `0/dev, 1/ino, 2/mode, ...` — which reads as PAIRS — and one loop
+/// inserting each field's numeric key followed by its string key produced exactly that.
+///
+/// Both key sets are present either way, so a lookup BY NAME never noticed. `array_slice($s, 0,
+/// 13)`, `array_values()`, `json_encode()` and `==` against php's shape all did.
+///
+/// The keys are walked rather than the values asserted: the values belong to the filesystem and
+/// change every run; the order is php's and does not. MEASURED on `php -n` 8.5.6.
+#[test]
+fn test_stat_lists_every_numeric_key_before_the_named_ones() {
+    let out = compile_and_run(
+        r####"<?php
+$path = tempnam(sys_get_temp_dir(), "so");
+file_put_contents($path, "abc");
+foreach (stat($path) as $k => $v) { echo $k, ","; }
+echo "|";
+foreach (lstat($path) as $k => $v) { echo $k, ","; }
+unlink($path);
+"####,
+    );
+    let php_order = "0,1,2,3,4,5,6,7,8,9,10,11,12,dev,ino,mode,nlink,uid,gid,rdev,size,atime,\
+                     mtime,ctime,blksize,blocks,";
+    assert_eq!(out, format!("{php_order}|{php_order}"));
+}
+
+/// Verifies a USER WRAPPER's stat array uses the same order, from its own builder.
+///
+/// The wrapper path rebuilds php's shape out of whatever `url_stat()` answered, in a second
+/// builder that had the same interleaving for the same reason. A wrapper naming no field at all
+/// still gets all 26 keys, because php fills the absent ones with zero.
+#[test]
+fn test_a_wrapper_stat_array_uses_phps_key_order() {
+    let out = compile_and_run(
+        r####"<?php
+class W
+{
+    public $context;
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_stat() { return []; }
+    public function url_stat($path, $flags) { return ["size" => 7]; }
+}
+stream_wrapper_register("wstat", "W");
+foreach (stat("wstat://x") as $k => $v) { echo $k, "=", $v, ","; }
+"####,
+    );
+    assert_eq!(
+        out,
+        "0=0,1=0,2=0,3=0,4=0,5=0,6=0,7=7,8=0,9=0,10=0,11=0,12=0,\
+         dev=0,ino=0,mode=0,nlink=0,uid=0,gid=0,rdev=0,size=7,atime=0,mtime=0,ctime=0,\
+         blksize=0,blocks=0,"
+    );
+}
+
+/// Verifies `copy()` reads a source only the LOWERING knows how to open.
+///
+/// `__rt_copy` calls the runtime read helper, which serves REGISTERED wrappers — a user wrapper on
+/// either side already worked. The built-in `data:` and `php://filter/` schemes are resolved while
+/// lowering `file_get_contents()`, and `copy()` never entered that route, so it answered false.
+///
+/// A filtered DESTINATION is still open and deliberately absent here: that route is built around a
+/// data OPERAND and `copy()` has its bytes in registers.
+#[test]
+fn test_copy_reads_a_source_only_the_lowering_resolves() {
+    let out = compile_and_run(
+        r####"<?php
+$dir = sys_get_temp_dir() . "/elephc_copy_src";
+@mkdir($dir);
+chdir($dir);
+@unlink("a.txt"); @unlink("b.txt"); @unlink("d.txt");
+
+echo "data=", var_export(copy("data://text/plain,hello", "a.txt"), true);
+echo ",", var_export(file_get_contents("a.txt"), true), "|";
+
+file_put_contents("b.txt", "hello");
+echo "filter=", var_export(copy("php://filter/read=string.toupper/resource=b.txt", "d.txt"), true);
+echo ",", var_export(file_get_contents("d.txt"), true), "|";
+
+@unlink("a.txt"); @unlink("b.txt"); @unlink("d.txt");
+"####,
+    );
+    assert_eq!(out, "data=true,'hello'|filter=true,'HELLO'|");
+}
