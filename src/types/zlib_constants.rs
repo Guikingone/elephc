@@ -17,11 +17,7 @@
 //! - php refuses anything else with a ValueError naming all three, which the `gz*` prelude raises.
 
 /// Tuple of `(name, value)` pairs for ext-zlib's encoding constants.
-pub(crate) const ZLIB_INT_CONSTANTS: &[(&str, i64)] = &[
-    ("ZLIB_ENCODING_RAW", -15),
-    ("ZLIB_ENCODING_DEFLATE", 15),
-    ("ZLIB_ENCODING_GZIP", 31),
-];
+pub(crate) use elephc_builtin_contract::php_constants::ZLIB_INT_CONSTANTS;
 
 #[cfg(test)]
 mod tests {

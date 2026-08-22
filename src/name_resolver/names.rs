@@ -379,7 +379,6 @@ fn is_builtin_global_constant(name: &str) -> bool {
                 | "FNM_PATHNAME"
                 | "FNM_PERIOD"
                 | "FNM_CASEFOLD"
-                | "ARRAY_FILTER_USE_VALUE"
                 | "ARRAY_FILTER_USE_BOTH"
                 | "ARRAY_FILTER_USE_KEY"
                 | "STR_PAD_LEFT"
