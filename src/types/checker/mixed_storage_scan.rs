@@ -149,10 +149,24 @@ impl Checker {
         if facts.disqualified || facts.assigns.len() < 2 {
             return None;
         }
-        // A by-reference parameter aliases the caller's storage and a type-hinted one is a
-        // declared contract; both stay strict in either mode. An untyped by-value parameter is
-        // not excluded here — see the module note in `with_local_storage_context`.
-        if self.active_ref_params.contains(name) || self.typed_local_names.contains(name) {
+        // EVERY parameter is excluded, typed or not, by reference or by value.
+        //
+        // The marking's only mechanism is the FRESH-INSERT branch of `merge_local_assignment_type`,
+        // and a parameter is already bound when the body starts, so that branch structurally never
+        // runs for one: the mark could not give it boxed storage even if it were sound to. Marking
+        // one anyway is not merely inert, it is wrong twice over — the warning credits this feature
+        // for storage the parameter already had (an untyped by-value parameter called with two
+        // incompatible argument types is `mixed` on the pre-existing path), and it files store
+        // sites for a binding the marking never created, which then block DCE tail-sinking and
+        // enter the binding-decision ambiguity tally for nothing.
+        //
+        // `local_binding_depth` is exactly the parameter set here: `enter_local_binding_scope`
+        // seeds it with every parameter at depth 0 and this scan runs before the first statement
+        // is checked, so nothing else has been bound into it yet. It is also the only one of the
+        // per-body sets that is authoritative at top level, where it is empty. By-reference and
+        // type-hinted parameters were already excluded via `active_ref_params` /
+        // `typed_local_names`; this subsumes both.
+        if self.local_binding_depth.contains_key(name) {
             return None;
         }
         // A decision is only usable if EVERY one of the name's store sites can be named. A

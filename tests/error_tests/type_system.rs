@@ -1779,3 +1779,28 @@ fn test_conflict_already_resolved_by_the_retype_path_is_not_marked() {
         "changes type from string to int",
     );
 }
+
+/// A PARAMETER is never marked: it is already bound on entry, so the fresh-insert hook that gives
+/// a marked name boxed storage structurally cannot fire for it.
+///
+/// `$x` here is an untyped by-value parameter whose two call sites make it `mixed` already, so the
+/// body compiles on the PRE-EXISTING mixed-parameter path. Marking it would attribute that storage
+/// to this feature and file store sites for a binding the marking never created — spurious keys
+/// that block DCE tail-sinking and enter the binding-decision ambiguity tally.
+#[test]
+fn test_parameter_is_never_marked() {
+    expect_no_warning(
+        "<?php function h($x, int $n): void { if ($n > 1) { $x = 0; } else { $x = \"s\"; } var_dump($x); } h($argc > 1 ? 42 : \"hello\", 2);",
+        "boxed mixed storage",
+    );
+}
+
+/// Control for the test above: the same shape written as a LOCAL still marks and warns, so the
+/// exclusion above is about parameters rather than a scan that stopped working inside functions.
+#[test]
+fn test_same_shape_local_still_marks_inside_a_function() {
+    expect_warning(
+        "<?php function h(int $n): void { if ($n > 1) { $x = 0; } else { $x = \"s\"; } var_dump($x); } h(2);",
+        "boxed mixed storage",
+    );
+}

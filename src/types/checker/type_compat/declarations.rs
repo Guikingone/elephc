@@ -398,10 +398,10 @@ impl Checker {
     ///
     /// `body` is the statement list `f` is about to check. It is taken so the mixed-storage
     /// pre-scan can run here, once the per-body state is installed and before any statement is
-    /// checked: the scan's decision has to be in place at each marked local's FIRST store. An
-    /// untyped BY-VALUE parameter is not excluded from marking by the scan (only by-reference and
-    /// type-hinted ones are), but a parameter is already bound on entry, so the mark cannot take
-    /// effect for it — `merge_local_assignment_type` only honours it on a fresh binding.
+    /// checked: the scan's decision has to be in place at each marked local's FIRST store, and the
+    /// freshly seeded `local_binding_depth` is exactly this body's parameter set, which the scan
+    /// excludes from marking wholesale (a parameter is already bound, so the fresh-insert hook the
+    /// marking works through can never fire for it).
     pub(crate) fn with_local_storage_context<T, F>(
         &mut self,
         ref_param_names: Vec<String>,
