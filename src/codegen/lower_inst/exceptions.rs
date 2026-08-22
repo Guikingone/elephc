@@ -501,6 +501,11 @@ fn emit_uncaught_exception_fatal_if_no_handler(
             ctx.emitter.instruction("mov x0, #1");                              // fd = stdout, where PHP writes this report
             ctx.emitter.syscall(4);
             abi::emit_load_int_immediate(ctx.emitter, "x0", i64::from(creation_line));
+            // A builtin called directly from `main` has a COMPLETE chain — `#0 <builtin>` then
+            // `#1 {main}` — whatever else the module declares. Inside a user function the chain
+            // would need that function's frame and its callers, which nothing here can walk, so
+            // the module flag decides as before.
+            abi::emit_load_int_immediate(ctx.emitter, "x1", i64::from(ctx.is_main));
             ctx.emitter.instruction("bl __rt_trace_write_block");               // this path never reaches the shared report
             abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
         }
@@ -527,6 +532,8 @@ fn emit_uncaught_exception_fatal_if_no_handler(
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the specific fatal message
             abi::emit_load_int_immediate(ctx.emitter, "rdi", i64::from(creation_line));
+            // See the AArch64 arm: `main` is the one frame this lowering can prove complete.
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", i64::from(ctx.is_main));
             ctx.emitter.instruction("call __rt_trace_write_block");             // this path never reaches the shared report
             ctx.emitter.instruction("mov rsp, r15");                            // restore the entry rsp before leaving
             abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);

@@ -582,9 +582,17 @@ fn emit_x86_64(emitter: &mut Emitter) {
 
 /// Emits php's `Stack trace:` block, AArch64.
 ///
-/// Silent unless `_rt_trace_exact` says the recorded frame list is complete for this module. A
-/// trace that is SHORT is not an approximation: `#0 {main}` where php names a frame asserts the
-/// stack was empty. Printing nothing, as before, is the only honest alternative.
+/// Input: `x0` = the line php prints in the tail, `x1` = a per-SITE completeness override.
+///
+/// Silent unless the frame list is known complete. A trace that is SHORT is not an approximation:
+/// `#0 {main}` where php names a frame asserts the stack was empty, so printing nothing is the
+/// only honest alternative.
+///
+/// Two authorities answer that, and they are not the same question. `_rt_trace_exact` is a MODULE
+/// property — "no user function here could hide a frame" — and it is all the runtime unwinder can
+/// consult, because it cannot know whose frame it is unwinding. A LOWERED throw knows more: a
+/// builtin called directly from `main` has a complete chain whatever else the module declares, and
+/// says so through `x1`. Zero defers to the module flag.
 fn emit_write_block_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: trace_write_block ---");
@@ -592,8 +600,10 @@ fn emit_write_block_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #-32]!");
     emitter.instruction("add x29, sp, #0");
     emitter.instruction("str x0, [sp, #16]");                                    // the line php prints in the tail
+    emitter.instruction("cbnz x1, __rt_uncaught_trace_go");                     // the SITE proved this chain complete
     abi::emit_load_symbol_to_reg(emitter, "x9", "_rt_trace_exact", 0);
     emitter.instruction("cbz x9, __rt_uncaught_trace_done");                    // this module can hide a frame: say nothing
+    emitter.label("__rt_uncaught_trace_go");
 
     abi::emit_symbol_address(emitter, "x1", "_rt_trace_header");
     emitter.instruction(&format!("mov x2, #{}", trace_literal_len("_rt_trace_header")));
@@ -661,9 +671,12 @@ fn emit_write_block_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");
     emitter.instruction("sub rsp, 16");
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                       // the line php prints in the tail
+    emitter.instruction("test rsi, rsi");                                       // the SITE proved this chain complete
+    emitter.instruction("jnz __rt_uncaught_trace_go_x86");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_trace_exact", 0);
     emitter.instruction("test r10, r10");
     emitter.instruction("jz __rt_uncaught_trace_done");                         // this module can hide a frame: say nothing
+    emitter.label("__rt_uncaught_trace_go_x86");
 
     abi::emit_symbol_address(emitter, "rsi", "_rt_trace_header");
     emitter.instruction(&format!("mov edx, {}", trace_literal_len("_rt_trace_header")));

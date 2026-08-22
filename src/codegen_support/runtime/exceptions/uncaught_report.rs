@@ -178,6 +178,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.syscall(4);
     abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
     emitter.instruction(&format!("ldr x0, [x9, #{}]", THROWABLE_CREATION_LINE_OFFSET));
+    emitter.instruction("mov x1, #0");                                          // the unwinder cannot know whose frame it is on
     emitter.instruction("bl __rt_trace_write_block");                           // php's Stack trace: block, when the frame list is complete
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.syscall(1);
@@ -287,6 +288,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("syscall");                                             // terminate the uncaught-exception diagnostic with a newline
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_value", 0);
     emitter.instruction(&format!("mov rdi, QWORD PTR [r10 + {}]", THROWABLE_CREATION_LINE_OFFSET));
+    emitter.instruction("xor esi, esi");                                        // the unwinder cannot know whose frame it is on
     emitter.instruction("call __rt_trace_write_block");                         // php's Stack trace: block, when the frame list is complete
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit

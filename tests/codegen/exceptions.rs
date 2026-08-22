@@ -963,3 +963,51 @@ fn test_uncaught_report_omits_a_trace_it_cannot_complete() {
         output.stdout
     );
 }
+
+
+/// Verifies php's `Stack trace:` block survives a module that declares user methods.
+///
+/// The completeness gate was a MODULE property — "no user function here could hide a frame" —
+/// which is the right question for the runtime unwinder and the wrong one for a throw whose site
+/// is being lowered. A builtin called directly from `main` has a complete chain whatever else the
+/// module declares, so a single unrelated class silenced the whole block.
+///
+/// The class here is deliberately the thing that used to suppress it. The `false` comes from a
+/// failing `fopen()` rather than a literal, because elephc REFUSES a literal `false` in a resource
+/// parameter at compile time where php compiles it and raises at run time — a separate divergence,
+/// and not the one this test is about. MEASURED on `php -n` 8.5.6.
+#[test]
+fn test_a_builtin_fatal_in_main_prints_its_trace_despite_user_methods() {
+    let out = compile_and_run_capture(
+        r####"<?php
+class Unrelated
+{
+    function neverCalled() { return 1; }
+}
+echo "before|";
+$h = @fopen("no_such_wrapper://x", "r");
+fwrite($h, "x");
+"####,
+    );
+    // The harness splits php's report by KIND PREFIX: the `Fatal error:` line is a diagnostic and
+    // the trace lines, which carry no prefix, stay in stdout. php prints them as one block.
+    assert!(
+        out.diagnostics.contains(
+            "Fatal error: Uncaught TypeError: fwrite(): Argument #1 ($stream) must be of type \
+             resource, false given"
+        ),
+        "missing the fatal line in diagnostics={}",
+        out.diagnostics
+    );
+    for expected in [
+        "before|",
+        "Stack trace:\n#0 ",
+        "): fwrite(false, 'x')\n#1 {main}\n  thrown in ",
+    ] {
+        assert!(
+            out.stdout.contains(expected),
+            "missing `{expected}` in stdout={}",
+            out.stdout
+        );
+    }
+}
