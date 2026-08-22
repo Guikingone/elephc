@@ -18466,3 +18466,44 @@ echo ",", var_export(file_get_contents("d.txt"), true), "|";
     );
     assert_eq!(out, "data=true,'hello'|filter=true,'HELLO'|");
 }
+
+
+/// Verifies php's own sub-streams answer for their own seekability.
+///
+/// `php://input` is served from a rewindable buffer of the request body and SEEKS; `php://output`
+/// is the output layer and has no position at all. Neither property belongs to the descriptor
+/// elephc backs them with — which answers exactly backwards for each, so the two were reported
+/// inverted. MEASURED on `php -n` 8.5.6.
+///
+/// The streams that already agreed are here too: the decision this reaches into is on every
+/// stream's path, and a test naming only the two that changed would not notice it starting to
+/// answer for the others.
+///
+/// `php://stderr` is deliberately NOT among them. Its seekability is the DESCRIPTOR's — fd 2 is a
+/// regular file when the output is redirected and a pipe under a test harness — so php and elephc
+/// agree about it and both change their answer with how the suite was invoked.
+#[test]
+fn test_phps_own_substreams_answer_for_their_seekability() {
+    let out = compile_and_run(
+        r####"<?php
+$path = tempnam(sys_get_temp_dir(), "sk");
+file_put_contents($path, "abc");
+$cases = [
+    "plain"  => fopen($path, "r"),
+    "memory" => fopen("php://memory", "w+"),
+    "temp"   => fopen("php://temp", "w+"),
+    "input"  => fopen("php://input", "r"),
+    "output" => fopen("php://output", "w"),
+    "data"   => fopen("data://text/plain,hi", "r"),
+];
+foreach ($cases as $name => $h) {
+    echo $name, "=", var_export(stream_get_meta_data($h)["seekable"], true), "|";
+}
+unlink($path);
+"####,
+    );
+    assert_eq!(
+        out,
+        "plain=true|memory=true|temp=true|input=true|output=false|data=true|"
+    );
+}

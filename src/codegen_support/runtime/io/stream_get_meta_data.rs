@@ -122,6 +122,28 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
         super::WRAPPER_ID_ZIP
     ));                                                                         // the zip wrapper?
     emitter.instruction("csel x0, xzr, x0, eq");                                // a zip entry stream never seeks
+    // ...and php's OWN sub-streams answer for themselves. `php://input` is served from a
+    // rewindable buffer and seeks; `php://output` is the output layer and has no position. The
+    // descriptor elephc backs each with answers exactly backwards, MEASURED both ways.
+    emitter.instruction("ldr x9, [sp, #80]");                                   // the stable StreamState pointer
+    emitter.instruction(&format!("ldr x10, [x9, #{STREAM_WRAPPER_ID_OFFSET}]"));
+    emitter.instruction(&format!("cmp x10, #{}", WRAPPER_ID_PHP));
+    emitter.instruction("b.ne __rt_sgmd_seekable_kept");                        // any other wrapper keeps its answer
+    emitter.instruction(&format!("ldr x10, [x9, #{STREAM_URI_PTR_OFFSET}]"));   // the recorded URI
+    emitter.instruction(&format!("ldr x11, [x9, #{STREAM_URI_LEN_OFFSET}]"));
+    emitter.instruction("cbz x10, __rt_sgmd_seekable_kept");
+    emitter.instruction("cmp x11, #7");                                         // "php://" plus the naming byte
+    emitter.instruction("b.lt __rt_sgmd_seekable_kept");
+    emitter.instruction("ldrb w12, [x10, #6]");                                 // the php:// sub-wrapper's initial
+    emitter.instruction("cmp w12, #0x69");                                      // 'i' as in input
+    emitter.instruction("b.eq __rt_sgmd_seekable_yes");
+    emitter.instruction("cmp w12, #0x6F");                                      // 'o' as in output
+    emitter.instruction("b.ne __rt_sgmd_seekable_kept");
+    emitter.instruction("mov x0, #0");                                          // the output layer has no position
+    emitter.instruction("b __rt_sgmd_seekable_kept");
+    emitter.label("__rt_sgmd_seekable_yes");
+    emitter.instruction("mov x0, #1");                                          // the request body rewinds
+    emitter.label("__rt_sgmd_seekable_kept");
     // ...and a DIRECTORY always does. php's plain-files directory ops carry a seek (rewinddir),
     // so `_php_stream_get_metadata` reports `seekable => true` for every `opendir()` handle,
     // while `S_ISREG` on a directory descriptor is false. This is the same "ask the ops, not the
@@ -736,6 +758,34 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp r10, {}", super::WRAPPER_ID_ZIP));        // the zip wrapper?
     emitter.instruction("mov r11d, 0");                                         // the unseekable answer
     emitter.instruction("cmove rax, r11");                                      // a zip entry stream never seeks
+    // See the AArch64 arm: php's own sub-streams answer for themselves, and the descriptor
+    // answers backwards for both of them.
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // the stable StreamState pointer
+    emitter.instruction(&format!(
+        "mov r11, QWORD PTR [r10 + {STREAM_WRAPPER_ID_OFFSET}]"
+    ));
+    emitter.instruction(&format!("cmp r11, {}", WRAPPER_ID_PHP));
+    emitter.instruction("jne __rt_sgmd_seekable_kept_x86");                     // any other wrapper keeps its answer
+    emitter.instruction(&format!(
+        "mov r11, QWORD PTR [r10 + {STREAM_URI_PTR_OFFSET}]"
+    ));                                                                         // the recorded URI
+    emitter.instruction(&format!(
+        "mov rcx, QWORD PTR [r10 + {STREAM_URI_LEN_OFFSET}]"
+    ));
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_sgmd_seekable_kept_x86");
+    emitter.instruction("cmp rcx, 7");                                          // "php://" plus the naming byte
+    emitter.instruction("jl __rt_sgmd_seekable_kept_x86");
+    emitter.instruction("movzx ecx, BYTE PTR [r11 + 6]");                       // the php:// sub-wrapper's initial
+    emitter.instruction("cmp ecx, 0x69");                                       // 'i' as in input
+    emitter.instruction("je __rt_sgmd_seekable_yes_x86");
+    emitter.instruction("cmp ecx, 0x6F");                                       // 'o' as in output
+    emitter.instruction("jne __rt_sgmd_seekable_kept_x86");
+    emitter.instruction("xor eax, eax");                                        // the output layer has no position
+    emitter.instruction("jmp __rt_sgmd_seekable_kept_x86");
+    emitter.label("__rt_sgmd_seekable_yes_x86");
+    emitter.instruction("mov rax, 1");                                          // the request body rewinds
+    emitter.label("__rt_sgmd_seekable_kept_x86");
     // ...and a DIRECTORY always does — see the AArch64 arm for php's "ask the ops, not the
     // descriptor" rule, which this case applies in the other direction.
     emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // the stable StreamState pointer
