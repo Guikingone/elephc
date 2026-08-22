@@ -613,6 +613,23 @@ pub(crate) fn lower_flock(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)),
     }
     ctx.emitter.label(&unlockable_label);
+    // php still writes the out-parameter while refusing: `flock($memory, LOCK_EX, $b)` answers
+    // false and leaves `$b` as int 0, not null. MEASURED on `php -n` 8.5.6.
+    if inst.operands.len() == 3 {
+        let would_block = expect_operand(inst, 2)?;
+        let Some(slot) = source_load_local_slot(ctx, would_block)? else {
+            return Err(CodegenIrError::unsupported(
+                "flock would_block output for non-local arguments",
+            ));
+        };
+        let (verdict_reg, block_reg) = match ctx.emitter.target.arch {
+            Arch::AArch64 => ("x0", "x1"),
+            Arch::X86_64 => ("rax", "rdx"),
+        };
+        abi::emit_load_int_immediate(ctx.emitter, verdict_reg, 0);              // the verdict this path reports
+        abi::emit_load_int_immediate(ctx.emitter, block_reg, 0);                // nothing blocked: no lock was attempted
+        store_flock_would_block(ctx, slot)?;
+    }
     emit_bool_result(ctx, false);                                               // php answers false, and warns about nothing
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)

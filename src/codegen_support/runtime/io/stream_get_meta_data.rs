@@ -510,6 +510,13 @@ fn emit_set_wrapper_type_aarch64(emitter: &mut Emitter) {
         "ldr x7, [x6, #{}]", STREAM_TRANSPORT_OFFSET
     ));                                                                         // non-zero only for a socket transport
     emitter.instruction("cbnz x7, __rt_sgmd_wtype_done");                       // a transport has no wrapper, so php omits the key
+    // A glob directory is identified by what BACKS it: `opendir()` stamps no wrapper id, so the
+    // unset value 0 read as `plainfile`. The stream_type namer already asks this question first.
+    emitter.instruction(&format!(
+        "ldr x7, [x6, #{}]", STREAM_BACKEND_KIND_OFFSET
+    ));                                                                         // what backs the stream
+    emitter.instruction(&format!("cmp x7, #{}", STREAM_BACKEND_GLOB_DIRECTORY));
+    emitter.instruction("b.eq __rt_sgmd_wtype_glob");                           // php names this wrapper `glob`
     emitter.instruction(&format!(
         "ldr x7, [x6, #{}]", STREAM_WRAPPER_ID_OFFSET
     ));                                                                         // load the handle-keyed wrapper id
@@ -524,6 +531,11 @@ fn emit_set_wrapper_type_aarch64(emitter: &mut Emitter) {
     // Fallback for unknown ids: use plainfile (same as id 0).
     abi::emit_symbol_address(emitter, "x3", "_meta_wrapper_plainfile");          // fallback wrapper name
     emitter.instruction("mov x4, #9");                                          // plainfile length
+    emitter.instruction("mov x5, #1");                                          // value tag = string
+    emitter.instruction("b __rt_sgmd_wtype_put");                               // jump to the shared hash insert
+    emitter.label("__rt_sgmd_wtype_glob");
+    abi::emit_symbol_address(emitter, "x3", "_meta_wrapper_glob");               // the glob wrapper names itself
+    emitter.instruction("mov x4, #4");                                          // "glob" length
     emitter.instruction("mov x5, #1");                                          // value tag = string
     emitter.instruction("b __rt_sgmd_wtype_put");                               // jump to the shared hash insert
     // Literal-load blocks (emitted after the compare chain).
@@ -933,6 +945,13 @@ fn emit_set_wrapper_type_x86(emitter: &mut Emitter) {
     ));                                                                         // non-zero only for a socket transport
     emitter.instruction("test rax, rax");
     emitter.instruction("jne __rt_sgmd_wtype_done_x");                          // a transport has no wrapper, so php omits the key
+    // A glob directory is identified by what BACKS it: `opendir()` stamps no wrapper id, so the
+    // unset value 0 read as `plainfile`. The stream_type namer already asks this question first.
+    emitter.instruction(&format!(
+        "mov rax, QWORD PTR [r10 + {}]", STREAM_BACKEND_KIND_OFFSET
+    ));                                                                         // what backs the stream
+    emitter.instruction(&format!("cmp rax, {}", STREAM_BACKEND_GLOB_DIRECTORY));
+    emitter.instruction("je __rt_sgmd_wtype_glob_x");                           // php names this wrapper `glob`
     emitter.instruction(&format!(
         "mov rax, QWORD PTR [r10 + {}]", STREAM_WRAPPER_ID_OFFSET
     ));                                                                         // load the handle-keyed wrapper id
@@ -944,6 +963,11 @@ fn emit_set_wrapper_type_x86(emitter: &mut Emitter) {
     // Fallback for unknown ids: use plainfile (same as id 0).
     abi::emit_symbol_address(emitter, "rcx", "_meta_wrapper_plainfile");          // fallback wrapper name
     emitter.instruction("mov r8, 9");                                           // plainfile length
+    emitter.instruction("mov r9, 1");                                           // value tag = string
+    emitter.instruction("jmp __rt_sgmd_wtype_put_x");                           // jump to the shared hash insert
+    emitter.label("__rt_sgmd_wtype_glob_x");
+    abi::emit_symbol_address(emitter, "rcx", "_meta_wrapper_glob");               // the glob wrapper names itself
+    emitter.instruction("mov r8, 4");                                           // "glob" length
     emitter.instruction("mov r9, 1");                                           // value tag = string
     emitter.instruction("jmp __rt_sgmd_wtype_put_x");                           // jump to the shared hash insert
     for (id, (sym, len)) in wrappers.iter().enumerate() {

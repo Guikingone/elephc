@@ -30,6 +30,12 @@ const WRAPPER_ID_PHP: u64 = 6;
 /// Wrapper id 7 is `data:`, which php-src names after the RFC that defines it.
 const WRAPPER_ID_DATA: u64 = 7;
 
+/// Wrapper id 8 is `compress.zlib://`, which php-src names `ZLIB` in both metadata keys.
+const WRAPPER_ID_ZLIB: u64 = 8;
+
+/// Wrapper id 11 is a USERSPACE wrapper, which php-src names `user-space`.
+const WRAPPER_ID_USER: u64 = 11;
+
 /// Wrapper id 12 is `zip://`, php's twelfth and last built-in wrapper.
 ///
 /// Measured on `php -n` 8.5.6: `stream_get_meta_data(fopen("zip://a.zip#f.txt","r"))`
@@ -247,6 +253,10 @@ fn emit_stream_type_name_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_stn_rfc2397");
     emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_ZIP}"));
     emitter.instruction("b.eq __rt_stn_zip");                                   // php names a zip entry stream "zip"
+    emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_ZLIB}"));
+    emitter.instruction("b.eq __rt_stn_zlib");                                  // a zlib stream is served from a temp file, which seeks
+    emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_USER}"));
+    emitter.instruction("b.eq __rt_stn_user");                                  // a synthetic handle no lseek can move is NOT a socket
     emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_PHP}"));
     emitter.instruction("b.ne __rt_stn_unknown");                               // every other wrapper keeps the fallback
 
@@ -274,6 +284,8 @@ fn emit_stream_type_name_aarch64(emitter: &mut Emitter) {
     emit_named_type_aarch64(emitter, "__rt_stn_glob", "_meta_stype_glob", 4);
     emit_named_type_aarch64(emitter, "__rt_stn_rfc2397", "_meta_wrapper_data", 7);
     emit_named_type_aarch64(emitter, "__rt_stn_zip", "_meta_stype_zip", 3);
+    emit_named_type_aarch64(emitter, "__rt_stn_zlib", "_meta_wrapper_zlib", 4);
+    emit_named_type_aarch64(emitter, "__rt_stn_user", "_meta_wrapper_user", 10);
     emit_named_type_aarch64(emitter, "__rt_stn_stdio", "_meta_stype_stdio", 5);
     emit_named_type_aarch64(emitter, "__rt_stn_tcp", "_meta_stype_tcp", 14);
     emit_named_type_aarch64(emitter, "__rt_stn_udp", "_meta_stype_udp", 10);
@@ -339,6 +351,10 @@ fn emit_stream_type_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_stn_rfc2397_x86");
     emitter.instruction(&format!("cmp r10, {WRAPPER_ID_ZIP}"));
     emitter.instruction("je __rt_stn_zip_x86");                                 // php names a zip entry stream "zip"
+    emitter.instruction(&format!("cmp r10, {WRAPPER_ID_ZLIB}"));
+    emitter.instruction("je __rt_stn_zlib_x86");                                // a zlib stream is served from a temp file, which seeks
+    emitter.instruction(&format!("cmp r10, {WRAPPER_ID_USER}"));
+    emitter.instruction("je __rt_stn_user_x86");                                // a synthetic handle no lseek can move is NOT a socket
     emitter.instruction(&format!("cmp r10, {WRAPPER_ID_PHP}"));
     emitter.instruction("jne __rt_stn_unknown_x86");                            // every other wrapper keeps the fallback
 
@@ -364,6 +380,8 @@ fn emit_stream_type_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_stn_stdio_x86");                              // stdin, stdout, stderr, fd and filter
 
     emit_named_type_x86_64(emitter, "__rt_stn_zip_x86", "_meta_stype_zip", 3);
+    emit_named_type_x86_64(emitter, "__rt_stn_zlib_x86", "_meta_wrapper_zlib", 4);
+    emit_named_type_x86_64(emitter, "__rt_stn_user_x86", "_meta_wrapper_user", 10);
     emit_named_type_x86_64(emitter, "__rt_stn_memory_x86", "_meta_stype_memory", 6);
     emit_named_type_x86_64(emitter, "__rt_stn_temp_x86", "_meta_stype_temp", 4);
     emit_named_type_x86_64(emitter, "__rt_stn_output_x86", "_meta_stype_output", 6);

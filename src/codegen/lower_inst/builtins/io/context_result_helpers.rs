@@ -459,6 +459,22 @@ fn emit_stream_context_options_type_error_ladder(
         ctx.emitter.label(&not_null);
     }
 
+    // A closure is tag 10, NOT the object tag, so the class-name arm below never sees it. php
+    // prints `Closure` for a closure and for a first-class callable alike, and that name is fixed.
+    let not_closure = ctx.next_label("sctx_opt_not_closure");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #10", tag_reg));          // runtime tag 10 = callable descriptor
+            ctx.emitter.instruction(&format!("b.ne {}", not_closure));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, 10", tag_reg));           // runtime tag 10 = callable descriptor
+            ctx.emitter.instruction(&format!("jne {}", not_closure));
+        }
+    }
+    super::super::exceptions::emit_type_error(ctx, &format!("{prefix}Closure given"));
+    ctx.emitter.label(&not_closure);
+
     // An object names its class, which no pre-baked message can carry.
     let not_object = ctx.next_label("sctx_opt_not_object");
     match ctx.emitter.target.arch {
@@ -472,7 +488,7 @@ fn emit_stream_context_options_type_error_ladder(
         }
     }
     emit_class_name_to_string_result(ctx, payload_reg);
-    super::super::exceptions::emit_message_concat_prefix(ctx, PREFIX);
+    super::super::exceptions::emit_message_concat_prefix(ctx, prefix);
     super::super::exceptions::emit_message_concat_suffix(ctx, " given");
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");                      // the Throwable owns its message
     super::super::exceptions::emit_type_error_from_string_result(ctx);

@@ -17823,3 +17823,100 @@ echo json_encode(stream_context_get_options($c)), "|";
         out.diagnostics
     );
 }
+
+
+/// Verifies `flock()` refuses the streams php has no descriptor to lock.
+///
+/// php reaches `flock()` through `php_stream_lock`, which only a stream whose ops carry a locking
+/// one answers. MEASURED on `php -n` 8.5.6: a plain file locks, and `php://memory`, `php://temp`,
+/// `php://output` and `data:` all return false, silently — no warning of any kind.
+///
+/// elephc backs `php://memory` and `php://temp` with `tmpfile()`, a REAL descriptor that locks
+/// perfectly well, so every one of them answered true. The refusal has to come from the recorded
+/// wrapper identity, which is what `__rt_stream_lock_unsupported` reads.
+#[test]
+fn test_flock_refuses_the_streams_php_cannot_lock() {
+    let out = compile_and_run_capture(
+        r####"<?php
+$path = tempnam(sys_get_temp_dir(), "flk");
+$cases = [
+    "plain"  => fopen($path, "w+"),
+    "memory" => fopen("php://memory", "w+"),
+    "temp"   => fopen("php://temp", "w+"),
+    "output" => fopen("php://output", "w"),
+    "data"   => fopen("data://text/plain,hi", "r"),
+];
+foreach ($cases as $name => $handle) {
+    echo $name, "=", var_export(flock($handle, LOCK_EX), true);
+    echo ",", var_export(flock($handle, LOCK_UN), true), "|";
+}
+unlink($path);
+"####,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "plain=true,true|memory=false,false|temp=false,false|output=false,false|data=false,false|"
+    );
+    // php says nothing at all here: the refusal is the return value.
+    assert_eq!(out.diagnostics, "");
+}
+
+
+/// Verifies every wrapper names ITSELF in `stream_get_meta_data()`, not the thing backing it.
+///
+/// MEASURED on `php -n` 8.5.6. Four of these six were wrong, each for its own reason:
+///
+/// ```text
+/// zlib   stream_type   php ZLIB        elephc STDIO       (served from a temp file, which seeks)
+/// user   stream_type   php user-space  elephc tcp_socket  (a synthetic handle no lseek can move)
+/// glob   wrapper_type  php glob        elephc plainfile   (opendir stamps no wrapper id)
+/// ```
+///
+/// `stream_type` is derived from an `lseek` probe unless the stream records an identity, which is
+/// how a user wrapper came to call itself a TCP socket. `wrapper_type` reads the recorded id
+/// alone, which `opendir()` never sets — so a glob directory kept the unset value's name.
+#[test]
+fn test_every_wrapper_names_itself_in_the_metadata() {
+    let out = compile_and_run(
+        r####"<?php
+class W
+{
+    public $context;
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_stat() { return []; }
+    public function dir_opendir($p, $o) { return true; }
+    public function dir_readdir() { return false; }
+}
+stream_wrapper_register("mine", "W");
+
+$dir = sys_get_temp_dir() . "/elephc_meta_probe";
+@mkdir($dir);
+file_put_contents($dir . "/f.txt", "abc");
+file_put_contents($dir . "/f.gz", gzencode("abc"));
+
+$cases = [
+    "plain" => fopen($dir . "/f.txt", "r"),
+    "php"   => fopen("php://memory", "w+"),
+    "data"  => fopen("data://text/plain,hi", "r"),
+    "zlib"  => fopen("compress.zlib://" . $dir . "/f.gz", "r"),
+    "user"  => fopen("mine://x", "r"),
+    "glob"  => opendir("glob://" . $dir . "/*"),
+];
+foreach ($cases as $name => $handle) {
+    $meta = stream_get_meta_data($handle);
+    echo $name, "=", $meta["wrapper_type"], "/", $meta["stream_type"], "|";
+}
+unlink($dir . "/f.txt");
+unlink($dir . "/f.gz");
+rmdir($dir);
+"####,
+    );
+    assert_eq!(
+        out,
+        "plain=plainfile/STDIO|php=PHP/MEMORY|data=RFC2397/RFC2397|\
+         zlib=ZLIB/ZLIB|user=user-space/user-space|glob=glob/glob|"
+    );
+}
