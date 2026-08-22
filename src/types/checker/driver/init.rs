@@ -204,6 +204,7 @@ impl Checker {
             loop_storage_types: HashMap::new(),
             string_incdec_locals: HashSet::new(),
             widened_scalar_locals: HashSet::new(),
+            tentative_return_deprecations: Vec::new(),
         }
     }
 }

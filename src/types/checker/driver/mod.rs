@@ -254,6 +254,10 @@ pub(super) fn check_types_impl(
         errors.extend(error.flatten());
     }
     checker.declared_classes = class_map.keys().cloned().collect();
+    // php raises these while LINKING each class, before the script produces anything, so they
+    // are computed here from the finished class map rather than at any call site.
+    checker.tentative_return_deprecations =
+        super::tentative_return_types::tentative_return_deprecations(&class_map);
     checker.declared_interfaces = interface_map.keys().cloned().collect();
     checker.declared_traits = declared_traits.clone();
     checker.declared_trait_methods = declared_trait_methods;

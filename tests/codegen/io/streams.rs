@@ -18104,3 +18104,76 @@ echo var_export($a, true), "|", var_export($b, true);
         out.diagnostics
     );
 }
+
+
+/// Verifies php's tentative-return deprecation for a class extending `php_user_filter`.
+///
+/// php declares three of that class's methods with TENTATIVE return types — `filter(): int`,
+/// `onCreate(): bool`, `onClose(): void` — and raises this notice while LINKING any subclass that
+/// overrides one without a return type of its own. It fires before the script produces anything
+/// and whether or not the method is ever called, which is why elephc emits it from the main
+/// prologue rather than at a call site.
+///
+/// Every ordinary user filter is written the way `A` is, so this notice accompanies essentially
+/// every real use of the filter API — elephc printed none of them. MEASURED on `php -n` 8.5.6,
+/// including the ORDER: by method line, across classes.
+///
+/// `B` opts out by declaring the return types, `C` by the attribute, and `D` shows the notice is
+/// about the return type alone — typed parameters do not silence it.
+#[test]
+fn test_a_user_filter_gets_phps_tentative_return_deprecation() {
+    let out = compile_and_run_capture(
+        r####"<?php
+class A extends php_user_filter
+{
+    function filter($in, $out, &$consumed, $closing) { return PSFS_PASS_ON; }
+    function onCreate() { return true; }
+    function onClose() { }
+}
+class B extends php_user_filter
+{
+    function filter($in, $out, &$consumed, bool $closing): int { return PSFS_PASS_ON; }
+    function onCreate(): bool { return true; }
+    function onClose(): void { }
+}
+class C extends php_user_filter
+{
+    #[\ReturnTypeWillChange]
+    function filter($in, $out, &$consumed, $closing) { return PSFS_PASS_ON; }
+}
+class D extends php_user_filter
+{
+    function filter(mixed $in, mixed $out, mixed &$consumed, mixed $closing) { return PSFS_PASS_ON; }
+}
+echo "declared";
+"####,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "declared");
+
+    let tail = "should either be compatible with php_user_filter::";
+    for expected in [
+        format!("Return type of A::filter($in, $out, &$consumed, $closing) {tail}filter($in, $out, &$consumed, bool $closing): int"),
+        format!("Return type of A::onCreate() {tail}onCreate(): bool"),
+        format!("Return type of A::onClose() {tail}onClose(): void"),
+        format!("Return type of D::filter(mixed $in, mixed $out, mixed &$consumed, mixed $closing) {tail}filter($in, $out, &$consumed, bool $closing): int"),
+    ] {
+        assert!(
+            out.diagnostics.contains(&expected),
+            "missing `{expected}` in diagnostics={}",
+            out.diagnostics
+        );
+    }
+    // The two that opt out say nothing at all.
+    assert!(
+        !out.diagnostics.contains("B::") && !out.diagnostics.contains("C::"),
+        "a declared return type and the attribute both silence it, got diagnostics={}",
+        out.diagnostics
+    );
+    assert_eq!(
+        out.diagnostics.matches("Return type of").count(),
+        4,
+        "one notice per untyped override, got diagnostics={}",
+        out.diagnostics
+    );
+}

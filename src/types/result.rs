@@ -93,6 +93,10 @@ pub struct CheckResult {
     /// `(function-like scope, local name)` pairs for locals a reassignment widened across scalar
     /// types, so EIR lowering can give them boxed storage from their first store.
     pub widened_scalar_locals: HashSet<(String, String)>,
+    /// `(line, message)` for every built-in method with a TENTATIVE return type that a user
+    /// class overrides without one. php raises these while LINKING the class, so they are
+    /// emitted from the main prologue rather than at any call site.
+    pub tentative_return_deprecations: Vec<(u32, String)>,
 }
 
 /// Runs type checking using the host platform (auto-detected from the build environment).

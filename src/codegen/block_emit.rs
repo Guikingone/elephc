@@ -925,6 +925,7 @@ fn emit_main_function(
         crate::codegen::tls::publish_tls_function_pointers(ctx.emitter);
     }
     emit_http_response_header_deprecation(&mut ctx);
+    emit_tentative_return_deprecations(&mut ctx);
     // Enum cases are NOT initialized here any more: each case now materializes on
     // its first evaluation through `super::enum_singletons`, so a case that user
     // code never touches allocates nothing and burns no object handle — which is
@@ -965,6 +966,32 @@ const HTTP_RESPONSE_HEADER_DEPRECATION: &str =
 /// variable reaching `module.data.global_names`, and its equivalent of "before
 /// any output" is the main prologue, so the notice lands there — once, whatever
 /// the number of mentions, which is also what php does.
+/// Emits php's tentative-return deprecations, which it raises while LINKING each class.
+///
+/// Same reasoning as the notice below: php raises these while COMPILING the file, so they fire
+/// before the script produces anything and whether or not the method is ever called. The checker
+/// computed them from the finished class map; each carries the line of the METHOD php names, which
+/// is why the location is published per message rather than once.
+fn emit_tentative_return_deprecations(ctx: &mut FunctionContext<'_>) {
+    let deprecations = ctx.module.tentative_return_deprecations.clone();
+    for (line, message) in deprecations {
+        let (label, len) = ctx.data.add_string(message.as_bytes());
+        // BEFORE the message registers are loaded: the publisher works through scratch registers.
+        super::lower_inst::publish_diagnostic_line(ctx, line);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_symbol_address(ctx.emitter, "x1", &label);
+                abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+            }
+            Arch::X86_64 => {
+                abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+                abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    }
+}
+
 fn emit_http_response_header_deprecation(ctx: &mut FunctionContext<'_>) {
     if crate::codegen::compile_php_version() < crate::php_version::PhpVersion::Php85 {
         return;

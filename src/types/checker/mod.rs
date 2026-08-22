@@ -19,6 +19,7 @@ mod builtin_spl_exceptions;
 pub(crate) mod builtin_stdclass;
 mod builtin_types;
 mod builtin_user_filter;
+pub(crate) mod tentative_return_types;
 pub(crate) mod builtins;
 mod callables;
 mod driver;
@@ -275,6 +276,8 @@ pub(crate) struct Checker {
     /// `(function-like scope, local name)` pairs for locals a reassignment widened across scalar
     /// types, so EIR lowering gives them boxed storage from their first store.
     pub widened_scalar_locals: HashSet<(String, String)>,
+    /// php's tentative-return deprecations, computed while linking and emitted at startup.
+    pub tentative_return_deprecations: Vec<(u32, String)>,
 }
 
 /// Records an access violation that must lower to a catchable `Error` throw.
@@ -389,6 +392,7 @@ pub fn check_types(
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,
         widened_scalar_locals: checker.widened_scalar_locals,
+        tentative_return_deprecations: checker.tentative_return_deprecations,
     })
 }
 
