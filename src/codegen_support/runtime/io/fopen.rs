@@ -16,6 +16,26 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// fopen: open a file and return its file descriptor.
 /// Input:  x1/x2=filename string, x3/x4=mode string
 /// Output: x0=file descriptor (or negative on error)
+/// The disabled-wrapper mask bit that stands for `file://`.
+///
+/// DERIVED from `STREAM_WRAPPERS`, never written as a literal. `__rt_fopen` used to test bit 0
+/// with a comment claiming index 0 was `file`; it is index 5, so the guard tested `https` and
+/// `stream_wrapper_unregister("file")` reported success while opens kept working — on both
+/// arches. A hard-coded bit is a second copy of the table's ordering, and this one had already
+/// stopped agreeing with it.
+fn file_wrapper_mask_bit() -> u64 {
+    let index = crate::types::stream_constants::STREAM_WRAPPERS
+        .iter()
+        .position(|name| *name == "file")
+        .expect("the built-in wrapper table must contain file://");
+    assert!(
+        index < 64,
+        "the disabled-wrapper mask is one 64-bit word; file:// at index {index} no longer fits a \
+         bit test"
+    );
+    1u64 << index
+}
+
 pub fn emit_fopen(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fopen_linux_x86_64(emitter);
@@ -87,11 +107,11 @@ pub fn emit_fopen(emitter: &mut Emitter) {
 
     // -- refuse plain paths while the file:// wrapper is unregistered --
     // stream_wrapper_unregister("file") must actually stop opens, otherwise the
-    // call reports success and changes nothing. Index 0 is "file" in the built-in
-    // wrapper list.
+    // call reports success and changes nothing. The bit is derived from the wrapper table by
+    // `file_wrapper_mask_bit`.
     abi::emit_symbol_address(emitter, "x9", "_disabled_builtin_wrappers");
     emitter.instruction("ldr x10, [x9]");                                       // disabled built-in mask
-    emitter.instruction("tst x10, #1");                                         // is file:// unregistered?
+    emitter.instruction(&format!("tst x10, #{}", file_wrapper_mask_bit()));     // is file:// unregistered?
     emitter.instruction("b.ne __rt_fopen_fail");                                // report PHP false while it is
 
     // -- save mode string for later parsing --
@@ -473,10 +493,10 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     // -- refuse plain paths while the file:// wrapper is unregistered --
     // The AArch64 helper has always done this; without it here,
     // `stream_wrapper_unregister("file")` reported success on x86_64 and then changed nothing,
-    // so opens kept working. Index 0 is "file" in the built-in wrapper list.
+    // so opens kept working. The bit is derived by `file_wrapper_mask_bit`.
     abi::emit_symbol_address(emitter, "r9", "_disabled_builtin_wrappers");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // disabled built-in mask
-    emitter.instruction("test r10, 1");                                         // is file:// unregistered?
+    emitter.instruction(&format!("test r10, {}", file_wrapper_mask_bit()));     // is file:// unregistered?
     emitter.instruction("jnz __rt_fopen_fail_x86");                             // report PHP false while it is
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the elephc mode pointer while the filename string is converted to a C string

@@ -17533,3 +17533,30 @@ unlink("a.txt"); unlink("b.txt"); unlink("c.txt");
     assert_eq!(out, "3|abc|5|12.51|0|[]");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `stream_wrapper_unregister("file")` actually stops opens.
+///
+/// The guard existed on both arches and could never fire: `__rt_fopen` tested BIT 0 of the
+/// disabled-wrapper mask, under a comment asserting "Index 0 is `file` in the built-in wrapper
+/// list". `file` is at index 5 — bit 0 is `https` — so the test asked about a wrapper nobody had
+/// unregistered, and the open proceeded. That is precisely the failure the x86 arm's own comment
+/// says it was added to fix, reintroduced by a hard-coded constant that stopped agreeing with the
+/// table it was copied from.
+///
+/// The bit is now DERIVED from `STREAM_WRAPPERS`, so reordering that table cannot silently
+/// retarget the guard again.
+#[test]
+fn test_unregistering_the_file_wrapper_stops_opens() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("uw.txt", "abc");
+echo stream_wrapper_unregister("file") ? "1" : "0";
+echo @fopen("uw.txt", "r") !== false ? "1" : "0";
+echo stream_wrapper_restore("file") ? "1" : "0";
+echo @fopen("uw.txt", "r") !== false ? "1" : "0";
+unlink("uw.txt");
+"#,
+    );
+    assert_eq!(out, "1011");
+    let _ = fs::remove_dir_all(&dir);
+}
