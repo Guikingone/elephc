@@ -62,6 +62,20 @@ fn emit_keyed_adapter(emitter: &mut Emitter) {
             emitter.instruction("add x29, sp, #32");
             emitter.instruction("stp x0, x2, [sp, #0]");                        // the predicate and its environment
             emitter.instruction("str x3, [sp, #16]");                           // the mode
+            // The mode is judged BEFORE the conversion allocates. Converting first and letting
+            // `__rt_hash_filter` raise would abandon the hash `__rt_array_to_hash` just built.
+            emitter.instruction("cmp x3, #0");
+            emitter.instruction("b.eq __rt_afk_mode_ok");
+            emitter.instruction("cmp x3, #1");
+            emitter.instruction("b.eq __rt_afk_mode_ok");
+            emitter.instruction("cmp x3, #2");
+            emitter.instruction("b.eq __rt_afk_mode_ok");
+            value_error::emit_throw_value_error_aarch64(
+                emitter,
+                "_array_filter_mode_msg",
+                MODE_MSG_LEN,
+            );
+            emitter.label("__rt_afk_mode_ok");
             emitter.instruction("mov x0, x1");                                  // the list to convert
             emitter.instruction("bl __rt_array_to_hash");                       // integer keys 0..length-1
             emitter.instruction("mov x1, x0");                                  // it becomes the filter's source
@@ -79,6 +93,19 @@ fn emit_keyed_adapter(emitter: &mut Emitter) {
             emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // the predicate
             emitter.instruction("mov QWORD PTR [rbp - 16], rdx");               // its environment
             emitter.instruction("mov QWORD PTR [rbp - 24], rcx");               // the mode
+            // The mode is judged BEFORE the conversion allocates; see the AArch64 arm.
+            emitter.instruction("cmp rcx, 0");
+            emitter.instruction("je __rt_afk_mode_ok_x");
+            emitter.instruction("cmp rcx, 1");
+            emitter.instruction("je __rt_afk_mode_ok_x");
+            emitter.instruction("cmp rcx, 2");
+            emitter.instruction("je __rt_afk_mode_ok_x");
+            value_error::emit_throw_value_error_x86_64(
+                emitter,
+                "_array_filter_mode_msg",
+                MODE_MSG_LEN,
+            );
+            emitter.label("__rt_afk_mode_ok_x");
             emitter.instruction("mov rdi, rsi");                                // the list to convert
             emitter.instruction("call __rt_array_to_hash");                     // integer keys 0..length-1
             emitter.instruction("mov rsi, rax");                                // it becomes the filter's source

@@ -17619,3 +17619,32 @@ unlink("uw.txt");
     assert_eq!(out, "1011");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies a context created from an EMPTY options array survives `stream_context_set_option()`.
+///
+/// It used to SEGFAULT. `[]` is an empty INDEXED array, and the options slot is read as a hash by
+/// everything downstream — `__rt_hash_ensure_unique` and then `__rt_hash_get`, which hashed a key
+/// pointer out of an indexed array's header. `stream_context_create()` with NO argument never had
+/// the bug, so the empty literal is written here on purpose.
+///
+/// php's rule is what settles the storage: an options array is
+/// `["wrappername"]["optionname"] = $value`, so an indexed array can only be legal when empty, and
+/// an empty one carries no options. MEASURED on `php -n` 8.5.6.
+#[test]
+fn test_a_context_built_from_an_empty_options_array_accepts_set_option() {
+    let out = compile_and_run(
+        r#"<?php
+$c = stream_context_create([]);
+var_dump(stream_context_set_option($c, "http", "method", "POST"));
+print_r(stream_context_get_options($c));
+$d = stream_context_create([]);
+print_r(stream_context_get_options($d));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\n\
+         Array\n(\n    [http] => Array\n        (\n            [method] => POST\n        )\n\n)\n\
+         Array\n(\n)\n"
+    );
+}

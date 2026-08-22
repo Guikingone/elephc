@@ -474,7 +474,11 @@ fn emit_uncaught_exception_fatal_if_no_handler(
             ctx.emitter.instruction("mov r15, rsp");                            // stash the entry rsp in r15, which the flush helper preserves
             ctx.emitter.instruction("and rsp, -16");                            // realign the stack to the 16-byte call boundary
             ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain buffered output before the fatal report
-            ctx.emitter.instruction("mov rsp, r15");                            // restore the entry rsp once the flush returns
+            // The trace calls stay INSIDE the aligned window. `mov rsp, r15` restores the entry
+            // rsp, which at a call boundary is 8 mod 16 — the very thing `and rsp, -16` exists to
+            // fix — so calling from there would hand every callee a misaligned stack. Nothing
+            // below reads an rsp-relative temporary: this arm's message is a pre-baked label, and
+            // the frame recording reads rbp-relative locals.
             emit_raising_builtin_trace_frame(ctx);                              // php's frame #0 is the builtin that raised
             abi::emit_symbol_address(ctx.emitter, "rsi", fatal_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", fatal_len as i64);
@@ -483,6 +487,7 @@ fn emit_uncaught_exception_fatal_if_no_handler(
             ctx.emitter.instruction("syscall");                                 // emit the specific fatal message
             abi::emit_load_int_immediate(ctx.emitter, "rdi", i64::from(creation_line));
             ctx.emitter.instruction("call __rt_trace_write_block");             // this path never reaches the shared report
+            ctx.emitter.instruction("mov rsp, r15");                            // restore the entry rsp before leaving
             abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
         }
     }

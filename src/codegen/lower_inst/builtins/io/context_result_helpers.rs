@@ -231,6 +231,19 @@ pub(super) fn store_stream_context_options(
         STREAM_CONTEXT_OPTIONS_SHAPE_MESSAGE,
     );
     abi::emit_pop_reg(ctx.emitter, result_reg);
+    // An INDEXED array is never an options map. php's shape is
+    // `["wrappername"]["optionname"] = $value`, so a list can only be legal when EMPTY — measured,
+    // `stream_context_create([])` is a valid context and `stream_context_create([1])` is a
+    // ValueError, which the guard above already raises. What remains is not to PUBLISH the list:
+    // every reader of this slot treats it as a hash, and `stream_context_set_option()` on a
+    // context built from `[]` used to segfault hashing a key out of an indexed array's header.
+    if matches!(
+        ctx.raw_value_php_type(options)?.codegen_repr(),
+        PhpType::Array(_)
+    ) {
+        clear_stream_context_options(ctx);
+        return Ok(());
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => store_stream_context_options_aarch64(ctx, clear_on_null),
         Arch::X86_64 => store_stream_context_options_x86_64(ctx, clear_on_null),
