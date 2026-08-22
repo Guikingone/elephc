@@ -854,7 +854,18 @@ fn merge_local_assignment_type(
         checker
             .local_binding_depth
             .insert(name.to_string(), checker.local_conditional_depth);
-        env.insert(name.to_string(), ty.clone());
+        // The syntactic pre-scan marked this name as branch-divergently assigned, so its frame
+        // slot is boxed `Mixed` for the WHOLE body — see `checker::mixed_storage_scan`. Binding
+        // `Mixed` at the FIRST store is what makes that true: every later assignment then merges
+        // trivially (`Mixed` absorbs everything), so neither the retype hook above nor the hard
+        // "cannot reassign" error can fire for a marked name. The binding depth stays the real
+        // one; only the type is replaced.
+        let bound_ty = if checker.mixed_storage_locals.contains(name) {
+            PhpType::Mixed
+        } else {
+            ty.clone()
+        };
+        env.insert(name.to_string(), bound_ty);
     }
     Ok(())
 }

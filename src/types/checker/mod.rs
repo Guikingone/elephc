@@ -28,6 +28,7 @@ mod functions;
 mod inference;
 mod loop_storage;
 mod method_pass;
+mod mixed_storage_scan;
 pub(crate) mod null_probe;
 mod schema;
 mod stmt_check;
@@ -286,6 +287,18 @@ pub(crate) struct Checker {
     /// type, as span -> local NAME. Filled in Task 3; carried in `CheckResult` from here so the
     /// two decision maps travel together, keyed the same way.
     pub local_retype_sites: HashMap<Span, String>,
+    /// Names of the CURRENT body's locals that the syntactic pre-scan marked as whole-frame boxed
+    /// `Mixed` storage, because they are assigned incompatible types across a branch.
+    ///
+    /// A marked name binds `PhpType::Mixed` at its first store (see `merge_local_assignment_type`),
+    /// which absorbs every later assignment, so the retype hook and the "cannot reassign" error
+    /// never fire for it. Per-body, like every other field in [`SavedLocalBindingScope`].
+    pub mixed_storage_locals: HashSet<String>,
+    /// Every statement-form assignment to a mixed-storage local, as span -> local NAME, so EIR
+    /// lowering can declare the slot boxed BEFORE the first store instead of inferring it from
+    /// the first stored value. Cumulative across bodies, and keyed like the other two decision
+    /// maps — see `CheckResult::local_bind_kill_sites` for why the name is half the key.
+    pub mixed_storage_store_sites: HashMap<Span, String>,
 }
 
 /// The per-body local-binding eligibility state, saved while a nested body is checked.
@@ -299,6 +312,7 @@ pub(crate) struct SavedLocalBindingScope {
     ref_aliased: HashSet<String>,
     statics: HashSet<String>,
     typed: HashSet<String>,
+    mixed_storage: HashSet<String>,
 }
 
 impl Checker {
@@ -347,6 +361,10 @@ impl Checker {
             ref_aliased: std::mem::take(&mut self.ref_aliased_locals),
             statics: std::mem::take(&mut self.static_local_names),
             typed: std::mem::take(&mut self.typed_local_names),
+            // The mixed-storage marking describes ONE frame: a name boxed in the caller says
+            // nothing about a same-named local in the callee, and leaking the set inward would
+            // box a callee local the pre-scan never marked.
+            mixed_storage: std::mem::take(&mut self.mixed_storage_locals),
         };
         self.local_conditional_depth = 0;
         self.local_binding_depth = param_names.into_iter().map(|name| (name, 0)).collect();
@@ -361,6 +379,7 @@ impl Checker {
         self.ref_aliased_locals = saved.ref_aliased;
         self.static_local_names = saved.statics;
         self.typed_local_names = saved.typed;
+        self.mixed_storage_locals = saved.mixed_storage;
     }
 
     /// Drops every per-name fact the checker carries for a local whose binding just ended.
@@ -528,6 +547,7 @@ pub fn check_types_with_options(
         program,
         &checker.local_bind_kill_sites,
         &checker.local_retype_sites,
+        &checker.mixed_storage_store_sites,
     )?;
 
     Ok(CheckResult {
@@ -554,6 +574,7 @@ pub fn check_types_with_options(
         string_incdec_locals: checker.string_incdec_locals,
         local_bind_kill_sites: checker.local_bind_kill_sites,
         local_retype_sites: checker.local_retype_sites,
+        mixed_storage_store_sites: checker.mixed_storage_store_sites,
     })
 }
 

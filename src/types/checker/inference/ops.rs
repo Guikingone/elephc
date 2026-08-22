@@ -438,6 +438,7 @@ impl Checker {
             closure_ref_params,
             closure_param_names,
             closure_typed_params,
+            body,
             |checker| {
                 for stmt in body {
                     checker.check_stmt(stmt, &mut closure_sig.env)?;

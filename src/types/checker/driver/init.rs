@@ -203,6 +203,8 @@ impl Checker {
             typed_local_names: HashSet::new(),
             local_bind_kill_sites: HashMap::new(),
             local_retype_sites: HashMap::new(),
+            mixed_storage_locals: HashSet::new(),
+            mixed_storage_store_sites: HashMap::new(),
         }
     }
 }

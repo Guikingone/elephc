@@ -166,6 +166,7 @@ impl Checker {
             ref_param_names,
             param_names,
             typed_param_names,
+            &decl.body,
             |checker| {
                 for stmt in &decl.body {
                     if let Err(error) = checker.check_stmt(stmt, &mut local_env) {

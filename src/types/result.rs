@@ -119,19 +119,39 @@ pub struct CheckResult {
     /// reason — see that field.
     #[allow(dead_code)]
     pub local_retype_sites: HashMap<Span, String>,
+    /// Every statement-form assignment to a local the checker's syntactic pre-scan marked as
+    /// whole-frame boxed `Mixed` storage (a branch-divergently assigned local), as span -> local
+    /// NAME, so EIR lowering declares the slot boxed before the FIRST store instead of inferring
+    /// it from the first stored value.
+    ///
+    /// Keyed like the other two decision maps and for the same reason — see
+    /// `local_bind_kill_sites` — and checked by `checker::binding_decision_ambiguity` against the
+    /// same statement-form-assignment tally the retype decisions use, because both roles name
+    /// exactly that node kind.
+    #[allow(dead_code)]
+    pub mixed_storage_store_sites: HashMap<Span, String>,
 }
 
 impl CheckResult {
-    /// Every span carrying a local-binding decision, kills and retypes together.
+    /// Every span carrying a local-binding decision: kills, retypes and mixed-storage stores.
     ///
     /// Handed to the post-typecheck optimizer. These decisions are keyed BY SPAN and EIR lowering
     /// consults them by span, so any pass that CLONES an AST node would hand one decision to two
     /// syntactic sites — and abandoning a binding is not idempotent. DCE's tail-sinking is the one
     /// pass that clones, and it keeps statements carrying these spans singular.
+    ///
+    /// The mixed-storage store sites are included even though their consumer — declaring the slot
+    /// `Mixed` when the local has none yet — IS idempotent under duplication (the second clone
+    /// finds the slot already declared and does nothing). They are kept singular anyway because
+    /// the ambiguity check that runs in the checker counts the nodes of the ORIGINAL program: a
+    /// pass that cloned one of these statements afterwards would create a second site for a key
+    /// that check already cleared, and "the decision names exactly one node" is the invariant the
+    /// two halves of this feature are built on. The cost is one lost tail-sink per boxed local.
     pub fn local_binding_decision_spans(&self) -> HashSet<Span> {
         self.local_bind_kill_sites
             .keys()
             .chain(self.local_retype_sites.keys())
+            .chain(self.mixed_storage_store_sites.keys())
             .copied()
             .collect()
     }

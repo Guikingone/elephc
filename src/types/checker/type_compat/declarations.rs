@@ -395,11 +395,19 @@ impl Checker {
     /// per-body local-binding eligibility state (conditional depth, binding depths, reference
     /// aliases, `static` names) is reset here too — it describes one frame and must not leak
     /// between caller and callee.
+    ///
+    /// `body` is the statement list `f` is about to check. It is taken so the mixed-storage
+    /// pre-scan can run here, once the per-body state is installed and before any statement is
+    /// checked: the scan's decision has to be in place at each marked local's FIRST store. An
+    /// untyped BY-VALUE parameter is not excluded from marking by the scan (only by-reference and
+    /// type-hinted ones are), but a parameter is already bound on entry, so the mark cannot take
+    /// effect for it — `merge_local_assignment_type` only honours it on a fresh binding.
     pub(crate) fn with_local_storage_context<T, F>(
         &mut self,
         ref_param_names: Vec<String>,
         param_names: Vec<String>,
         typed_param_names: Vec<String>,
+        body: &[crate::parser::ast::Stmt],
         f: F,
     ) -> Result<T, CompileError>
     where
@@ -426,6 +434,10 @@ impl Checker {
         // A function/method/closure body is not the scope whose environment becomes
         // `global_env`, so null-probe roots found here must not be deferred against it.
         self.null_probe_scope_is_top_level = false;
+
+        // Runs on the state installed above: the scan reads `active_ref_params` and
+        // `typed_local_names` to keep by-reference and declared-type parameters unmarked.
+        self.run_mixed_storage_scan(body);
 
         let result = f(self);
 

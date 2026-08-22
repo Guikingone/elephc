@@ -1595,3 +1595,187 @@ fn test_by_value_capture_not_killable_inside_closure() {
         "cannot reassign",
     );
 }
+
+/// Branch-divergent assignment is accepted via whole-frame Mixed storage.
+#[test]
+fn test_branch_divergent_assignment_is_accepted() {
+    expect_no_error("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;");
+}
+
+/// Permissive default: the marking warns once, naming the boxed compilation.
+#[test]
+fn test_branch_divergent_assignment_warns() {
+    expect_warning("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;", "boxed mixed storage");
+}
+
+/// --strict-locals disables the pre-scan: the divergent assignment errors as today.
+#[test]
+fn test_branch_divergent_assignment_errors_under_strict() {
+    expect_error_strict("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;", "cannot reassign");
+}
+
+/// Single-branch retype of an outer binding is also handled by marking.
+#[test]
+fn test_single_branch_retype_of_outer_binding_is_accepted() {
+    expect_no_error("<?php $a = 0; if ($argc > 1) { $a = \"x\"; } echo $a;");
+}
+
+/// Heterogeneous loop-carried local is handled by marking.
+#[test]
+fn test_loop_carried_heterogeneous_local_is_accepted() {
+    expect_no_error("<?php $a = 0; for ($i = 0; $i < $argc; $i++) { $a = \"s\"; } echo $a;");
+}
+
+/// Declared-typed locals are never marked (contract wins in both modes).
+#[test]
+fn test_typed_local_never_mixed() {
+    expect_error("<?php int $a = 0; if ($argc > 1) { $a = \"x\"; }", "cannot reassign");
+}
+
+/// Ref-aliased locals are never marked.
+#[test]
+fn test_ref_aliased_never_mixed() {
+    expect_error("<?php $a = 0; $r =& $a; if ($argc > 1) { $a = 1; } else { $a = \"x\"; }", "cannot reassign");
+}
+
+/// A non-Assign write (++) blocks marking: the divergent assignment stays an error.
+#[test]
+fn test_incdec_write_blocks_marking() {
+    expect_error("<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++;", "cannot reassign");
+}
+
+/// unset anywhere in the body blocks marking: the name stays unmarked, so the
+/// else-branch assignment errors exactly as today (before the unset is even reached).
+#[test]
+fn test_unset_blocks_marking() {
+    expect_error("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } unset($a); echo $a;", "cannot reassign");
+}
+
+/// The marking records EVERY store site of the marked name, each naming a node and the local it
+/// boxes, and warns exactly once however many times the checker walks the body.
+#[test]
+fn test_mixed_storage_store_sites_are_recorded_once() {
+    let result = check_source_full("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;")
+        .expect("a branch-divergent assignment must type-check in permissive mode");
+    assert_eq!(
+        result.mixed_storage_store_sites.len(),
+        2,
+        "both branch assignments must be recorded: {:?}",
+        result.mixed_storage_store_sites
+    );
+    assert!(
+        result
+            .mixed_storage_store_sites
+            .iter()
+            .all(|(span, name)| span.identifies_a_node() && name == "a"),
+        "recorded store sites must name a node AND the local they box: {:?}",
+        result.mixed_storage_store_sites
+    );
+    let mixed_warnings: Vec<_> = result
+        .warnings
+        .iter()
+        .filter(|warning| warning.message.contains("boxed mixed storage"))
+        .collect();
+    assert_eq!(
+        mixed_warnings.len(),
+        1,
+        "the checker walks the top level twice; the marking must warn once: {:?}",
+        result.warnings
+    );
+    assert_eq!(
+        mixed_warnings[0].message,
+        "$a is assigned incompatible types (int and string); it is compiled as boxed mixed \
+         storage (compile with --strict-locals to make this an error)"
+    );
+    // The LATER span of the first failing pair: the `else` branch's assignment, at column 41.
+    assert_eq!(
+        (mixed_warnings[0].span.line, mixed_warnings[0].span.col),
+        (1, 41),
+        "the warning must land on the later assignment of the first failing pair"
+    );
+}
+
+/// A marking whose store sites name NO node must not happen at all.
+///
+/// `Span::dummy()` is what every compiler-generated AST node carries, so a store site filed under
+/// it would box locals at every other dummy-span assignment in the program — and, worse, the
+/// checker would type this local `Mixed` while lowering never saw the site that boxes its slot.
+/// Refusing to mark keeps the two halves in lock-step: the body reports today's error instead.
+#[test]
+fn test_mixed_storage_marking_at_dummy_spans_is_refused() {
+    use elephc::parser::ast::{Expr, Stmt, StmtKind};
+    use elephc::span::Span;
+
+    let program: elephc::parser::ast::Program = vec![Stmt::new(
+        StmtKind::If {
+            condition: Expr::var("argc"),
+            then_body: vec![Stmt::assign("a", Expr::int_lit(0))],
+            elseif_clauses: Vec::new(),
+            else_body: Some(vec![Stmt::assign("a", Expr::string_lit("ciao"))]),
+        },
+        Span::dummy(),
+    )];
+    let error = elephc::types::check(&program)
+        .err()
+        .expect("a divergent assignment at dummy spans must stay an error");
+    assert!(
+        error.message.contains("cannot reassign"),
+        "expected today's diagnostic, got: {}",
+        error.message
+    );
+}
+
+/// The scan only trusts value types it can infer EXACTLY (literals and scalar casts).
+///
+/// `infer_expr_type_syntactic` answers `Int` for everything it does not recognise, a plain
+/// `$a = $s` included, so trusting it here would box a local in a program that type-checks
+/// perfectly well today.
+#[test]
+fn test_inexactly_typed_value_blocks_marking() {
+    expect_no_warning(
+        "<?php $s = \"hello\"; $a = $s; if ($argc > 1) { $a = \"x\"; } echo $a;",
+        "boxed mixed storage",
+    );
+}
+
+/// The scan runs at every per-body entry point, not only at top level.
+#[test]
+fn test_branch_divergent_assignment_in_a_function_body_is_accepted() {
+    expect_no_error(
+        "<?php function f(int $n) { if ($n > 1) { $a = 0; } else { $a = \"s\"; } return $a; } echo f(2);",
+    );
+}
+
+/// Method bodies get the same treatment.
+#[test]
+fn test_branch_divergent_assignment_in_a_method_body_is_accepted() {
+    expect_no_error(
+        "<?php class C { public function m(int $n) { if ($n > 1) { $a = 0; } else { $a = \"s\"; } return $a; } } $c = new C(); echo $c->m(2);",
+    );
+}
+
+/// Closure bodies too.
+#[test]
+fn test_branch_divergent_assignment_in_a_closure_body_is_accepted() {
+    expect_no_error(
+        "<?php $f = function (int $n) { if ($n > 1) { $a = 0; } else { $a = \"s\"; } return $a; }; echo $f(2);",
+    );
+}
+
+/// A conflict the depth-0 retype path already resolved must not box the local.
+///
+/// `$a = "s"; $a = 0;` re-binds `$a` to a fresh `int` slot (Task 3), so the later `$a = 1` inside
+/// the branch merges cleanly and the program compiles today with only the "changes type" warning.
+/// Comparing the assignments pairwise instead of replaying them would see (`string`, `int`) and
+/// box a local for a conflict that no longer exists.
+#[test]
+fn test_conflict_already_resolved_by_the_retype_path_is_not_marked() {
+    expect_no_warning(
+        "<?php $a = \"s\"; $a = 0; if ($argc > 1) { $a = 1; } echo $a;",
+        "boxed mixed storage",
+    );
+    expect_warning(
+        "<?php $a = \"s\"; $a = 0; if ($argc > 1) { $a = 1; } echo $a;",
+        "changes type from string to int",
+    );
+}

@@ -37,6 +37,11 @@ impl Checker {
         // second pass would start with the first pass's aliases and binding depths already in
         // place, so the same `unset` could be eligible in one pass and not the other.
         let saved_local_binding_scope = self.enter_local_binding_scope(Vec::new(), Vec::new());
+        // The pre-scan has to decide before the first statement is checked: a marked local binds
+        // boxed `Mixed` at its FIRST store. Top level has no parameters, so the scan sees an
+        // empty by-reference/declared-type exclusion set, as `enter_local_binding_scope` just
+        // installed it.
+        self.run_mixed_storage_scan(program);
         let mut global_env = self.seed_global_env();
         let mut all_errors = Vec::with_capacity(program.len());
         // `(statement index, name, span)` for every null probe this pass tolerated, so the

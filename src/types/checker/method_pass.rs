@@ -178,6 +178,7 @@ impl Checker {
                         method_ref_params,
                         method_param_names,
                         method_typed_params,
+                        &method.body,
                         |checker| {
                             for s in &method.body {
                                 if let Err(error) = checker.check_stmt(s, &mut method_env) {

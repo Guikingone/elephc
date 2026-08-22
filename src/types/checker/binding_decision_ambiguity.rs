@@ -6,7 +6,8 @@
 //! - `crate::types::checker::check_types_with_options`, once, after every checker walk has settled.
 //!
 //! Key details:
-//! - `CheckResult::local_bind_kill_sites` / `local_retype_sites` are keyed by `(Span, local name)`
+//! - `CheckResult::local_bind_kill_sites` / `local_retype_sites` / `mixed_storage_store_sites` are
+//!   keyed by `(Span, local name)`
 //!   and EIR lowering consults them by that key. A `Span` carries line/column and NOTHING about
 //!   which FILE they are in, and include resolution splices every included file's statements into
 //!   one program WITHOUT rebasing line numbers (`resolver::engine_includes` rewrites no spans). So
@@ -34,35 +35,51 @@ use crate::span::Span;
 
 /// Rejects every recorded decision whose key matches more than one node OF ITS OWN ROLE.
 ///
-/// Both maps are keyed the same way and are walked in one pass, but each is checked against its
-/// own tally, never against the other's. That matches how lowering consults them and is not a
-/// weakening: `lower_assign` reads the retype decisions and fires only at a `StmtKind::Assign`,
-/// `unset_local` reads the kill decisions and fires only at an `unset` argument. A retype and a
-/// kill filed under one span for one name could therefore never make either site re-bind for the
-/// other's reason, so cross-role coincidence is not a hazard to detect.
+/// All three maps are keyed the same way and are walked in one pass, but each is checked against
+/// the tally for the node kind it names, never against another kind's. That matches how lowering
+/// consults them and is not a weakening: `lower_assign` reads the retype decisions and fires only
+/// at a `StmtKind::Assign`, `unset_local` reads the kill decisions and fires only at an `unset`
+/// argument. A retype and a kill filed under one span for one name could therefore never make
+/// either site re-bind for the other's reason, so cross-role coincidence is not a hazard to detect.
+///
+/// The MIXED-STORAGE store sites share the retype tally rather than getting one of their own,
+/// because they name the same node kind: both are statement-form assignments, and both are read
+/// at a `StmtKind::Assign` during lowering. Giving them a separate tally would count the same
+/// nodes twice over and change nothing, while lumping them with the `unset` arguments would be
+/// wrong. A span shared by a retype and a mixed store site for one name cannot happen — a marked
+/// name binds `Mixed`, so its assignments always merge and never record a retype — and if it
+/// somehow did, both decisions would still name that one assignment.
 pub(super) fn reject_ambiguous_local_binding_decisions(
     program: &Program,
     kill_sites: &HashMap<Span, String>,
     retype_sites: &HashMap<Span, String>,
+    mixed_storage_store_sites: &HashMap<Span, String>,
 ) -> Result<(), CompileError> {
-    if kill_sites.is_empty() && retype_sites.is_empty() {
+    if kill_sites.is_empty() && retype_sites.is_empty() && mixed_storage_store_sites.is_empty() {
         return Ok(());
     }
     // Only spans a decision was filed against are worth counting, and there are a handful of them
     // in a whole program. Everything else short-circuits on this set lookup.
     let mut tally = Tally {
-        watched: kill_sites.keys().chain(retype_sites.keys()).copied().collect(),
+        watched: kill_sites
+            .keys()
+            .chain(retype_sites.keys())
+            .chain(mixed_storage_store_sites.keys())
+            .copied()
+            .collect(),
         assigns: HashMap::new(),
         unset_args: HashMap::new(),
     };
     count_block(program, &mut tally);
     // Counted BY ROLE, matching how lowering consults each map: `lower_assign` reads the retype
-    // decisions at a statement-form assignment, `unset_local` reads the kill decisions at an
-    // `unset` argument. Lumping the roles together is wrong rather than merely imprecise — the
-    // parser gives `$x .= "a"` a synthesized `$x` READ at the very span of the assignment
-    // statement, so one ordinary compound assignment would look like two colliding sites.
+    // and mixed-storage decisions at a statement-form assignment, `unset_local` reads the kill
+    // decisions at an `unset` argument. Lumping the roles together is wrong rather than merely
+    // imprecise — the parser gives `$x .= "a"` a synthesized `$x` READ at the very span of the
+    // assignment statement, so one ordinary compound assignment would look like two colliding
+    // sites.
     let decisions = retype_sites
         .iter()
+        .chain(mixed_storage_store_sites.iter())
         .map(|(span, name)| (span, name, &tally.assigns))
         .chain(
             kill_sites
@@ -81,9 +98,10 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
                 *span,
                 &format!(
                     "Cannot re-bind ${} here: {} statements in this program sit at line {} \
-                     column {} and name ${}. elephc identifies a local re-binding (an `unset` or \
-                     an incompatible reassignment) by source position, and a position carries no \
-                     file, so it cannot tell them apart. Either two files have a statement at the \
+                     column {} and name ${}. elephc identifies a local binding decision (an \
+                     `unset`, an incompatible reassignment, or a branch-divergent assignment \
+                     compiled as boxed mixed storage) by source position, and a position carries \
+                     no file, so it cannot tell them apart. Either two files have a statement at the \
                      same line and column, or the same file is included more than once (every \
                      `require`/`include` splices its statements in again). Keep the two \
                      assignments type-compatible, or move one statement to a different line or \

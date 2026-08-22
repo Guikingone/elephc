@@ -1,0 +1,699 @@
+//! Purpose:
+//! Syntactic per-body pre-scan that marks branch-divergently assigned locals as whole-frame
+//! boxed `Mixed` storage, so `if (…) { $a = 0; } else { $a = "ciao"; }` compiles instead of
+//! being rejected.
+//!
+//! Called from:
+//! - `crate::types::checker::Checker::with_local_storage_context` (function/method/closure bodies)
+//! - `crate::types::checker::Checker::check_top_level_program` (the top-level body)
+//!
+//! Key details:
+//! - Runs BEFORE the body is statement-checked, because the decision has to be in place at the
+//!   local's FIRST store: a marked name binds `PhpType::Mixed` there, and `Mixed` absorbs every
+//!   later assignment, so neither the retype hook nor the "cannot reassign" error can fire for it.
+//! - Purely syntactic. It never consults the type environment, so it produces the same answer on
+//!   every one of the checker's repeated walks over the same body (top level twice, method bodies
+//!   to stability, function bodies once per call-site specialization).
+//! - Disabled under `--strict-locals`: the scan returns without marking anything and a divergent
+//!   assignment errors exactly as it does today.
+
+use std::collections::BTreeMap;
+
+use crate::errors::CompileWarning;
+use crate::names::Name;
+use crate::parser::ast::{
+    is_compound_assignment_self_read, CallableTarget, CatchClause, Expr, ExprKind,
+    InstanceOfTarget, Stmt, StmtKind,
+};
+use crate::span::Span;
+use crate::types::PhpType;
+
+use super::{infer_expr_type_syntactic, Checker};
+
+/// One statement-form assignment to a candidate local.
+struct AssignSite {
+    /// The value's syntactic type. Only recorded for values this scan can type EXACTLY
+    /// (see [`has_exact_syntactic_type`]).
+    ty: PhpType,
+    /// Syntactic conditional nesting depth, mirroring `Checker::local_conditional_depth`.
+    depth: u32,
+    /// The assignment STATEMENT's span, which is what EIR lowering looks the decision up by.
+    span: Span,
+}
+
+/// Everything the scan learned about one name in one body.
+#[derive(Default)]
+struct NameFacts {
+    /// Statement-form assignments, in source order.
+    assigns: Vec<AssignSite>,
+    /// Set by any write or aliasing shape that is not a plain statement-form assignment.
+    disqualified: bool,
+}
+
+/// Per-name evidence for the body being scanned, ordered so warnings are deterministic.
+type Facts = BTreeMap<String, NameFacts>;
+
+impl Checker {
+    /// Marks the locals of `body` that are assigned incompatible types across a branch, so their
+    /// frame storage becomes boxed `Mixed` for the whole body.
+    ///
+    /// Fills `mixed_storage_locals` for this body (consumed by `merge_local_assignment_type`),
+    /// records every marked name's assignment spans in `mixed_storage_store_sites` (consumed by
+    /// EIR lowering), and pushes ONE warning per marked name. Under `--strict-locals` nothing is
+    /// marked and nothing is recorded.
+    ///
+    /// Parameter facts are read from the per-body state the caller has already installed:
+    /// `active_ref_params` holds the by-reference parameters and `typed_local_names` the
+    /// type-hinted ones, both seeded by `enter_local_binding_scope` /
+    /// `with_local_storage_context` before this runs.
+    pub(crate) fn run_mixed_storage_scan(&mut self, body: &[Stmt]) {
+        // The marking describes ONE frame. The caller saves and restores the enclosing body's
+        // set, but clear it here too so the scan owns the whole decision for this body.
+        self.mixed_storage_locals.clear();
+
+        let mut facts = Facts::new();
+        collect_block(self, body, 0, &mut facts);
+
+        // This visit RE-DECIDES every assignment site in this body, so a decision a SUPERSEDED
+        // walk recorded for one of them is dropped first. The checker walks a body more than
+        // once and only the LAST walk's decisions may reach EIR lowering; a store site left
+        // behind by an earlier walk that marked a name this walk does not would give lowering a
+        // boxed slot the checker no longer types as `Mixed`. Mirrors the same re-decision in
+        // `merge_local_assignment_type` and in the `unset` kill sites.
+        //
+        // Qualified by NAME as well as span, because a `Span` has no file identity: the same
+        // (line, column) in an included file is an EQUAL span, and this walk must not drop the
+        // decision recorded for that unrelated assignment.
+        for (name, name_facts) in &facts {
+            for site in &name_facts.assigns {
+                if self
+                    .mixed_storage_store_sites
+                    .get(&site.span)
+                    .is_some_and(|recorded| recorded == name)
+                {
+                    self.mixed_storage_store_sites.remove(&site.span);
+                }
+            }
+        }
+
+        if self.strict_locals {
+            return;
+        }
+
+        // Collected before pushing so the warnings come out in source order regardless of the
+        // name ordering the evidence map imposes.
+        let mut marks: Vec<(Span, String, String)> = Vec::new();
+        for (name, name_facts) in &facts {
+            let Some((existing, site)) = self.first_rejected_assignment(name, name_facts) else {
+                continue;
+            };
+            marks.push((
+                site.span,
+                name.clone(),
+                format!(
+                    "${} is assigned incompatible types ({} and {}); it is compiled as boxed \
+                     mixed storage (compile with --strict-locals to make this an error)",
+                    name, existing, site.ty
+                ),
+            ));
+        }
+        marks.sort_by_key(|(span, name, _)| (span.line, span.col, name.clone()));
+        for (span, name, message) in marks {
+            self.warnings.push(CompileWarning::new(span, &message));
+            for site in &facts[&name].assigns {
+                self.mixed_storage_store_sites.insert(site.span, name.clone());
+            }
+            self.mixed_storage_locals.insert(name);
+        }
+    }
+
+    /// Returns the first assignment to `name` that the checker will REJECT, paired with the type
+    /// the binding holds when it is reached — or `None` when the name is not markable at all.
+    ///
+    /// The assignments are replayed in source order through `merged_assignment_type`, exactly as
+    /// `merge_local_assignment_type` will, instead of being compared pairwise. Pairwise comparison
+    /// looks at conflicts the running binding has already resolved: in `$a = "s"; $a = 0; if (…) {
+    /// $a = 1; }` the pair (`string`, `int` at depth 1) fails, but by the time the branch is
+    /// reached `$a` has been re-bound to `int` by the depth-0 retype path and the program compiles
+    /// today. Marking it would box a local for a conflict that no longer exists.
+    ///
+    /// The plan's "at least one member of the failing pair at depth > 0" rule falls out of the
+    /// replay rather than being tested separately: a conflict where BOTH the binding and the new
+    /// assignment sit at depth 0 is exactly the one `Checker::local_binding_is_killable` accepts,
+    /// so it is left to the fresh-binding retype path — two unboxed slots, strictly better codegen.
+    fn first_rejected_assignment<'a>(
+        &self,
+        name: &str,
+        facts: &'a NameFacts,
+    ) -> Option<(PhpType, &'a AssignSite)> {
+        if facts.disqualified || facts.assigns.len() < 2 {
+            return None;
+        }
+        // A by-reference parameter aliases the caller's storage and a type-hinted one is a
+        // declared contract; both stay strict in either mode. An untyped by-value parameter is
+        // not excluded here — see the module note in `with_local_storage_context`.
+        if self.active_ref_params.contains(name) || self.typed_local_names.contains(name) {
+            return None;
+        }
+        // A decision is only usable if EVERY one of the name's store sites can be named. A
+        // `Span::dummy()` identifies no node — it is what every compiler-generated AST node
+        // carries — so lowering would either miss the first store (leaving the slot unboxed
+        // while the checker types the local `Mixed`) or box unrelated dummy-span assignments
+        // across the whole program. Refusing to mark keeps the checker and lowering in
+        // lock-step: the body simply reports today's error instead.
+        if !facts
+            .assigns
+            .iter()
+            .all(|site| site.span.identifies_a_node())
+        {
+            return None;
+        }
+        // `(type the binding currently holds, conditional depth the binding was created at)`,
+        // mirroring `Checker::local_binding_depth` for this one name.
+        let mut binding: Option<(PhpType, u32)> = None;
+        for site in &facts.assigns {
+            let Some((existing, binding_depth)) = binding else {
+                binding = Some((site.ty.clone(), site.depth));
+                continue;
+            };
+            if let Some(merged) = self.merged_assignment_type(&existing, &site.ty) {
+                binding = Some((merged, binding_depth));
+                continue;
+            }
+            // The plan asks for the merge to fail in BOTH directions before a conflict counts.
+            // The checker only tries `existing -> new`, so a one-way failure is left alone: the
+            // body keeps today's diagnostic instead of being quietly boxed.
+            if let Some(merged) = self.merged_assignment_type(&site.ty, &existing) {
+                binding = Some((merged, binding_depth));
+                continue;
+            }
+            if site.depth == 0 && binding_depth == 0 {
+                // `local_binding_is_killable` accepts this: the depth-0 retype path re-binds the
+                // name to a fresh slot of the new type, and the replay follows it.
+                binding = Some((site.ty.clone(), 0));
+                continue;
+            }
+            return Some((existing, site));
+        }
+        None
+    }
+}
+
+/// Records one statement-form assignment to `name`.
+fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: Span) {
+    let entry = facts.entry(name.to_string()).or_default();
+    // A value this scan cannot type EXACTLY is not evidence, it is a guess.
+    // `infer_expr_type_syntactic` answers `Int` for everything it does not recognise — a plain
+    // `$a = $b`, a user function call, a property read — so trusting it here would mark locals in
+    // programs that type-check perfectly well today, and a marked local's storage is boxed. Any
+    // inexact value therefore disqualifies the name outright, which keeps the marking confined to
+    // programs the checker rejects without it.
+    if !has_exact_syntactic_type(value) {
+        entry.disqualified = true;
+        return;
+    }
+    entry.assigns.push(AssignSite {
+        ty: infer_expr_type_syntactic(value),
+        depth,
+        span,
+    });
+}
+
+/// Marks `name` as never eligible for mixed storage in this body.
+fn disqualify(facts: &mut Facts, name: &str) {
+    facts.entry(name.to_string()).or_default().disqualified = true;
+}
+
+/// Disqualifies the local at the root of an lvalue/reference access chain.
+///
+/// Mirrors `Checker::record_reference_alias_root`: a write to (or reference into) `$a[0]` or
+/// `$o->p` reaches `$a` / `$o` too.
+fn disqualify_root(facts: &mut Facts, expr: &Expr) {
+    let mut current = expr;
+    loop {
+        match &current.kind {
+            ExprKind::Variable(name) => {
+                disqualify(facts, name);
+                return;
+            }
+            ExprKind::ArrayAccess { array: base, .. }
+            | ExprKind::PropertyAccess { object: base, .. }
+            | ExprKind::NullsafePropertyAccess { object: base, .. }
+            | ExprKind::DynamicPropertyAccess { object: base, .. }
+            | ExprKind::NullsafeDynamicPropertyAccess { object: base, .. }
+            | ExprKind::Spread(base)
+            | ExprKind::ErrorSuppress(base)
+            | ExprKind::NamedArg { value: base, .. } => current = base,
+            _ => return,
+        }
+    }
+}
+
+/// Returns whether `expr`'s syntactic type is EXACT rather than a fallback guess.
+///
+/// Only literals and scalar casts qualify: for those the checker's own inference agrees by
+/// construction, so a pair this scan judges incompatible is a pair the checker would reject.
+/// Everything else — variables, calls, array literals, arithmetic — is either an approximation or
+/// depends on facts only the typed walk has, and is treated as unknown.
+fn has_exact_syntactic_type(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null => true,
+        // An `(array)` cast's ELEMENT type is not knowable syntactically, so it is excluded.
+        ExprKind::Cast { target, .. } => !matches!(target, crate::parser::ast::CastType::Array),
+        _ => false,
+    }
+}
+
+/// Walks a straight-line block of statements at `depth`.
+fn collect_block(checker: &Checker, stmts: &[Stmt], depth: u32, facts: &mut Facts) {
+    for stmt in stmts {
+        collect_stmt(checker, stmt, depth, facts);
+    }
+}
+
+/// Walks one statement.
+///
+/// Exhaustive over `StmtKind` on purpose: a new statement form that can write a local must be
+/// classified here rather than silently defaulting to "reads nothing", which would let the scan
+/// mark a name some other statement also writes.
+///
+/// `depth` mirrors `Checker::local_conditional_depth`, which `check_stmt` raises for the WHOLE of
+/// `If`/`IfDef`/`Switch`/`While`/`DoWhile`/`For`/`Foreach`/`Try`/`Throw`/`IncludeOnceGuard`
+/// (conditions, `for` init/update and loop subjects included).
+fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
+    match &stmt.kind {
+        StmtKind::Assign { name, value } => {
+            // `$x .= "a"` / `$x ??= 1` reach the checker as a plain `Assign` whose value is a
+            // synthesized self-read at the statement's own span. A compound assignment is a
+            // read-modify-write, not the clean whole-value store the mixed contract needs.
+            if is_compound_assignment_self_read(value, name, stmt.span) {
+                disqualify(facts, name);
+            } else {
+                record_assign(facts, name, value, depth, stmt.span);
+            }
+            collect_expr(checker, value, depth, facts);
+        }
+        StmtKind::TypedAssign { type_expr: _, name, value } => {
+            // A declared type is a programmer contract and stays strict in both modes.
+            disqualify(facts, name);
+            collect_expr(checker, value, depth, facts);
+        }
+        StmtKind::RefAssign { target, source } => {
+            disqualify(facts, target);
+            disqualify_root(facts, source);
+            collect_expr(checker, source, depth, facts);
+        }
+        StmtKind::ArrayAssign { array, index, value } => {
+            disqualify(facts, array);
+            collect_expr(checker, index, depth, facts);
+            collect_expr(checker, value, depth, facts);
+        }
+        StmtKind::ArrayPush { array, value } => {
+            disqualify(facts, array);
+            collect_expr(checker, value, depth, facts);
+        }
+        StmtKind::NestedArrayAssign { target, value } => {
+            disqualify_root(facts, target);
+            collect_expr(checker, target, depth, facts);
+            collect_expr(checker, value, depth, facts);
+        }
+        StmtKind::ListUnpack { vars, value } => {
+            for var in vars {
+                disqualify(facts, var);
+            }
+            collect_expr(checker, value, depth, facts);
+        }
+        StmtKind::Global { vars } => {
+            for var in vars {
+                disqualify(facts, var);
+            }
+        }
+        StmtKind::StaticVar { name, init } => {
+            // A `static` local's storage outlives the call, so the body does not own its layout.
+            disqualify(facts, name);
+            collect_expr(checker, init, depth, facts);
+        }
+        StmtKind::Foreach { array, key_var, value_var, value_by_ref, body } => {
+            if let Some(key_var) = key_var {
+                disqualify(facts, key_var);
+            }
+            disqualify(facts, value_var);
+            if *value_by_ref {
+                // `foreach ($arr as &$v)` takes references INTO `$arr`'s elements.
+                disqualify_root(facts, array);
+            }
+            collect_expr(checker, array, depth + 1, facts);
+            collect_block(checker, body, depth + 1, facts);
+        }
+        StmtKind::Echo(expr) | StmtKind::ExprStmt(expr) => collect_expr(checker, expr, depth, facts),
+        // `check_stmt` puts `throw` in a conditional scope, so its operand is one level deeper.
+        StmtKind::Throw(expr) => collect_expr(checker, expr, depth + 1, facts),
+        StmtKind::Return(value) => {
+            if let Some(value) = value {
+                collect_expr(checker, value, depth, facts);
+            }
+        }
+        StmtKind::ConstDecl { name: _, value } => collect_expr(checker, value, depth, facts),
+        StmtKind::Include { path, .. } => collect_expr(checker, path, depth, facts),
+        StmtKind::PropertyAssign { object, property: _, value }
+        | StmtKind::PropertyArrayPush { object, property: _, value } => {
+            collect_expr(checker, object, depth, facts);
+            collect_expr(checker, value, depth, facts);
+        }
+        StmtKind::PropertyArrayAssign { object, property: _, index, value } => {
+            collect_expr(checker, object, depth, facts);
+            collect_expr(checker, index, depth, facts);
+            collect_expr(checker, value, depth, facts);
+        }
+        StmtKind::StaticPropertyAssign { receiver: _, property: _, value }
+        | StmtKind::StaticPropertyArrayPush { receiver: _, property: _, value } => {
+            collect_expr(checker, value, depth, facts);
+        }
+        StmtKind::StaticPropertyArrayAssign { receiver: _, property: _, index, value } => {
+            collect_expr(checker, index, depth, facts);
+            collect_expr(checker, value, depth, facts);
+        }
+        // Straight-line groupings: the statements inside run exactly when the group does.
+        StmtKind::Synthetic(body) | StmtKind::NamespaceBlock { name: _, body } => {
+            collect_block(checker, body, depth, facts)
+        }
+        // Conditional groups. The checker raises its depth for the whole statement, condition
+        // included, so this does the same.
+        StmtKind::IncludeOnceGuard { label: _, body } => {
+            collect_block(checker, body, depth + 1, facts)
+        }
+        StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
+            collect_expr(checker, condition, depth + 1, facts);
+            collect_block(checker, then_body, depth + 1, facts);
+            for (condition, body) in elseif_clauses {
+                collect_expr(checker, condition, depth + 1, facts);
+                collect_block(checker, body, depth + 1, facts);
+            }
+            if let Some(else_body) = else_body {
+                collect_block(checker, else_body, depth + 1, facts);
+            }
+        }
+        StmtKind::IfDef { symbol: _, then_body, else_body } => {
+            collect_block(checker, then_body, depth + 1, facts);
+            if let Some(else_body) = else_body {
+                collect_block(checker, else_body, depth + 1, facts);
+            }
+        }
+        StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
+            collect_expr(checker, condition, depth + 1, facts);
+            collect_block(checker, body, depth + 1, facts);
+        }
+        StmtKind::For { init, condition, update, body } => {
+            // `check_stmt` puts the ENTIRE `for` — init and update included — in one conditional
+            // scope, so an assignment in the header is at the body's depth, not the outer one.
+            if let Some(init) = init {
+                collect_stmt(checker, init, depth + 1, facts);
+            }
+            if let Some(condition) = condition {
+                collect_expr(checker, condition, depth + 1, facts);
+            }
+            if let Some(update) = update {
+                collect_stmt(checker, update, depth + 1, facts);
+            }
+            collect_block(checker, body, depth + 1, facts);
+        }
+        StmtKind::Switch { subject, cases, default } => {
+            collect_expr(checker, subject, depth + 1, facts);
+            for (patterns, body) in cases {
+                for pattern in patterns {
+                    collect_expr(checker, pattern, depth + 1, facts);
+                }
+                collect_block(checker, body, depth + 1, facts);
+            }
+            if let Some(default) = default {
+                collect_block(checker, default, depth + 1, facts);
+            }
+        }
+        StmtKind::Try { try_body, catches, finally_body } => {
+            collect_block(checker, try_body, depth + 1, facts);
+            for CatchClause { exception_types: _, variable, body } in catches {
+                // The catch variable is bound by the clause, not by an assignment statement.
+                if let Some(variable) = variable {
+                    disqualify(facts, variable);
+                }
+                collect_block(checker, body, depth + 1, facts);
+            }
+            if let Some(finally_body) = finally_body {
+                collect_block(checker, finally_body, depth + 1, facts);
+            }
+        }
+        // Declarations own SEPARATE bodies, each of which gets its own scan at its own entry
+        // point. Descending into them here would attribute a callee's assignments to this frame.
+        StmtKind::FunctionDecl { .. }
+        | StmtKind::ClassDecl { .. }
+        | StmtKind::EnumDecl { .. }
+        | StmtKind::InterfaceDecl { .. }
+        | StmtKind::TraitDecl { .. }
+        | StmtKind::PackedClassDecl { .. }
+        | StmtKind::ExternFunctionDecl { .. }
+        | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ExternGlobalDecl { .. }
+        // Leaves: no sub-statements and no sub-expressions.
+        | StmtKind::Break(_)
+        | StmtKind::Continue(_)
+        | StmtKind::IncludeOnceMark { .. }
+        | StmtKind::NamespaceDecl { .. }
+        | StmtKind::UseDecl { .. }
+        | StmtKind::FunctionVariantGroup { .. }
+        | StmtKind::FunctionVariantMark { .. } => {}
+    }
+}
+
+/// Walks one expression.
+///
+/// Exhaustive over `ExprKind`: every shape that can WRITE a local (an expression-form assignment,
+/// `++`/`--`, a by-reference call argument, a by-reference capture) disqualifies the name it
+/// reaches, and every other shape recurses into its children.
+fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
+    match &expr.kind {
+        // An expression-form assignment yields the stored value to its enclosing expression, so
+        // re-binding it to boxed storage has no single well-defined result to hand back.
+        ExprKind::Assignment { target, value, result_target, prelude, conditional_value_temp: _ } => {
+            disqualify_root(facts, target);
+            if let Some(result_target) = result_target {
+                disqualify_root(facts, result_target);
+                collect_expr(checker, result_target, depth, facts);
+            }
+            collect_expr(checker, target, depth, facts);
+            collect_expr(checker, value, depth, facts);
+            // The prelude runs where the enclosing expression does, so it inherits its depth.
+            collect_block(checker, prelude, depth, facts);
+        }
+        // `++`/`--` is a read-modify-write with its own storage contract (`string_incdec_locals`).
+        ExprKind::PreIncrement(name)
+        | ExprKind::PostIncrement(name)
+        | ExprKind::PreDecrement(name)
+        | ExprKind::PostDecrement(name) => disqualify(facts, name),
+        ExprKind::FunctionCall { name, args } => {
+            if is_unset_call(name.as_str()) {
+                // A name mentioned in ANY `unset` is left to the kill path (or to today's error).
+                for arg in args {
+                    disqualify_root(facts, arg);
+                }
+            } else if callee_may_bind_arguments_by_ref(checker, name) {
+                disqualify_call_arguments(facts, args);
+            }
+            collect_exprs(checker, args, depth, facts);
+        }
+        // Every other call shape resolves its callee from a value, not from a name the scan can
+        // look up, so its arguments are disqualified conservatively: a by-reference parameter
+        // anywhere behind them would alias the local for the rest of the body.
+        ExprKind::MethodCall { object, method: _, args }
+        | ExprKind::NullsafeMethodCall { object, method: _, args } => {
+            disqualify_call_arguments(facts, args);
+            collect_expr(checker, object, depth, facts);
+            collect_exprs(checker, args, depth, facts);
+        }
+        ExprKind::NullsafeDynamicMethodCall { object, method, args } => {
+            disqualify_call_arguments(facts, args);
+            collect_expr(checker, object, depth, facts);
+            collect_expr(checker, method, depth, facts);
+            collect_exprs(checker, args, depth, facts);
+        }
+        ExprKind::StaticMethodCall { receiver: _, method: _, args }
+        | ExprKind::NewScopedObject { receiver: _, args }
+        | ExprKind::NewObject { class_name: _, args }
+        | ExprKind::ClosureCall { var: _, args } => {
+            disqualify_call_arguments(facts, args);
+            collect_exprs(checker, args, depth, facts);
+        }
+        ExprKind::ExprCall { callee, args } => {
+            disqualify_call_arguments(facts, args);
+            collect_expr(checker, callee, depth, facts);
+            collect_exprs(checker, args, depth, facts);
+        }
+        ExprKind::NewDynamic { name_expr, args } => {
+            disqualify_call_arguments(facts, args);
+            collect_expr(checker, name_expr, depth, facts);
+            collect_exprs(checker, args, depth, facts);
+        }
+        ExprKind::NewDynamicObject { class_name, fallback_class: _, required_parent: _, args } => {
+            disqualify_call_arguments(facts, args);
+            collect_expr(checker, class_name, depth, facts);
+            collect_exprs(checker, args, depth, facts);
+        }
+        // `$v |> $f` passes `$v` as `$f`'s single argument.
+        ExprKind::Pipe { value, callable } => {
+            disqualify_root(facts, value);
+            collect_expr(checker, value, depth, facts);
+            collect_expr(checker, callable, depth, facts);
+        }
+        ExprKind::Closure { params: _, body: _, capture_refs, .. } => {
+            // A `use (&$x)` capture aliases the enclosing body's local and can outlive this
+            // statement. The closure's own body is a SEPARATE frame with its own scan, and its
+            // parameter defaults are evaluated there, so neither is walked here.
+            for capture in capture_refs {
+                disqualify(facts, capture);
+            }
+        }
+        ExprKind::IncludeValue { path, once: _, required: _ } => collect_expr(checker, path, depth, facts),
+        ExprKind::Yield { key, value } => {
+            if let Some(key) = key {
+                collect_expr(checker, key, depth, facts);
+            }
+            if let Some(value) = value {
+                collect_expr(checker, value, depth, facts);
+            }
+        }
+        ExprKind::BinaryOp { left, op: _, right } => {
+            collect_expr(checker, left, depth, facts);
+            collect_expr(checker, right, depth, facts);
+        }
+        ExprKind::InstanceOf { value, target } => {
+            collect_expr(checker, value, depth, facts);
+            if let InstanceOfTarget::Expr(target) = target {
+                collect_expr(checker, target, depth, facts);
+            }
+        }
+        ExprKind::YieldFrom(inner)
+        | ExprKind::Clone(inner)
+        | ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Throw(inner)
+        | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Print(inner)
+        | ExprKind::Spread(inner)
+        | ExprKind::Cast { target: _, expr: inner }
+        | ExprKind::PtrCast { target_type: _, expr: inner }
+        | ExprKind::NamedArg { name: _, value: inner }
+        | ExprKind::BufferNew { element_type: _, len: inner } => collect_expr(checker, inner, depth, facts),
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
+            collect_expr(checker, value, depth, facts);
+            collect_expr(checker, default, depth, facts);
+        }
+        ExprKind::Ternary { condition, then_expr, else_expr } => {
+            collect_expr(checker, condition, depth, facts);
+            collect_expr(checker, then_expr, depth, facts);
+            collect_expr(checker, else_expr, depth, facts);
+        }
+        ExprKind::Match { subject, arms, default } => {
+            collect_expr(checker, subject, depth, facts);
+            for (patterns, body) in arms {
+                collect_exprs(checker, patterns, depth, facts);
+                collect_expr(checker, body, depth, facts);
+            }
+            if let Some(default) = default {
+                collect_expr(checker, default, depth, facts);
+            }
+        }
+        ExprKind::ArrayLiteral(items) => collect_exprs(checker, items, depth, facts),
+        ExprKind::ArrayLiteralAssoc(items) => {
+            for (key, value) in items {
+                collect_expr(checker, key, depth, facts);
+                collect_expr(checker, value, depth, facts);
+            }
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            collect_expr(checker, array, depth, facts);
+            collect_expr(checker, index, depth, facts);
+        }
+        ExprKind::PropertyAccess { object, property: _ }
+        | ExprKind::NullsafePropertyAccess { object, property: _ }
+        | ExprKind::ObjectClassName { object } => collect_expr(checker, object, depth, facts),
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            collect_expr(checker, object, depth, facts);
+            collect_expr(checker, property, depth, facts);
+        }
+        ExprKind::FirstClassCallable(target) => {
+            if let CallableTarget::Method { object, method: _ } = target {
+                collect_expr(checker, object, depth, facts);
+            }
+        }
+        // Leaves. A plain `Variable` is a READ, which never disqualifies.
+        ExprKind::Variable(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::ConstRef(_)
+        | ExprKind::This
+        | ExprKind::StaticPropertyAccess { .. }
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::MagicConstant(_) => {}
+    }
+}
+
+/// Walks a list of expressions.
+fn collect_exprs(checker: &Checker, exprs: &[Expr], depth: u32, facts: &mut Facts) {
+    for expr in exprs {
+        collect_expr(checker, expr, depth, facts);
+    }
+}
+
+/// Disqualifies the local at the root of every argument of a call that may bind one by reference.
+///
+/// Applied per CALL rather than per parameter index: named arguments and spreads make the
+/// argument-to-parameter mapping unreliable here, and a call is only reached by this helper when
+/// its callee declares a by-reference parameter at all (or cannot be resolved), which is rare.
+fn disqualify_call_arguments(facts: &mut Facts, args: &[Expr]) {
+    for arg in args {
+        disqualify_root(facts, arg);
+    }
+}
+
+/// Returns whether a called NAME may bind one of its arguments by reference.
+///
+/// Answers `true` whenever the callee cannot be resolved statically: an unknown callee could hold
+/// a reference to the local for the rest of the body, and over-disqualifying only narrows the
+/// feature, while under-disqualifying would box a local a reference still reaches.
+fn callee_may_bind_arguments_by_ref(checker: &Checker, name: &Name) -> bool {
+    let raw = name.as_str();
+    let trimmed = raw.trim_start_matches('\\');
+    // Language constructs the registry does not carry, all of which only READ their operand.
+    if matches!(
+        crate::names::php_symbol_key(trimmed).as_str(),
+        "isset" | "empty" | "exit" | "die"
+    ) {
+        return false;
+    }
+    if let Some(decl) = checker
+        .fn_decls
+        .get(raw)
+        .or_else(|| checker.fn_decls.get(trimmed))
+    {
+        // `ref_params` already carries the variadic's flag in its last slot.
+        return decl.ref_params.iter().any(|by_ref| *by_ref) || decl.variadic_by_ref;
+    }
+    if let Some(def) = crate::builtins::registry::lookup(trimmed) {
+        return def.ref_params.iter().any(|by_ref| *by_ref);
+    }
+    true
+}
+
+/// Returns whether a called name is PHP's `unset`, the only builtin that ends a local binding.
+fn is_unset_call(name: &str) -> bool {
+    name.trim_start_matches('\\').eq_ignore_ascii_case("unset")
+}
