@@ -370,8 +370,10 @@ compile error:
 Both warning shapes require the name's current binding to be **unconditional**
 (created at the top of the body, not inside a branch or loop) and **never
 reference-aliased** — no `=&` target or source, no `use (&$x)` capture, no
-by-reference parameter (including a variadic `&...$xs`), and no by-reference
-call argument. The branch-divergent shape additionally requires every write to
+by-reference parameter (including a variadic `&...$xs`), no by-reference
+call argument, and no by-reference `foreach` iterable (`foreach ($arr as &$v)`
+permanently aliases `$arr`, the container being iterated, not `$v`). The
+branch-divergent shape additionally requires every write to
 the name to be syntactically exact evidence — a literal, a scalar cast, or a
 `.` string concatenation; any other write shape (`++`/`--`, a `foreach`/
 `list()` target, a by-reference call argument, an `unset()` mention, `=&`,
