@@ -54,7 +54,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 {
                     callback
                 }
-                _ => return Ok(PhpType::Array(elem_ty)),
+                _ => return Ok(array_filter_result_type(&elem_ty)),
             };
             let arr_ty = PhpType::Array(elem_ty.clone());
             let callback_arg_types =
@@ -70,11 +70,57 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 cx.env,
                 "array_filter() callback",
             )?;
-            Ok(PhpType::Array(elem_ty))
+            Ok(array_filter_result_type(&elem_ty))
+        }
+        // An associative source keeps its own key type; php preserves those keys too.
+        PhpType::AssocArray { key, value } => {
+            let callback = match cx.args.get(1) {
+                Some(callback)
+                    if !matches!(callback.kind, crate::parser::ast::ExprKind::Null) =>
+                {
+                    callback
+                }
+                _ => {
+                    return Ok(PhpType::AssocArray {
+                        key: key.clone(),
+                        value: value.clone(),
+                    })
+                }
+            };
+            let arr_ty = PhpType::AssocArray {
+                key: key.clone(),
+                value: value.clone(),
+            };
+            let callback_arg_types =
+                crate::types::checker::builtins::array_filter_callback_arg_types(
+                    &arr_ty,
+                    cx.args.get(2),
+                );
+            crate::types::checker::builtins::check_array_callback_builtin_call(
+                cx.checker,
+                callback,
+                &callback_arg_types,
+                cx.span,
+                cx.env,
+                "array_filter() callback",
+            )?;
+            Ok(PhpType::AssocArray { key, value })
         }
         _ => Err(CompileError::new(
             cx.span,
             "array_filter() first argument must be array",
         )),
+    }
+}
+
+/// Returns the type `array_filter()` answers for an INDEXED source.
+///
+/// php preserves the keys, and the survivors of a list are not a list: `array_filter([0,1,2])`
+/// answers `[1 => 1, 2 => 2]`, whose `isset($r[0])` is false. Only a keyed table can hold that,
+/// so an indexed source answers one keyed by the integer indices it had.
+fn array_filter_result_type(elem_ty: &PhpType) -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Int),
+        value: Box::new(elem_ty.clone()),
     }
 }

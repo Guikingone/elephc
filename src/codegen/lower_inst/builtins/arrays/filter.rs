@@ -20,10 +20,16 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let mode = inst.operands.get(2).copied();
     let elem_ty = array_filter_source_element_type(ctx.value_php_type(array)?)?;
     require_array_filter_result_type(&elem_ty, &inst.result_php_type.codegen_repr())?;
-    let runtime_label = if array_filter_uses_refcounted_runtime(&elem_ty) {
-        "__rt_array_filter_refcounted"
+    // php preserves the keys, so the destination is a keyed table either way. The ownership
+    // rules live in `__rt_hash_clone_shallow`, which is why the refcounted/plain split the
+    // indexed helpers needed does not reappear here.
+    let runtime_label = if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    ) {
+        "__rt_hash_filter"
     } else {
-        "__rt_array_filter"
+        "__rt_array_filter_keyed"
     };
     let callback_arg_types = array_filter_callback_arg_types(ctx, mode, &elem_ty)?;
     if let Some(visible_arg_types) = callback_arg_types.clone() {
@@ -138,8 +144,7 @@ fn array_filter_callback_is_absent(ctx: &FunctionContext<'_>, inst: &Instruction
 ///
 /// php keeps the elements that are truthy. Rather than growing a second filter loop that could
 /// drift from the callback one, this passes an implicit predicate carrying the callback
-/// wrapper's own ABI, so `__rt_array_filter` / `__rt_array_filter_refcounted` drive it
-/// unchanged. Mode is pinned to ARRAY_FILTER_USE_VALUE and the capture environment to zero:
+/// wrapper's own ABI, so the shared filter loop drives it unchanged. Mode is pinned to ARRAY_FILTER_USE_VALUE and the capture environment to zero:
 /// there is nothing to capture, and php never hands the key to a predicate it did not receive.
 fn lower_array_filter_without_callback(
     ctx: &mut FunctionContext<'_>,
@@ -148,10 +153,16 @@ fn lower_array_filter_without_callback(
 ) -> Result<()> {
     let elem_ty = array_filter_source_element_type(ctx.value_php_type(array)?)?;
     require_array_filter_result_type(&elem_ty, &inst.result_php_type.codegen_repr())?;
-    let runtime_label = if array_filter_uses_refcounted_runtime(&elem_ty) {
-        "__rt_array_filter_refcounted"
+    // php preserves the keys, so the destination is a keyed table either way. The ownership
+    // rules live in `__rt_hash_clone_shallow`, which is why the refcounted/plain split the
+    // indexed helpers needed does not reappear here.
+    let runtime_label = if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    ) {
+        "__rt_hash_filter"
     } else {
-        "__rt_array_filter"
+        "__rt_array_filter_keyed"
     };
     let predicate = match elem_ty.codegen_repr() {
         // An empty literal carries a `Never` element type. The filter loop runs zero times, so

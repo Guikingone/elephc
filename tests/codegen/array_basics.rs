@@ -970,6 +970,69 @@ rmdir("sd");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Verifies `array_filter()` preserves php's keys instead of renumbering the survivors.
+///
+/// `array_filter([0,1,2])` answered `[0=>1, 1=>2]` where php answers `[1=>1, 2=>2]` — a silent
+/// wrong answer in every callback form, including no callback at all. The keys were wrong AS
+/// KEYS, not merely in the rendering, which is what `isset` and `array_keys` pin here:
+/// `json_encode` shows a list whenever the survivors happen to occupy 0..n-1, so an encoded
+/// comparison alone would have passed on half the cases while still being wrong.
+#[test]
+fn test_array_filter_preserves_php_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$first = array_filter([0, 1, 2], fn($v) => (bool) $v);
+echo implode(",", array_keys($first)), "|", count($first), "|",
+     var_export(isset($first[0]), true), "\n";
+foreach ($first as $k => $v) { echo "$k=$v,"; }
+echo "\n";
+
+// A survivor set that happens to start at zero still reads as a list, exactly as php's does.
+echo json_encode(array_filter([1, 2, 0], fn($v) => (bool) $v)), "\n";
+echo json_encode(array_filter([1, 0, 3], fn($v) => (bool) $v)), "\n";
+echo json_encode(array_filter([1, 2, 3], fn($v) => true)), "\n";
+echo json_encode(array_filter([0, 0], fn($v) => (bool) $v)), "\n";
+echo json_encode(array_filter([0, 1, 2, 0, 3])), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1,2|2|false\n\
+         1=1,2=2,\n\
+         [1,2]\n\
+         {\"0\":1,\"2\":3}\n\
+         [1,2,3]\n\
+         []\n\
+         {\"1\":1,\"2\":2,\"4\":3}\n"
+    );
+}
+
+/// Verifies `array_filter()` accepts an associative source, and keeps its keys.
+///
+/// It used to refuse one outright: `array_filter() first argument must be array`, a compile error
+/// on php that runs. All three modes are exercised because each hands the callback a different
+/// argument shape, and a hash key may be an integer or a string in any of them.
+#[test]
+fn test_array_filter_accepts_an_associative_source() {
+    let out = compile_and_run(
+        r#"<?php
+echo json_encode(array_filter(["a" => 1, "b" => 0, "c" => 2])), "\n";
+echo json_encode(array_filter(["a" => 1, "b" => 0], fn($v) => (bool) $v)), "\n";
+echo json_encode(array_filter([1, 2, 3], fn($k) => $k > 0, ARRAY_FILTER_USE_KEY)), "\n";
+echo json_encode(array_filter([1, 2, 3], fn($v, $k) => $k > 0, ARRAY_FILTER_USE_BOTH)), "\n";
+echo json_encode(array_filter([0 => "a", "x" => "", 5 => "b"])), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"a\":1,\"c\":2}\n\
+         {\"a\":1}\n\
+         {\"1\":2,\"2\":3}\n\
+         {\"1\":2,\"2\":3}\n\
+         {\"0\":\"a\",\"5\":\"b\"}\n"
+    );
+}
+
 /// Verifies array keys.
 #[test]
 fn test_array_keys() {

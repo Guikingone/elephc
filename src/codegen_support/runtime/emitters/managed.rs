@@ -183,6 +183,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_walk(emitter);
     arrays::emit_array_walk_recursive(emitter);
     arrays::emit_array_udiff_uintersect(emitter);
+    arrays::emit_hash_filter(emitter);
     arrays::emit_sort_mixed(emitter);
     arrays::emit_usort(emitter);
     arrays::emit_usort_str(emitter);
