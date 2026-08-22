@@ -1441,6 +1441,25 @@ fn test_implicit_retype_errors_under_strict_locals() {
     expect_error_strict("<?php $a = 0; $a = \"ciao\"; echo $a;", "cannot reassign $a");
 }
 
+/// The `unset()` kill is MODE-INDEPENDENT: `--strict-locals` only tightens the two permissive
+/// retype shapes, and dropping a binding never went through either of them.
+///
+/// The kill's acceptance was only ever pinned in permissive mode, where it says nothing about the
+/// flag. Here the rebind after the kill is a FRESH binding, not a retype, so the strict checker
+/// has nothing to reject.
+#[test]
+fn test_unset_then_incompatible_assign_is_accepted_under_strict_locals() {
+    expect_no_error_strict("<?php $a = 1; unset($a); $a = \"ciao\"; echo $a;");
+}
+
+/// The other half of the same contract: the kill really did end the binding under
+/// `--strict-locals` too, so a read with no intervening assignment is the ordinary undefined-name
+/// diagnostic rather than a silently surviving `int`.
+#[test]
+fn test_read_after_unset_still_errors_under_strict_locals() {
+    expect_error_strict("<?php $a = 1; unset($a); echo $a;", "Undefined variable");
+}
+
 /// A compatible reassignment stays silent.
 #[test]
 fn test_compatible_reassign_has_no_warning() {

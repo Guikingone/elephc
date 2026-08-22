@@ -164,6 +164,21 @@ fn expect_no_error(src: &str) {
     }
 }
 
+/// Verifies that a snippet type-checks under `--strict-locals`.
+///
+/// The mirror of [`expect_error_strict`], for the shapes whose acceptance must be
+/// MODE-INDEPENDENT: `--strict-locals` only tightens the two permissive retype shapes, so a
+/// construct that never went through them has to be accepted in both modes. Without this helper
+/// such a claim could only be pinned in permissive mode, where it proves nothing about the flag.
+fn expect_no_error_strict(src: &str) {
+    if let Err(msg) = check_source_strict(src) {
+        panic!(
+            "Expected source to type-check under --strict-locals, but got error: {}",
+            msg
+        );
+    }
+}
+
 /// Verifies expect warning.
 fn expect_warning(src: &str, expected_substr: &str) {
     let result = check_source_full(src).expect("expected source to type-check");
