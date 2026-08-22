@@ -13,6 +13,8 @@ mod assignments;
 mod control_flow;
 mod narrowing;
 
+use std::collections::HashSet;
+
 use crate::errors::CompileError;
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};
 use crate::types::TypeEnv;
@@ -65,10 +67,14 @@ impl Checker {
             StmtKind::FunctionVariantGroup { .. } => Ok(()),
             StmtKind::FunctionVariantMark { .. } => Ok(()),
             StmtKind::IncludeOnceGuard { body, .. } => {
-                for stmt in body {
-                    self.check_stmt(stmt, env)?;
-                }
-                Ok(())
+                // The guard lowers to a real runtime branch (`Op::IncludeOnceGuard`), so its
+                // body is conditional exactly like an `if` body.
+                self.in_conditional_scope(env, |checker, env| {
+                    for stmt in body {
+                        checker.check_stmt(stmt, env)?;
+                    }
+                    Ok(())
+                })
             }
             StmtKind::IfDef { .. } => {
                 Err(CompileError::new(stmt.span, "Unresolved ifdef statement"))
@@ -106,7 +112,11 @@ impl Checker {
             | StmtKind::While { .. }
             | StmtKind::For { .. }
             | StmtKind::Throw(..)
-            | StmtKind::Try { .. } => self.check_control_flow_stmt(stmt, env),
+            | StmtKind::Try { .. } => {
+                self.in_conditional_scope(env, |checker, env| {
+                    checker.check_control_flow_stmt(stmt, env)
+                })
+            }
             StmtKind::Include { .. } => {
                 Err(CompileError::new(stmt.span, "Unresolved include statement"))
             }
@@ -171,6 +181,39 @@ impl Checker {
             | StmtKind::ExternClassDecl { .. }
             | StmtKind::ExternGlobalDecl { .. } => Ok(()),
         }
+    }
+
+    /// Checks a statement group whose body may not run, keeping the local-binding eligibility
+    /// state honest about it.
+    ///
+    /// Two facts are maintained here rather than at each individual binding site:
+    /// - `local_conditional_depth` is raised for the whole group (the loop/branch CONDITION
+    ///   included, which is conservative and accepted), so no `unset` or retype inside it is
+    ///   eligible — the checker shares one mutable `TypeEnv` across branches, so a kill in one
+    ///   arm would otherwise leak into its siblings and into the code after the join.
+    /// - every name the group INTRODUCED is recorded as bound at the group's inner depth, so a
+    ///   later depth-0 kill knows its slot is not provably initialized. Doing it from the
+    ///   outside covers every binding shape at once — `foreach` and `list()` targets, `catch`
+    ///   variables, builtin out-parameters, array auto-vivification — instead of one opt-in per
+    ///   site. Assignments inside the group already recorded their own (deeper) depth;
+    ///   `or_insert` leaves those alone.
+    fn in_conditional_scope<F>(&mut self, env: &mut TypeEnv, f: F) -> Result<(), CompileError>
+    where
+        F: FnOnce(&mut Self, &mut TypeEnv) -> Result<(), CompileError>,
+    {
+        let names_before: HashSet<String> = env.keys().cloned().collect();
+        self.local_conditional_depth += 1;
+        let result = f(self, env);
+        self.local_conditional_depth -= 1;
+        let created_depth = self.local_conditional_depth + 1;
+        for name in env.keys() {
+            if !names_before.contains(name) {
+                self.local_binding_depth
+                    .entry(name.clone())
+                    .or_insert(created_depth);
+            }
+        }
+        result
     }
 
     /// Validates a `break` or `continue` statement against the current loop depth.

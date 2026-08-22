@@ -90,6 +90,16 @@ pub struct CheckResult {
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
     /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// Spans of the `unset()` arguments whose local binding the checker killed, so EIR lowering
+    /// abandons the old frame slot (after releasing its value) instead of null-storing into it.
+    /// Read by `crate::ir_lower` once the kill is wired through to the slot.
+    #[allow(dead_code)]
+    pub local_bind_kill_sites: HashSet<Span>,
+    /// Spans of the statement-form assignments the checker re-bound to a fresh binding of an
+    /// incompatible type, so EIR lowering mints a new slot there. Recorded once the permissive
+    /// retype path lands; read by `crate::ir_lower` alongside `local_bind_kill_sites`.
+    #[allow(dead_code)]
+    pub local_retype_sites: HashSet<Span>,
 }
 
 /// Runs type checking using the host platform (auto-detected from the build environment).

@@ -196,6 +196,13 @@ impl Checker {
             loop_storage_types: HashMap::new(),
             string_incdec_locals: HashSet::new(),
             strict_locals: false,
+            local_conditional_depth: 0,
+            local_binding_depth: HashMap::new(),
+            ref_aliased_locals: HashSet::new(),
+            static_local_names: HashSet::new(),
+            typed_local_names: HashSet::new(),
+            local_bind_kill_sites: HashSet::new(),
+            local_retype_sites: HashSet::new(),
         }
     }
 }

@@ -127,6 +127,21 @@ impl Checker {
             .filter(|(_, is_ref)| **is_ref)
             .map(|(name, _)| name.clone())
             .collect();
+        // A parameter with a declared type hint is a contract: it never becomes kill/retype
+        // eligible inside the body, in either mode.
+        let typed_param_names: Vec<String> = decl
+            .params
+            .iter()
+            .zip(decl.param_types.iter())
+            .filter(|(_, type_ann)| type_ann.is_some())
+            .map(|(name, _)| name.clone())
+            .chain(
+                decl.variadic
+                    .iter()
+                    .filter(|_| decl.variadic_type.is_some())
+                    .cloned(),
+            )
+            .collect();
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return = decl.by_ref_return;
         self.loop_storage_types
@@ -138,21 +153,26 @@ impl Checker {
         // a called function saves and restores the enclosing name), so friend
         // channels can identify compiler-owned procedural aliases.
         let previous_function = self.current_function.replace(function_key.clone());
-        let body_check_result = self.with_local_storage_context(ref_param_names, |checker| {
-            for stmt in &decl.body {
-                if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
-                    errors.extend(error.flatten());
+        let body_check_result =
+            self.with_local_storage_context(ref_param_names, typed_param_names, |checker| {
+                for stmt in &decl.body {
+                    if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
+                        errors.extend(error.flatten());
+                    }
+                    checker.collect_return_infos(stmt, &local_env, &mut all_return_infos);
+                    checker.collect_return_callable_sigs(
+                        stmt,
+                        &local_env,
+                        &mut callable_return_sigs,
+                    );
+                    checker.collect_return_callable_array_sigs(
+                        stmt,
+                        &local_env,
+                        &mut callable_array_return_sigs,
+                    );
                 }
-                checker.collect_return_infos(stmt, &local_env, &mut all_return_infos);
-                checker.collect_return_callable_sigs(stmt, &local_env, &mut callable_return_sigs);
-                checker.collect_return_callable_array_sigs(
-                    stmt,
-                    &local_env,
-                    &mut callable_array_return_sigs,
-                );
-            }
-            Ok(())
-        });
+                Ok(())
+            });
         self.current_function = previous_function;
         self.resolving_functions.remove(&function_key);
         self.current_loop_storage_scope = previous_loop_storage_scope;

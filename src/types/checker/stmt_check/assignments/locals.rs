@@ -225,6 +225,11 @@ pub(super) fn check_ref_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    // Both sides of `$target =& <source>` share one cell from here on, so neither binding can
+    // be killed or re-bound independently. Recorded before the per-shape checks so an aliasing
+    // that fails a later validation is still treated as an alias.
+    checker.ref_aliased_locals.insert(target.to_string());
+    checker.record_reference_alias_root(source);
     let result = match &source.kind {
         ExprKind::Variable(source_name) => {
             check_ref_assign_variable(checker, target, source_name, span, env)
@@ -747,7 +752,7 @@ fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a 
 /// The merge operation supports widening (e.g., `Int | Float` from separate assignments)
 /// and preserves type specificity where possible.
 fn merge_local_assignment_type(
-    checker: &Checker,
+    checker: &mut Checker,
     name: &str,
     ty: &PhpType,
     span: Span,
@@ -770,6 +775,11 @@ fn merge_local_assignment_type(
             }
         }
     } else {
+        // A fresh binding: remember the conditional depth it was created at, so a later
+        // depth-0 `unset`/retype knows whether the store that created it definitely ran.
+        checker
+            .local_binding_depth
+            .insert(name.to_string(), checker.local_conditional_depth);
         env.insert(name.to_string(), ty.clone());
     }
     Ok(())
@@ -823,6 +833,13 @@ pub(super) fn check_typed_assign(
             ),
         ));
     }
+    // A declared type is a programmer contract: the local is never kill/retype eligible, in
+    // either mode. The binding depth is still recorded so the name has one authority.
+    checker.typed_local_names.insert(name.to_string());
+    checker
+        .local_binding_depth
+        .entry(name.to_string())
+        .or_insert(checker.local_conditional_depth);
     env.insert(name.to_string(), declared_ty);
     let reflected_class = reflection_class_assignment_target(checker, value, env);
     update_reflection_class_assignment_metadata(checker, name, reflected_class);
@@ -995,6 +1012,9 @@ pub(super) fn check_static_var(
     init: &Expr,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    // A `static` local's storage outlives the call, so its binding is never killable — record
+    // it before inference so an erroring initializer still marks the name.
+    checker.static_local_names.insert(name.to_string());
     let ty = match checker.infer_type(init, env) {
         Ok(ty) => ty,
         Err(error) => {

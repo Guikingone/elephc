@@ -121,8 +121,13 @@ impl Checker {
             for (index, arg) in args.iter().enumerate() {
                 if matches!(arg.kind, ExprKind::Spread(_))
                     || !def.ref_params.get(index).copied().unwrap_or(false)
-                    || self.is_builtin_by_ref_argument_lvalue(arg)
                 {
+                    continue;
+                }
+                // `sort($a)`, `preg_match(..., $m)` and friends reach this local through its
+                // storage, so the local is never kill/retype eligible in this body.
+                self.record_reference_alias_root(arg);
+                if self.is_builtin_by_ref_argument_lvalue(arg) {
                     continue;
                 }
                 let param_name = def

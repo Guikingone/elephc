@@ -387,6 +387,28 @@ impl Checker {
             }
         }
         closure_ref_params.extend(capture_refs.iter().cloned());
+        // A `use (&$x)` capture aliases the ENCLOSING body's local: the closure can outlive
+        // this statement and write through the reference, so `$x` is aliased there from here
+        // on. Recorded before entering the closure scope, which saves and restores the
+        // enclosing set.
+        for capture in capture_refs {
+            self.ref_aliased_locals.insert(capture.clone());
+        }
+        // A closure parameter with a declared type hint is a contract inside the body.
+        let typed_variadic = match &expr.kind {
+            ExprKind::Closure {
+                variadic: Some(variadic_name),
+                variadic_type: Some(_),
+                ..
+            } => Some(variadic_name.clone()),
+            _ => None,
+        };
+        let closure_typed_params: Vec<String> = params
+            .iter()
+            .filter(|(_, type_ann, _, _)| type_ann.is_some())
+            .map(|(name, _, _, _)| name.clone())
+            .chain(typed_variadic)
+            .collect();
         // Inside a closure body, `$this` is permitted even with no enclosing
         // class method: the closure may be bound to an object later. Track the
         // nesting so `infer_this_type` can allow it (as a runtime-dispatched
@@ -403,12 +425,13 @@ impl Checker {
         self.loop_storage_types
             .retain(|(scope, _), _| scope != &loop_storage_scope);
         self.current_loop_storage_scope = loop_storage_scope;
-        let body_result = self.with_local_storage_context(closure_ref_params, |checker| {
-            for stmt in body {
-                checker.check_stmt(stmt, &mut closure_sig.env)?;
-            }
-            Ok(())
-        });
+        let body_result =
+            self.with_local_storage_context(closure_ref_params, closure_typed_params, |checker| {
+                for stmt in body {
+                    checker.check_stmt(stmt, &mut closure_sig.env)?;
+                }
+                Ok(())
+            });
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.closure_depth -= 1;

@@ -122,20 +122,24 @@ impl Checker {
                     .get(param_idx)
                     .copied()
                     .unwrap_or(false)
-                    && !self.is_by_ref_argument_lvalue(arg, caller_env)?
                 {
-                    let param_name = effective_sig
-                        .params
-                        .get(param_idx)
-                        .map(|(name, _)| name.as_str())
-                        .unwrap_or("arg");
-                    return Err(CompileError::new(
-                        arg.span,
-                        &format!(
-                            "Function '{}' parameter ${} must be passed a variable",
-                            name, param_name
-                        ),
-                    ));
+                    // The callee holds a reference to this local from here on, and it can
+                    // escape, so the local is never kill/retype eligible in this body.
+                    self.record_reference_alias_root(arg);
+                    if !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                        let param_name = effective_sig
+                            .params
+                            .get(param_idx)
+                            .map(|(name, _)| name.as_str())
+                            .unwrap_or("arg");
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "Function '{}' parameter ${} must be passed a variable",
+                                name, param_name
+                            ),
+                        ));
+                    }
                 }
                 if let Some((param_name, expected_ty)) = effective_sig.params.get(param_idx) {
                     if effective_sig

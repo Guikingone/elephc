@@ -33,6 +33,10 @@ impl Checker {
         let saved_null_probe_scope = self.null_probe_scope_is_top_level;
         self.null_probe_scope_is_top_level = true;
         self.pending_null_probe_roots.clear();
+        // Top level is a body like any other, and this pass runs TWICE. Without a reset the
+        // second pass would start with the first pass's aliases and binding depths already in
+        // place, so the same `unset` could be eligible in one pass and not the other.
+        let saved_local_binding_scope = self.enter_local_binding_scope(Vec::new());
         let mut global_env = self.seed_global_env();
         let mut all_errors = Vec::with_capacity(program.len());
         // `(statement index, name, span)` for every null probe this pass tolerated, so the
@@ -56,6 +60,7 @@ impl Checker {
         self.top_level_env = global_env.clone();
         self.eval_barrier_active = saved_eval_barrier_active;
         self.null_probe_scope_is_top_level = saved_null_probe_scope;
+        self.exit_local_binding_scope(saved_local_binding_scope);
         (global_env, all_errors)
     }
 

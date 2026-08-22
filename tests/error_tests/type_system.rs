@@ -1262,3 +1262,128 @@ fn test_error_strict_types_reaches_call_user_func() {
 fn test_strict_types_absent_keeps_coercive_binding() {
     expect_no_error("<?php function ti(int $i) { return $i; } echo ti(true);");
 }
+
+/// `unset` at top level kills the binding: a later incompatible assignment binds fresh.
+#[test]
+fn test_unset_then_retype_is_accepted() {
+    expect_no_error("<?php $a = 1; unset($a); $a = \"ciao\"; echo $a;");
+}
+
+/// `unset` at top level kills the binding: a later read is an undefined variable.
+#[test]
+fn test_read_after_unset_is_undefined() {
+    expect_error("<?php $a = 1; unset($a); echo $a;", "Undefined variable");
+}
+
+/// Multi-arg unset kills every plain-variable binding.
+#[test]
+fn test_multi_arg_unset_kills_all_bindings() {
+    expect_no_error("<?php $a = 1; $b = 2; unset($a, $b); $a = \"x\"; $b = \"y\"; echo $a . $b;");
+}
+
+/// A conditional unset does NOT kill the binding (sound: the branch may not run).
+/// (A later incompatible reassignment of the still-bound name is Task 3's business:
+/// it becomes a depth-0 retype warning — do not assert an error for it here.)
+#[test]
+fn test_conditional_unset_keeps_binding() {
+    expect_no_error("<?php $a = 1; if ($argc > 1) { unset($a); } echo $a;");
+}
+
+/// A binding created inside a branch is not killable at depth 0 (may be uninitialized).
+#[test]
+fn test_branch_created_binding_not_killable() {
+    expect_error("<?php if ($argc > 1) { $a = 1; } unset($a); $a = \"x\"; echo $a;", "cannot reassign");
+}
+
+/// Reference-aliased locals are never killable.
+#[test]
+fn test_ref_aliased_local_not_killable() {
+    expect_error("<?php $a = 1; $r =& $a; unset($a); $a = \"x\";", "cannot reassign");
+}
+
+/// Static locals are never killable.
+#[test]
+fn test_static_local_not_killable() {
+    expect_error("<?php function f() { static $a = 1; unset($a); $a = \"x\"; } f();", "cannot reassign");
+}
+
+/// Global-bound locals are never killable.
+#[test]
+fn test_global_local_not_killable() {
+    expect_error("<?php $g = 1; function f() { global $g; unset($g); $g = \"x\"; } f();", "cannot reassign");
+}
+
+/// By-ref closure captures are never killable.
+#[test]
+fn test_by_ref_capture_not_killable() {
+    expect_error("<?php $a = 1; $f = function() use (&$a) { return $a; }; unset($a); $a = \"x\";", "cannot reassign");
+}
+
+/// A local passed to a by-ref parameter is aliased from that point on.
+#[test]
+fn test_by_ref_call_arg_not_killable() {
+    expect_error("<?php function f(&$x) { $x = 2; } $a = 1; f($a); unset($a); $a = \"s\";", "cannot reassign");
+}
+
+/// Declared-typed locals are a contract: never killable, in both modes.
+#[test]
+fn test_typed_local_not_killable() {
+    expect_error("<?php int $a = 1; unset($a); $a = \"x\";", "cannot reassign");
+}
+
+/// Parameters with a declared type hint are a contract: never killable.
+/// (An untyped parameter stays killable — pin that too.)
+#[test]
+fn test_typed_param_not_killable() {
+    expect_error("<?php function f(int $a) { unset($a); $a = \"x\"; } f(1);", "cannot reassign");
+    expect_no_error("<?php function f($a) { unset($a); $a = \"x\"; echo $a; } f(1);");
+}
+
+/// Class properties never reach the local retype paths: pin the declared-property error.
+#[test]
+fn test_typed_property_stays_strict() {
+    expect_error(
+        "<?php class C { public string $s = \"a\"; } $c = new C(); $c->s = 5;",
+        "Property C::$s expects Str, got Int",
+    );
+}
+
+/// A local passed to a METHOD's by-ref parameter is aliased too — that path validates its
+/// arguments from a `FunctionSig`, not from the `FnDecl` the plain-function test exercises.
+#[test]
+fn test_method_by_ref_call_arg_not_killable() {
+    expect_error(
+        "<?php class C { function m(&$x) { $x = 2; } } $c = new C(); $a = 1; $c->m($a); unset($a); $a = \"s\";",
+        "cannot reassign",
+    );
+}
+
+/// A local passed to a BUILTIN's by-ref parameter (`sort`, `preg_match`, …) is aliased: the
+/// builtin reaches the local through its storage.
+#[test]
+fn test_builtin_by_ref_call_arg_not_killable() {
+    expect_error(
+        "<?php $a = [3, 1]; sort($a); unset($a); $a = \"s\";",
+        "cannot reassign",
+    );
+}
+
+/// A `foreach` value target is bound inside the loop, which may never run, so it is not
+/// killable at depth 0 afterwards — even though nothing ever assigned it via `check_assign`.
+#[test]
+fn test_foreach_bound_local_not_killable() {
+    expect_error(
+        "<?php foreach ([1, 2] as $v) {} unset($v); $v = \"x\"; echo $v;",
+        "cannot reassign",
+    );
+}
+
+/// Same rule for a `list()` target bound inside a branch: the binding depth is recorded for
+/// every shape a conditional statement can introduce, not only for plain assignments.
+#[test]
+fn test_branch_created_list_unpack_target_not_killable() {
+    expect_error(
+        "<?php if ($argc > 0) { [$p, $q] = [1, 2]; } unset($p); $p = \"x\"; echo $p;",
+        "cannot reassign",
+    );
+}

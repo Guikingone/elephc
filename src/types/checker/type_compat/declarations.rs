@@ -387,14 +387,22 @@ impl Checker {
     /// Temporarily replaces the checker's active ref params, globals, and statics stacks with
     /// the given values while running `f`. Saves and restores all state afterward to avoid
     /// leaking context across nested checks.
+    ///
+    /// `typed_param_names` seeds the body's declared-type exclusion set with the parameters
+    /// that carry a type hint: a declared type is a contract, so those locals are never
+    /// kill/retype eligible. The rest of the per-body local-binding eligibility state
+    /// (conditional depth, binding depths, reference aliases, `static` names) is reset here
+    /// too — it describes one frame and must not leak between caller and callee.
     pub(crate) fn with_local_storage_context<T, F>(
         &mut self,
         ref_param_names: Vec<String>,
+        typed_param_names: Vec<String>,
         f: F,
     ) -> Result<T, CompileError>
     where
         F: FnOnce(&mut Self) -> Result<T, CompileError>,
     {
+        let saved_local_binding_scope = self.enter_local_binding_scope(typed_param_names);
         let saved_ref_params = self.active_ref_params.clone();
         let saved_globals = self.active_globals.clone();
         let saved_statics = self.active_statics.clone();
@@ -425,6 +433,7 @@ impl Checker {
         self.break_continue_depth = saved_break_continue_depth;
         self.finally_break_continue_bases = saved_finally_break_continue_bases;
         self.null_probe_scope_is_top_level = saved_null_probe_scope_is_top_level;
+        self.exit_local_binding_scope(saved_local_binding_scope);
 
         result
     }

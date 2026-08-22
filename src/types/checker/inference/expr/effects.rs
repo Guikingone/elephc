@@ -303,6 +303,24 @@ impl Checker {
                     for arg in &expanded_args {
                         promote_indexed_local_for_element_unset(arg, env);
                     }
+                    // `unset($a)` on an eligible local KILLS the binding, which is what PHP
+                    // does: a later read is "Undefined variable" and a later assignment binds
+                    // fresh, at whatever type it likes. Ineligible names (conditional depth,
+                    // reference-aliased, `global`, `static`, declared-typed) keep today's
+                    // typing no-op. Iterating the SOURCE args keeps the recorded span on a node
+                    // EIR lowering actually visits. `unset` is statement-only in PHP's grammar,
+                    // so this always runs against the statement-level environment.
+                    for arg in args {
+                        let ExprKind::Variable(var) = &arg.kind else {
+                            continue;
+                        };
+                        if env.contains_key(var) && self.local_binding_is_killable(var) {
+                            env.remove(var);
+                            self.local_binding_depth.remove(var);
+                            self.clear_local_binding_metadata(var);
+                            self.local_bind_kill_sites.insert(arg.span);
+                        }
+                    }
                 }
                 if builtin_name.eq_ignore_ascii_case("eval") {
                     self.mark_eval_barrier(env);

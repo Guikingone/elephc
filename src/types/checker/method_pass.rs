@@ -149,15 +149,34 @@ impl Checker {
                         .filter(|(_, _, _, is_ref)| *is_ref)
                         .map(|(name, _, _, _)| name.clone())
                         .collect();
+                    // A parameter with a declared type hint is a contract: never kill/retype
+                    // eligible inside the body, in either mode.
+                    let method_typed_params: Vec<String> = method
+                        .params
+                        .iter()
+                        .filter(|(_, type_ann, _, _)| type_ann.is_some())
+                        .map(|(name, _, _, _)| name.clone())
+                        .chain(
+                            method
+                                .variadic
+                                .iter()
+                                .filter(|_| method.variadic_type.is_some())
+                                .cloned(),
+                        )
+                        .collect();
                     let mut method_errors = Vec::new();
-                    self.with_local_storage_context(method_ref_params, |checker| {
-                        for s in &method.body {
-                            if let Err(error) = checker.check_stmt(s, &mut method_env) {
-                                method_errors.extend(error.flatten());
+                    self.with_local_storage_context(
+                        method_ref_params,
+                        method_typed_params,
+                        |checker| {
+                            for s in &method.body {
+                                if let Err(error) = checker.check_stmt(s, &mut method_env) {
+                                    method_errors.extend(error.flatten());
+                                }
                             }
-                        }
-                        Ok(())
-                    })?;
+                            Ok(())
+                        },
+                    )?;
                     let method_has_errors = !method_errors.is_empty();
                     pass_errors.extend(method_errors);
 

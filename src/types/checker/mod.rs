@@ -39,7 +39,7 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::platform::Platform;
 use crate::errors::CompileError;
 use crate::parser::ast::{
-    CallableTarget, Expr, Program, TypeExpr,
+    CallableTarget, Expr, ExprKind, Program, TypeExpr,
 };
 use crate::span::Span;
 use crate::types::{
@@ -255,6 +255,134 @@ pub(crate) struct Checker {
     /// Mirrors `CheckOptions::strict_locals` for the duration of the check. Not yet consumed
     /// by any pass — Task 1 only threads the flag from the CLI down to the `Checker`.
     pub strict_locals: bool,
+    /// Nesting depth of conditional statements (`if`/`switch`/loops/`try`/…) in the body being
+    /// checked. Only depth 0 is straight-line code that unconditionally dominates everything
+    /// after it, which is what makes a binding kill or re-bind safe to lower.
+    pub local_conditional_depth: u32,
+    /// Conditional depth at which each currently-bound local of the body was FIRST bound.
+    /// A binding created inside a branch may be uninitialized at a later depth-0 point, so
+    /// releasing or abandoning its slot there is not safe.
+    pub local_binding_depth: HashMap<String, u32>,
+    /// Locals of the current body that a reference can reach: `=&` target or source,
+    /// by-reference closure captures (`use (&$x)`), and any plain variable passed to a
+    /// by-reference parameter. A reference can escape through a callee, so the alias is
+    /// permanent for the rest of the body.
+    pub ref_aliased_locals: HashSet<String>,
+    /// Names declared `static` in the current body. Their storage outlives the call, so the
+    /// binding is never killable.
+    pub static_local_names: HashSet<String>,
+    /// Names whose type was DECLARED in the current body: `TypedAssign` locals (`int $x = …`)
+    /// and parameters carrying a type hint. A declaration is a programmer contract and stays
+    /// strict in both permissive and `--strict-locals` mode.
+    pub typed_local_names: HashSet<String>,
+    /// Spans of the `unset()` ARGUMENTS whose local binding the checker killed. EIR lowering
+    /// consults these to abandon the old frame slot instead of null-storing into it.
+    pub local_bind_kill_sites: HashSet<Span>,
+    /// Spans of statement-form assignments the checker re-bound to a fresh binding of an
+    /// incompatible type. Filled in Task 3; carried in `CheckResult` from here so the two
+    /// span sets travel together.
+    pub local_retype_sites: HashSet<Span>,
+}
+
+/// The per-body local-binding eligibility state, saved while a nested body is checked.
+///
+/// Every field it carries describes ONE function/method/closure/top-level body: a name that is
+/// reference-aliased in the caller says nothing about a same-named local in the callee. See
+/// [`Checker::enter_local_binding_scope`].
+pub(crate) struct SavedLocalBindingScope {
+    conditional_depth: u32,
+    binding_depth: HashMap<String, u32>,
+    ref_aliased: HashSet<String>,
+    statics: HashSet<String>,
+    typed: HashSet<String>,
+}
+
+impl Checker {
+    /// True when `name`'s current binding may be killed (by `unset`) or re-bound to an
+    /// incompatible type (by assignment) at the current program point. See
+    /// `.plans/local-retype-and-strict-locals.md` — depth-0 + non-aliased rule.
+    pub(crate) fn local_binding_is_killable(&self, name: &str) -> bool {
+        self.local_conditional_depth == 0
+            && self.local_binding_depth.get(name).copied().unwrap_or(0) == 0
+            && !self.active_ref_params.contains(name)
+            && !self.ref_aliased_locals.contains(name)
+            && !self.active_globals.contains(name)
+            && !self.static_local_names.contains(name)
+            && !self.typed_local_names.contains(name)
+    }
+
+    /// Enters a fresh local-binding eligibility scope for one function/method/closure/top-level
+    /// body, seeding the parameters that carry a declared type hint.
+    ///
+    /// Eligibility is a property of a single frame: the caller's aliasing, `static` names and
+    /// binding depths say nothing about the body about to be checked, and a body entered from
+    /// inside an `if` still starts at conditional depth 0 of its OWN statements. The returned
+    /// value must be handed back to [`Checker::exit_local_binding_scope`].
+    pub(crate) fn enter_local_binding_scope(
+        &mut self,
+        typed_param_names: Vec<String>,
+    ) -> SavedLocalBindingScope {
+        let saved = SavedLocalBindingScope {
+            conditional_depth: self.local_conditional_depth,
+            binding_depth: std::mem::take(&mut self.local_binding_depth),
+            ref_aliased: std::mem::take(&mut self.ref_aliased_locals),
+            statics: std::mem::take(&mut self.static_local_names),
+            typed: std::mem::take(&mut self.typed_local_names),
+        };
+        self.local_conditional_depth = 0;
+        self.typed_local_names = typed_param_names.into_iter().collect();
+        saved
+    }
+
+    /// Restores the enclosing body's local-binding eligibility scope.
+    pub(crate) fn exit_local_binding_scope(&mut self, saved: SavedLocalBindingScope) {
+        self.local_conditional_depth = saved.conditional_depth;
+        self.local_binding_depth = saved.binding_depth;
+        self.ref_aliased_locals = saved.ref_aliased;
+        self.static_local_names = saved.statics;
+        self.typed_local_names = saved.typed;
+    }
+
+    /// Drops every per-name fact the checker carries for a local whose binding just ended.
+    ///
+    /// The callable/reflection tables are keyed by variable name and outlive the type
+    /// environment, so a killed (or re-bound) name must not keep answering with the signature,
+    /// captures, or reflected class of the binding that is gone — that is how a stale
+    /// `$f()` signature would survive an `unset($f)`.
+    pub(crate) fn clear_local_binding_metadata(&mut self, name: &str) {
+        self.closure_return_types.remove(name);
+        self.callable_sigs.remove(name);
+        self.callable_captures.remove(name);
+        self.callable_array_targets.remove(name);
+        self.first_class_callable_targets.remove(name);
+        self.reflection_class_targets.remove(name);
+        self.foreach_key_locals.remove(name);
+    }
+
+    /// Records that a reference was taken to the storage `expr` names, so the local at the root
+    /// of its access chain is reference-aliased for the rest of the body.
+    ///
+    /// Covers a by-reference call argument and a `=&` source alike. The reference can escape
+    /// through the callee (stored in a property, captured by a closure it creates), so the
+    /// alias is permanent rather than scoped to the call. Walking the whole chain is
+    /// deliberate: a reference to `$a[0]` or `$o->p` keeps `$a` / `$o` alive too.
+    pub(crate) fn record_reference_alias_root(&mut self, expr: &Expr) {
+        let mut current = expr;
+        loop {
+            match &current.kind {
+                ExprKind::Variable(name) => {
+                    self.ref_aliased_locals.insert(name.clone());
+                    return;
+                }
+                ExprKind::ArrayAccess { array: base, .. }
+                | ExprKind::PropertyAccess { object: base, .. }
+                | ExprKind::NullsafePropertyAccess { object: base, .. }
+                | ExprKind::DynamicPropertyAccess { object: base, .. }
+                | ExprKind::NullsafeDynamicPropertyAccess { object: base, .. } => current = base,
+                _ => return,
+            }
+        }
+    }
 }
 
 /// Options controlling type-checker behavior beyond its default permissive rules.
@@ -395,6 +523,8 @@ pub fn check_types_with_options(
         builtin_call_types: checker.builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,
+        local_bind_kill_sites: checker.local_bind_kill_sites,
+        local_retype_sites: checker.local_retype_sites,
     })
 }
 
