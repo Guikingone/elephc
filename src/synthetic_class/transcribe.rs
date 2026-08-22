@@ -1217,6 +1217,7 @@ mod tests {
                 crate::pdo_prelude::OptionalDrivers::from_build_environment(),
             ),
             "image" => crate::image_prelude::image_declarations(),
+            "gz" => crate::gz_prelude::build::gz_declarations(),
             other => panic!("unknown prelude {other}"),
         };
         let php = std::fs::read_to_string(&php_path).expect("must read the PHP fixture");

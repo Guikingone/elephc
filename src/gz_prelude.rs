@@ -73,6 +73,7 @@
 //!   where php warns `fopen(compress.zlib://nope.gz): ... operation failed`, naming the URL rather
 //!   than the underlying path. Fixing it there fixes it here.
 
+pub(crate) mod build;
 mod detect;
 
 /// The elephc-PHP gzip-stream prelude.
@@ -80,6 +81,13 @@ mod detect;
 /// Every body is one existing builtin call on a `compress.zlib://` URL, so the whole surface
 /// compiles through the ordinary function pipeline with NO new assembly and both architectures get
 /// it at once.
+/// The PHP this surface used to be injected as, kept only as the migration oracle's reference.
+///
+/// `#[cfg(test)]` is the whole point: `build::gz_declarations()` produces the same AST this parses
+/// to — `ELEPHC_ORACLE_WHICH=gz` compares them node by node — so no real compile tokenizes it any
+/// more. It stays because a builder with nothing to be checked against is a builder nobody can
+/// trust.
+#[cfg(test)]
 pub(crate) const GZ_PRELUDE_SRC: &str = r#"<?php
 
 function gzopen(string $filename, string $mode, int $use_include_path = 0) {
@@ -270,8 +278,10 @@ pub fn inject_if_used(program: crate::parser::ast::Program) -> crate::parser::as
     if !detect::program_uses_gz(&program) || detect::program_declares_gz(&program) {
         return program;
     }
-    let tokens = crate::lexer::tokenize(GZ_PRELUDE_SRC).expect("gz prelude must tokenize");
-    let mut combined = crate::parser::parse_internal(&tokens).expect("gz prelude must parse");
+    // BUILT, not parsed. `build::gz_declarations` produces the same AST the PHP under
+    // `#[cfg(test)]` below parses to — the migration oracle compares them node by node — so the
+    // tokenizer and parser no longer run over this surface on every compile that touches it.
+    let mut combined = build::gz_declarations();
     combined.extend(program);
     combined
 }
