@@ -49,6 +49,30 @@ fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> 
     Ok(())
 }
 
+/// Like [`check_source`] but type-checks with `--strict-locals` semantics.
+///
+/// Mirrors the same frontend pipeline so the only difference a strict-mode assertion can
+/// observe is the `CheckOptions` handed to the checker.
+fn check_source_strict(src: &str) -> Result<(), String> {
+    let tokens = tokenize(src).map_err(|e| e.message.clone())?;
+    let ast = parse(&tokens).map_err(|e| e.message.clone())?;
+    let ast = elephc::conditional::apply(ast, &HashSet::new());
+    let ast = elephc::autoload::collect_aliases(ast);
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
+    let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
+    let ast = elephc::optimize::fold_constants(ast);
+    types::check_with_options(
+        &ast,
+        elephc::types::CheckOptions {
+            strict_locals: true,
+        },
+    )
+    .map_err(|e| e.message.clone())?;
+    Ok(())
+}
+
 /// Checks source full for this module.
 fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::errors::CompileError> {
     let tokens = tokenize(src).map_err(|e| elephc::errors::CompileError::new(e.span, &e.message))?;
@@ -105,6 +129,24 @@ fn expect_error(src: &str, expected_substr: &str) {
             assert!(
                 msg.contains(expected_substr),
                 "Error '{}' doesn't contain '{}'",
+                msg,
+                expected_substr,
+            );
+        }
+    }
+}
+
+/// Verifies a snippet fails under `--strict-locals` with the given substring.
+fn expect_error_strict(src: &str, expected_substr: &str) {
+    match check_source_strict(src) {
+        Ok(_) => panic!(
+            "Expected --strict-locals error containing '{}', but got Ok",
+            expected_substr
+        ),
+        Err(msg) => {
+            assert!(
+                msg.contains(expected_substr),
+                "--strict-locals error '{}' doesn't contain '{}'",
                 msg,
                 expected_substr,
             );

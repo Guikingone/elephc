@@ -102,12 +102,19 @@ fn null_coalesce_assignment_type(
 ///
 /// On success, updates `env` with the resolved type for `name`. On error, returns a
 /// type mismatch diagnostic.
+///
+/// `stmt_form` is `true` only when this assignment IS a statement (`StmtKind::Assign`).
+/// An assignment used as an expression (`f($x = "s")`, `$y = ($x = "s")`) yields the
+/// assigned value to its enclosing expression, so re-binding `$x` to a fresh slot of a
+/// different type there has no single well-defined result value to hand back — only the
+/// statement form is eligible for the permissive retype below.
 pub(super) fn check_assign(
     checker: &mut Checker,
     name: &str,
     value: &Expr,
     span: Span,
     env: &mut TypeEnv,
+    stmt_form: bool,
 ) -> Result<(), CompileError> {
     // A direct reassignment (`$k = ...`) makes `$k` an ordinary local: it is no
     // longer the boxed `Mixed` `foreach` iteration key. Drop the foreach-key
@@ -208,7 +215,7 @@ pub(super) fn check_assign(
         return Err(error);
     }
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
-    merge_local_assignment_type(checker, name, &ty, span, env)
+    merge_local_assignment_type(checker, name, &ty, span, env, stmt_form)
 }
 
 /// Type-checks a reference alias assignment (`$target =& <source>`).
@@ -342,6 +349,9 @@ impl Checker {
     /// Validates that the variable exists in `env` after assignment, returning its type.
     /// Used by the checker when processing assignment expressions to propagate the
     /// assigned type back to the caller.
+    ///
+    /// This is the EXPRESSION form of an assignment, so it passes `stmt_form: false`: an
+    /// incompatible retype here keeps the hard error in both modes.
     pub(crate) fn check_local_assignment_expression(
         &mut self,
         name: &str,
@@ -349,7 +359,7 @@ impl Checker {
         span: Span,
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        check_assign(self, name, value, span, env)?;
+        check_assign(self, name, value, span, env, false)?;
         env.get(name).cloned().ok_or_else(|| {
             CompileError::new(span, &format!("Undefined variable: ${}", name))
         })
@@ -751,16 +761,49 @@ fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a 
 ///
 /// The merge operation supports widening (e.g., `Int | Float` from separate assignments)
 /// and preserves type specificity where possible.
+///
+/// When the two types cannot merge, the assignment either RE-BINDS `name` to a fresh
+/// binding of the new type (permissive default) or stays a hard error (`--strict-locals`,
+/// and every shape a re-bind would be unsound for). Re-binding is what PHP does — the old
+/// value is simply dropped — and it is only safe where the store definitely runs and no
+/// reference can still reach the old cell, which is exactly
+/// [`Checker::local_binding_is_killable`].
 fn merge_local_assignment_type(
     checker: &mut Checker,
     name: &str,
     ty: &PhpType,
     span: Span,
     env: &mut TypeEnv,
+    stmt_form: bool,
 ) -> Result<(), CompileError> {
     if let Some(existing) = env.get(name) {
         let merged_ty = checker.merged_assignment_type(existing, ty);
         if merged_ty.is_none() {
+            if !checker.strict_locals && stmt_form && checker.local_binding_is_killable(name) {
+                let message = format!(
+                    "${} changes type from {} to {}; the previous value is discarded (compile with --strict-locals to make this an error)",
+                    name, existing, ty
+                );
+                checker.warnings.push(CompileWarning::new(span, &message));
+                // The span EIR lowering consults to abandon the old frame slot instead of
+                // storing the new value through it.
+                checker.local_retype_sites.insert(span);
+                // The fresh binding is created here, at depth 0 — pin that explicitly so a
+                // later kill or retype of the same name is judged against THIS binding.
+                checker.local_binding_depth.insert(name.to_string(), 0);
+                // Unlike the `unset` kill, the per-name callable/reflection tables are NOT
+                // cleared here. The old binding's metadata is already gone: `check_assign`
+                // ran `update_callable_assignment_metadata`,
+                // `update_callable_array_assignment_metadata` and
+                // `update_reflection_class_assignment_metadata` for THIS assignment before
+                // calling in, and between them they set-or-remove every entry
+                // `Checker::clear_local_binding_metadata` touches (`foreach_key_locals` is
+                // dropped at the top of `check_assign`). Clearing again would discard the
+                // NEW binding's metadata instead: `$f = 1; $f = function (int $a) {…};
+                // $f("s")` would lose the signature that reports the bad argument.
+                env.insert(name.to_string(), ty.clone());
+                return Ok(());
+            }
             return Err(CompileError::new(
                 span,
                 &format!(

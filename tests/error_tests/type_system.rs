@@ -146,11 +146,16 @@ fn test_error_plain_self_read_assignment_remains_undefined() {
     expect_error("<?php $x = $x + 1;", "Undefined variable: $x");
 }
 
-/// Verifies that reassigning a typed variable to a different type is rejected.
-/// Input: `$x = 42; $x = "hello";` — `$x` is int, reassignment to string fails.
+/// Verifies that reassigning an inferred local to an incompatible type is diagnosed.
+/// Input: `$x = 42; $x = "hello";` — a depth-0, statement-form, unaliased retype, so the
+/// permissive default warns and re-binds while `--strict-locals` keeps the hard error.
 #[test]
 fn test_error_type_mismatch_reassign() {
-    expect_error("<?php $x = 42; $x = \"hello\";", "cannot reassign $x");
+    expect_warning(
+        "<?php $x = 42; $x = \"hello\"; echo $x;",
+        "changes type from int to string",
+    );
+    expect_error_strict("<?php $x = 42; $x = \"hello\";", "cannot reassign $x");
 }
 
 /// Verifies that arithmetic on a string operand produces an error.
@@ -1422,4 +1427,50 @@ fn test_by_value_foreach_iterable_stays_killable() {
     expect_no_error(
         "<?php $arr = [1, 2, 3]; foreach ($arr as $v) { } unset($arr); $arr = \"gone\"; echo $arr;",
     );
+}
+
+/// Permissive default: an incompatible depth-0 reassignment warns and re-binds.
+#[test]
+fn test_implicit_retype_warns_by_default() {
+    expect_warning("<?php $a = 0; $a = \"ciao\"; echo $a;", "changes type from int to string");
+}
+
+/// --strict-locals restores the hard error.
+#[test]
+fn test_implicit_retype_errors_under_strict_locals() {
+    expect_error_strict("<?php $a = 0; $a = \"ciao\"; echo $a;", "cannot reassign $a");
+}
+
+/// A compatible reassignment stays silent.
+#[test]
+fn test_compatible_reassign_has_no_warning() {
+    expect_no_warning("<?php $a = 1; $a = 2;", "changes type");
+}
+
+/// unset-then-assign is a fresh binding, not a retype: no warning.
+#[test]
+fn test_unset_then_assign_has_no_warning() {
+    expect_no_warning("<?php $a = 0; unset($a); $a = \"ciao\";", "changes type");
+}
+
+/// A conditional incompatible reassignment is not kill/rebind-eligible. The `$a++`
+/// write also blocks Task 6's mixed-storage marking, so this fixture stays an error
+/// through the whole plan (a plain conditional retype becomes legal in Task 6).
+#[test]
+fn test_conditional_retype_still_errors() {
+    expect_error("<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++;", "cannot reassign");
+}
+
+/// Interplay: a conditional unset leaves the binding alive, so a later depth-0
+/// incompatible reassignment is an ordinary retype (warning), and it is sound:
+/// the fresh slot is written on both paths.
+#[test]
+fn test_retype_after_conditional_unset_warns() {
+    expect_warning("<?php $a = 1; if ($argc > 1) { unset($a); } $a = \"x\"; echo $a;", "changes type");
+}
+
+/// A ref-aliased local stays an error even in permissive mode.
+#[test]
+fn test_ref_aliased_retype_still_errors() {
+    expect_error("<?php $a = 0; $r =& $a; $a = \"x\";", "cannot reassign");
 }
