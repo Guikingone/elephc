@@ -23,7 +23,10 @@
 //!   `$a = 42/"hello" divergently; $a = 99; echo strlen($a);` reached the checked-builtin fast path
 //!   with an `Int` operand and panicked the compiler.
 //! - Installed as scoped thread-locals, matching `with_callable_effect_analysis` and
-//!   `with_by_ref_signatures`. Empty by default, which makes every query a cheap `is_empty()`.
+//!   `with_by_ref_signatures`. Both sets are empty by default. The SPAN set has an explicit
+//!   `is_empty()` fast path (`has_local_binding_decisions`) that keeps the DCE scan off the hot
+//!   path entirely; the NAME set has none — `local_has_mixed_storage` is a plain hash lookup,
+//!   which on an empty set is already the cheapest thing it could do.
 
 use std::cell::RefCell;
 use std::collections::HashSet;

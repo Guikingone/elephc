@@ -84,10 +84,11 @@ impl Checker {
     /// EIR lowering), and pushes ONE warning per marked name. Under `--strict-locals` nothing is
     /// marked and nothing is recorded.
     ///
-    /// Parameter facts are read from the per-body state the caller has already installed:
-    /// `active_ref_params` holds the by-reference parameters and `typed_local_names` the
-    /// type-hinted ones, both seeded by `enter_local_binding_scope` /
-    /// `with_local_storage_context` before this runs.
+    /// PARAMETERS are excluded wholesale — typed or not, by reference or by value — through
+    /// `local_binding_depth`, which `enter_local_binding_scope` has just seeded with this body's
+    /// parameter set and nothing else (the scan runs before the first statement is checked). See
+    /// [`Checker::first_rejected_assignment`] for why: a parameter is already bound on entry, so
+    /// the fresh-insert branch the marking works through can never fire for one.
     pub(crate) fn run_mixed_storage_scan(&mut self, body: &[Stmt]) {
         // The marking describes ONE frame. The caller saves and restores the enclosing body's
         // set, but clear it here too so the scan owns the whole decision for this body.

@@ -754,6 +754,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if overrides_seeded_type {
             self.local_types.insert(name.to_string(), php_type);
         } else {
+            // `or_insert`, so an ABANDONED name keeps the `Void` fact `abandon_local_binding`
+            // deliberately left behind (that fact is what makes `isset`/`empty`/`??` on the
+            // unbound name answer false instead of reading uninitialized storage) — this call
+            // mints the fresh slot without overwriting it. The discipline that makes the stale
+            // `Void` harmless belongs to the CALLER: every re-binding path pairs its
+            // `declare_local` with a `store_local`, which ends by setting the name's type to the
+            // stored one. A future caller that declares an abandoned name WITHOUT storing to it
+            // would keep reading it as `Void`.
             self.local_types.entry(name.to_string()).or_insert(php_type);
         }
         slot
@@ -1884,9 +1892,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// the released pointer in place would be a double free.
     ///
     /// The abandoning form goes through `release_and_abandon_local_binding`, shared with the
-    /// retype re-bind; see there for why both forms null at `Void` and what the resulting slot
-    /// widening buys (a decref instead of a free) and costs (a boxed-detach leak on reads above
-    /// the kill).
+    /// retype re-bind; see there for why both forms null at `Void`, which is a REGISTER-shape
+    /// requirement (a `Str` slot is written from the string register pair, so a null materialized
+    /// as an `I64` never reaches it and the stale pointer is freed twice) rather than a
+    /// refcounting one, and for what the resulting slot widening costs (a boxed-detach leak on
+    /// reads above the kill).
     pub(crate) fn unset_local(
         &mut self,
         name: &str,
@@ -1903,6 +1913,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             }
             return self.store_local(name, null, PhpType::Void, span);
         }
+        // The ref-bound arm. `abandons_binding` is structurally FALSE here and needs no test:
+        // `local_binding_slot_is_abandonable` refuses `is_ref_bound_local(name)` outright, which
+        // is the very condition that selects this arm. The kill therefore always takes the
+        // ref-cell path below, never the abandoning one — as it must, since a ref-bound name's
+        // value lives in a cell other names still reach, not in the slot.
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
         self.clear_reflection_function_local(name);

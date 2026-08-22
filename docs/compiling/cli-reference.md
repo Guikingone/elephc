@@ -367,21 +367,35 @@ compile error:
   of a `Mixed`-storage local goes through boxed dispatch instead of a plain
   register/stack slot for the rest of the body.
 
-Both warning shapes require the name's current binding to be **unconditional**
-(created at the top of the body, not inside a branch or loop) and **never
-reference-aliased** — no `=&` target or source, no `use (&$x)` capture, no
-by-reference parameter (including a variadic `&...$xs`), no by-reference
-call argument, and no by-reference `foreach` iterable (`foreach ($arr as &$v)`
-permanently aliases `$arr`, the container being iterated, not `$v`). The
-branch-divergent shape additionally requires every write to
-the name to be syntactically exact evidence — a literal, a scalar cast, or a
-`.` string concatenation; any other write shape (`++`/`--`, a `foreach`/
-`list()` target, a by-reference call argument, an `unset()` mention, `=&`,
-`global`, or `static`) disqualifies the name from boxing and leaves it on
-today's hard error. A **declared type** always stays strict in both modes: a
-typed local (`int $x = 5;`), a type-hinted parameter, and a class property
-never retype or box to `Mixed` — reassigning one incompatibly is a compile
-error exactly as before.
+All three shapes require the name to be **never reference-aliased** — no `=&`
+target or source, no `use (&$x)` capture, no by-reference parameter (including
+a variadic `&...$xs`), no by-reference call argument, and no by-reference
+`foreach` iterable (`foreach ($arr as &$v)` permanently aliases `$arr`, the
+container being iterated, not `$v`) — and none of them applies to a `global`
+name, a `static` name, or a superglobal, whose storage the body does not own.
+A **declared type** always stays strict in both modes: a typed local
+(`int $x = 5;`), a type-hinted parameter, and a class property never retype or
+box to `Mixed` — reassigning one incompatibly is a compile error exactly as
+before.
+
+Beyond those shared exclusions the shapes are gated differently:
+
+- The **`unset()` kill** and the **straight-line retype** additionally require
+  the name's current binding to be **unconditional**: the binding and the
+  `unset`/reassignment must both sit at conditional depth 0 — straight-line
+  code that dominates everything after it. That is what makes ending the
+  binding safe, since the store that replaces it definitely runs.
+- The **branch-divergent** shape has no such requirement, and could not: it
+  exists precisely for the case where at least one of the two conflicting
+  assignments is inside a branch or loop, as its `if`/`else` example is. It
+  never ends a binding — the local gets one boxed slot for the whole body —
+  so what it requires instead is that every write to the name in the body be
+  syntactically exact evidence: a literal, a scalar cast, or a `.` string
+  concatenation. Any other write shape (`++`/`--`, a `foreach`/`list()`
+  target, a by-reference call argument, an `unset()` mention, `=&`, `global`,
+  or `static`) disqualifies the name from boxing and leaves it on today's hard
+  error, and a **parameter** is never boxed by it at all (it is already bound
+  when the body starts).
 
 `--strict-locals` restores the hard error for the two warning shapes above:
 
@@ -396,6 +410,22 @@ the optional Magician interpreter bridge — reads and writes its locals through
 a boxed `Mixed` scope representation rather than a typed frame slot, so it was
 never subject to the monomorphic-local check `--strict-locals` restores.
 `--strict-locals` therefore has no effect inside `eval()` fragments.
+
+A body that **calls** `eval()` anywhere is the other side of that coin: the
+eval scope reaches the surrounding function's locals BY NAME, while the kill
+and the straight-line retype end a binding and give the name a different frame
+slot. Both therefore step aside for the whole body — `unset()` is a plain
+typing no-op there, and an incompatible reassignment is the hard error in both
+modes, whether the `eval()` call sits above or below it. The branch-divergent
+shape is unaffected, because a boxed `Mixed` slot is exactly what the eval
+scope wants:
+
+```php
+$a = 1; unset($a); eval('$a = 5;'); echo $a;   // prints 5 — the binding survives
+$a = "old"; $a = 7; eval('echo $a;');          // Type error: cannot reassign $a
+if ($n > 1) { $b = 1; } else { $b = "z"; }     // still boxed Mixed, still a warning
+eval('echo $b;');
+```
 
 See [The Type Checker](../internals/the-type-checker.md#local-retyping-and-strict-locals-mode)
 for the full mechanism, including which files implement each shape.

@@ -800,8 +800,10 @@ fn test_collision_inside_an_enum_method_is_a_compile_error() {
 ///
 /// The rejection is conservative rather than necessary — PHP runs this, printing `|5|5` — but
 /// allowing it would mean firing a decision at splices the checker never approved (only the LAST
-/// splice's binding state produced it). What the diagnostic must not do is blame "two files": it
-/// names duplicate inclusion as a cause and points at `require_once`.
+/// splice's binding state produced it). What the diagnostic must not do is blame "two files"
+/// alone: it names duplicate inclusion as a cause too. It deliberately stops there and does NOT
+/// offer `require_once` as the fix, because `_once` does not rescue this program — see
+/// `test_single_require_of_a_retyping_file_still_compiles` for why.
 #[test]
 fn test_double_require_of_a_retyping_file_reports_duplicate_inclusion() {
     let error = compile_files_error_message(

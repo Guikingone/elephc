@@ -38,10 +38,16 @@ pub(super) fn env_after_scalar_assign(mut env: ConstantEnv, name: &str, value: &
     // ("strlen cannot lower checked operand type Int"); the `strtoupper` variant failed EIR
     // validation with an `OperandTypeMismatch` instead.
     //
-    // Refusing the FACT rather than the substitution is what makes this airtight. This is the only
-    // place a plain local's fact is recorded, so a name blocked here cannot leak a concrete type
-    // anywhere downstream — including through the `$b = $a` copy arm below, which would otherwise
-    // hand the constant to an unmarked name and substitute it there.
+    // Refusing the FACT rather than the substitution is what makes this airtight. A name blocked
+    // here cannot leak a concrete type anywhere downstream — including through the `$b = $a` copy
+    // arm below, which would otherwise hand the constant to an unmarked name and substitute it
+    // there.
+    //
+    // This is not literally the only place a fact is recorded — `env_after_list_unpack` records
+    // one per unpacked variable — but it is the only one a MARKED name can reach: the
+    // mixed-storage pre-scan disqualifies every `ListUnpack` target outright
+    // (`checker::mixed_storage_scan`'s `StmtKind::ListUnpack` arm), so a name that got here
+    // marked is never a name that arm can record.
     if crate::optimize::binding_decisions::local_has_mixed_storage(name) {
         env.remove(name);
         return env;

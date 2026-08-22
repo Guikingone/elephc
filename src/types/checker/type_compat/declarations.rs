@@ -435,8 +435,11 @@ impl Checker {
         // `global_env`, so null-probe roots found here must not be deferred against it.
         self.null_probe_scope_is_top_level = false;
 
-        // Runs on the state installed above: the scan reads `active_ref_params` and
-        // `typed_local_names` to keep by-reference and declared-type parameters unmarked.
+        // Runs on the state installed above, and reads exactly one piece of it: the
+        // `local_binding_depth` map `enter_local_binding_scope` has just filled with this body's
+        // parameters, which is how EVERY parameter — typed or not, by reference or by value — is
+        // kept unmarked. It also records here whether the body calls `eval()` anywhere, which
+        // `Checker::local_binding_is_killable` then consults for the whole body.
         self.run_mixed_storage_scan(body);
 
         let result = f(self);
