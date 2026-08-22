@@ -1559,18 +1559,32 @@ $c = new Constructed([1]);
 }
 
 /// Verifies `unset($local)` writes PHP null into local slots on the EIR backend.
+///
+/// The probes are `isset`, not `is_null`. Reading a variable after a straight-line `unset` is a
+/// compile ERROR since the checker learned to end the binding there (`Undefined variable: $x`),
+/// and `is_null($x)` is such a read. `isset`/`??` are the two forms PHP defines on an unbound
+/// name, so they are what a program may still ask — and they lower to exactly the load-and-
+/// null-check this test is here to smoke: the kill leaves the name typed `Void` and its slot
+/// holding PHP null, which is what the probes observe.
 #[test]
 fn ir_backend_handles_unset_locals() {
     for (name, source, expected) in [
         (
             "unset_int_local",
-            "<?php $x = 42; unset($x); echo is_null($x) ? 'null' : 'value';",
+            "<?php $x = 42; unset($x); echo isset($x) ? 'value' : 'null';",
             "null",
         ),
         (
             "unset_multiple_locals",
-            "<?php $a = 1; $b = 'owned' . $argc; unset($a, $b); echo is_null($a) ? 'A' : 'a'; echo is_null($b) ? 'B' : 'b';",
+            "<?php $a = 1; $b = 'owned' . $argc; unset($a, $b); echo isset($a) ? 'a' : 'A'; echo isset($b) ? 'b' : 'B';",
             "AB",
+        ),
+        // The owned heap string is released by the unset and the name re-bound at a new type,
+        // so the slot the backend hands the rebind is the one the kill nulled.
+        (
+            "unset_then_rebind_local",
+            "<?php $c = 'owned' . $argc; unset($c); $c = 7; echo $c;",
+            "7",
         ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);
