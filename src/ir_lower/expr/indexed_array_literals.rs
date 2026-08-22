@@ -432,6 +432,13 @@ pub(super) fn array_literal_element_type_for_ir(
             if let Some(sig) = ctx.extern_functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
             }
+            // A BUILTIN is neither of those, and the syntactic fallback below cannot know one:
+            // it answered `Str` for `json_decode()`, so `[json_decode("1")]` became
+            // `array<string>` and `gettype()` reported the DECLARATION rather than the value.
+            // The checker already decided this call's type and keyed it by span.
+            if let Some(ty) = ctx.builtin_call_types.get(&item.span) {
+                return ir_array_storage_type(ty.clone());
+            }
             ir_array_storage_type(infer_expr_type_syntactic(item))
         }
         // Calls must use declared EIR return metadata rather than the syntactic `Int` fallback,

@@ -495,21 +495,30 @@ pub(crate) fn lower_stream_context_set_option(
             if spelling == StreamContextSetOptionSpelling::Singular {
                 emit_stream_context_set_option_two_arg_deprecation(ctx);
             }
-            // php prints the deprecation from the ARITY and only then judges the shape, so a
-            // two-argument call with a STRING wrapper gets the notice AND the refusal. Only a
-            // DECLARED string takes that branch: a `Mixed` operand is almost always an options
-            // array behind a variable, and guessing "string" there would refuse a legal call.
-            if matches!(ctx.raw_value_php_type(options)?, PhpType::Str) {
-                super::super::exceptions::emit_value_error(
-                    ctx,
-                    STREAM_CONTEXT_SET_OPTION_NAME_CANNOT_BE_NULL,
-                );
-                return store_if_result(ctx, inst);
-            }
+            // php prints the deprecation from the ARITY and only then judges the shape. The guard
+            // exists because the merge below walks its argument as a HASH: a boxed scalar was
+            // dereferenced as a container and the process died with SIGBUS, where php raises.
+            //
+            // The two spellings raise different things — the singular declares `array|string`, so
+            // a scalar becomes a wrapper NAME and the complaint moves to the missing
+            // `$option_name` — which is what the style carries.
+            let style = match spelling {
+                StreamContextSetOptionSpelling::Singular => {
+                    StreamContextOptionsRefusal::ArrayOrString
+                }
+                StreamContextSetOptionSpelling::Plural => StreamContextOptionsRefusal::ArrayOnly(
+                    StreamContextOptionsParam::SET_OPTIONS,
+                ),
+            };
+            // Scratch first: the guard MERGES what survives, and it must land in this context's
+            // scratch. php's own order is unaffected — the setup below is invisible to it.
             clear_stream_context_options(ctx);
             restore_stream_context_from_handle(ctx, context)?;
             retain_stream_context_options_scratch(ctx);
-            merge_stream_context_options_into_scratch(ctx, options)?;
+            let outcome = emit_two_argument_options_guard(ctx, options, style)?;
+            if matches!(outcome, StreamContextTwoArgOptions::Refused) {
+                return store_if_result(ctx, inst);
+            }
             update_stream_context_state_from_handle(ctx, context)?;
             emit_bool_result(ctx, true);
         }
@@ -615,7 +624,7 @@ fn lower_stream_context_set_option_3(
 }
 
 /// php-src's `ValueError` when a STRING wrapper is paired with a null `$option_name`.
-const STREAM_CONTEXT_SET_OPTION_NAME_CANNOT_BE_NULL: &str =
+pub(super) const STREAM_CONTEXT_SET_OPTION_NAME_CANNOT_BE_NULL: &str =
     "stream_context_set_option(): Argument #3 ($option_name) cannot be null when argument #2 \
      ($wrapper_or_options) is a string";
 

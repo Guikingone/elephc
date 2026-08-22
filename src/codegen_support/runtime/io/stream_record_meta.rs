@@ -107,9 +107,27 @@ pub fn emit_stream_record_meta(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "cmp x12, #{}", STREAM_BACKEND_PHAR_WRITE
     ));                                                                         // is this a buffered Phar write backend?
-    emitter.instruction("b.ne __rt_stream_record_meta_wrapper");                // preserve the caller's wrapper id for ordinary backends
+    emitter.instruction("b.ne __rt_stream_record_meta_scheme");                 // ordinary backends are identified by their URI
     emitter.instruction("mov x11, #5");                                         // wrapper id 5 selects the Phar wrapper literal
     emitter.instruction("b __rt_stream_record_meta_wrapper");                   // publish the inferred Phar identity
+
+    // A recorded URI beginning `php://` belongs to the `php` wrapper whatever opened it. php
+    // decides this by SCHEME, and a `php://filter/...` URL built at run time never reaches the
+    // literal parser that re-stamps the identity at the open site — so it kept the inner opener's.
+    emitter.label("__rt_stream_record_meta_scheme");
+    emitter.instruction("ldp x13, x14, [sp, #16]");                             // the persisted URI and its length
+    emitter.instruction("cbz x13, __rt_stream_record_meta_wrapper");            // no URI: keep the caller's fallback
+    emitter.instruction("cmp x14, #6");                                         // "php://" is six bytes
+    emitter.instruction("b.lt __rt_stream_record_meta_wrapper");
+    for (offset, byte) in b"php://".iter().enumerate() {
+        emitter.instruction(&format!("ldrb w15, [x13, #{}]", offset));
+        emitter.instruction(&format!("cmp w15, #{}", byte));
+        emitter.instruction("b.ne __rt_stream_record_meta_wrapper");
+    }
+    emitter.instruction("mov x11, #6");                                         // wrapper id 6 selects the PHP wrapper literal
+    // Explicitly: the userspace arm is emitted immediately below, and falling into it made a
+    // filtered plain file report `user-space`.
+    emitter.instruction("b __rt_stream_record_meta_wrapper");
     emitter.label("__rt_stream_record_meta_user");
     emitter.instruction("str x10, [sp, #40]");                                  // preserve detached URI ownership across definition lookup
     emitter.instruction("ldp x0, x1, [sp, #16]");                               // pass the persisted URI bytes to wrapper-definition lookup
@@ -226,9 +244,42 @@ fn emit_stream_record_meta_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "cmp rcx, {}", STREAM_BACKEND_PHAR_WRITE
     ));                                                                         // is this a buffered Phar write backend?
-    emitter.instruction("jne __rt_stream_record_meta_wrapper_x86");             // preserve the caller's wrapper id for ordinary backends
+    emitter.instruction("jne __rt_stream_record_meta_scheme_x86");              // ordinary backends are identified by their URI
     emitter.instruction("mov eax, 5");                                          // wrapper id 5 selects the Phar wrapper literal
     emitter.instruction("jmp __rt_stream_record_meta_wrapper_x86");             // publish the inferred Phar identity
+
+    // A recorded URI beginning `php://` belongs to the `php` wrapper whatever opened it. php
+    // decides this by SCHEME, and a `php://filter/...` URL built at run time never reaches the
+    // literal parser that re-stamps the identity at the open site — so it kept the inner opener's.
+    emitter.label("__rt_stream_record_meta_scheme_x86");
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // the persisted URI
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // and its length
+    emitter.instruction("test r8, r8");
+    emitter.instruction("jz __rt_stream_record_meta_wrapper_x86");              // no URI: keep the caller's fallback
+    emitter.instruction("cmp r9, 6");                                           // "php://" is six bytes
+    emitter.instruction("jl __rt_stream_record_meta_wrapper_x86");
+    emitter.instruction("movzx ecx, BYTE PTR [r8 + 0]");
+    emitter.instruction("cmp ecx, 112");
+    emitter.instruction("jne __rt_stream_record_meta_wrapper_x86");
+    emitter.instruction("movzx ecx, BYTE PTR [r8 + 1]");
+    emitter.instruction("cmp ecx, 104");
+    emitter.instruction("jne __rt_stream_record_meta_wrapper_x86");
+    emitter.instruction("movzx ecx, BYTE PTR [r8 + 2]");
+    emitter.instruction("cmp ecx, 112");
+    emitter.instruction("jne __rt_stream_record_meta_wrapper_x86");
+    emitter.instruction("movzx ecx, BYTE PTR [r8 + 3]");
+    emitter.instruction("cmp ecx, 58");
+    emitter.instruction("jne __rt_stream_record_meta_wrapper_x86");
+    emitter.instruction("movzx ecx, BYTE PTR [r8 + 4]");
+    emitter.instruction("cmp ecx, 47");
+    emitter.instruction("jne __rt_stream_record_meta_wrapper_x86");
+    emitter.instruction("movzx ecx, BYTE PTR [r8 + 5]");
+    emitter.instruction("cmp ecx, 47");
+    emitter.instruction("jne __rt_stream_record_meta_wrapper_x86");
+    emitter.instruction("mov eax, 6");                                          // wrapper id 6 selects the PHP wrapper literal
+    // Explicitly: the userspace arm is emitted immediately below, and falling into it made a
+    // filtered plain file report `user-space`.
+    emitter.instruction("jmp __rt_stream_record_meta_wrapper_x86");
     emitter.label("__rt_stream_record_meta_user_x86");
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve detached URI ownership across definition lookup
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the persisted URI pointer to definition lookup

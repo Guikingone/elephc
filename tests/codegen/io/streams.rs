@@ -18177,3 +18177,153 @@ echo "declared";
         out.diagnostics
     );
 }
+
+
+/// Verifies the two-argument context form refuses what php refuses, instead of dying.
+///
+/// The merge this form performs walks its argument as a HASH, and nothing checked it first. Two
+/// ways to die, both measured before this test existed:
+///
+/// ```text
+/// stream_context_set_options($c, json_decode("1"))          SIGBUS
+/// stream_context_set_options($c, json_decode("[1]", true))  Fatal error: heap memory exhausted
+/// ```
+///
+/// php raises a `TypeError` for the first and its options-FORM `ValueError` for the second. An
+/// EMPTY list is legal and carries nothing; a populated one is not. MEASURED on `php -n` 8.5.6.
+#[test]
+fn test_the_two_argument_context_form_refuses_what_php_refuses() {
+    let out = compile_and_run(
+        r####"<?php
+$cases = [
+    "scalar" => json_decode("1"),
+    "list"   => json_decode("[1]", true),
+    "empty"  => json_decode("[]", true),
+    "map"    => json_decode('{"http":{"method":"POST"}}', true),
+];
+foreach ($cases as $name => $value) {
+    $c = stream_context_create();
+    try {
+        stream_context_set_options($c, $value);
+        echo $name, "=", json_encode(stream_context_get_options($c)), "|";
+    } catch (Throwable $t) {
+        echo $name, "=", get_class($t), ": ", $t->getMessage(), "|";
+    }
+}
+"####,
+    );
+    assert_eq!(
+        out,
+        "scalar=TypeError: stream_context_set_options(): Argument #2 ($options) must be of type \
+         array, int given|\
+         list=ValueError: Options should have the form [\"wrappername\"][\"optionname\"] = $value|\
+         empty=[]|map={\"http\":{\"method\":\"POST\"}}|"
+    );
+}
+
+/// Verifies the SINGULAR spelling refuses differently, because it declares `array|string`.
+///
+/// A scalar has a string form, so php COERCES it into a wrapper name and the complaint moves to
+/// the argument that was not supplied. Only a value with no string form — an object — is a type
+/// error, and that one names `array|string`. A null earns php 8.1's non-nullable notice FIRST and
+/// is then coerced to `""`, which is why the refusal that follows names a string.
+#[test]
+fn test_the_singular_context_form_declares_array_or_string() {
+    let out = compile_and_run_capture(
+        r####"<?php
+class Thing
+{
+}
+foreach (["int" => json_decode("1"), "obj" => json_decode('{"a":1}')] as $name => $value) {
+    try {
+        stream_context_set_option(stream_context_create(), $value);
+        echo $name, "=ok|";
+    } catch (Throwable $t) {
+        echo $name, "=", get_class($t), ": ", $t->getMessage(), "|";
+    }
+}
+try {
+    stream_context_set_option(stream_context_create(), null);
+    echo "null=ok|";
+} catch (Throwable $t) {
+    echo "null=", get_class($t), ": ", $t->getMessage(), "|";
+}
+"####,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "int=ValueError: stream_context_set_option(): Argument #3 ($option_name) cannot be null \
+         when argument #2 ($wrapper_or_options) is a string|\
+         obj=TypeError: stream_context_set_option(): Argument #2 ($wrapper_or_options) must be of \
+         type array|string, stdClass given|\
+         null=ValueError: stream_context_set_option(): Argument #3 ($option_name) cannot be null \
+         when argument #2 ($wrapper_or_options) is a string|"
+    );
+    assert!(
+        out.diagnostics.contains(
+            "Deprecated: stream_context_set_option(): Passing null to parameter #2 \
+             ($wrapper_or_options) of type array|string is deprecated"
+        ),
+        "php warns about the null before refusing it, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies an array literal of BUILTIN calls keeps each call's real type.
+///
+/// `json_decode()` returns `mixed` and the EIR recorded each element as `mixed` — but the LITERAL
+/// came out `array<string>`, so the loop variable was a declared string and `gettype()` answered
+/// from the declaration instead of the value. Nine wrong answers out of nine, in silence.
+///
+/// The element walk consulted user functions and extern functions and then guessed syntactically,
+/// which cannot know a builtin. The checker had already decided every builtin call's type.
+#[test]
+fn test_an_array_literal_of_builtin_calls_keeps_their_types() {
+    let out = compile_and_run(
+        r####"<?php
+foreach ([json_decode("1"), json_decode('"x"'), json_decode("[1]", true)] as $v) {
+    echo gettype($v), "|";
+}
+$a = [json_decode("1"), json_decode('"x"'), json_decode("[1]", true)];
+foreach ($a as $v) {
+    echo gettype($v), "|";
+}
+"####,
+    );
+    assert_eq!(out, "integer|string|array|integer|string|array|");
+}
+
+
+/// Verifies a `php://filter/...` URL built at RUN TIME reports the php wrapper, as php does.
+///
+/// MEASURED on `php -n` 8.5.6: `wrapper_type` is `PHP` and `stream_type` is `STDIO` whichever way
+/// the URL was written. elephc reported `plainfile` for the computed one, because the literal form
+/// is re-stamped by a parser a run-time path never reaches, leaving the INNER opener's identity on
+/// the handle.
+///
+/// The identity is read off the recorded URI now — a scheme lookup, which is what php does — so
+/// the two spellings agree by construction rather than by having two sites kept in step.
+#[test]
+fn test_a_computed_php_filter_url_still_names_the_php_wrapper() {
+    let out = compile_and_run(
+        r####"<?php
+$path = tempnam(sys_get_temp_dir(), "flt");
+file_put_contents($path, "hello");
+
+$computed = fopen("php://filter/read=string.toupper/resource=" . $path, "r");
+$m = stream_get_meta_data($computed);
+echo "computed=", $m["wrapper_type"], "/", $m["stream_type"], "|";
+echo "read=", stream_get_contents($computed), "|";
+fclose($computed);
+
+$memory = fopen("php://filter/read=string.toupper/resource=php://memory", "w+");
+$mm = stream_get_meta_data($memory);
+// php keeps the INNER identity in `stream_type` for a php:// resource: still MEMORY.
+echo "memory=", $mm["wrapper_type"], "/", $mm["stream_type"], "|";
+fclose($memory);
+unlink($path);
+"####,
+    );
+    assert_eq!(out, "computed=PHP/STDIO|read=HELLO|memory=PHP/MEMORY|");
+}
