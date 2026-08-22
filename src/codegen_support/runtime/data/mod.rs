@@ -231,6 +231,19 @@ pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FSTAT: &str = "Warning: fstat(): ";
 /// `flock()`'s head; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
 pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FLOCK: &str = "Warning: flock(): ";
 
+/// `fseek()`'s head; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FSEEK: &str = "Warning: fseek(): ";
+
+/// `rewind()`'s head; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_REWIND: &str = "Warning: rewind(): ";
+
+/// `stream_tell`'s tail; see [`WRAPPER_MISSING_HOOK_TAIL_WRITE`].
+///
+/// php reconciles its own position after every successful `stream_seek` by calling `stream_tell`,
+/// and a wrapper that does not define one can therefore never seek: the seek is REFUSED, with this
+/// warning, and the position is left where it was. MEASURED on `php -n` 8.5.6.
+pub(crate) const WRAPPER_MISSING_HOOK_TAIL_TELL: &str = "::stream_tell is not implemented!\n";
+
 /// `stream_write`'s tail; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
 pub(crate) const WRAPPER_MISSING_HOOK_TAIL_WRITE: &str = "::stream_write is not implemented!\n";
 

@@ -68,6 +68,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_stream_clear_append_skip(emitter);
     io::emit_stream_wrapper_pos(emitter);
     io::emit_stream_wrapper_pos_advance(emitter);
+    io::emit_user_wrapper_seek_reconcile(emitter);
     io::emit_stream_wrapper_pos_set(emitter);
     io::emit_stream_filtered_pos(emitter);
     io::emit_stream_filtered_pos_set(emitter);

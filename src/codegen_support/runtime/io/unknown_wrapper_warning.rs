@@ -17,6 +17,9 @@
 //!   table and `__rt_builtin_wrapper_index` for the built-ins — and the warning is emitted only
 //!   when neither knows the scheme.
 //! - A path with no `://` at all is an ordinary filesystem path and warns nothing.
+//! - Neither is a ONE-LETTER scheme: php-src requires `p - path > 1` before it reads what
+//!   precedes `://` as a scheme, so `c://x` is a Windows drive path on every platform and gets
+//!   only the ordinary failed-open line. MEASURED on `php -n` 8.5.6.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -84,7 +87,8 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_uww_scan");
 
     emitter.label("__rt_uww_found");
-    emitter.instruction("cbz x9, __rt_uww_ret");                                // an empty scheme is not a wrapper name
+    emitter.instruction("cmp x9, #2");                                          // php-src: `p - path > 1`
+    emitter.instruction("b.lo __rt_uww_ret");                                   // one letter is a DRIVE, not a wrapper name
     emitter.instruction("str x9, [sp, #32]");                                   // the scheme length
 
     // -- ask both authorities; either one claiming the scheme means there is nothing to report --
@@ -234,8 +238,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_uww_x_scan");
 
     emitter.label("__rt_uww_x_found");
-    emitter.instruction("test r9, r9");
-    emitter.instruction("jz __rt_uww_x_ret");                                   // an empty scheme is not a wrapper name
+    emitter.instruction("cmp r9, 2");                                           // php-src: `p - path > 1`
+    emitter.instruction("jb __rt_uww_x_ret");                                   // one letter is a DRIVE, not a wrapper name
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // the scheme length
 
     // -- ask both authorities; either one claiming the scheme means there is nothing to report --

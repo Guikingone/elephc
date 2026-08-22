@@ -297,6 +297,50 @@ pub(super) fn emit_advance_wrapper_position(
     Ok(())
 }
 
+/// Advances a userspace wrapper's position by the byte count a WRITE just returned.
+///
+/// The sibling above does the same for a read, whose result is a string pair. A write answers a
+/// COUNT in the int-result register, and answers a NEGATIVE one when it failed — which must move
+/// nothing, exactly as php leaves the position alone when `stream_write` reports failure.
+///
+/// Like its sibling, the count travels on an explicit frame: materializing the handle clobbers the
+/// register it would otherwise sit in, and the position would then advance by the handle.
+pub(super) fn emit_advance_wrapper_position_by_written(
+    ctx: &mut FunctionContext<'_>,
+    stream: ValueId,
+    name: &str,
+) -> Result<()> {
+    let skip = ctx.next_label("wrapper_pos_write_failed");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #16");
+            ctx.emitter.instruction("str x0, [sp, #0]");                        // the byte count the caller is owed
+            load_stream_handle_to_result(ctx, stream, name)?;
+            ctx.emitter.instruction("ldr x1, [sp, #0]");                        // the bytes this write produced
+            ctx.emitter.instruction("cmp x1, #0");                              // a failed write moves nothing
+            ctx.emitter.instruction(&format!("b.lt {}", skip));
+            abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_pos_advance");
+            ctx.emitter.label(&skip);
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            ctx.emitter.instruction("add sp, sp, #16");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // the byte count the caller is owed
+            load_stream_handle_to_result(ctx, stream, name)?;
+            ctx.emitter.instruction("mov rdi, rax");
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                // the bytes this write produced
+            ctx.emitter.instruction("cmp rsi, 0");                              // a failed write moves nothing
+            ctx.emitter.instruction(&format!("jl {}", skip));
+            abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_pos_advance");
+            ctx.emitter.label(&skip);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");
+            ctx.emitter.instruction("add rsp, 16");
+        }
+    }
+    Ok(())
+}
+
 /// Lowers `fwrite(stream, data, length?)` and boxes a byte count or PHP `false` on error.
 ///
 /// php's third argument caps the write at `max(0, min($length, strlen($data)))` bytes and is
@@ -362,6 +406,9 @@ pub(crate) fn lower_fwrite(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");
         }
     }
+    // php advances the position it keeps for a userspace stream by what the write moved; ftell()
+    // reports THAT and never asks the wrapper. Every read path already did this.
+    emit_advance_wrapper_position_by_written(ctx, stream, "fwrite")?;
     box_negative_int_or_false_result(ctx, "fwrite");
     store_if_result(ctx, inst)
 }

@@ -12827,13 +12827,18 @@ echo fflush($g) ? "1" : "0";
     assert_eq!(out, "1|0");
 }
 
-/// Verifies compiled PHP output for fopen user wrapper fseek dispatches to stream seek.
+/// Verifies `fseek()` reaches the wrapper's `stream_seek` — and that reaching it is not enough.
+///
+/// This test used to assert `0|0`, which was elephc's answer and not php's. MEASURED on `php -n`
+/// 8.5.6 with the SAME program: `-1|-1`, and a warning before each.
+///
+/// `SeekW` defines `stream_seek` and no `stream_tell`. php reconciles the position it keeps for a
+/// userspace stream after every successful seek by calling `stream_tell`, so a class that defines
+/// none can never seek: php warns and refuses. The dispatch this test is named for still happens —
+/// `stream_seek` is called and answers true — it is the step AFTER it that fails.
 #[test]
 fn test_fopen_user_wrapper_fseek_dispatches_to_stream_seek() {
-    // Phase 10 step 4: fseek dispatches into the wrapper's stream_seek and
-    // maps a `true` return to 0, anything else (including a missing method)
-    // to -1 — matching PHP's int fseek() result.
-    let out = compile_and_run(
+    let out = compile_and_run_capture(
         r#"<?php
 class SeekW {
     public function stream_open($p, $m, $o, &$op): bool { return true; }
@@ -12846,7 +12851,16 @@ echo "|";
 echo fseek($f, 0, 2);
 "#,
     );
-    assert_eq!(out, "0|0");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "-1|-1");
+    assert_eq!(
+        out.diagnostics
+            .matches("Warning: fseek(): SeekW::stream_tell is not implemented!")
+            .count(),
+        2,
+        "one warning per refused seek, got diagnostics={}",
+        out.diagnostics
+    );
 }
 
 /// Verifies compiled PHP output for fopen user wrapper fseek missing method returns minus one.
@@ -17918,5 +17932,175 @@ rmdir($dir);
         out,
         "plain=plainfile/STDIO|php=PHP/MEMORY|data=RFC2397/RFC2397|\
          zlib=ZLIB/ZLIB|user=user-space/user-space|glob=glob/glob|"
+    );
+}
+
+
+/// Verifies a WRITE through a userspace wrapper moves the position `ftell()` reports.
+///
+/// php keeps that position itself and advances it by what each read and write moved; every read
+/// path already did, and no write path did — so `ftell()` answered 0 forever on a wrapper stream
+/// that had been written to. MEASURED on `php -n` 8.5.6, the same three answers in every mode.
+#[test]
+fn test_a_write_through_a_wrapper_moves_the_position_ftell_reports() {
+    let out = compile_and_run(
+        r####"<?php
+class W
+{
+    public $context;
+    private $buf = "";
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_write($d) { $this->buf .= $d; return strlen($d); }
+    public function stream_read($n) { return substr($this->buf, 0, $n); }
+    public function stream_eof() { return true; }
+}
+stream_wrapper_register("wt", "W");
+
+foreach (["w", "a", "r+"] as $mode) {
+    $f = fopen("wt://x", $mode);
+    echo $mode, ": t0=", ftell($f);
+    fwrite($f, "AB");
+    echo " t1=", ftell($f);
+    fwrite($f, "C");
+    echo " t2=", ftell($f), "|";
+    fclose($f);
+}
+"####,
+    );
+    assert_eq!(out, "w: t0=0 t1=2 t2=3|a: t0=0 t1=2 t2=3|r+: t0=0 t1=2 t2=3|");
+}
+
+/// Verifies a wrapper with no `stream_tell` CANNOT SEEK, and that php says why.
+///
+/// This is the rule that is easy to get wrong in the flattering direction. php reconciles its own
+/// position after a successful `stream_seek` by calling `stream_tell` — and when the class defines
+/// none, it warns `<Class>::stream_tell is not implemented!` and REFUSES the seek: `fseek()`
+/// answers -1, `rewind()` answers false, and the position stays where the writes left it.
+///
+/// The refusing wrapper is here for the other half: when `stream_seek` itself answers false, php
+/// never reconciles at all, so the position is equally untouched. elephc moved it in both cases,
+/// to the offset that had been ASKED for.
+#[test]
+fn test_a_wrapper_without_stream_tell_cannot_seek() {
+    let out = compile_and_run_capture(
+        r####"<?php
+class Refuse
+{
+    public $context;
+    private $buf = "";
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_write($d) { $this->buf .= $d; return strlen($d); }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_seek($o, $w) { return false; }
+}
+class Accept extends Refuse
+{
+    public function stream_seek($o, $w) { return true; }
+}
+stream_wrapper_register("nope", "Refuse");
+stream_wrapper_register("yeah", "Accept");
+
+foreach (["nope", "yeah"] as $scheme) {
+    $h = fopen($scheme . "://x", "w");
+    fwrite($h, "ABCDE");
+    echo $scheme, ": after-write=", ftell($h);
+    echo " seek=", var_export(fseek($h, 1, SEEK_SET), true), " pos=", ftell($h);
+    echo " rewind=", var_export(rewind($h), true), " pos=", ftell($h), "|";
+    fclose($h);
+}
+"####,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "nope: after-write=5 seek=-1 pos=5 rewind=false pos=5|\
+         yeah: after-write=5 seek=-1 pos=5 rewind=false pos=5|"
+    );
+    // php names the function the USER called, not the method it reached.
+    assert!(
+        out.diagnostics
+            .contains("Warning: fseek(): Accept::stream_tell is not implemented!"),
+        "expected fseek's warning, got diagnostics={}",
+        out.diagnostics
+    );
+    assert!(
+        out.diagnostics
+            .contains("Warning: rewind(): Accept::stream_tell is not implemented!"),
+        "expected rewind's warning, got diagnostics={}",
+        out.diagnostics
+    );
+    // The wrapper that refuses the seek outright is reconciled by nothing, so it says nothing.
+    assert!(
+        !out.diagnostics.contains("Refuse::stream_tell"),
+        "a refused seek reconciles nothing, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies the position after a seek is what `stream_tell` SAYS, not what was asked for.
+///
+/// php trusts the wrapper completely here: a `stream_tell` answering 999 puts the stream at 999
+/// after `fseek($h, 1)`, and the next write advances from THERE. MEASURED on `php -n` 8.5.6 —
+/// the numbers below are php's, absurd ones included.
+#[test]
+fn test_a_wrappers_stream_tell_decides_where_a_seek_landed() {
+    let out = compile_and_run(
+        r####"<?php
+class Liar
+{
+    public $context;
+    private $buf = "";
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_write($d) { $this->buf .= $d; return strlen($d); }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_seek($o, $w) { return true; }
+    public function stream_tell() { return 999; }
+}
+stream_wrapper_register("liar", "Liar");
+
+$h = fopen("liar://x", "w");
+fwrite($h, "ABCDE");
+echo "after-write=", ftell($h), "|";
+echo "seek=", var_export(fseek($h, 1, SEEK_SET), true), " pos=", ftell($h), "|";
+fwrite($h, "Z");
+echo "after-second-write=", ftell($h), "|";
+echo "rewind=", var_export(rewind($h), true), " pos=", ftell($h), "|";
+fclose($h);
+"####,
+    );
+    assert_eq!(
+        out,
+        "after-write=5|seek=0 pos=999|after-second-write=1000|rewind=true pos=999|"
+    );
+}
+
+/// Verifies a ONE-LETTER scheme is a drive letter to php, not a wrapper name.
+///
+/// php-src's `php_stream_locate_url_wrapper` requires `p - path > 1` before it reads what precedes
+/// `://` as a scheme at all, so `w://x` is an ordinary path on every platform and gets only the
+/// failed-open line. elephc's guard rejected an EMPTY scheme only, so a single letter produced an
+/// "Unable to find the wrapper" warning php never prints.
+#[test]
+fn test_a_one_letter_scheme_is_a_drive_not_a_wrapper() {
+    let out = compile_and_run_capture(
+        r####"<?php
+$a = fopen("bogus://x", "r");
+$b = fopen("w://x", "r");
+echo var_export($a, true), "|", var_export($b, true);
+"####,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false|false");
+    assert!(
+        out.diagnostics.contains("Unable to find the wrapper \"bogus\""),
+        "a real unknown scheme is named, got diagnostics={}",
+        out.diagnostics
+    );
+    assert!(
+        !out.diagnostics.contains("Unable to find the wrapper \"w\""),
+        "one letter is a drive, got diagnostics={}",
+        out.diagnostics
     );
 }
