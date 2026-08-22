@@ -96,16 +96,44 @@ pub struct CheckResult {
 /// Returns `Ok(CheckResult)` on success, or `Err(CompileError)` if type checking fails.
 /// The `CheckResult` carries the resolved type environment, function signatures, class
 /// metadata, warnings, and any required native libraries for linking.
+/// Delegates to `check_with_options` with default `CheckOptions`.
 #[allow(dead_code)]
 pub fn check(program: &Program) -> Result<CheckResult, CompileError> {
-    checker::check_types(program, Platform::detect_host())
+    check_with_options(program, checker::CheckOptions::default())
+}
+
+/// Runs type checking using the host platform with explicit `CheckOptions`
+/// (e.g. `--strict-locals`). Returns `Ok(CheckResult)` on success, or
+/// `Err(CompileError)` if type checking fails.
+#[allow(dead_code)]
+pub fn check_with_options(
+    program: &Program,
+    options: checker::CheckOptions,
+) -> Result<CheckResult, CompileError> {
+    checker::check_types_with_options(program, Platform::detect_host(), options)
 }
 
 /// Runs type checking targeting a specific platform (e.g., Linux instead of the host macOS).
 /// Returns `Ok(CheckResult)` on success, or `Err(CompileError)` if type checking fails.
 /// The target affects FFI metadata, required library resolution, and platform-specific type behavior.
+/// Delegates to `check_with_target_and_options` with default `CheckOptions`.
+///
+/// No longer called by the compile pipeline directly (it now threads `CheckOptions`
+/// via `check_with_target_and_options`), so this is dead code outside of tests.
+#[allow(dead_code)]
 pub fn check_with_target(program: &Program, target: Target) -> Result<CheckResult, CompileError> {
-    checker::check_types(program, target.platform)
+    check_with_target_and_options(program, target, checker::CheckOptions::default())
+}
+
+/// Runs type checking targeting a specific platform with explicit `CheckOptions`
+/// (e.g. `--strict-locals`). Returns `Ok(CheckResult)` on success, or
+/// `Err(CompileError)` if type checking fails.
+pub fn check_with_target_and_options(
+    program: &Program,
+    target: Target,
+    options: checker::CheckOptions,
+) -> Result<CheckResult, CompileError> {
+    checker::check_types_with_options(program, target.platform, options)
 }
 
 #[cfg(test)]

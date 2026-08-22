@@ -252,6 +252,21 @@ pub(crate) struct Checker {
     /// already visits every expression with a typed environment, so no second AST walk is
     /// needed. See `crate::ir_lower::context::LoweringContext::boxed_incdec_storage_type`.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// Mirrors `CheckOptions::strict_locals` for the duration of the check. Not yet consumed
+    /// by any pass — Task 1 only threads the flag from the CLI down to the `Checker`.
+    pub strict_locals: bool,
+}
+
+/// Options controlling type-checker behavior beyond its default permissive rules.
+///
+/// Threaded from `CliConfig::strict_locals` (the `--strict-locals` flag) down to the
+/// `Checker`. All fields default to today's behavior, so a caller that does not opt in
+/// (`CheckOptions::default()`) sees no change.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CheckOptions {
+    /// Make an incompatible local retype (e.g. a variable assigned `int` then later
+    /// `string`) a compile error instead of a warning.
+    pub strict_locals: bool,
 }
 
 /// Records an access violation that must lower to a catchable `Error` throw.
@@ -314,15 +329,30 @@ pub(crate) struct FnDecl {
     pub attributes: Vec<crate::parser::ast::AttributeGroup>,
 }
 
-/// Runs the type checker on `program` for the given `target_platform`, returning
-/// a `CheckResult` on success or a `CompileError` on failure. The checker validates
-/// types, resolves declarations, infers return types, and collects warnings. Abstract
-/// return types are propagated from concrete implementations before returning.
+/// Runs the type checker on `program` for the given `target_platform` with default
+/// `CheckOptions`, returning a `CheckResult` on success or a `CompileError` on failure.
+/// Delegates to `check_types_with_options`; see it for the full behavior.
+///
+/// Only reachable through `result::check`/`check_with_target` (both of which now go through
+/// `*_with_options`) and a unit test, so this is dead code outside of tests.
+#[allow(dead_code)]
 pub fn check_types(
     program: &Program,
     target_platform: Platform,
 ) -> Result<CheckResult, CompileError> {
-    let (mut checker, global_env) = driver::check_types_impl(program, target_platform)?;
+    check_types_with_options(program, target_platform, CheckOptions::default())
+}
+
+/// Runs the type checker on `program` for the given `target_platform` and `options`,
+/// returning a `CheckResult` on success or a `CompileError` on failure. The checker
+/// validates types, resolves declarations, infers return types, and collects warnings.
+/// Abstract return types are propagated from concrete implementations before returning.
+pub fn check_types_with_options(
+    program: &Program,
+    target_platform: Platform,
+    options: CheckOptions,
+) -> Result<CheckResult, CompileError> {
+    let (mut checker, global_env) = driver::check_types_impl(program, target_platform, options)?;
 
     propagate_abstract_return_types(&mut checker);
     apply_reference_property_promotions(&mut checker);

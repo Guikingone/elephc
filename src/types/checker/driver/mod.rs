@@ -44,7 +44,7 @@ use super::schema::{
     validate_deferred_declaration_defaults,
 };
 use super::yield_validation::validate_yield_contexts;
-use super::Checker;
+use super::{CheckOptions, Checker};
 
 mod declaration_metadata;
 mod externs;
@@ -77,11 +77,14 @@ use declaration_metadata::{
 ///
 /// Returns `Ok((Checker, TypeEnv))` on success or `Err(CompileError)` if any phase reports errors.
 /// The `Checker` carries resolved class/interface/enum/function metadata; `TypeEnv` holds the global type environment.
+/// `options` is copied onto the constructed `Checker` (e.g. `strict_locals`) before any phase runs.
 pub(super) fn check_types_impl(
     program: &Program,
     target_platform: Platform,
+    options: CheckOptions,
 ) -> Result<(Checker, TypeEnv), CompileError> {
     let mut checker = Checker::new(target_platform);
+    checker.strict_locals = options.strict_locals;
     let mut errors = Vec::new();
 
     errors.extend(validate_yield_contexts(program));

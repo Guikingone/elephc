@@ -66,6 +66,7 @@ pub(crate) fn compile(config: CliConfig) {
         extra_frameworks,
         defines,
         strict_php,
+        strict_locals,
         web,
         web_isolation,
         with_crates,
@@ -449,7 +450,8 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("typecheck");
     let phase_started = Instant::now();
-    let mut check_result = match types::check_with_target(&ast, target) {
+    let check_options = types::CheckOptions { strict_locals };
+    let mut check_result = match types::check_with_target_and_options(&ast, target, check_options) {
         Ok(result) => result,
         Err(e) => {
             crate::progress::clear();
