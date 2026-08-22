@@ -47,6 +47,18 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
                 .flatten()
         })
         .unwrap_or_else(|| lower_expr(ctx, value));
+    // The checker recorded this assignment as an incompatible RE-BINDING of `$name`: end the old
+    // binding here, so the store below mints a fresh slot at the new type instead of widening a
+    // slot the program will never read at the old type again.
+    //
+    // Placed exactly here for two reasons. The right-hand side is already lowered, so
+    // `$a = "n=" . $a` (and every compound assignment, which the parser hands over in this same
+    // shape) still reads the OLD binding. And it is before `contextualize_local_assignment`,
+    // whose whole job is to coerce the value into the storage contract the name ALREADY has —
+    // the contract of the binding being abandoned, which must not apply to the new one.
+    if ctx.is_recorded_retype_site(span, name) {
+        ctx.rebind_local_for_retype(name, Some(span));
+    }
     let (lowered, php_type) = contextualize_local_assignment(ctx, name, value, lowered, span);
     ctx.store_local(name, lowered, php_type, Some(span));
     let callable_result = if direct_closure {

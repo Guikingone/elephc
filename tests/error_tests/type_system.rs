@@ -1515,6 +1515,61 @@ fn test_final_pass_kill_site_still_reaches_the_result() {
     );
 }
 
+/// A retype at a span that names NO node must never be recorded, however legal the re-bind is.
+///
+/// `Span::dummy()` is what every compiler-generated AST node carries — the synthetic class
+/// builders, the PDO/mysqli/curl preludes, the parser's own desugarings — so it is not an
+/// identity, it is a shared bucket (`Span::identifies_a_node`). EIR lowering consults
+/// `local_retype_sites` at EVERY `StmtKind::Assign`, so one entry filed under `dummy()` would
+/// re-bind the local at every dummy-span assignment in the program at once. The re-bind itself
+/// still happens — the WARNING below is what proves the checker did not simply fall back to the
+/// hard error — only the span lowering acts on is withheld.
+#[test]
+fn test_retype_at_a_dummy_span_is_not_recorded() {
+    use elephc::parser::ast::{Expr, Stmt};
+
+    let program: elephc::parser::ast::Program = vec![
+        Stmt::assign("a", Expr::int_lit(1)),
+        Stmt::assign("a", Expr::string_lit("s")),
+        Stmt::echo(Expr::var("a")),
+    ];
+    let result = elephc::types::check(&program).expect("permissive retype should type-check");
+    assert!(
+        result.local_retype_sites.is_empty(),
+        "a retype was recorded at a span that names no node: {:?}",
+        result.local_retype_sites
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("changes type")),
+        "the permissive re-bind itself must still happen: {:?}",
+        result.warnings
+    );
+}
+
+/// The same re-bind written in real source DOES record its span, so the test above is pinning the
+/// dummy-span guard rather than a checker that stopped recording retypes.
+#[test]
+fn test_retype_in_real_source_is_recorded() {
+    let result = check_source_full("<?php $a = 1; $a = \"s\"; echo $a;")
+        .expect("permissive retype should type-check");
+    assert_eq!(
+        result.local_retype_sites.len(),
+        1,
+        "a depth-0 incompatible reassignment in real source must record exactly one retype site"
+    );
+    assert!(
+        result
+            .local_retype_sites
+            .iter()
+            .all(|(span, name)| span.identifies_a_node() && name == "a"),
+        "recorded retype sites must name a node AND the local they re-bind: {:?}",
+        result.local_retype_sites
+    );
+}
+
 /// Superglobals are seeded into every environment with no binding depth: they are not bindings
 /// the body created, so `unset` must not kill them — EIR lowering would otherwise abandon (and
 /// re-mint as a frame slot) storage that lives in an `_eir_global_*` symbol.

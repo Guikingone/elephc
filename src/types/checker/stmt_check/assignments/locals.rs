@@ -783,7 +783,18 @@ fn merge_local_assignment_type(
     // walk no longer infers would otherwise make lowering re-bind a compatible assignment.
     // Mirrors the `unset` kill sites in `inference::expr::effects`, and the per-scope clear
     // `loop_storage_types` does before each re-walk.
-    checker.local_retype_sites.remove(&span);
+    //
+    // Qualified by NAME, because a `Span` has no file identity: the same (line, column) in an
+    // included file is an EQUAL span, and this visit must not drop the decision recorded for
+    // that unrelated assignment — a `$x = …` in the main file would otherwise silently disarm
+    // the retype of a `$w = …` at the same position in a library.
+    if checker
+        .local_retype_sites
+        .get(&span)
+        .is_some_and(|retyped| retyped == name)
+    {
+        checker.local_retype_sites.remove(&span);
+    }
     if let Some(existing) = env.get(name) {
         let merged_ty = checker.merged_assignment_type(existing, ty);
         if merged_ty.is_none() {
@@ -795,7 +806,19 @@ fn merge_local_assignment_type(
                 checker.warnings.push(CompileWarning::new(span, &message));
                 // The span EIR lowering consults to abandon the old frame slot instead of
                 // storing the new value through it.
-                checker.local_retype_sites.insert(span);
+                //
+                // A `Span::dummy()` is NOT such a span: it names no node
+                // (`Span::identifies_a_node`), it is what every compiler-generated AST node
+                // carries, and lowering consults this set at EVERY `StmtKind::Assign`. One
+                // prelude assignment recorded under it would therefore re-bind the local at
+                // every OTHER dummy-span assignment in the program — synthetic class bodies
+                // and the PDO/mysqli/curl preludes are made of those. The re-bind still
+                // happens in the type ENVIRONMENT (that is what keeps such a body compiling
+                // at all); withholding only the span leaves the assignment on the storage
+                // widening path it used before retypes were lowered.
+                if span.identifies_a_node() {
+                    checker.local_retype_sites.insert(span, name.to_string());
+                }
                 // The fresh binding is created here, at depth 0 — pin that explicitly so a
                 // later kill or retype of the same name is judged against THIS binding.
                 checker.local_binding_depth.insert(name.to_string(), 0);

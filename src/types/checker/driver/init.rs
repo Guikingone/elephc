@@ -201,8 +201,8 @@ impl Checker {
             ref_aliased_locals: HashSet::new(),
             static_local_names: HashSet::new(),
             typed_local_names: HashSet::new(),
-            local_bind_kill_sites: HashSet::new(),
-            local_retype_sites: HashSet::new(),
+            local_bind_kill_sites: HashMap::new(),
+            local_retype_sites: HashMap::new(),
         }
     }
 }

@@ -318,7 +318,17 @@ impl Checker {
                             env.remove(var);
                             self.local_binding_depth.remove(var);
                             self.clear_local_binding_metadata(var);
-                            self.local_bind_kill_sites.insert(arg.span);
+                            // A span that names no node must never enter a map lowering keys
+                            // BY span. `Span::dummy()` is shared by every compiler-generated
+                            // node (`Span::identifies_a_node`), so one prelude `unset` filed
+                            // under it would make lowering abandon the binding at EVERY other
+                            // dummy-span `unset` argument in the program. The env kill above
+                            // still happens — only the lowering instruction is withheld, which
+                            // leaves such a site on the plain null-store path it had before
+                            // kills were lowered at all.
+                            if arg.span.identifies_a_node() {
+                                self.local_bind_kill_sites.insert(arg.span, var.clone());
+                            }
                         } else {
                             // This visit RE-DECIDES the site. The checker walks a body more
                             // than once (top level twice, method bodies to stability, a
@@ -329,7 +339,17 @@ impl Checker {
                             // successor refuses (a callee's by-reference parameter that only
                             // became visible later, say) would otherwise make lowering
                             // abandon a slot the final check kept alive.
-                            self.local_bind_kill_sites.remove(&arg.span);
+                            //
+                            // Qualified by NAME for the same reason the insert above is: a
+                            // `Span` has no file identity, so an `unset($other)` at the same
+                            // (line, column) of another file must not disarm this one.
+                            if self
+                                .local_bind_kill_sites
+                                .get(&arg.span)
+                                .is_some_and(|killed| killed == var)
+                            {
+                                self.local_bind_kill_sites.remove(&arg.span);
+                            }
                         }
                     }
                 }

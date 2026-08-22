@@ -275,13 +275,16 @@ pub(crate) struct Checker {
     /// and parameters carrying a type hint. A declaration is a programmer contract and stays
     /// strict in both permissive and `--strict-locals` mode.
     pub typed_local_names: HashSet<String>,
-    /// Spans of the `unset()` ARGUMENTS whose local binding the checker killed. EIR lowering
-    /// consults these to abandon the old frame slot instead of null-storing into it.
-    pub local_bind_kill_sites: HashSet<Span>,
-    /// Spans of statement-form assignments the checker re-bound to a fresh binding of an
-    /// incompatible type. Filled in Task 3; carried in `CheckResult` from here so the two
-    /// span sets travel together.
-    pub local_retype_sites: HashSet<Span>,
+    /// The `unset()` ARGUMENTS whose local binding the checker killed, as span -> local NAME.
+    /// EIR lowering consults these to abandon the old frame slot instead of null-storing into
+    /// it. The name is half the key: a `Span` has no file identity and include resolution does
+    /// not rebase line numbers, so lowering has to confirm the decision is about the variable in
+    /// front of it. See `CheckResult::local_bind_kill_sites`.
+    pub local_bind_kill_sites: HashMap<Span, String>,
+    /// Statement-form assignments the checker re-bound to a fresh binding of an incompatible
+    /// type, as span -> local NAME. Filled in Task 3; carried in `CheckResult` from here so the
+    /// two decision maps travel together, keyed the same way.
+    pub local_retype_sites: HashMap<Span, String>,
 }
 
 /// The per-body local-binding eligibility state, saved while a nested body is checked.

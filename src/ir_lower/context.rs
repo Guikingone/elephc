@@ -206,11 +206,11 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// (`CheckResult::local_bind_kill_sites`). At one of these spans `unset_local` abandons the
     /// frame slot after releasing its value, so the next `declare_local` mints a fresh one.
     /// The checker is the single decision point: nothing here re-derives eligibility.
-    pub bind_kill_sites: &'m HashSet<Span>,
+    pub bind_kill_sites: &'m HashMap<Span, String>,
     /// Spans of statement-form assignments the CHECKER re-bound to a fresh binding of an
     /// incompatible type (`CheckResult::local_retype_sites`). Carried alongside
     /// `bind_kill_sites` so both travel together; consumed by the retype lowering.
-    pub retype_sites: &'m HashSet<Span>,
+    pub retype_sites: &'m HashMap<Span, String>,
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
@@ -290,8 +290,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         builtin_call_types: &'m HashMap<Span, PhpType>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
-        bind_kill_sites: &'m HashSet<Span>,
-        retype_sites: &'m HashSet<Span>,
+        bind_kill_sites: &'m HashMap<Span, String>,
+        retype_sites: &'m HashMap<Span, String>,
         loop_storage_scope: String,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         top_level_env: TypeEnv,
@@ -303,6 +303,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         source_path: Option<String>,
         web: bool,
     ) -> Self {
+        // Both maps are keyed BY SPAN and consulted at every `unset` argument and every
+        // assignment. `Span::dummy()` identifies no node, so a decision filed under it would
+        // answer for every compiler-generated node at once — abandoning a binding at each of the
+        // hundreds of dummy-span assignments the synthetic-class and PDO/mysqli/curl preludes
+        // contain. The checker refuses to record one (`Span::identifies_a_node`); this is the
+        // cheap whole-map restatement of that invariant, and the consult sites re-check it.
+        debug_assert!(
+            !bind_kill_sites.contains_key(&Span::dummy()),
+            "a local-binding kill was recorded at a span that names no node",
+        );
+        debug_assert!(
+            !retype_sites.contains_key(&Span::dummy()),
+            "a local-binding retype was recorded at a span that names no node",
+        );
         let return_type = return_ir_type(&return_php_type);
         Self {
             builder,
@@ -1856,20 +1870,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// null in the abandoned slot. That is load-bearing: the frame epilogue still emits cleanup
     /// for every slot whose storage type is refcounted, including the abandoned one, so leaving
     /// the released pointer in place would be a double free.
+    ///
+    /// The abandoning form goes through `release_and_abandon_local_binding`, shared with the
+    /// retype re-bind — and it nulls the slot at the slot's OWN storage type rather than at
+    /// `Void`, which is what keeps the widening from re-typing loads lowered above this point.
+    /// The plain (non-abandoning) `unset` still nulls at `Void`: there the name stays bound and
+    /// the checker types it null, so the slot has to be able to hold one.
     pub(crate) fn unset_local(
         &mut self,
         name: &str,
         null: LoweredValue,
         span: Option<Span>,
     ) -> LoweredValue {
-        let abandons_binding = span.is_some_and(|span| self.bind_kill_sites.contains(&span))
-            && self.local_binding_slot_is_abandonable(name);
+        let abandons_binding = span.is_some_and(|span| {
+            span.identifies_a_node()
+                && self.bind_kill_sites.get(&span).is_some_and(|killed| killed == name)
+        }) && self.local_binding_slot_is_abandonable(name);
         if !self.is_ref_bound_local(name) {
-            let result = self.store_local(name, null, PhpType::Void, span);
             if abandons_binding {
-                self.abandon_local_binding(name);
+                return self.release_and_abandon_local_binding(name, null, span);
             }
-            return result;
+            return self.store_local(name, null, PhpType::Void, span);
         }
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
@@ -1950,6 +1971,82 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.local_types.insert(name.to_string(), PhpType::Void);
         self.array_conversions.remove(name);
         self.foreach_int_key_locals.remove(name);
+    }
+
+    /// Ends a local binding: releases the value the old slot owns, leaves PHP null behind, and
+    /// drops the name-to-slot mapping.
+    ///
+    /// The single mechanism behind BOTH ways a binding can end — an `unset` the checker recorded
+    /// in `bind_kill_sites`, and an incompatible reassignment it recorded in `retype_sites`. The
+    /// release and the null-store are the ordinary `store_local` overwrite path, which is what
+    /// makes the release use the same load/release pair (and the same null tolerance) every other
+    /// overwrite uses; the null it leaves behind is load-bearing, because the frame epilogue still
+    /// emits cleanup for every slot whose storage type is refcounted, the abandoned one included.
+    ///
+    /// The store happens at the slot's OWN storage type, never at `PhpType::Void`. A slot's
+    /// storage type is a whole-FRAME property: widening it here (`Str` joined with `Void` is
+    /// `Mixed`) would retroactively re-type every load of that slot the body already lowered,
+    /// including the ones ABOVE this point. Those loads keep their `Str` IR type, so each one
+    /// becomes a detach out of a boxed cell that nothing releases — measured as exactly one
+    /// leaked 48-byte block per executed read, for `$a = "n" . $argc; $b = strlen($a);` followed
+    /// by either `unset($a)` or an incompatible reassignment. Storing at the slot's current type
+    /// widens nothing, so the reads above stay ordinary `Str` loads.
+    fn release_and_abandon_local_binding(
+        &mut self,
+        name: &str,
+        null: LoweredValue,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let storage_type = self
+            .local_slots
+            .get(name)
+            .copied()
+            .map_or(PhpType::Void, |slot| self.builder.local_php_type(slot));
+        let result = self.store_local(name, null, storage_type, span);
+        self.abandon_local_binding(name);
+        result
+    }
+
+    /// Abandons `name`'s binding at a checker-recorded RETYPE site, so the assignment's own store
+    /// mints a FRESH slot at the new type instead of widening the old one.
+    ///
+    /// Called from `lower_assign` AFTER the right-hand side is lowered and BEFORE the store: the
+    /// RHS of `$a = "n=" . $a` — and of every compound assignment, which the parser hands over as
+    /// an ordinary `Assign` whose value reads the target — must read the OLD binding. Nothing
+    /// else may run in between, because the release emitted here frees whatever the old slot
+    /// owns; the RHS value has already been computed and (where it captured the old value, as in
+    /// `$a = [$a]`) already holds its own reference to it.
+    ///
+    /// The eligibility judgement is the checker's alone. The gate consulted here is the same
+    /// STORAGE gate the `unset` kill uses (`local_binding_slot_is_abandonable`): where the name's
+    /// slot is not the value's home, the assignment falls back to the storage-widening path it
+    /// used before retypes were lowered, which is correct, just less precise.
+    pub(crate) fn rebind_local_for_retype(&mut self, name: &str, span: Option<Span>) {
+        if !self.local_binding_slot_is_abandonable(name) {
+            return;
+        }
+        let null = LoweredValue {
+            value: self.builder.emit_const_null(),
+            ir_type: IrType::I64,
+        };
+        self.release_and_abandon_local_binding(name, null, span);
+    }
+
+    /// Returns whether the checker recorded a binding RETYPE of `name` at this assignment's span.
+    ///
+    /// Neither half of the key is redundant. `Span::dummy()` names no node, so a decision filed
+    /// under it would answer for every compiler-generated assignment in the program; the checker
+    /// refuses to record one, and this is the second half of that contract. And a `Span` carries
+    /// no FILE, while include resolution splices every included file's statements into one
+    /// program without rebasing line numbers — so line 4 column 1 of the main file and of an
+    /// included one are equal spans, and only the local's name separates the decision recorded
+    /// for one from the unrelated assignment at the other.
+    pub(crate) fn is_recorded_retype_site(&self, span: Span, name: &str) -> bool {
+        span.identifies_a_node()
+            && self
+                .retype_sites
+                .get(&span)
+                .is_some_and(|retyped| retyped == name)
     }
 
     /// Clears an owned hidden temp after its value has been loaded into SSA.
