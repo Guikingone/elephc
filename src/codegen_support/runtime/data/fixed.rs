@@ -823,6 +823,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // around the name itself rather than before an open parenthesis.
     out.push_str(".globl _uww_name_fopen\n_uww_name_fopen:\n    .ascii \"fopen\"\n");
     out.push_str(".globl _uww_name_fgc\n_uww_name_fgc:\n    .ascii \"file_get_contents\"\n");
+    out.push_str(".globl _diag_open_failed_copy_prefix\n_diag_open_failed_copy_prefix:\n    .ascii \"Warning: copy(\"\n");
+    out.push_str(".globl _uww_name_copy\n_uww_name_copy:\n    .ascii \"copy\"\n");
+    // A delegating builtin publishes the name php should print here for the duration of the
+    // helpers it calls. Zero means "the helper names itself", which is every other caller.
+    out.push_str(".globl _rt_open_diag_prefix\n_rt_open_diag_prefix:\n    .quad 0\n");
+    out.push_str(".globl _rt_open_diag_prefix_len\n_rt_open_diag_prefix_len:\n    .quad 0\n");
+    out.push_str(".globl _rt_open_diag_name\n_rt_open_diag_name:\n    .quad 0\n");
+    out.push_str(".globl _rt_open_diag_name_len\n_rt_open_diag_name_len:\n    .quad 0\n");
     out.push_str(".globl _diag_csv_escape_deprecated_fgetcsv_msg\n_diag_csv_escape_deprecated_fgetcsv_msg:\n    .ascii \"Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");
     out.push_str(".globl _diag_csv_escape_deprecated_fputcsv_msg\n_diag_csv_escape_deprecated_fputcsv_msg:\n    .ascii \"Deprecated: fputcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");
     out.push_str(".globl _diag_csv_escape_deprecated_str_getcsv_msg\n_diag_csv_escape_deprecated_str_getcsv_msg:\n    .ascii \"Deprecated: str_getcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");

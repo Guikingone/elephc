@@ -76,6 +76,14 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #0]");                                    // the null-terminated path
     abi::emit_symbol_address(emitter, "x0", "_diag_open_failed_fpc_prefix");
     emitter.instruction(&format!("mov x1, #{}", "Warning: file_put_contents(".len()));
+    // Prefer a name a delegating builtin published for the duration of its call. The
+    // two values are loaded SEPARATELY: materializing a symbol borrows the scratch
+    // register, so a length held there would not survive the pointer load.
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_rt_open_diag_prefix_len", 0);
+    emitter.instruction("cbz x9, __rt_fpc_open_named");
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_rt_open_diag_prefix", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x1", "_rt_open_diag_prefix_len", 0);
+    emitter.label("__rt_fpc_open_named");
     emitter.instruction("bl __rt_open_failed_warning");
     emitter.instruction("mov x0, #-1");                                         // php answers false for a path it cannot open
     emitter.instruction("b __rt_fpc_ret");
@@ -150,6 +158,13 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // the null-terminated path
     abi::emit_symbol_address(emitter, "rdi", "_diag_open_failed_fpc_prefix");
     emitter.instruction(&format!("mov esi, {}", "Warning: file_put_contents(".len()));
+    // See the AArch64 arm: load both values from their slots, never park one in scratch.
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_rt_open_diag_prefix_len", 0);
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_fpc_open_named_x86");
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_rt_open_diag_prefix", 0);
+    abi::emit_load_symbol_to_reg(emitter, "rsi", "_rt_open_diag_prefix_len", 0);
+    emitter.label("__rt_fpc_open_named_x86");
     emitter.instruction("call __rt_open_failed_warning");
     emitter.instruction("mov rax, -1");                                         // php answers false for a path it cannot open
     emitter.instruction("jmp __rt_fpc_ret_x");

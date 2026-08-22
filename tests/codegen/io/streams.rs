@@ -18327,3 +18327,53 @@ unlink($path);
     );
     assert_eq!(out, "computed=PHP/STDIO|read=HELLO|memory=PHP/MEMORY|");
 }
+
+
+/// Verifies `copy()` leaves the destination alone when the source cannot be opened.
+///
+/// php opens the SOURCE first and never touches the destination when that fails. elephc read the
+/// source, got nothing back, and WROTE that nothing — so a copy from a missing file truncated
+/// whatever was already at the destination. The return value was false either way, so only the
+/// filesystem could show it.
+///
+/// The empty-file case is here because the two architectures disagreed about it: aarch64 asked for
+/// more than zero bytes written and x86_64 accepted zero, so copying an empty file answered false
+/// on one target and true on the other. php answers true, and the copy succeeds on both.
+///
+/// The warnings are checked because `__rt_copy` delegates to the `file_get_contents` and
+/// `file_put_contents` helpers, which used to name THEMSELVES. MEASURED on `php -n` 8.5.6.
+#[test]
+fn test_a_failed_copy_leaves_its_destination_untouched() {
+    let out = compile_and_run_capture(
+        r####"<?php
+$dir = sys_get_temp_dir() . "/elephc_copy_probe";
+@mkdir($dir);
+chdir($dir);
+@unlink("e.txt"); @unlink("e2.txt"); @unlink("keep.txt");
+
+file_put_contents("e.txt", "");
+echo "empty=", var_export(copy("e.txt", "e2.txt"), true);
+echo ",", var_export(file_exists("e2.txt"), true);
+echo ",", filesize("e2.txt"), "|";
+
+file_put_contents("keep.txt", "PRECIOUS");
+echo "failed=", var_export(copy("missing.txt", "keep.txt"), true);
+echo ",", var_export(file_get_contents("keep.txt"), true), "|";
+
+@unlink("e.txt"); @unlink("e2.txt"); @unlink("keep.txt");
+"####,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "empty=true,true,0|failed=false,'PRECIOUS'|");
+    assert!(
+        out.diagnostics
+            .contains("Warning: copy(missing.txt): Failed to open stream: No such file or directory"),
+        "php names the function the user called, got diagnostics={}",
+        out.diagnostics
+    );
+    assert!(
+        !out.diagnostics.contains("file_get_contents("),
+        "the helper must not name itself here, got diagnostics={}",
+        out.diagnostics
+    );
+}

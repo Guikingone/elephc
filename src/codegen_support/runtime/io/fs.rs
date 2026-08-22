@@ -238,15 +238,27 @@ pub fn emit_fs(emitter: &mut Emitter) {
     // -- read source file contents --
     emitter.instruction("bl __rt_file_get_contents");                           // read source, x1=data ptr, x2=data len
 
+    // php opens the SOURCE first and never touches the destination when that open fails, so a
+    // failed copy leaves an existing file alone. Writing the nothing that came back truncated it.
+    // A NULL pointer is the failure; an EMPTY file comes back as a real pointer of length zero,
+    // which is the same distinction `file_get_contents()` uses to tell `false` from `""`.
+    emitter.instruction("cbz x1, __rt_copy_source_failed");
+
     // -- write contents to destination file --
     emitter.instruction("mov x3, x1");                                          // move data ptr to x3 (data arg)
     emitter.instruction("mov x4, x2");                                          // move data len to x4 (data arg)
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload destination path ptr and len
     emitter.instruction("bl __rt_file_put_contents");                           // write data to dest file, x0=bytes written
 
-    // -- return 1 if bytes were written --
-    emitter.instruction("cmp x0, #0");                                          // check if any bytes were written
-    emitter.instruction("cset x0, gt");                                         // x0 = 1 if bytes written > 0
+    // A zero-byte write is a SUCCESS: php copies an empty file and answers true. This asked for
+    // more than zero, so an empty source answered false here and true on x86_64 — the two arms
+    // disagreed about the same program.
+    emitter.instruction("cmp x0, #0");                                          // check the byte count the write reported
+    emitter.instruction("cset x0, ge");                                         // any non-negative count is success
+    emitter.instruction("b __rt_copy_return");
+    emitter.label("__rt_copy_source_failed");
+    emitter.instruction("mov x0, #0");                                          // php answers false and leaves the destination alone
+    emitter.label("__rt_copy_return");
 
     // -- restore frame and return --
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
@@ -319,6 +331,9 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the destination elephc path pointer while the source file is read into owned storage
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the destination elephc path length while the source file is read into owned storage
     emitter.instruction("call __rt_file_get_contents");                         // read the source file into an owned elephc string before writing it to the destination path
+    // See the AArch64 arm: a failed source open must leave the destination untouched.
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_copy_source_failed_x86");
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the copied file payload pointer across the destination-path reload and write helper call
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // preserve the copied file payload length across the destination-path reload and write helper call
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the destination elephc path pointer into the primary x86_64 string argument register
@@ -329,6 +344,10 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 0");                                          // treat zero-byte writes as success so empty files can still be copied correctly
     emitter.instruction("setge al");                                            // convert the signed write result into a boolean success byte where any non-negative byte count is success
     emitter.instruction("movzx rax, al");                                       // widen the boolean success byte into the canonical integer result register
+    emitter.instruction("jmp __rt_copy_return_x86");
+    emitter.label("__rt_copy_source_failed_x86");
+    emitter.instruction("xor eax, eax");                                        // php answers false and leaves the destination alone
+    emitter.label("__rt_copy_return_x86");
     emitter.instruction("add rsp, 32");                                         // release the aligned stack locals used by copy()
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the copy() success predicate
     emitter.instruction("ret");                                                 // return the copy() success predicate to the caller

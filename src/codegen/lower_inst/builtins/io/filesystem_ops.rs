@@ -110,7 +110,52 @@ pub(crate) fn lower_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     if let Some(path) = inst.operands.get(0).copied() {
         super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
     }
-    lower_binary_path_call_with_context(ctx, inst, "copy", "__rt_copy")
+    // php names the function the USER called in every one of these warnings. `__rt_copy` is
+    // `__rt_file_get_contents` followed by `__rt_file_put_contents`, and left to themselves those
+    // two name THEMSELVES — so a failed copy reported `file_get_contents(missing.txt)`.
+    emit_open_diag_name(ctx, Some(("_diag_open_failed_copy_prefix", "Warning: copy(".len(),
+                                   "_uww_name_copy", "copy".len())));
+    let result = lower_binary_path_call_with_context(ctx, inst, "copy", "__rt_copy");
+    // Unconditionally: the slots are global, and a name left behind would make the next
+    // `file_get_contents()` in the program call itself `copy`.
+    emit_open_diag_name(ctx, None);
+    result
+}
+
+/// Publishes the name php should print in open-failure warnings, or clears it.
+///
+/// `Some((prefix symbol, prefix length, bare name symbol, bare name length))` while a delegating
+/// builtin owns the diagnostics; `None` hands them back to the helpers that raise them.
+fn emit_open_diag_name(
+    ctx: &mut FunctionContext<'_>,
+    published: Option<(&str, usize, &str, usize)>,
+) {
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    let value = abi::tertiary_scratch_reg(ctx.emitter);
+    let slots: [(&str, Option<(&str, usize)>); 2] = match published {
+        Some((prefix, prefix_len, name, name_len)) => [
+            ("_rt_open_diag_prefix", Some((prefix, prefix_len))),
+            ("_rt_open_diag_name", Some((name, name_len))),
+        ],
+        None => [("_rt_open_diag_prefix", None), ("_rt_open_diag_name", None)],
+    };
+    for (slot, published) in slots {
+        let len_slot = format!("{slot}_len");
+        match published {
+            Some((symbol, len)) => {
+                abi::emit_symbol_address(ctx.emitter, value, symbol);
+                abi::emit_store_reg_to_symbol(ctx.emitter, value, slot, 0);
+                abi::emit_load_int_immediate(ctx.emitter, value, len as i64);
+                abi::emit_store_reg_to_symbol(ctx.emitter, value, &len_slot, 0);
+            }
+            None => {
+                abi::emit_load_int_immediate(ctx.emitter, value, 0);
+                abi::emit_store_reg_to_symbol(ctx.emitter, value, slot, 0);
+                abi::emit_store_reg_to_symbol(ctx.emitter, value, &len_slot, 0);
+            }
+        }
+    }
+    let _ = scratch;
 }
 
 /// Lowers `rename(from, to)` through the target-aware runtime helper.

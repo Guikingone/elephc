@@ -119,11 +119,27 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // the null-terminated path
     abi::emit_symbol_address(emitter, "x0", "_uww_name_fgc");
     emitter.instruction(&format!("mov x1, #{}", "file_get_contents".len()));    // bare callee name
+    // Prefer a name a delegating builtin published for the duration of its call. The
+    // two values are loaded SEPARATELY: materializing a symbol borrows the scratch
+    // register, so a length held there would not survive the pointer load.
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_rt_open_diag_name_len", 0);
+    emitter.instruction("cbz x9, __rt_fgc_uww_named");
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_rt_open_diag_name", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x1", "_rt_open_diag_name_len", 0);
+    emitter.label("__rt_fgc_uww_named");
     emitter.instruction("bl __rt_unknown_wrapper_warning");
     emitter.instruction("ldr x3, [sp], #16");                                   // restore the errno
     emitter.instruction("ldr x2, [sp, #0]");                                    // the null-terminated path
     abi::emit_symbol_address(emitter, "x0", "_diag_open_failed_fgc_prefix");
     emitter.instruction("mov x1, #27");                                          // prefix length
+    // Prefer a name a delegating builtin published for the duration of its call. The
+    // two values are loaded SEPARATELY: materializing a symbol borrows the scratch
+    // register, so a length held there would not survive the pointer load.
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_rt_open_diag_prefix_len", 0);
+    emitter.instruction("cbz x9, __rt_fgc_open_named");
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_rt_open_diag_prefix", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x1", "_rt_open_diag_prefix_len", 0);
+    emitter.label("__rt_fgc_open_named");
     emitter.instruction("bl __rt_open_failed_warning");
     emitter.instruction("mov x1, #0");                                          // return an empty string pointer on read-path failure
     emitter.instruction("mov x2, #0");                                          // return an empty string length on read-path failure
@@ -209,12 +225,26 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {}]", path_off));   // the null-terminated path
     abi::emit_symbol_address(emitter, "rdi", "_uww_name_fgc");
     emitter.instruction(&format!("mov esi, {}", "file_get_contents".len()));    // bare callee name
+    // See the AArch64 arm: load both values from their slots, never park one in scratch.
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_rt_open_diag_name_len", 0);
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_fgc_uww_named_x86");
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_rt_open_diag_name", 0);
+    abi::emit_load_symbol_to_reg(emitter, "rsi", "_rt_open_diag_name_len", 0);
+    emitter.label("__rt_fgc_uww_named_x86");
     emitter.instruction("call __rt_unknown_wrapper_warning");
     emitter.instruction("pop rcx");                                             // discard the alignment copy
     emitter.instruction("pop rcx");                                             // restore the errno
     emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {}]", path_off));   // the null-terminated path
     abi::emit_symbol_address(emitter, "rdi", "_diag_open_failed_fgc_prefix");
     emitter.instruction("mov esi, 27");                                          // prefix length
+    // See the AArch64 arm: load both values from their slots, never park one in scratch.
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_rt_open_diag_prefix_len", 0);
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_fgc_open_named_x86");
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_rt_open_diag_prefix", 0);
+    abi::emit_load_symbol_to_reg(emitter, "rsi", "_rt_open_diag_prefix_len", 0);
+    emitter.label("__rt_fgc_open_named_x86");
     emitter.instruction("call __rt_open_failed_warning");
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer when the file could not be stated or opened
     emitter.instruction("xor edx, edx");                                        // return an empty string length when the file could not be stated or opened
