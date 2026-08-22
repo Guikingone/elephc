@@ -241,6 +241,9 @@ elephc --define DEBUG app.php
 # Reject elephc extensions in every physical PHP file (.lfc stays extension-enabled)
 elephc --strict-php app.php
 
+# Make an incompatible local retype a compile error instead of a warning
+elephc --strict-locals app.php
+
 # Print per-phase compiler timings
 elephc --timings hello.php
 
@@ -527,7 +530,7 @@ The static type system tracks these runtime shapes at compile time:
 
 The checker also carries the internal `False` subtype and the two-word `TaggedScalar` codegen shape used by the default tagged null representation.
 
-A variable's type is set at first assignment. Compatible types (int/float/bool/null) can be reassigned between each other.
+A variable's type is set at first assignment. Compatible types (int/float/bool/null) can be reassigned between each other. An untyped local may also change type outright — `unset()` then reassign, a straight-line reassignment, or a branch-divergent assignment (boxed as `Mixed` storage) — and by default this is a warning rather than an error; `--strict-locals` makes it an error again. A typed local, a type-hinted parameter, or a class property always stays strict. See [`--strict-locals`](docs/compiling/cli-reference.md#strict-locals-mode).
 
 ## Error messages
 
@@ -537,6 +540,7 @@ Errors include line and column numbers, and the compiler tries to recover far en
 error[3:1]: Undefined variable: $x
 error[5:7]: Type error: cannot reassign $x from Int to Str
 error[2:1]: Required file not found: 'missing.php'
+warning[6:1]: $a changes type from Int to Str; the previous value is discarded (compile with --strict-locals to make this an error)
 warning[9:5]: Unused variable: $tmp
 warning[14:9]: Unreachable code
 ```

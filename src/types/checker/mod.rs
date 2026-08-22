@@ -254,8 +254,11 @@ pub(crate) struct Checker {
     /// already visits every expression with a typed environment, so no second AST walk is
     /// needed. See `crate::ir_lower::context::LoweringContext::boxed_incdec_storage_type`.
     pub string_incdec_locals: HashSet<(String, String)>,
-    /// Mirrors `CheckOptions::strict_locals` for the duration of the check. Not yet consumed
-    /// by any pass — Task 1 only threads the flag from the CLI down to the `Checker`.
+    /// Mirrors `CheckOptions::strict_locals` for the duration of the check. When set, the
+    /// permissive local-retype path in `merge_local_assignment_type` and the branch-divergent
+    /// `Mixed`-storage marking in `mixed_storage_scan::run_mixed_storage_scan` both step aside
+    /// and leave the existing hard "cannot reassign" error / no-marking behavior in place
+    /// instead of rebinding-with-warning or marking-with-warning.
     pub strict_locals: bool,
     /// Nesting depth of conditional statements (`if`/`switch`/loops/`try`/…) in the body being
     /// checked. Only depth 0 is straight-line code that unconditionally dominates everything

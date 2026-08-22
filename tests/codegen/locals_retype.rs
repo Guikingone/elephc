@@ -1211,3 +1211,21 @@ var_dump($g());"#,
         out.stderr
     );
 }
+
+/// eval'd code retypes locals dynamically; permissive AOT now matches it.
+///
+/// Observed BEFORE this plan's permissive retyping shipped for ordinary locals: this exact
+/// program already compiled clean (no warning) and printed `ciao`. A literal `eval(...)`
+/// fragment is lowered by `src/eval_aot.rs` into its own EIR scope function that reads/writes
+/// `$a` through the dynamic `__elephc_eval_scope_set`/`get` scope map rather than through a
+/// normal typed local slot, so it was never subject to the old strict "cannot reassign" local
+/// check in the first place — the eval scope was always dynamically typed. `--strict-locals`
+/// does not gate it either (verified separately; the flag only tightens the AOT local-slot
+/// checker, which this construct never goes through). This test pins that parity as a
+/// regression: it is not a case Task 1-7's mechanism newly admits, but the two paths (ordinary
+/// permissive AOT locals and eval's scope map) now agree on the observable result.
+#[test]
+fn test_eval_local_retype_matches_aot() {
+    let out = compile_and_run("<?php eval('$a = 1; $a = \"ciao\"; echo $a;');");
+    assert_eq!(out, "ciao");
+}

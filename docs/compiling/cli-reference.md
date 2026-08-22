@@ -60,6 +60,7 @@ selection, toolchain overrides, and transactional behavior.
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run front-end checks only; write nothing. |
 | `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
+| `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. See [Strict locals mode](#strict-locals-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
 | `--keep-symbols` | — | off | Keep the symbol table in the linked executable. It is stripped by default; `--debug-info` also implies keeping it. See [Symbol stripping](#symbol-stripping). |
@@ -331,6 +332,71 @@ an otherwise unused define is valid.
 Strict mode guarantees that the *constructs* used are PHP-compatible; it does
 not change elephc's static-subset semantics. A strict-valid program can still be
 rejected by the type checker in places where the PHP interpreter would run it.
+
+## Strict locals mode
+
+| Flag | Values | Default | Description |
+|---|---|---|---|
+| `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. |
+
+By default (permissive mode) an **untyped** local variable is allowed to
+change type during its lifetime in three shapes that would otherwise be a
+compile error:
+
+- **`unset()` kill.** `unset($a)` on a binding created unconditionally at the
+  top of its body — not inside an `if`/loop/`try`/`switch`/… — and never
+  reference-aliased KILLS the binding: a later read of `$a` is an `Undefined
+  variable: $a` error, and a later assignment binds `$a` fresh, at any type,
+  with no warning. This is **mode-independent** — it behaves identically under
+  `--strict-locals`.
+- **Straight-line retype.** A plain statement-form reassignment at the same
+  eligibility (`$a = 0; $a = "ciao";`, and a compound form that parses as a
+  plain assignment, such as `$x = 1; $x .= "a";`) re-binds the name to a fresh
+  slot of the new type and emits a warning instead of failing:
+  ```text
+  $a changes type from Int to Str; the previous value is discarded (compile with --strict-locals to make this an error)
+  ```
+- **Branch-divergent assignment.** `if (…) { $a = 0; } else { $a = "ciao"; }`
+  — and the same shape for a single-branch retype of an outer binding, or a
+  heterogeneous loop-carried local — compiles instead of failing, as
+  whole-frame boxed `Mixed` storage for that local, with a warning:
+  ```text
+  $a is assigned incompatible types (Int and Str); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)
+  ```
+  The warning is a performance signal as much as a correctness one: every read
+  of a `Mixed`-storage local goes through boxed dispatch instead of a plain
+  register/stack slot for the rest of the body.
+
+Both warning shapes require the name's current binding to be **unconditional**
+(created at the top of the body, not inside a branch or loop) and **never
+reference-aliased** — no `=&` target or source, no `use (&$x)` capture, no
+by-reference parameter (including a variadic `&...$xs`), and no by-reference
+call argument. The branch-divergent shape additionally requires every write to
+the name to be syntactically exact evidence — a literal, a scalar cast, or a
+`.` string concatenation; any other write shape (`++`/`--`, a `foreach`/
+`list()` target, a by-reference call argument, an `unset()` mention, `=&`,
+`global`, or `static`) disqualifies the name from boxing and leaves it on
+today's hard error. A **declared type** always stays strict in both modes: a
+typed local (`int $x = 5;`), a type-hinted parameter, and a class property
+never retype or box to `Mixed` — reassigning one incompatibly is a compile
+error exactly as before.
+
+`--strict-locals` restores the hard error for the two warning shapes above:
+
+```text
+Type error: cannot reassign $a from Int to Str
+```
+
+The `unset()` kill is unaffected, since it was never gated by the flag.
+
+`eval()`'d code — whether AOT-lowered from a literal fragment or run through
+the optional Magician interpreter bridge — reads and writes its locals through
+a boxed `Mixed` scope representation rather than a typed frame slot, so it was
+never subject to the monomorphic-local check `--strict-locals` restores.
+`--strict-locals` therefore has no effect inside `eval()` fragments.
+
+See [The Type Checker](../internals/the-type-checker.md#local-retyping-and-strict-locals-mode)
+for the full mechanism, including which files implement each shape.
 
 ## INI directives
 

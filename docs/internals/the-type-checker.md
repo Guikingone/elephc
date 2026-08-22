@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-**Source:** `src/types/` — `mod.rs`, `model.rs`, `signatures.rs`, `result.rs`, `schema.rs`, `traits.rs`, `fibers.rs`, `checker/mod.rs`, `checker/driver/`, `checker/builtin_interfaces.rs`, `checker/builtin_iterators.rs`, `checker/builtin_json.rs`, `checker/builtin_spl_exceptions.rs`, `checker/builtin_spl_classes.rs`, `checker/builtin_spl_classes/`, `checker/builtin_class_gate.rs`, `checker/builtin_stdclass.rs`, `checker/builtin_types/`, `checker/builtins/`, `checker/functions.rs`, `checker/functions/`, `checker/inference/`, `checker/stmt_check.rs`, `checker/stmt_check/`, `checker/type_compat.rs`, `checker/type_compat/`, `checker/schema/`, `checker/yield_validation/`, `warnings/`
+**Source:** `src/types/` — `mod.rs`, `model.rs`, `signatures.rs`, `result.rs`, `schema.rs`, `traits.rs`, `fibers.rs`, `checker/mod.rs`, `checker/driver/`, `checker/builtin_interfaces.rs`, `checker/builtin_iterators.rs`, `checker/builtin_json.rs`, `checker/builtin_spl_exceptions.rs`, `checker/builtin_spl_classes.rs`, `checker/builtin_spl_classes/`, `checker/builtin_class_gate.rs`, `checker/builtin_stdclass.rs`, `checker/builtin_types/`, `checker/builtins/`, `checker/functions.rs`, `checker/functions/`, `checker/inference/`, `checker/mixed_storage_scan.rs`, `checker/binding_decision_ambiguity.rs`, `checker/stmt_check.rs`, `checker/stmt_check/`, `checker/type_compat.rs`, `checker/type_compat/`, `checker/schema/`, `checker/yield_validation/`, `warnings/`
 
 PHP is dynamically typed — variables can change type at runtime. But elephc compiles to native code where every value must have a known size and location. The type checker bridges this gap by **inferring types at compile time**.
 
@@ -82,7 +82,7 @@ $ok = true;       // $ok: Bool
 $nothing = null;   // $nothing: Void
 ```
 
-The first assignment determines a variable's type. After that, reassignment is only allowed to the same type (with some exceptions):
+The first assignment determines a variable's type. After that, reassignment is only allowed to the same type (with some exceptions, below) — for a **declared** type (a typed local, a type-hinted parameter, a class property) this is enforced strictly in every mode. For an **untyped** local, an incompatible reassignment is instead a warning by default; see [Local retyping and strict locals mode](#local-retyping-and-strict-locals-mode).
 
 ### Type compatibility rules
 
@@ -106,20 +106,52 @@ The first assignment determines a variable's type. After that, reassignment is o
 
 Declared boundaries are looser than plain reassignment. A `Mixed` value is accepted where a declared parameter, return, or property expects a plain `Int`, `Float`, `Bool`, or `Str` (PHP's coercive mode): the checker lets it through and codegen inserts the runtime unboxing/narrowing conversion. Union values are accepted member-wise — every member of the actual union must be accepted by some member of the expected type.
 
+### Local retyping and strict locals mode
+
+**Files:** `checker/mod.rs` (`local_binding_is_killable`, per-body eligibility state), `checker/stmt_check/assignments/locals.rs` (`merge_local_assignment_type`), `checker/mixed_storage_scan.rs` (`run_mixed_storage_scan`), `checker/inference/expr/effects.rs` (the `unset()` kill), `checker/binding_decision_ambiguity.rs` (span-collision guard)
+
+A **declared** type — a typed local (`int $x = 5;`), a type-hinted parameter, or a class property — always enforces the type-compatibility table above strictly, in every mode: retyping one is a compile error.
+
+For an **untyped** local, DEFAULT (permissive) mode instead allows a local to change type in three shapes that would otherwise be this same error. Each is gated by one eligibility test: the local's CURRENT binding must have been created unconditionally at the top of its body (conditional depth 0, not inside an `if`/loop/`try`/`switch`/…) and must never be reference-aliased (no `=&` target or source, no `use (&$x)` capture, no by-reference parameter including a variadic `&...$xs` tail, and no by-reference call argument); `global`-bound names, `static` names, and superglobals/seeded names are also excluded, since this body does not own their storage.
+
+1. **`unset()` kill.** `unset($a)` on an eligible binding removes `$a` from the type environment entirely. A later READ is `Undefined variable: $a`; a later assignment binds `$a` fresh, at any type, with no warning. This kill is **not gated by `strict_locals`** — `unset` behaves identically in both modes, because dropping a binding is always sound where the eligibility test holds.
+2. **Straight-line retype.** A plain statement-form reassignment (`$a = 0; $a = "ciao";`) — including a compound form the parser desugars to a plain assignment, such as `$x = 1; $x .= "a";` — re-binds the name to a fresh binding of the new type and pushes this warning instead of failing:
+   ```text
+   $a changes type from Int to Str; the previous value is discarded (compile with --strict-locals to make this an error)
+   ```
+   Only STATEMENT-form assignments are eligible; an expression-form assignment (`$b = ($a = "s");`) keeps the hard error, because its result has no single well-defined type to hand the enclosing expression.
+3. **Branch-divergent assignment (boxed `Mixed` storage).** `run_mixed_storage_scan` runs a purely SYNTACTIC pre-scan of a body BEFORE it is type-checked, looking for a local whose statement-form assignments cannot all merge — the shape of `if (…) { $a = 0; } else { $a = "ciao"; }`, a single-branch retype of an outer binding, or a heterogeneous loop-carried local. A marked name binds `PhpType::Mixed` at its FIRST store, so every later assignment merges trivially and neither the retype hook nor the hard error ever fires for it; EIR lowering gives the name boxed frame storage for the whole body — every later read dispatches on the boxed value instead of using a plain register/stack slot. One warning is pushed per marked name:
+   ```text
+   $a is assigned incompatible types (Int and Str); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)
+   ```
+   The pre-scan only trusts evidence it can type EXACTLY from an expression's shape alone: a literal, a scalar cast (not `(array)`, whose element type is not knowable syntactically), or a `.` string concatenation (which always yields `Str` regardless of its operands). Any OTHER write to the name anywhere in the body — a plain variable or call-result value, `++`/`--`, a `foreach`/`list()` target, a by-reference call argument, an `unset()` mention, `=&`, `global`, or `static` — disqualifies the whole name from marking, and the pair falls back to the hard error.
+
+`--strict-locals` turns shapes 2 and 3 back into the hard error:
+
+```text
+Type error: cannot reassign $a from Int to Str
+```
+
+Shape 1 (`unset()` kill) is unaffected in either mode.
+
+Because a `Span` carries no file identity, elephc cannot always tell apart two DIFFERENT statements that happen to sit at the same line and column — the same position in two different included files, or the same file `require`d twice. When such a collision lands on a retype/kill/mixed-storage decision, `binding_decision_ambiguity.rs` rejects it with `Cannot re-bind $a here: …` instead of silently mis-lowering one of the two sites.
+
+`eval()`'d code — whether interpreted by the optional Magician bridge or AOT-lowered from a literal fragment into an EIR scope function — reads and writes its locals through a boxed `Mixed` scope cell rather than a compiled, typed frame slot (see [eval() scope behavior](../php/eval.md#scope-behavior)), so it was never subject to this rule to begin with: `--strict-locals` has no effect inside `eval()` fragments. See [`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode) for the CLI flag.
+
 ### Per-file `strict_types`
 
 `declare(strict_types=1)` is scoped to one physical file, but the checker only ever sees the single flat program the resolver produces after include/autoload merging, and `Span` carries no file identity. The flag therefore rides on the AST: the parser records the directive on its per-file source profile (`crate::source`), `Stmt::strict_types` inherits it at construction alongside `Stmt::source_mode`, and every statement-rewriting pass re-installs the whole `SourceProfile` — which is why `with_parse_mode`/`scoped_parse_mode` take the profile rather than the mode alone.
 
 `Checker::check_stmt` installs `Stmt::strict_types` on `Checker::strict_types` and restores the outer value afterwards, so the setting always reflects the file the *call site* was written in — matching PHP, where a strict file calling into a coercive one is strict and a coercive file calling a function declared in a strict one is not. `Checker::require_strict_types_param_binding` then runs *before* `types_compatible`, because the widenings PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible` accepts on its own. `Checker::with_internal_callback_binding` suspends the flag while validating a callback that an internal function invokes (`array_map`, `usort`, …), which PHP calls from an engine frame that never carries the directive.
 
-This means elephc rejects code that PHP would allow:
+None of this is affected by the permissive local retyping described in [Local retyping and strict locals mode](#local-retyping-and-strict-locals-mode) above: a **declared** type stays strict regardless of `strict_types` or `--strict-locals`.
 
 ```php
-$x = 42;
-$x = "hello";  // ← Type error: cannot reassign $x from Int to Str
+int $x = 42;
+$x = "hello";  // ← Type error: cannot reassign $x from Int to Str (declared type, strict in every mode)
 ```
 
-This is intentional — it lets the compiler know exactly what `$x` is at every point, without needing runtime type tags.
+This is intentional — it lets the compiler know exactly what a declared `$x` is at every point, without needing runtime type tags.
 
 ## Statement checks
 
@@ -594,9 +626,12 @@ This is passed to the [code generator](the-codegen.md), which uses it to:
 ## Error examples
 
 ```php
-$x = 42;
+int $x = 42;
 $x = "hello";
 // Error: Type error: cannot reassign $x from Int to Str
+// (a DECLARED type stays strict in every mode; an untyped local instead warns by
+// default and only errors under --strict-locals — see "Local retyping and strict
+// locals mode" above)
 
 strlen(42);
 // Error: strlen() expects string, got Int
