@@ -307,7 +307,10 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let optimized = elephc::optimize::propagate_constants(resolved);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
-    let optimized = elephc::optimize::eliminate_dead_code(optimized);
+    let optimized = elephc::optimize::eliminate_dead_code(
+        optimized,
+        check_result.local_binding_decision_spans(),
+    );
     let requires_elephc_tls = check_result
         .required_libraries
         .iter()
@@ -384,7 +387,10 @@ pub(crate) fn compile_and_run_files_with_defines(
     let optimized = elephc::optimize::propagate_constants(resolved);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
-    let optimized = elephc::optimize::eliminate_dead_code(optimized);
+    let optimized = elephc::optimize::eliminate_dead_code(
+        optimized,
+        check_result.local_binding_decision_spans(),
+    );
     let requires_elephc_tls = check_result
         .required_libraries
         .iter()
@@ -496,7 +502,10 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let optimized = elephc::optimize::propagate_constants(resolved);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
-    let optimized = elephc::optimize::eliminate_dead_code(optimized);
+    let optimized = elephc::optimize::eliminate_dead_code(
+        optimized,
+        check_result.local_binding_decision_spans(),
+    );
     let requires_elephc_tls = check_result
         .required_libraries
         .iter()

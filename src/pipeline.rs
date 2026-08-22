@@ -516,7 +516,11 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("dce");
     let phase_started = Instant::now();
-    let ast = post_typecheck_optimizer.eliminate_dead_code(ast);
+    // Tail-sinking clones the tail of an `if`/`switch`/`try` into every branch, and a clone keeps
+    // the original's spans. The checker's local-binding decisions are keyed BY SPAN, so the pass
+    // is told which spans carry one and keeps those statements singular.
+    let ast = post_typecheck_optimizer
+        .eliminate_dead_code(ast, check_result.local_binding_decision_spans());
     timings.record_since("dce", phase_started);
 
     crate::progress::phase("decl-reach");

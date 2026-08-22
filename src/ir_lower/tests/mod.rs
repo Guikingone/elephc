@@ -86,7 +86,8 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::optimize::propagate_constants(ast);
     let ast = crate::optimize::prune_constant_control_flow(ast);
     let ast = crate::optimize::normalize_control_flow(ast);
-    let ast = crate::optimize::eliminate_dead_code(ast);
+    let ast =
+        crate::optimize::eliminate_dead_code(ast, check_result.local_binding_decision_spans());
     crate::ir_lower::lower_program(&ast, &check_result, target, false).unwrap_or_else(|error| {
         panic!(
             "EIR lowering failed for {}: {error:?}",

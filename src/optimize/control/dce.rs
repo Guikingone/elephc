@@ -10,6 +10,7 @@
 
 use super::*;
 
+mod binding_decisions;
 mod guards;
 mod ifs;
 mod methods;
@@ -20,6 +21,7 @@ mod tries;
 mod writes;
 
 pub(crate) use methods::{dce_method, dce_method_without_context};
+use binding_decisions::stmts_carry_local_binding_decision;
 use guards::*;
 use ifs::dce_if_stmt;
 use state::{GuardLiteral, GuardState};
@@ -54,9 +56,19 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
             // Control-flow statements (if/switch/try/loops) must also stay singular:
             // sinking them duplicates nested control flow and produces exponential
             // AST growth (each successive if duplicates the remaining tail).
-            // Fall back to plain per-statement DCE when the tail contains either.
+            // Statements the CHECKER filed a local-binding decision against must stay
+            // singular too: `local_bind_kill_sites` / `local_retype_sites` are keyed BY
+            // SPAN and a copy carries the original's span, so both copies would re-bind
+            // the local. Abandoning a binding is not idempotent — it releases the old
+            // value and re-binds the name to a FRESH slot — so the second copy lowers
+            // against the first copy's post-rebind maps and a read ABOVE the retype in
+            // source resolves to the fresh slot. Measured as a `local load from PHP type
+            // Int as Str` backend error, and with two retypes as silently printing `|s`
+            // for `a1|s`.
+            // Fall back to plain per-statement DCE when the tail contains any of them.
             if stmts_contain_declaration(stmts.as_slice())
                 || stmts_contain_control_flow(stmts.as_slice())
+                || stmts_carry_local_binding_decision(stmts.as_slice())
             {
                 use_tail_sink = false;
                 dce_stmt_with_guards(stmt, &guards)

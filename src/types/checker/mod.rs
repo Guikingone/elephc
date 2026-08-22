@@ -8,6 +8,7 @@
 //! Key details:
 //! - Checker state is populated in ordered phases; later passes assume schemas, builtins, and signatures are complete.
 
+mod binding_decision_ambiguity;
 mod builtin_enums;
 mod builtin_interfaces;
 mod builtin_iterators;
@@ -519,6 +520,15 @@ pub fn check_types_with_options(
         .collect();
     let return_alias_summaries = crate::types::collect_return_alias_summaries(program);
     dedupe_warnings(&mut warnings);
+
+    // A decision key that names more than one syntactic site would let EIR lowering re-bind a
+    // local the checker never approved — silently, and with the wrong answer. Reject it here so
+    // the checker and lowering agree on exactly which programs are accepted.
+    binding_decision_ambiguity::reject_ambiguous_local_binding_decisions(
+        program,
+        &checker.local_bind_kill_sites,
+        &checker.local_retype_sites,
+    )?;
 
     Ok(CheckResult {
         global_env,

@@ -13,11 +13,13 @@ use crate::parser::ast::{
     BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
     InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
 };
+use crate::span::Span;
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+mod binding_decisions;
 mod control;
 mod effect_analysis;
 mod effects;
@@ -25,6 +27,7 @@ mod fold;
 mod propagate;
 pub mod reachability;
 
+use binding_decisions::with_local_binding_decision_spans;
 use control::*;
 use effect_analysis::{
     collect_instance_dispatch_metadata, compute_program_callable_effects, method_effect_key,
@@ -225,17 +228,34 @@ impl PostTypecheckOptimizer {
     }
 
     /// Eliminates dead code using the shared callable-effect summary.
-    pub fn eliminate_dead_code(&self, program: Program) -> Program {
-        with_callable_effect_analysis(&self.callable_effects, || {
-            with_by_ref_signatures(self.by_ref_signatures.clone(), || dce_block(program))
+    ///
+    /// `binding_decision_spans` is the union of `CheckResult::local_bind_kill_sites` and
+    /// `local_retype_sites`. DCE's tail-sinking is the one post-typecheck pass that CLONES
+    /// statements, and a clone carries the original's span — which would hand one span-keyed
+    /// checker decision to two syntactic sites. Passing the spans in lets the pass keep those
+    /// statements singular; see `control::dce::binding_decisions`.
+    pub fn eliminate_dead_code(
+        &self,
+        program: Program,
+        binding_decision_spans: HashSet<Span>,
+    ) -> Program {
+        with_local_binding_decision_spans(binding_decision_spans, || {
+            with_callable_effect_analysis(&self.callable_effects, || {
+                with_by_ref_signatures(self.by_ref_signatures.clone(), || dce_block(program))
+            })
         })
     }
 }
 
 /// Eliminates dead code for this module.
+///
+/// `binding_decision_spans` comes from `CheckResult::local_binding_decision_spans`. It is a
+/// REQUIRED argument rather than a default: a caller that silently passed an empty set would
+/// re-enable the tail-sinking clone of a decision-carrying statement, and the divergence would be
+/// invisible until the resulting program printed the wrong answer.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
-pub fn eliminate_dead_code(program: Program) -> Program {
-    PostTypecheckOptimizer::new(&program).eliminate_dead_code(program)
+pub fn eliminate_dead_code(program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+    PostTypecheckOptimizer::new(&program).eliminate_dead_code(program, binding_decision_spans)
 }
 
 /// Returns true when the named builtin can invoke user code through a callback

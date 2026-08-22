@@ -101,8 +101,16 @@ pub struct CheckResult {
     /// is about the variable in front of it; without that check a retype recorded in one file
     /// re-binds an unrelated same-position assignment in another (measured: a conditional
     /// `$w = …` in an included file lost its whole binding, printing `|s` where PHP prints
-    /// `a1|s`). Same-name-same-position across two files stays ambiguous — closing that needs
-    /// file identity in `Span` itself, which every span-keyed map here would want.
+    /// `a1|s`).
+    ///
+    /// The name does NOT make the key unique: the same name at the same line and column in two
+    /// files is still one key for two sites, and that shape was measured printing `|s` where PHP
+    /// prints `a1|5` — in a program that was a plain compile error before this feature existed.
+    /// It is not left ambiguous. `checker::binding_decision_ambiguity` counts, per role, how many
+    /// nodes each recorded key actually names and REJECTS the program when a key names more than
+    /// one, so an ambiguous decision is a compile error and never a silent re-bind. Giving `Span`
+    /// file identity would remove the ambiguity outright, and every span-keyed map here would
+    /// want it.
     #[allow(dead_code)]
     pub local_bind_kill_sites: HashMap<Span, String>,
     /// The statement-form assignments the checker re-bound to a fresh binding of an incompatible
@@ -111,6 +119,22 @@ pub struct CheckResult {
     /// reason — see that field.
     #[allow(dead_code)]
     pub local_retype_sites: HashMap<Span, String>,
+}
+
+impl CheckResult {
+    /// Every span carrying a local-binding decision, kills and retypes together.
+    ///
+    /// Handed to the post-typecheck optimizer. These decisions are keyed BY SPAN and EIR lowering
+    /// consults them by span, so any pass that CLONES an AST node would hand one decision to two
+    /// syntactic sites — and abandoning a binding is not idempotent. DCE's tail-sinking is the one
+    /// pass that clones, and it keeps statements carrying these spans singular.
+    pub fn local_binding_decision_spans(&self) -> HashSet<Span> {
+        self.local_bind_kill_sites
+            .keys()
+            .chain(self.local_retype_sites.keys())
+            .copied()
+            .collect()
+    }
 }
 
 /// Runs type checking using the host platform (auto-detected from the build environment).

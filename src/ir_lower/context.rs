@@ -1872,10 +1872,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// the released pointer in place would be a double free.
     ///
     /// The abandoning form goes through `release_and_abandon_local_binding`, shared with the
-    /// retype re-bind — and it nulls the slot at the slot's OWN storage type rather than at
-    /// `Void`, which is what keeps the widening from re-typing loads lowered above this point.
-    /// The plain (non-abandoning) `unset` still nulls at `Void`: there the name stays bound and
-    /// the checker types it null, so the slot has to be able to hold one.
+    /// retype re-bind; see there for why both forms null at `Void` and what the resulting slot
+    /// widening buys (a decref instead of a free) and costs (a boxed-detach leak on reads above
+    /// the kill).
     pub(crate) fn unset_local(
         &mut self,
         name: &str,
@@ -1983,26 +1982,28 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// overwrite uses; the null it leaves behind is load-bearing, because the frame epilogue still
     /// emits cleanup for every slot whose storage type is refcounted, the abandoned one included.
     ///
-    /// The store happens at the slot's OWN storage type, never at `PhpType::Void`. A slot's
-    /// storage type is a whole-FRAME property: widening it here (`Str` joined with `Void` is
-    /// `Mixed`) would retroactively re-type every load of that slot the body already lowered,
-    /// including the ones ABOVE this point. Those loads keep their `Str` IR type, so each one
-    /// becomes a detach out of a boxed cell that nothing releases — measured as exactly one
-    /// leaked 48-byte block per executed read, for `$a = "n" . $argc; $b = strlen($a);` followed
-    /// by either `unset($a)` or an incompatible reassignment. Storing at the slot's current type
-    /// widens nothing, so the reads above stay ordinary `Str` loads.
+    /// The store is at `PhpType::Void`, and that is load-bearing rather than incidental. A slot's
+    /// storage type is a whole-FRAME property, so storing `Void` WIDENS the slot (`Str` joined
+    /// with `Void` is `Mixed`) — which is exactly what makes the release above it a DECREF instead
+    /// of a free. `release` of a raw `Str` is an unconditional `__rt_heap_free_safe`
+    /// (`codegen::lower_inst::ownership::release_loaded_string`); strings carry no refcount, so
+    /// releasing an abandoned `Str` slot frees a buffer that any copy of the local still points
+    /// at. Measured, when this stored at the slot's own type instead:
+    /// `$q = "a" . $n; $r = $q; $q = 1; return $r . "|" . $q;` returned four NUL bytes.
+    ///
+    /// The widening has a known cost: every load of this slot the body already lowered keeps its
+    /// `Str` IR type against what is now boxed storage, so each read ABOVE this point becomes a
+    /// detach out of a boxed cell that nothing releases — one leaked 48-byte block per executed
+    /// read (`$a = "n" . $argc; $b = strlen($a); unset($a); $a = 5;`). That leak predates the
+    /// retype path (it arrived with the `unset` kill) and belongs to the ownership model, not
+    /// here: trading it for a use-after-free is not a fix.
     fn release_and_abandon_local_binding(
         &mut self,
         name: &str,
         null: LoweredValue,
         span: Option<Span>,
     ) -> LoweredValue {
-        let storage_type = self
-            .local_slots
-            .get(name)
-            .copied()
-            .map_or(PhpType::Void, |slot| self.builder.local_php_type(slot));
-        let result = self.store_local(name, null, storage_type, span);
+        let result = self.store_local(name, null, PhpType::Void, span);
         self.abandon_local_binding(name);
         result
     }

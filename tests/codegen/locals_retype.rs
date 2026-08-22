@@ -118,26 +118,60 @@ fn test_unset_then_retype_array_to_string_leaves_a_clean_heap() {
     );
 }
 
-/// A `string`-typed READ above the kill must stay a plain string load.
+/// A `string`-typed READ above the kill still answers correctly.
 ///
-/// The abandoned slot is nulled through the ordinary overwrite path, and that path widens the
-/// slot to whatever type it stores. A slot's storage type is a whole-FRAME property, so nulling
-/// at `Void` re-typed this slot `Str | Void` = `Mixed` and every load lowered ABOVE the kill —
-/// `strlen($a)` here — turned into a detach out of a boxed cell that nothing releases. Measured
-/// before the fix: `HEAP DEBUG: live_blocks=1 live_bytes=48`, one leaked block per executed read,
-/// with the right answer still printed. The kill now nulls at the slot's own storage type.
+/// It also LEAKS one 48-byte block per executed read, which this fixture deliberately does not
+/// assert on. Ending a binding nulls the slot through the ordinary overwrite path at
+/// `PhpType::Void`, which widens the slot to `Mixed`; a slot's storage type is a whole-FRAME
+/// property, so every load lowered ABOVE the kill — `strlen($a)` here — keeps its `Str` IR type
+/// against boxed storage and becomes a detach nothing releases.
+///
+/// Nulling at the slot's OWN type removes the leak but is NOT a valid fix: `release` of a raw
+/// `Str` is an unconditional `__rt_heap_free_safe` (strings are not refcounted —
+/// `codegen::lower_inst::ownership::release_loaded_string`), so it frees a buffer any copy of the
+/// local still points at. Measured: `$q = "a" . $n; $r = $q; $q = 1; return $r . "|" . $q;`
+/// returned four NUL bytes. The `Mixed` widening is what makes the release a decref instead, so
+/// the leak is the price of the safety and belongs to its own fix in the ownership model.
 #[test]
-fn test_string_read_above_a_kill_stays_unboxed() {
-    let out = compile_and_run_with_heap_debug(
-        "<?php $a = \"n\" . $argc; $b = strlen($a); unset($a); $a = 5; echo $b, $a;",
+fn test_string_read_above_a_kill_still_answers_correctly() {
+    let out = compile_and_run("<?php $a = \"n\" . $argc; $b = strlen($a); unset($a); $a = 5; echo $b, $a;");
+    assert_eq!(out, "25");
+}
+
+/// The copy taken out of a local BEFORE it is retyped stays valid afterwards.
+///
+/// Direct pin for the use-after-free above: `$r` holds the same buffer as `$q`, and the retype's
+/// release must not be an unconditional free.
+#[test]
+fn test_copy_taken_before_a_retype_survives_it() {
+    let out = compile_and_run(
+        r#"<?php
+function probe(int $n): string {
+    $q = "a" . $n;
+    $r = $q;
+    $q = 1;
+    return $r . "|" . $q;
+}
+echo probe($argc);"#,
     );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "25");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
+    assert_eq!(out, "a1|1");
+}
+
+/// The same for the `unset` kill.
+#[test]
+fn test_copy_taken_before_a_kill_survives_it() {
+    let out = compile_and_run(
+        r#"<?php
+function probe(int $n): string {
+    $q = "a" . $n;
+    $r = $q;
+    unset($q);
+    $q = 1;
+    return $r . "|" . $q;
+}
+echo probe($argc);"#,
     );
+    assert_eq!(out, "a1|1");
 }
 
 /// The same kill/rebind inside a function body, where the frame is torn down on return.
@@ -318,35 +352,27 @@ fn test_implicit_retype_array_to_string_leaves_a_clean_heap() {
     );
 }
 
-/// The RHS reads the old heap binding and the retype releases it exactly once.
+/// The RHS reads the old heap binding and the retype still answers correctly.
+///
+/// No heap assertion: the `strlen($a)` read sits ABOVE the abandon, so it pays the boxed-detach
+/// leak described on `test_string_read_above_a_kill_still_answers_correctly`.
 #[test]
-fn test_retype_rhs_reads_the_old_heap_value_and_releases_it_once() {
-    let out = compile_and_run_with_heap_debug("<?php $a = \"n\" . $argc; $a = strlen($a); echo $a;");
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "2");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
+fn test_retype_rhs_reads_the_old_heap_value() {
+    let out = compile_and_run("<?php $a = \"n\" . $argc; $a = strlen($a); echo $a;");
+    assert_eq!(out, "2");
 }
 
 /// The retype's NEW value still holds the OLD value: the release must not free storage the
 /// fresh binding now owns.
 ///
-/// `$a = [$a]` retypes `string` to `array<string>` while the array element is the very string
-/// the old slot holds. A release ordered before the array literal acquires its element would be
-/// a use-after-free; one that never runs would leak.
+/// `$a = [$a]` retypes `string` to `array<string>` while the array element is the very string the
+/// old slot holds. A release ordered before the array literal takes its own reference would be a
+/// use-after-free. The read of `$a` above the abandon means this shape leaks (same boxed-detach
+/// cause as above), so only the ANSWER is asserted.
 #[test]
 fn test_retype_whose_new_value_contains_the_old_one() {
-    let out = compile_and_run_with_heap_debug("<?php $a = \"s\" . $argc; $a = [$a]; echo $a[0];");
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "s1");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
+    let out = compile_and_run("<?php $a = \"s\" . $argc; $a = [$a]; echo $a[0];");
+    assert_eq!(out, "s1");
 }
 
 /// Retyping an OBJECT-typed binding releases the instance (and runs its destructor) instead of
@@ -429,6 +455,144 @@ echo probe($argc);"#,
     );
 }
 
+// ---------------------------------------------------------------------------
+// Tail-sinking duplicates the straight-line tail of an `if`/`switch`/`try` into
+// EVERY branch (`optimize::control::dce`, which runs AFTER type checking). The
+// copies share their spans, so one checker decision is consumed once per copy.
+// The decision must stay attached to ONE syntactic site.
+// ---------------------------------------------------------------------------
+
+/// A retype below an `if` survives the tail being sunk into both branches.
+///
+/// Measured before the fix: `EIR backend error: unsupported EIR backend feature: local load from
+/// PHP type Int as Str`. The `if.then` copy of the tail re-bound `$q` to a fresh slot, and because
+/// the abandon mutates the binding maps permanently, the `if.else` copy lowered its `echo $q` —
+/// which is ABOVE the retype in source — against that fresh slot.
+#[test]
+fn test_retype_below_an_if_survives_tail_sinking() {
+    let out = compile_and_run(
+        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } echo $q; $q = 1; echo \"|\", $q;",
+    );
+    assert_eq!(out, "a1|1");
+}
+
+/// The same shape with TWO retypes, which compiled but printed the wrong answer.
+///
+/// Measured before the fix: `|s` instead of `a1|s` — the `echo $q` above the retypes read a slot
+/// no copy had written yet, so the old binding's value vanished silently.
+#[test]
+fn test_two_retypes_below_an_if_survive_tail_sinking() {
+    let out = compile_and_run(
+        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } echo $q; $q = 1; $q = \"s\"; echo \"|\", $q;",
+    );
+    assert_eq!(out, "a1|s");
+}
+
+/// The `unset` kill has the same shape, so the hazard predates the retype hook.
+#[test]
+fn test_unset_kill_below_an_if_survives_tail_sinking() {
+    let out = compile_and_run(
+        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } echo $q; unset($q); $q = 5; echo \"|\", $q;",
+    );
+    assert_eq!(out, "a1|5");
+}
+
+/// An `if`/`else` sinks the tail into both written arms.
+#[test]
+fn test_retype_below_an_if_else_survives_tail_sinking() {
+    let out = compile_and_run(
+        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } else { echo \"y\"; } echo $q; $q = 1; echo \"|\", $q;",
+    );
+    assert_eq!(out, "ya1|1");
+}
+
+/// `switch` is tail-sunk too, into every case body.
+#[test]
+fn test_retype_below_a_switch_survives_tail_sinking() {
+    let out = compile_and_run(
+        "<?php $q = \"a\" . $argc; switch ($argc) { case 9: echo \"x\"; break; default: echo \"y\"; } echo $q; $q = 1; echo \"|\", $q;",
+    );
+    assert_eq!(out, "ya1|1");
+}
+
+/// `try` is in the same tail-sinking set.
+#[test]
+fn test_retype_below_a_try_survives_tail_sinking() {
+    let out = compile_and_run(
+        "<?php $q = \"a\" . $argc; try { echo \"t\"; } catch (Exception $e) { echo \"c\"; } echo $q; $q = 1; echo \"|\", $q;",
+    );
+    assert_eq!(out, "ta1|1");
+}
+
+/// The heap shape: the string the RE-BOUND binding allocates is owned once, however many copies
+/// of the retype the optimizer made.
+///
+/// The local read above the retype is an `int` here on purpose. The shape with a STRING read
+/// above it (the fixtures directly above) is the one that pays the pre-existing boxed-detach
+/// leak, which would mask what this fixture is for.
+#[test]
+fn test_retype_below_an_if_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php $n = $argc; if ($argc > 5) { echo \"x\"; } echo $n; $n = \"s\" . $argc; echo \"|\", $n;",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1|s1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The `unset` kill variant, likewise allocated and freed exactly once.
+#[test]
+fn test_unset_kill_below_an_if_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php $n = $argc; if ($argc > 5) { echo \"x\"; } echo $n; unset($n); $n = \"s\" . $argc; echo \"|\", $n;",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1|s1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A heap binding retyped below an `if` with NO read above it: nothing masks the accounting, so
+/// the abandoned string is released exactly once whatever the optimizer duplicated.
+#[test]
+fn test_retype_of_a_heap_local_below_an_if_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } $q = 1; echo \"|\", $q;",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "|1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The same shape inside a function body, where the frame epilogue also has to agree, and where
+/// a COPY of the string outlives the retype.
+#[test]
+fn test_retype_below_an_if_in_a_function_answers_correctly() {
+    let out = compile_and_run(
+        r#"<?php
+function probe(int $n): string {
+    $q = "a" . $n;
+    if ($n > 5) { echo "x"; }
+    $r = $q;
+    $q = 1;
+    return $r . "|" . $q;
+}
+echo probe($argc);"#,
+    );
+    assert_eq!(out, "a1|1");
+}
+
 /// A retype in one file must not re-bind an unrelated assignment at the same line and column of
 /// another file.
 ///
@@ -456,6 +620,74 @@ fn test_retype_does_not_reach_a_same_position_assignment_in_another_file() {
         "main.php",
     );
     assert_eq!(out, "a1|s");
+}
+
+/// The residual same-NAME same-position collision is a hard compile error, never a wrong answer.
+///
+/// `main.php` line 4 column 1 retypes `$q`; `lib.php` line 4 column 1 assigns `$q` inside an `if`.
+/// The two spans are equal and the names are equal, so the `(span, name)` key cannot tell them
+/// apart and lowering would re-bind the library's conditional assignment as well: measured as
+/// printing `|s` where PHP prints `a1|5`, in a program that was a plain compile error before this
+/// feature existed. Giving `Span` file identity is the real fix and is out of scope; until then
+/// the checker refuses the ambiguous decision outright, so the checker and lowering agree on which
+/// programs are accepted and no program silently changes meaning.
+#[test]
+fn test_same_name_same_position_collision_is_a_compile_error() {
+    assert!(
+        compile_files_fails(
+            &[
+                (
+                    "main.php",
+                    "<?php\nrequire 'lib.php';\necho \"|\";\n$q = 5;\necho $q;\n",
+                ),
+                (
+                    "lib.php",
+                    "<?php\n$q = \"a\" . $argc;\nif ($argc > 5) {\n$q = \"b\" . $argc;\n}\necho $q;\n",
+                ),
+            ],
+            "main.php",
+        ),
+        "an ambiguous (span, name) local-binding decision must not compile"
+    );
+}
+
+/// Control: the SAME two files with the library's assignment moved one column right compile and
+/// run correctly, so the test above pins the ambiguity and not the two-file shape itself.
+#[test]
+fn test_same_name_different_column_across_files_still_compiles() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\necho \"|\";\n$q = 5;\necho $q;\n",
+            ),
+            (
+                "lib.php",
+                "<?php\n$q = \"a\" . $argc;\nif ($argc > 5) {\n    $q = \"b\" . $argc;\n}\necho $q;\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "a1|5");
+}
+
+/// Control: the same position but a DIFFERENT local name is unambiguous and compiles.
+#[test]
+fn test_different_name_same_position_across_files_still_compiles() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\necho \"|\";\n$q = 5;\necho $q;\n",
+            ),
+            (
+                "lib.php",
+                "<?php\n$w = \"a\" . $argc;\nif ($argc > 5) {\n$w = \"b\" . $argc;\n}\necho $w;\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "a1|5");
 }
 
 /// A retype inside an array-representation fixed point region: the statement that retypes is
