@@ -287,7 +287,8 @@ fn emit_unbox_stream_context_options(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("b.eq {}", done));
             ctx.emitter.instruction("cmp x9, #5");                              // runtime tag 5 = hash
             ctx.emitter.instruction(&format!("b.eq {}", hashed));
-            ctx.emitter.instruction("mov x0, xzr");                             // anything else carries no options
+            emit_stream_context_options_type_error_ladder(ctx, "x9", "x1");     // php refuses a scalar here
+            ctx.emitter.instruction("mov x0, xzr");                             // null carries no options, which php allows
             ctx.emitter.label(&hashed);
             ctx.emitter.label(&done);
             abi::emit_push_reg(ctx.emitter, "x10");                             // the packed flag, across the guard
@@ -301,12 +302,72 @@ fn emit_unbox_stream_context_options(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("je {}", done));
             ctx.emitter.instruction("cmp r10, 5");                              // runtime tag 5 = hash
             ctx.emitter.instruction(&format!("je {}", hashed));
-            ctx.emitter.instruction("xor eax, eax");                            // anything else carries no options
+            emit_stream_context_options_type_error_ladder(ctx, "r10", "rdi");   // php refuses a scalar here
+            ctx.emitter.instruction("xor eax, eax");                            // null carries no options, which php allows
             ctx.emitter.label(&hashed);
             ctx.emitter.label(&done);
             abi::emit_push_reg(ctx.emitter, "r11");                             // the packed flag, across the guard
         }
     }
+}
+
+/// php's `?array` signature refuses every scalar, and names the offending value in the message.
+///
+/// MEASURED on `php -n` 8.5.6 — the tail is composed from the VALUE, not merely its type:
+///
+/// ```text
+/// 1        → int given          "x"      → string given
+/// 1.5      → float given        true     → true given
+/// $handle  → resource given     null     → accepted (`?array`)
+/// ```
+///
+/// The five scalar words are static, so each is a whole pre-baked message selected by tag. An
+/// OBJECT reports its CLASS NAME (`stdClass given`), which needs composition; that arm stays on
+/// the permissive path rather than inventing a name for the class.
+fn emit_stream_context_options_type_error_ladder(
+    ctx: &mut FunctionContext<'_>,
+    tag_reg: &str,
+    payload_reg: &str,
+) {
+    const PREFIX: &str =
+        "stream_context_create(): Argument #1 ($options) must be of type ?array, ";
+    // (runtime tag, the word php prints). Tag 3 is split by the payload below.
+    let scalars: &[(i64, &str)] = &[(0, "int"), (1, "string"), (2, "float"), (9, "resource")];
+    for (tag, word) in scalars {
+        let skip = ctx.next_label("sctx_opt_not_scalar");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {}, #{}", tag_reg, tag));
+                ctx.emitter.instruction(&format!("b.ne {}", skip));
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {}, {}", tag_reg, tag));
+                ctx.emitter.instruction(&format!("jne {}", skip));
+            }
+        }
+        super::super::exceptions::emit_type_error(ctx, &format!("{PREFIX}{word} given"));
+        ctx.emitter.label(&skip);
+    }
+    // A bool names its own value.
+    let not_bool = ctx.next_label("sctx_opt_not_bool");
+    let is_false = ctx.next_label("sctx_opt_false");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #3", tag_reg));           // runtime tag 3 = bool
+            ctx.emitter.instruction(&format!("b.ne {}", not_bool));
+            ctx.emitter.instruction(&format!("cbz {}, {}", payload_reg, is_false));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, 3", tag_reg));            // runtime tag 3 = bool
+            ctx.emitter.instruction(&format!("jne {}", not_bool));
+            ctx.emitter.instruction(&format!("test {}, {}", payload_reg, payload_reg));
+            ctx.emitter.instruction(&format!("jz {}", is_false));
+        }
+    }
+    super::super::exceptions::emit_type_error(ctx, &format!("{PREFIX}true given"));
+    ctx.emitter.label(&is_false);
+    super::super::exceptions::emit_type_error(ctx, &format!("{PREFIX}false given"));
+    ctx.emitter.label(&not_bool);
 }
 
 /// Drops an options value the unboxing marked as a packed array, once the guard has accepted it.

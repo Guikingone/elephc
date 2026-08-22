@@ -17678,3 +17678,33 @@ try { stream_context_create($list); } catch (Throwable $t) { echo get_class($t);
         "{\"http\":{\"method\":\"POST\"}}|{\"http\":{\"method\":\"GET\"}}|ValueError"
     );
 }
+
+
+/// Verifies a scalar `$options` raises php's TypeError, worded per VALUE.
+///
+/// `stream_context_create()` declares `?array`, so `null` is accepted and every scalar is refused
+/// — and php names the offending value in the message, which for a bool is `true` or `false`
+/// rather than the word "bool". MEASURED on `php -n` 8.5.6, one shape at a time.
+///
+/// The values arrive through `json_decode()` on purpose: that makes them boxed `Mixed` cells,
+/// which is the path the static type test cannot see.
+#[test]
+fn test_stream_context_scalar_options_raise_phps_type_error() {
+    let out = compile_and_run(
+        r####"<?php
+foreach (["1", "1.5", "\"x\"", "true", "false", "null"] as $j) {
+    $v = json_decode($j, true);
+    try { stream_context_create($v); echo $j, "=accepted|"; }
+    catch (Throwable $t) { echo $j, "=", $t->getMessage(), "|"; }
+}
+"####,
+    );
+    let prefix = "stream_context_create(): Argument #1 ($options) must be of type ?array, ";
+    assert_eq!(
+        out,
+        format!(
+            "1={prefix}int given|1.5={prefix}float given|\"x\"={prefix}string given|\
+             true={prefix}true given|false={prefix}false given|null=accepted|"
+        )
+    );
+}
