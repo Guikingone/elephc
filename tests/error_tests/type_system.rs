@@ -1397,6 +1397,69 @@ fn test_by_ref_call_arg_not_killable() {
     expect_error("<?php function f(&$x) { $x = 2; } $a = 1; f($a); unset($a); $a = \"s\";", "cannot reassign");
 }
 
+/// A local handed to a callable whose signature the checker cannot resolve is aliased.
+///
+/// The plan's eligibility rule disqualifies a name "passed as an argument to a by-ref parameter
+/// anywhere in the body", and mandates conservatism "when the callee cannot be resolved
+/// statically". `$cb` here is a `callable` parameter with no signature attached, so nothing says
+/// whether its first parameter is by-reference — and if it is, the kill would abandon a slot the
+/// callee still holds a reference into. The branch-divergent pre-scan already disqualifies every
+/// `ClosureCall`/`ExprCall` argument for the same reason.
+#[test]
+fn test_unresolved_callable_arg_not_killable() {
+    expect_error(
+        "<?php function g(callable $cb) { $a = 1; $cb($a); unset($a); $a = \"s\"; echo $a; }",
+        "cannot reassign",
+    );
+}
+
+/// The same rule for a variable function (`$f = \"sort\"; $f($a);`), whose callee is a string
+/// resolved at runtime: `sort()` binds its argument by reference, and no signature reaches the
+/// call site. Both the `unset` kill and the straight-line retype must step aside.
+#[test]
+fn test_string_variable_callee_arg_not_killable() {
+    expect_error(
+        "<?php $f = \"sort\"; $a = 1; $f($a); unset($a); $a = \"s\"; echo $a;",
+        "cannot reassign",
+    );
+    expect_error(
+        "<?php $f = \"sort\"; $a = 1; $f($a); $a = \"s\"; echo $a;",
+        "cannot reassign",
+    );
+}
+
+/// Sibling unknown-callee shapes reach the same rule: a dynamic class static call
+/// (`$c::m($a)`, which desugars to `call_user_func([$c, "m"], $a)`), a dynamic constructor
+/// (`new $c($a)`), and a method call on a `mixed` receiver dispatched over runtime candidates.
+#[test]
+fn test_unknown_callee_siblings_not_killable() {
+    expect_error(
+        "<?php class C { static function m(&$x) { $x = 2; } } function g() { $a = 1; $c = \"C\"; $c::m($a); unset($a); $a = \"s\"; echo $a; }",
+        "cannot reassign",
+    );
+    expect_error(
+        "<?php function g(string $c) { $a = 1; $x = new $c($a); unset($a); $a = \"s\"; echo $a, $x; }",
+        "cannot reassign",
+    );
+    expect_error(
+        "<?php class C { function m(&$x) { $x = 2; } } function g($o) { $a = 1; $o->m($a); unset($a); $a = \"s\"; echo $a; }",
+        "cannot reassign",
+    );
+}
+
+/// The conservatism is per-ARGUMENT, not per-body: an unresolvable call that never mentions `$a`
+/// leaves `$a` killable, and a KNOWN by-value signature leaves both the kill and the retype
+/// available. Without these controls the rule above could be satisfied by disqualifying
+/// everything.
+#[test]
+fn test_unknown_callee_does_not_over_reach() {
+    expect_no_error(
+        "<?php $f = \"sort\"; $b = [3, 1]; $a = 1; $f($b); unset($a); $a = \"s\"; echo $a; echo count($b);",
+    );
+    expect_no_error("<?php function h($x) { return $x; } $a = 1; h($a); unset($a); $a = \"s\"; echo $a;");
+    expect_no_error("<?php function h($x) { return $x; } $a = 1; h($a); $a = \"s\"; echo $a;");
+}
+
 /// Declared-typed locals are a contract: never killable, in both modes.
 #[test]
 fn test_typed_local_not_killable() {

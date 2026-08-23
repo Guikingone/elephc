@@ -605,6 +605,27 @@ impl Checker {
             }
         }
     }
+
+    /// Records every argument of a call whose callee the checker could NOT resolve to a signature
+    /// as reference-aliased, so none of the locals behind them stays kill/retype eligible.
+    ///
+    /// A `$cb($a)` on a signatureless `callable`, a variable function (`$f = "sort"; $f($a);`), a
+    /// dynamic constructor or a runtime-dispatched method has no `ref_params` to consult: the
+    /// callee may bind `$a` by reference, and a reference can escape. Ending or re-binding the
+    /// local then abandons storage the callee still points into, so the conservative answer is the
+    /// only sound one — and it is the answer `mixed_storage_scan::disqualify_call_arguments`
+    /// already gives on exactly these shapes. Losing eligibility costs nothing but the feature:
+    /// the kill degrades to the pre-feature null store, the retype to the pre-feature error.
+    ///
+    /// Only for UNRESOLVABLE callees. A known signature records its aliases per parameter through
+    /// [`Checker::record_reference_alias_root`] at the by-ref slots alone, and must keep doing so —
+    /// blanket-disqualifying a resolved by-VALUE call would take the feature away from the
+    /// ordinary case it exists for.
+    pub(crate) fn record_unresolved_callee_argument_aliases(&mut self, args: &[Expr]) {
+        for arg in args {
+            self.record_reference_alias_root(arg);
+        }
+    }
 }
 
 /// Options controlling type-checker behavior beyond its default permissive rules.

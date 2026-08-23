@@ -488,6 +488,7 @@ impl Checker {
                 // The callee name is only known at runtime, but PHP rejects
                 // unpacking after named arguments while compiling the call.
                 self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
+                self.record_unresolved_callee_argument_aliases(args);
                 for arg in args {
                     self.infer_type(arg, env)?;
                 }
@@ -577,6 +578,7 @@ impl Checker {
         // No signature is known for this callable, so the planner never runs;
         // still apply PHP's syntactic unpack-after-named rule.
         self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
+        self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
             self.infer_type(arg, env)?;
         }
@@ -612,6 +614,7 @@ impl Checker {
                 _ => "callable expression".to_string(),
             };
             self.require_no_spread_after_named_args(args, &callee_desc)?;
+            self.record_unresolved_callee_argument_aliases(args);
             for arg in args {
                 self.infer_type(arg, env)?;
             }
@@ -748,6 +751,9 @@ impl Checker {
             )?;
             return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
         }
+        // Everything below this point failed to produce a signature: the return type may still be
+        // recoverable from a recorded closure shape, but the PARAMETER binding modes are not.
+        self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
             self.infer_type(arg, env)?;
         }
@@ -775,11 +781,15 @@ impl Checker {
     }
 
     /// Infers a runtime-selected callable-array call by checking argument expressions only.
+    ///
+    /// The `[$receiver, "method"]` pair is picked at runtime, so no signature — and no parameter
+    /// binding mode — is available: every argument is recorded as reference-aliased.
     fn infer_runtime_callable_array_call(
         &mut self,
         args: &[Expr],
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
             self.infer_type(arg, env)?;
         }

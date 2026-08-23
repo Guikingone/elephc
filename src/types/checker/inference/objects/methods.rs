@@ -107,6 +107,11 @@ impl Checker {
                     return Ok(PhpType::Callable);
                 }
                 "call" => {
+                    // `call` INVOKES the receiver closure with `$args[1..]`, and the receiver's
+                    // signature is not resolvable here — the arguments are conservatively
+                    // reference-aliased. (`bindTo` above only rebinds `$this`; it invokes
+                    // nothing, so its arguments are ordinary by-value reads.)
+                    self.record_unresolved_callee_argument_aliases(args);
                     for arg in args {
                         self.infer_type(arg, env)?;
                     }
@@ -129,10 +134,15 @@ impl Checker {
         // `0`. With no declaring class the runtime would fatal, so `mixed` is the
         // safe static result.
         if matches!(obj_ty, PhpType::Mixed) {
+            // The callee is picked from the runtime class id over every candidate that declares
+            // the method, so no single parameter list governs the arguments: any candidate's
+            // by-reference parameter would alias the local behind them.
+            self.record_unresolved_callee_argument_aliases(args);
             return Ok(self
                 .mixed_receiver_method_return_type(method, args.len())
                 .unwrap_or(PhpType::Mixed));
         }
+        self.record_unresolved_callee_argument_aliases(args);
         Ok(PhpType::Int)
     }
 
@@ -240,6 +250,9 @@ impl Checker {
         else {
             return Ok(PhpType::Void);
         };
+        // A runtime method name resolves no signature, so the arguments are conservatively
+        // reference-aliased — see `Checker::record_unresolved_callee_argument_aliases`.
+        self.record_unresolved_callee_argument_aliases(args);
         self.infer_type(method, env)?;
         for arg in args {
             self.infer_type(arg, env)?;
@@ -1057,6 +1070,9 @@ impl Checker {
                 ));
             }
         } else if self.eval_barrier_active && matches!(receiver, StaticReceiver::Named(_)) {
+            // The class is not in the closed world (an `eval` fragment may declare it), so no
+            // signature governs the arguments: alias them conservatively.
+            self.record_unresolved_callee_argument_aliases(args);
             for arg in args {
                 self.infer_type(arg, env)?;
             }
