@@ -983,7 +983,7 @@ pub(super) fn lower_array_union(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Reports whether a union operand's static type leaves its runtime storage kind open.
-fn array_union_operand_is_gradual(ty: &PhpType) -> bool {
+pub(super) fn array_union_operand_is_gradual(ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed)
 }
 
@@ -994,6 +994,15 @@ pub(super) fn lower_array_hash_union(ctx: &mut FunctionContext<'_>, inst: &Instr
     require_indexed_array(ctx.value_php_type(left)?, inst)?;
     require_assoc_union_hash_operand(ctx.value_php_type(right)?, inst)?;
     let result_value_ty = require_array_to_hash_result(&inst.result_php_type.codegen_repr(), inst)?;
+    // Same trap as the sibling arm: the left operand's `array<mixed>` type does not promise
+    // indexed storage, and assuming it renumbered a string key — `$left + ['b'=>2]` answered
+    // `0,b` where php answers `a,b`.
+    let runtime_label =
+        if array_union_operand_is_gradual(&ctx.value_php_type(left)?) {
+            "__rt_array_union_gradual"
+        } else {
+            "__rt_array_hash_union"
+        };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(left, "x0")?;
@@ -1004,7 +1013,7 @@ pub(super) fn lower_array_hash_union(ctx: &mut FunctionContext<'_>, inst: &Instr
             ctx.load_value_to_reg(right, "rsi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_array_hash_union");
+    abi::emit_call_label(ctx.emitter, runtime_label);
     convert_hash_union_result_to_mixed_if_needed(ctx, &result_value_ty);
     store_if_result(ctx, inst)
 }

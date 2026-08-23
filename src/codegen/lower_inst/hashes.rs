@@ -500,6 +500,16 @@ pub(super) fn lower_hash_array_union(ctx: &mut FunctionContext<'_>, inst: &Instr
     require_hash(ctx.value_php_type(left)?, inst)?;
     require_indexed_union_array_operand(ctx.value_php_type(right)?, inst)?;
     let result_value_ty = require_hash_union_result(&inst.result_php_type.codegen_repr(), inst)?;
+    // The right operand's `array<mixed>` type does NOT promise indexed storage — it is what a
+    // declared `array` parameter carries, and that holds string keys. Assuming indexed here
+    // renumbered them: `['a'=>1] + $right` answered `a,0` where php answers `a,b`.
+    let runtime_label = if crate::codegen::lower_inst::arrays::array_union_operand_is_gradual(
+        &ctx.value_php_type(right)?,
+    ) {
+        "__rt_array_union_gradual"
+    } else {
+        "__rt_hash_array_union"
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(left, "x0")?;
@@ -510,7 +520,7 @@ pub(super) fn lower_hash_array_union(ctx: &mut FunctionContext<'_>, inst: &Instr
             ctx.load_value_to_reg(right, "rsi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_hash_array_union");
+    abi::emit_call_label(ctx.emitter, runtime_label);
     convert_hash_union_result_to_mixed_if_needed(ctx, &result_value_ty);
     store_if_result(ctx, inst)
 }

@@ -330,6 +330,31 @@ echo u([1], ["b" => 2]);
     assert_eq!(out, "2:a,b|2:0,1|2:a,0|2:0,b");
 }
 
+/// Verifies the MIXED union arms read the gradual side's runtime storage too.
+///
+/// `$gradual + ['b' => 2]` and `['a' => 1] + $gradual` each pair one `array<mixed>` operand with
+/// a refined literal. Assuming the gradual side is indexed did not shorten the result here — it
+/// RENUMBERED a string key, which is quieter: `count()` still said 2 while `array_keys()` said
+/// `0,b` where php says `a,b`.
+#[test]
+fn test_array_union_mixed_arms_read_the_gradual_operand_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function leftGradual(array $left): string {
+    $out = $left + ["b" => 2];
+    return count($out) . ":" . implode(",", array_keys($out));
+}
+function rightGradual(array $right): string {
+    $out = ["a" => 1] + $right;
+    return count($out) . ":" . implode(",", array_keys($out));
+}
+echo leftGradual(["a" => 1]), "|", leftGradual([7]), "|";
+echo rightGradual(["b" => 2]), "|", rightGradual([7]);
+"#,
+    );
+    assert_eq!(out, "2:a,b|2:0,b|2:a,b|2:a,0");
+}
+
 /// Verifies the same union survives the accumulator shape that found it: a local reassigned in a
 /// loop from a call that receives it, reached through an interface so the callee is not known
 /// statically.
