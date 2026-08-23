@@ -46,10 +46,14 @@ struct AssignSite {
     /// The assignment STATEMENT's span, which is what EIR lowering looks the decision up by.
     span: Span,
     /// Whether this assignment sits inside a branch whose guard is a type test on THIS SAME name
-    /// (`if (is_string($a)) { $a = "x"; }`). The checker narrows the name to the guard's target
-    /// for that branch and restores the pre-branch binding afterwards, so such an assignment is
-    /// merged against the guard target rather than against the running binding — and it never
-    /// changes that binding. See [`Checker::first_rejected_assignment`].
+    /// AND the guard's target ACCEPTS the assigned type (`if (is_string($a)) { $a = "x"; }`).
+    /// The checker narrows the name to the guard's target for that branch and restores the
+    /// pre-branch binding afterwards, so such an assignment is merged against the guard target
+    /// rather than against the running binding — and it never changes that binding.
+    ///
+    /// The acceptance half is not optional. `if (is_float($a)) { $a = "s"; }` is guarded by a test
+    /// on `$a` too, but `float` and `string` do not merge, so the checker really DOES reject it
+    /// and the name needs its mark. See [`Checker::first_rejected_assignment`].
     guarded_by_own_type_test: bool,
 }
 
@@ -79,10 +83,10 @@ struct Facts {
     /// the one shape that lets it reach an enclosing local — a `use (&$x)` capture — already
     /// makes `$x` reference-aliased and therefore neither killable nor re-bindable out here.
     contains_eval: bool,
-    /// Stack of the names a type guard is narrowing over the region being walked, innermost last.
-    /// One name may appear more than once (nested guards on it), which is why this is a stack of
-    /// names rather than a set. Read by [`record_assign`] to flag a site as guarded.
-    type_guarded_names: Vec<String>,
+    /// Stack of `(name, the type the guard narrows it TO)` over the region being walked, innermost
+    /// last. One name may appear more than once (nested guards on it), which is why this is a stack
+    /// rather than a map. Read by [`record_assign`] to flag a site as guarded.
+    type_guarded_names: Vec<(String, PhpType)>,
 }
 
 impl Checker {
@@ -282,13 +286,18 @@ impl Checker {
         // mirroring `Checker::local_binding_depth` for this one name.
         let mut binding: Option<(PhpType, u32)> = None;
         for site in &facts.assigns {
-            // An assignment inside a branch guarded by a type test on THIS name is not a conflict
-            // the checker will ever report, and it does not move the binding either. Flow
-            // narrowing replaced the name's type with the guard's TARGET for the guarded body
-            // (`control_flow` inserts `guard.then_ty` before checking it), so the merge the
-            // checker performs there is against that target rather than against the running
-            // binding — and it restores the pre-branch binding afterwards, so nothing the branch
-            // assigned survives the construct.
+            // An assignment inside a branch guarded by a type test on THIS name, whose target
+            // ACCEPTS the assigned type, is not a conflict the checker will ever report, and it
+            // does not move the binding either. Flow narrowing replaced the name's type with the
+            // guard's TARGET for the guarded body (`control_flow` inserts `guard.then_ty` before
+            // checking it), so the merge the checker performs there is against that target rather
+            // than against the running binding — and it restores the pre-branch binding
+            // afterwards, so nothing the branch assigned survives the construct.
+            //
+            // `record_assign` set this flag only when the merge against the target SUCCEEDS.
+            // `if (is_float($a)) { $a = "s"; }` is guarded by a test on `$a` too, but `float` and
+            // `string` do not merge, so the checker really does reject it and the name keeps its
+            // mark (which then makes the body compile, printing PHP's answer).
             //
             // Skipping it is what stops the scan predicting a rejection the checker never makes:
             // `$a = 1; if (is_string($a)) { $a = "x"; }` used to warn "compile with
@@ -344,11 +353,23 @@ impl Checker {
 }
 
 /// Records one statement-form assignment to `name`.
-fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: Span) {
-    let guarded_by_own_type_test = facts
-        .type_guarded_names
-        .iter()
-        .any(|guarded| guarded == name);
+fn record_assign(
+    checker: &Checker,
+    facts: &mut Facts,
+    name: &str,
+    value: &Expr,
+    depth: u32,
+    span: Span,
+) {
+    // Guarded AND accepted: the branch is guarded by a type test on this very name, and the type
+    // that guard narrows it to merges with what is being stored. Both halves are needed — see
+    // `AssignSite::guarded_by_own_type_test`.
+    let guarded_by_own_type_test = facts.type_guarded_names.iter().any(|(guarded, target)| {
+        guarded == name
+            && checker
+                .merged_assignment_type(target, &infer_expr_type_syntactic(value))
+                .is_some()
+    });
     let entry = facts.names.entry(name.to_string()).or_default();
     // A value this scan cannot type EXACTLY is not evidence, it is a guess.
     // `infer_expr_type_syntactic` answers `Int` for everything it does not recognise — a plain
@@ -450,8 +471,10 @@ fn collect_type_guarded_block(
     facts: &mut Facts,
 ) {
     let guarded = type_guard_subject(condition);
-    if let Some(name) = guarded {
-        facts.type_guarded_names.push(name.to_string());
+    if let Some((name, target)) = &guarded {
+        facts
+            .type_guarded_names
+            .push(((*name).to_string(), target.clone()));
     }
     collect_block(checker, body, depth, facts);
     if guarded.is_some() {
@@ -459,7 +482,7 @@ fn collect_type_guarded_block(
     }
 }
 
-/// Returns the LOCAL a condition narrows TO a type in the branch it guards, if any.
+/// Returns the LOCAL a condition narrows in the branch it guards, and the type it narrows it TO.
 ///
 /// Mirrors `checker::stmt_check::narrowing::guard_receiver_and_target` — the checker's own guard
 /// recogniser — narrowed to the cases where the guarded branch really sees the guard's TARGET:
@@ -467,26 +490,40 @@ fn collect_type_guarded_block(
 ///   local (property places live under a `\x01` sigil and are not locals at all);
 /// - the guard must not be negated. A leading `!`, a `!==` comparison and `isset(…)` all give the
 ///   guarded branch the guard's COMPLEMENT, which for a concrete type is that type unchanged — so
-///   the checker really does reject an incompatible assignment there and the marking is right.
+///   the checker really does reject an incompatible assignment there and the marking is right;
+/// - the target must be one exact `PhpType`. `is_array($x)` narrows to the element-agnostic array
+///   FAMILY (`GuardTarget::AnyArray`, whose fallback is `Mixed`), which this cannot state, so it
+///   is not recognised.
+///
+/// The type is returned because the caller has to ask whether the guard's target ACCEPTS what the
+/// guarded branch assigns: `is_string($a)` followed by `$a = "x"` is accepted and is not evidence,
+/// while `is_float($a)` followed by `$a = "s"` is rejected by the checker and is.
 ///
 /// Answering `None` for a shape the checker does narrow costs only a spurious warning (the
 /// pre-existing behaviour); answering `Some` for one it does not would suppress a mark the body
 /// needs, so this stays strictly narrower than the recogniser it mirrors.
-fn type_guard_subject(condition: &Expr) -> Option<&str> {
+fn type_guard_subject(condition: &Expr) -> Option<(&str, PhpType)> {
     match &condition.kind {
         ExprKind::FunctionCall { name, args } if args.len() == 1 => {
-            // `php_symbol_key` rather than a plain lowercase, so `\is_int($x)` and `Ns\is_int($x)`
-            // are recognised the same way the checker's own recogniser recognises them.
-            match crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str() {
-                "is_int" | "is_integer" | "is_long" | "is_float" | "is_double" | "is_real"
-                | "is_string" | "is_bool" | "is_null" | "is_callable" | "is_array" => {
-                    guarded_variable_name(&args[0])
-                }
-                _ => None,
-            }
+            // The same predicate spellings `guard_receiver_and_target` accepts, and the same
+            // targets: `is_null` narrows to `Void`, which is how elephc models a value's null.
+            let target = match crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str()
+            {
+                "is_int" | "is_integer" | "is_long" => PhpType::Int,
+                "is_float" | "is_double" | "is_real" => PhpType::Float,
+                "is_string" => PhpType::Str,
+                "is_bool" => PhpType::Bool,
+                "is_null" => PhpType::Void,
+                "is_callable" => PhpType::Callable,
+                _ => return None,
+            };
+            Some((guarded_variable_name(&args[0])?, target))
         }
         ExprKind::InstanceOf { value, target } => match target {
-            InstanceOfTarget::Name(_) => guarded_variable_name(value),
+            InstanceOfTarget::Name(class) => Some((
+                guarded_variable_name(value)?,
+                PhpType::Object(class.as_str().to_string()),
+            )),
             InstanceOfTarget::Expr(_) => None,
         },
         // `$x === null` / `$x === false` (either operand order). `!==` is the negated form and is
@@ -501,7 +538,8 @@ fn type_guard_subject(condition: &Expr) -> Option<&str> {
                 None => (guarded_variable_name(right)?, &left.kind),
             };
             match literal {
-                ExprKind::Null | ExprKind::BoolLiteral(false) => Some(receiver),
+                ExprKind::Null => Some((receiver, PhpType::Void)),
+                ExprKind::BoolLiteral(false) => Some((receiver, PhpType::False)),
                 _ => None,
             }
         }
@@ -535,7 +573,7 @@ fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
             if is_compound_assignment_self_read(value, name, stmt.span) {
                 disqualify(facts, name);
             } else {
-                record_assign(facts, name, value, depth, stmt.span);
+                record_assign(checker, facts, name, value, depth, stmt.span);
             }
             collect_expr(checker, value, depth, facts);
         }

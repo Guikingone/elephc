@@ -1847,6 +1847,22 @@ fn test_a_negated_guard_does_not_block_marking() {
     );
 }
 
+/// A guard on the right NAME but the wrong TYPE is still evidence: the checker narrows `$a` to
+/// `float` inside the branch, `float` and `string` do not merge, and the assignment really is
+/// rejected — so the name needs its mark, and with it the body compiles and prints PHP's `1`.
+///
+/// Dropping the acceptance half of the disqualifier turned this into a hard
+/// `cannot reassign $a from float to string`, which is what the branch-divergent marking exists to
+/// avoid.
+#[test]
+fn test_a_guard_whose_target_rejects_the_value_still_marks() {
+    expect_warning(
+        "<?php $a = 1; if (is_float($a)) { $a = \"s\"; } echo $a;",
+        "boxed mixed storage",
+    );
+    expect_no_error("<?php $a = 1; if (is_float($a)) { $a = \"s\"; } echo $a;");
+}
+
 /// Declared-typed locals are never marked (contract wins in both modes).
 #[test]
 fn test_typed_local_never_mixed() {
