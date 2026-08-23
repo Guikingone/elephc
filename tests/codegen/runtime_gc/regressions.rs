@@ -4460,6 +4460,70 @@ echo $c, "\n";
     );
 }
 
+/// Verifies an accumulator survives a callee that MIGHT hand its own argument back.
+///
+/// `$acc = f($acc, ...)` in a loop: the store retains the result, releases the slot's previous
+/// occupant, then releases the result as a consumed temporary. That last release assumes the
+/// callee returned a `+1`. On the branch where the callee returns its own parameter there is no
+/// such `+1`, so the accumulator's count dropped one per iteration until a later read hit freed
+/// memory — php prints `2:a,b`, elephc raised
+/// `TypeError: Unsupported operand types: non-array + array`.
+///
+/// A PROVEN alias was already handled; this is the MAY case, where the callee returns the
+/// parameter on only one branch and the decision has to be made at runtime.
+#[test]
+fn test_accumulator_survives_a_callee_that_may_return_its_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function mayReturnArg(mixed $l, mixed $r): mixed {
+    if (!$r) { return $l; }
+    return $l + $r;
+}
+$k = [];
+foreach ([["a" => 1], [], ["b" => 2], []] as $config) {
+    $k = mayReturnArg($k, $config);
+}
+echo count($k), ":", implode(",", array_keys($k)), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2:a,b\n");
+}
+
+/// Same accumulator reached through an INTERFACE, where no callee is known statically and no
+/// return-alias summary exists at all.
+///
+/// This is Symfony's `Config\Definition\Processor::process()` verbatim in shape:
+/// `$currentConfig = $configTree->merge($currentConfig, $config);`. Under `--web` the heap
+/// guard caught it as a double free inside `_rt_mixed_free_deep`.
+#[test]
+fn test_accumulator_through_interface_dispatch_survives_argument_aliasing() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+interface NodeInterface {
+    public function merge(mixed $leftSide, mixed $rightSide): mixed;
+}
+class Node implements NodeInterface {
+    public function merge(mixed $leftSide, mixed $rightSide): mixed {
+        if (!$rightSide) { return $leftSide; }
+        return $leftSide + $rightSide;
+    }
+}
+function process(NodeInterface $tree, array $configs): array {
+    $current = [];
+    foreach ($configs as $config) {
+        $current = $tree->merge($current, $config);
+    }
+    return $current;
+}
+$out = process(new Node(), [["a" => 1], [], ["b" => 2], []]);
+echo count($out), ":", implode(",", array_keys($out)), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2:a,b\n");
+}
+
 /// Regression test for issue #604 (conditional-return callee, alias path): a callee
 /// that returns its parameter on one branch (`if ($c) return $x;`) is summarized as
 /// possibly returning that parameter, so the fix suppresses the argument release. When

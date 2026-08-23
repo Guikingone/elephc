@@ -1721,9 +1721,49 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && !transfer_source_to_store
             && !ref_cell_narrowed_mixed_to_int
         {
-            crate::ir_lower::ownership::release_if_owned(self, source, span);
+            self.release_stored_source(source, slot, span);
         }
         value
+    }
+
+    /// Releases the value a retaining store consumed, deciding at RUNTIME when the callee only
+    /// MIGHT have handed one of its parameters back.
+    ///
+    /// `$acc = f($acc, …)` is the shape that needs this. When `f` returns a fresh value the
+    /// store's acquire/release pair nets zero and the slot owns the callee's `+1`. When `f`
+    /// returns its own argument there is no such `+1`, so the unconditional release took the
+    /// accumulator's count down one per iteration until the next read hit freed memory —
+    /// php answered `2:a,b`, elephc answered `TypeError: Unsupported operand types`.
+    fn release_stored_source(
+        &mut self,
+        source: LoweredValue,
+        slot: LocalSlotId,
+        span: Option<Span>,
+    ) {
+        let aliased_argument = self
+            .call_argument_read_from_slot(source.value, slot)
+            .or_else(|| self.user_call_result_may_alias_argument(source.value));
+        if let Some(argument) = aliased_argument {
+            // Only single-pointer payloads can be compared, the same restriction the argument
+            // side already applies: a boxed Mixed that WRAPS a container holds a different
+            // pointer than the container, so comparing them would read "not aliased" for a
+            // value the result does own.
+            let source_repr = self.builder.value_php_type(source.value).codegen_repr();
+            let argument_repr = self.builder.value_php_type(argument).codegen_repr();
+            if matches!(source_repr, PhpType::Mixed | PhpType::Union(_))
+                && matches!(argument_repr, PhpType::Mixed | PhpType::Union(_))
+            {
+                self.emit_void(
+                    Op::ReleaseUnlessAliases,
+                    vec![source.value, argument],
+                    None,
+                    Op::ReleaseUnlessAliases.default_effects(),
+                    span,
+                );
+                return;
+            }
+        }
+        crate::ir_lower::ownership::release_if_owned(self, source, span);
     }
 
     /// Boxes a typed-array source to `Array(Mixed)` before it is stored through a reference
@@ -2356,6 +2396,58 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// acquiring it for the caller. Such a result is borrowed when the matching
     /// argument is borrowed, but remains an owning temporary when an owning
     /// argument temporary transfers through the call.
+    /// The argument of `value`'s defining call that was read from `slot`, if any.
+    ///
+    /// This is the accumulator pattern `$acc = f(..., $acc, ...)` seen from the store, and it
+    /// needs NO alias summary — which is what makes it work for an INTERFACE call, where the
+    /// callee is unknown and no summary exists. Symfony's
+    /// `Config\Definition\Processor::process()` is exactly this shape:
+    /// `$currentConfig = $configTree->merge($currentConfig, $config);`.
+    fn call_argument_read_from_slot(&self, value: ValueId, slot: LocalSlotId) -> Option<ValueId> {
+        let inst = self.builder.value_defining_instruction(value)?;
+        if !matches!(
+            inst.op,
+            Op::Call | Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall
+        ) {
+            return None;
+        }
+        inst.operands
+            .iter()
+            .copied()
+            .find(|operand| self.value_source_slot(*operand) == Some(slot))
+    }
+
+    /// The argument a user-call result MAY alias, when the callee's summary says it might hand
+    /// that parameter back.
+    ///
+    /// `value_is_borrowed_user_call_result` deliberately demands a PROVEN alias, because it
+    /// declares the result borrowed on every path. A callee that returns its parameter on only
+    /// ONE branch — `if (!$r) { return $l; } return $l + $r;` — is neither: the result is owned
+    /// on one path and borrowed on the other, so the release has to be decided at RUNTIME.
+    pub(crate) fn user_call_result_may_alias_argument(&self, result: ValueId) -> Option<ValueId> {
+        let inst = self.builder.value_defining_instruction(result)?;
+        if inst.op != Op::Call {
+            return None;
+        }
+        let Some(Immediate::Data(function_id)) = inst.immediate else {
+            return None;
+        };
+        let function_name = self
+            .data
+            .function_names
+            .get(function_id.as_raw() as usize)?;
+        let return_alias = self.return_alias_summaries.function(function_name)?;
+        inst.operands
+            .iter()
+            .enumerate()
+            .find(|(parameter_index, argument)| {
+                return_alias.may_alias_parameter(*parameter_index)
+                    && !return_alias.proven_aliases_parameter(*parameter_index)
+                    && self.call_result_may_alias_arg(**argument, result)
+            })
+            .map(|(_, argument)| *argument)
+    }
+
     fn value_is_borrowed_user_call_result(&self, result: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(result) else {
             return false;
