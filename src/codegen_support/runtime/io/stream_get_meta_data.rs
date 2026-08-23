@@ -253,7 +253,7 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emit_set_wrapper_type_aarch64(emitter);
     emit_set_str_slots(emitter, "_meta_key_stream_type", 11, 56, 64);
     emit_set_owned_str_slots(emitter, "_meta_key_mode", 4, 40, 48);
-    emit_set_int_const(emitter, "_meta_key_unread_bytes", 12);
+    emit_set_unread_bytes_aarch64(emitter, "_meta_key_unread_bytes", 12);
     emit_set_bool_slot(emitter, "_meta_key_seekable", 8, 16);
     // -- uri: read the StreamState-owned URI pointer/length pair --
     emit_set_uri_aarch64(emitter);
@@ -658,8 +658,15 @@ fn emit_set_bool_slot(emitter: &mut Emitter, key_sym: &str, key_len: i64, slot: 
 }
 
 /// Emits the set int const stream runtime helper.
-fn emit_set_int_const(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
-    emitter.instruction("mov x3, #0");                                          // value_lo = 0 (elephc keeps no read buffer)
+/// Emits the `unread_bytes` entry, read from the stream's own holding area.
+///
+/// php reads a whole chunk and reports what it has NOT yet handed to the caller: on a 192-byte
+/// file, `fread($h, 5)` leaves 187. This was a hardcoded zero while elephc kept no read buffer;
+/// it now keeps one for regular files, so the number is the buffer's remainder.
+fn emit_set_unread_bytes_aarch64(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_pending_held");                         // x0 = bytes read but not handed out
+    emitter.instruction("mov x3, x0");                                          // value_lo = that count
     emitter.instruction("mov x4, #0");                                          // value_hi unused for integers
     emitter.instruction("mov x5, #0");                                          // value tag = int
     emit_hash_put_aarch64(emitter, key_sym, key_len);
@@ -898,7 +905,7 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emit_set_wrapper_type_x86(emitter);
     emit_set_str_slots_x86(emitter, "_meta_key_stream_type", 11, 64, 72);
     emit_set_owned_str_slots_x86(emitter, "_meta_key_mode", 4, 48, 56);
-    emit_set_int_const_x86(emitter, "_meta_key_unread_bytes", 12);
+    emit_set_unread_bytes_x86(emitter, "_meta_key_unread_bytes", 12);
     emit_set_bool_slot_x86(emitter, "_meta_key_seekable", 8, 24);
     // -- uri: read the StreamState-owned URI pointer/length pair --
     emit_set_uri_x86(emitter);
@@ -955,8 +962,11 @@ fn emit_set_bool_slot_x86(emitter: &mut Emitter, key_sym: &str, key_len: i64, sl
 }
 
 /// Emits the set int const x86 stream runtime helper.
-fn emit_set_int_const_x86(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
-    emitter.instruction("xor ecx, ecx");                                        // value_lo = 0 (elephc keeps no read buffer)
+/// See the AArch64 counterpart: `unread_bytes` is the stream's own holding area, not a zero.
+fn emit_set_unread_bytes_x86(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_pending_held");                       // rax = bytes read but not handed out
+    emitter.instruction("mov rcx, rax");                                        // value_lo = that count
     emitter.instruction("xor r8d, r8d");                                        // value_hi unused for integers
     emitter.instruction("xor r9d, r9d");                                        // value tag = int
     emit_hash_put_x86(emitter, key_sym, key_len);

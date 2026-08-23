@@ -56,9 +56,9 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.label_global("__rt_fread_raw");
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #64");                                     // allocate stream, descriptor, and read-result spill slots
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // establish new frame pointer
+    emitter.instruction("sub sp, sp, #80");                                     // allocate stream, descriptor, and read-result spill slots
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // establish new frame pointer
 
     // -- save handle and requested length, then resolve the backend descriptor --
     emitter.instruction("str x0, [sp, #0]");                                    // save the opaque stream handle
@@ -68,6 +68,11 @@ pub fn emit_fread(emitter: &mut Emitter) {
     // x0, beside the x1/x2 string pair.
     emitter.instruction("mov x9, #1");
     emitter.instruction("str x9, [sp, #40]");                                   // "this is a real result" — cleared only by an actual read failure
+    // Slot 48 is how many of the caller's bytes came out of the stream's own holding area. A
+    // request that outruns what is held is topped up FROM THE DESCRIPTOR into the same window,
+    // because php serves one `fread()` from its buffer AND the source when the buffer runs out —
+    // measured: with 8190 bytes consumed of a 12190-byte file, `fread($h, 100)` answers 100.
+    emitter.instruction("str xzr, [sp, #48]");                                  // nothing served from the holding area yet
     emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor through StreamState
     emitter.instruction("str x0, [sp, #32]");                                   // preserve the resolved backend descriptor
     emitter.instruction("mov w9, #0x4000");                                     // load the high half of USER_WRAPPER_FD_BASE = 0x40000000
@@ -136,14 +141,14 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_fread_wrapper_direct");                      // at least a chunk: ask for exactly it
     emitter.instruction("ldr x0, [sp, #0]");                                    // the handle drives the chunked reader
     emitter.instruction("ldr x1, [sp, #8]");                                    // and the caller's request
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame before tail dispatch
-    emitter.instruction("add sp, sp, #64");                                     // release native-read scratch storage
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the caller frame before tail dispatch
+    emitter.instruction("add sp, sp, #80");                                     // release native-read scratch storage
     emitter.instruction("b __rt_uw_fread_chunked");
     emitter.label("__rt_fread_wrapper_direct");
     emitter.instruction("ldr x0, [sp, #32]");                                   // the wrapper descriptor the probe clobbered
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the requested byte count for stream_read
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame before wrapper tail dispatch
-    emitter.instruction("add sp, sp, #64");                                     // release native-read scratch storage
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the caller frame before wrapper tail dispatch
+    emitter.instruction("add sp, sp, #80");                                     // release native-read scratch storage
     emitter.instruction("b __rt_user_wrapper_fread");                           // wrapper backend tail-calls stream_read
     emitter.label("__rt_fread_real_fd");
 
@@ -176,7 +181,11 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #8]");                                    // at most the requested count
     emitter.instruction("bl __rt_stream_pending_take");                         // x0 = how many came back
     emitter.instruction("cbz x0, __rt_fread_no_pending");
-    emitter.instruction("str x0, [sp, #24]");                                   // they are the whole result
+    emitter.instruction("str x0, [sp, #48]");                                   // this much came out of the holding area
+    emitter.instruction("ldr x9, [sp, #8]");                                    // the caller's request
+    emitter.instruction("cmp x0, x9");
+    emitter.instruction("b.lt __rt_fread_no_pending");                          // short: top up from the descriptor
+    emitter.instruction("str x0, [sp, #24]");                                   // satisfied in full: they are the result
     emitter.instruction("ldr x1, [sp, #16]");
     emitter.instruction("mov x2, x0");
     emitter.instruction("bl __rt_concat_publish");                              // claim the window they occupy
@@ -200,10 +209,55 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fread_done");                                   // and does not exhaust the stream either
 
     emitter.label("__rt_fread_do_syscall");
+    // -- php reads a WHOLE CHUNK from a regular file and keeps what the call did not need --
+    //
+    // Without this, `fgetc()` is one `read(2)` per byte: MEASURED at 499 ms for 900 000 bytes
+    // where php takes 14 ms, and `stream_get_meta_data()['unread_bytes']` was always 0 where php
+    // reports what its buffer still holds. The chunked reader below is the SAME one the wrapper
+    // path already uses — it reads a chunk through `__rt_fread`, hands the whole thing to the
+    // stream's holding area, and takes the caller's request back out of it.
+    //
+    // Restricted to REGULAR files on purpose. Reading ahead on a socket or a pipe changes when a
+    // read blocks and what `stream_select()` sees next, which is a separate question from this
+    // one; `S_ISREG` is the same probe `stream_get_meta_data()` uses for `seekable`.
+    //
+    // The recursion stops itself: the chunked reader asks for exactly one chunk, and a request of
+    // a chunk or more takes the syscall below.
+    emitter.instruction("ldr x0, [sp, #8]");                                    // the caller's request
+    emitter.instruction("cmp x0, #1");
+    emitter.instruction("b.lt __rt_fread_syscall_now");                         // a non-positive request buffers nothing
+    // A top-up already holds part of the answer in the window; the chunked reader starts from
+    // nothing and would lose it, so this read finishes on the descriptor.
+    emitter.instruction("ldr x9, [sp, #48]");                                   // bytes already served from the holding area
+    emitter.instruction("cbnz x9, __rt_fread_syscall_now");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_state");                                // only a stream with a STATE can hold a surplus
+    emitter.instruction("cbz x0, __rt_fread_syscall_now");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // the resolved backend descriptor
+    emitter.instruction("bl __rt_stream_fd_is_regular");                        // S_ISREG: leave sockets, pipes and ttys alone
+    emitter.instruction("cbz x0, __rt_fread_syscall_now");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_chunk_size");                           // x0 = what php would ask for
+    emitter.instruction("ldr x1, [sp, #8]");                                    // the caller's request
+    emitter.instruction("cmp x1, x0");
+    emitter.instruction("b.ge __rt_fread_syscall_now");                         // at least a chunk: read exactly it
+    emitter.instruction("ldr x1, [sp, #16]");                                   // hand the reserved window back before
+    emitter.instruction("mov x2, #0");                                          // the chunked reader reserves its own
+    emitter.instruction("bl __rt_concat_publish");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the handle drives the chunked reader
+    emitter.instruction("ldr x1, [sp, #8]");                                    // and the caller's request
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the caller frame before tail dispatch
+    emitter.instruction("add sp, sp, #80");                                     // release native-read scratch storage
+    emitter.instruction("b __rt_uw_fread_chunked");
+
+    emitter.label("__rt_fread_syscall_now");
     // -- perform read syscall --
     emitter.instruction("ldr x0, [sp, #32]");                                   // fd for read syscall
     emitter.instruction("ldr x1, [sp, #16]");                                   // buffer pointer: the TLS probe clobbers caller-saved x12
     emitter.instruction("ldr x2, [sp, #8]");                                    // number of bytes to read
+    emitter.instruction("ldr x9, [sp, #48]");                                   // what the holding area already supplied
+    emitter.instruction("add x1, x1, x9");                                      // append after it
+    emitter.instruction("sub x2, x2, x9");                                      // and ask only for the remainder
     emitter.syscall(3);
     if emitter.platform.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: negative read result means failure
@@ -215,15 +269,22 @@ pub fn emit_fread(emitter: &mut Emitter) {
         emitter.instruction(&format!("cmp x0, #{}", emitter.platform.would_block_errno())); // macOS: is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
     }
     emitter.instruction("b.eq __rt_fread_would_block");                         // a transient nonblocking miss is not EOF
-    emitter.instruction("str xzr, [sp, #24]");                                  // failed reads carry no bytes
+    // A read that FAILED after the holding area already supplied bytes still answers those
+    // bytes: php loses nothing it has already served out of its buffer.
+    emitter.instruction("ldr x9, [sp, #48]");
+    emitter.instruction("str x9, [sp, #24]");                                   // failed reads carry only what was held
+    emitter.instruction("cbnz x9, __rt_fread_publish_total");                   // publish what the buffer gave
     emitter.instruction("str xzr, [sp, #40]");                                  // php answers false for a read that fails
     emitter.instruction("b __rt_fread_done");                                   // a FAILED read does not exhaust the stream: php keeps feof() false
     emitter.label("__rt_fread_read_ok");
 
     // -- publish the bytes actually read into the reserved destination --
+    emitter.instruction("ldr x9, [sp, #48]");                                   // what the holding area already supplied
+    emitter.instruction("add x0, x0, x9");                                      // the answer is both halves
     emitter.instruction("str x0, [sp, #24]");                                   // save actual bytes read
+    emitter.label("__rt_fread_publish_total");
     emitter.instruction("ldr x1, [sp, #16]");                                   // reload the reserved destination pointer
-    emitter.instruction("mov x2, x0");                                          // pass the number of bytes actually read
+    emitter.instruction("ldr x2, [sp, #24]");                                   // pass the number of bytes actually read
     emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed reads
 
     // -- set EOF when the read returned fewer bytes than requested --
@@ -248,7 +309,8 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fread_done");                                   // preserve a successful short-read result
 
     emitter.label("__rt_fread_would_block");
-    emitter.instruction("str xzr, [sp, #24]");                                  // return an empty read without setting EOF for EAGAIN/EWOULDBLOCK
+    emitter.instruction("ldr x9, [sp, #48]");                                   // whatever the holding area supplied stands
+    emitter.instruction("str x9, [sp, #24]");                                   // an empty read otherwise, without setting EOF for EAGAIN/EWOULDBLOCK
 
     // -- return pointer and length --
     emitter.label("__rt_fread_done");
@@ -295,8 +357,8 @@ pub fn emit_fread(emitter: &mut Emitter) {
     // nulled: x86_64 already returns a null pointer for an ordinary EOF, so the pointer
     // cannot mean "failed" on both arches, and every caller here tests the length first.
     emitter.instruction("ldr x0, [sp, #40]");                                   // x0 = 0 only when the read failed
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 
     emit_wrapper_chunked_read(emitter);
@@ -333,7 +395,7 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.instruction("ldr x0, [sp, #0]");
             emitter.instruction("bl __rt_fread");                               // x0 = flag, x1 = ptr, x2 = len
             emitter.instruction("str x0, [sp, #40]");                           // the read's OWN verdict travels out
-            emitter.instruction("cbz x2, __rt_uwfc_empty");                     // the wrapper had nothing
+            emitter.instruction("cbz x2, __rt_uwfc_empty");                     // the source had nothing
             emitter.instruction("stp x1, x2, [sp, #16]");                       // the chunk outlives the calls below
 
             emitter.instruction("ldr x0, [sp, #0]");
@@ -357,6 +419,22 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.instruction("ldr x1, [sp, #32]");
             emitter.instruction("mov x2, x0");
             emitter.instruction("bl __rt_concat_publish");                      // claim the window they occupy
+            // EOF is the CALLER's question, not the fill's. The raw helper judged a short read
+            // against the CHUNK it was asked for, which is short almost every time, so a stream
+            // with plenty left reported end of file. php judges it against what the program
+            // asked for — MEASURED on `php://memory`: a 1-byte stream read with `fread($h, 2)`
+            // leaves `feof()` true, a 3-byte stream read with `fread($h, 3)` leaves it FALSE.
+            emitter.instruction("ldr x9, [sp, #8]");                            // the caller's request
+            emitter.instruction("ldr x10, [sp, #40]");                          // what it received
+            emitter.instruction("cmp x10, x9");
+            emitter.instruction("b.lt __rt_uwfc_short");                        // less than asked: the source is spent
+            emitter.instruction("mov x1, #0");                                  // satisfied in full: not at end
+            emitter.instruction("b __rt_uwfc_eof_set");
+            emitter.label("__rt_uwfc_short");
+            emitter.instruction("mov x1, #1");                                  // at end
+            emitter.label("__rt_uwfc_eof_set");
+            emitter.instruction("ldr x0, [sp, #0]");                            // the opaque stream handle
+            emitter.instruction("bl __rt_stream_eof_set");
             emitter.instruction("mov x0, #1");                                  // a real result, not a failed read
             emitter.instruction("ldr x1, [sp, #32]");
             emitter.instruction("ldr x2, [sp, #40]");
@@ -393,7 +471,7 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.instruction("call __rt_fread");                             // rax = ptr, rdx = len, rcx = flag
             emitter.instruction("mov QWORD PTR [rbp - 48], rcx");               // the read's OWN verdict travels out
             emitter.instruction("test rdx, rdx");
-            emitter.instruction("jz __rt_uwfc_empty_x86");                      // the wrapper had nothing
+            emitter.instruction("jz __rt_uwfc_empty_x86");                      // the source had nothing
             emitter.instruction("mov QWORD PTR [rbp - 24], rax");
             emitter.instruction("mov QWORD PTR [rbp - 32], rdx");
 
@@ -418,6 +496,18 @@ fn emit_wrapper_chunked_read(emitter: &mut Emitter) {
             emitter.instruction("mov rdx, rax");                                // publish takes the length in RDX
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // and the pointer in RAX
             emitter.instruction("call __rt_concat_publish");                    // claim the window they occupy
+            // See the AArch64 counterpart: EOF is judged against the CALLER's request, not
+            // against the chunk the fill asked for.
+            emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                // what the caller received
+            emitter.instruction("cmp r9, QWORD PTR [rbp - 16]");                // against what it asked for
+            emitter.instruction("jl __rt_uwfc_short_x86");                      // less than asked: the source is spent
+            emitter.instruction("xor esi, esi");                                // satisfied in full: not at end
+            emitter.instruction("jmp __rt_uwfc_eof_set_x86");
+            emitter.label("__rt_uwfc_short_x86");
+            emitter.instruction("mov esi, 1");                                  // at end
+            emitter.label("__rt_uwfc_eof_set_x86");
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // the opaque stream handle
+            emitter.instruction("call __rt_stream_eof_set");
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");
             emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");
             emitter.instruction("mov rcx, 1");                                  // a real result, not a failed read
@@ -445,13 +535,16 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while fread() uses local spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved file descriptor, length, and concat-buffer start pointer
-    emitter.instruction("sub rsp, 48");                                         // reserve aligned stream, descriptor, and read-result spill slots
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned stream, descriptor, and read-result spill slots
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the opaque stream handle
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the requested byte count across the concat-buffer address computation and libc read() call
     // See the AArch64 half: a failed read and an empty one both end with length 0, so the
     // difference travels in its own slot and leaves in rcx.
     emitter.instruction("mov QWORD PTR [rbp - 48], 1");                         // "this is a real result" — cleared only by an actual read failure
+    // See the AArch64 half: slot 56 is how many of the caller's bytes came out of the holding
+    // area, so a request that outruns it is topped up from the descriptor into the same window.
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // nothing served from the holding area yet
     emitter.instruction("call __rt_stream_fd");                                 // resolve the backend descriptor through StreamState
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the resolved backend descriptor
     emitter.instruction("mov r9d, 0x40000000");                                 // materialize USER_WRAPPER_FD_BASE
@@ -512,13 +605,13 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_fread_wrapper_direct_x86");                   // at least a chunk: ask for exactly it
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the handle drives the chunked reader
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // and the caller's request
-    emitter.instruction("add rsp, 48");                                         // release native-read scratch storage
+    emitter.instruction("add rsp, 64");                                         // release native-read scratch storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("jmp __rt_uw_fread_chunked");
     emitter.label("__rt_fread_wrapper_direct_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the wrapper descriptor the probe clobbered
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
-    emitter.instruction("add rsp, 48");                                         // release native-read scratch storage
+    emitter.instruction("add rsp, 64");                                         // release native-read scratch storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("jmp __rt_user_wrapper_fread");                         // wrapper backend tail-calls stream_read
     emitter.label("__rt_fread_real_fd_x86");
@@ -526,7 +619,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_fread_fd_ok_x86");                            // continue to the normal read path for non-negative descriptors
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer for an invalid stream
     emitter.instruction("xor edx, edx");                                        // return an empty string length for an invalid stream
-    emitter.instruction("add rsp, 48");                                         // release native-read scratch storage
+    emitter.instruction("add rsp, 64");                                         // release native-read scratch storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // skip the read path for invalid stream handles
 
@@ -554,7 +647,10 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_stream_pending_take");                       // rax = how many came back
     emitter.instruction("test rax, rax");
     emitter.instruction("jz __rt_fread_no_pending_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // they are the whole result
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // this much came out of the holding area
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // against the caller's request
+    emitter.instruction("jl __rt_fread_no_pending_x86");                        // short: top up from the descriptor
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // satisfied in full: they are the result
     emitter.instruction("mov rdx, rax");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");
     emitter.instruction("call __rt_concat_publish");                            // claim the window they occupy
@@ -580,9 +676,44 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // a failed TLS read is a failed read
     emitter.instruction("jmp __rt_fread_failed_x86");                           // and does not exhaust the stream either
     emitter.label("__rt_fread_do_syscall_x86");
+    // See the AArch64 counterpart: php reads a WHOLE CHUNK from a regular file and keeps the
+    // surplus, which is what makes `fgetc()` one syscall per CHUNK instead of one per byte and
+    // what `unread_bytes` reports. Sockets, pipes and ttys keep the unbuffered path.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the caller's request
+    emitter.instruction("cmp rax, 1");
+    emitter.instruction("jl __rt_fread_syscall_now_x86");                       // a non-positive request buffers nothing
+    // A top-up already holds part of the answer in the window; the chunked reader starts from
+    // nothing and would lose it.
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // bytes already served from the holding area
+    emitter.instruction("jne __rt_fread_syscall_now_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_state");                              // only a stream with a STATE can hold a surplus
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fread_syscall_now_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the resolved backend descriptor
+    emitter.instruction("call __rt_stream_fd_is_regular");                      // S_ISREG: leave sockets, pipes and ttys alone
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fread_syscall_now_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_chunk_size");                         // rax = what php would ask for
+    emitter.instruction("cmp QWORD PTR [rbp - 16], rax");                       // the caller's request against it
+    emitter.instruction("jge __rt_fread_syscall_now_x86");                      // at least a chunk: read exactly it
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // hand the reserved window back before
+    emitter.instruction("xor edx, edx");                                        // the chunked reader reserves its own
+    emitter.instruction("call __rt_concat_publish");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the handle drives the chunked reader
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // and the caller's request
+    emitter.instruction("mov rsp, rbp");                                        // restore the caller frame before tail dispatch
+    emitter.instruction("pop rbp");
+    emitter.instruction("jmp __rt_uw_fread_chunked");
+
+    emitter.label("__rt_fread_syscall_now_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the file descriptor as the first libc read() argument
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the concat-buffer write pointer as the second libc read() argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // pass the requested byte count as the third libc read() argument
+    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // what the holding area already supplied
+    emitter.instruction("add rsi, r9");                                         // append after it
+    emitter.instruction("sub rdx, r9");                                         // and ask only for the remainder
     emitter.instruction("call read");                                           // read the requested bytes into the concat-buffer append window through libc read()
     emitter.instruction("cmp rax, 0");                                          // classify libc read() as bytes, EOF, or failure
     emitter.instruction("jg __rt_fread_read_ok_x86");                           // positive byte count: publish the successful read
@@ -590,8 +721,10 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fread_eof_x86");                              // zero-byte read means real EOF
 
     emitter.label("__rt_fread_read_ok_x86");
+    emitter.instruction("add rax, QWORD PTR [rbp - 56]");                       // the answer is the holding area's bytes and the read's
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the actual byte count across EOF publication
-    emitter.instruction("mov rdx, rax");                                        // pass the number of bytes actually read
+    emitter.label("__rt_fread_publish_total_x86");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // pass the number of bytes actually read
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // pass the reserved destination pointer
     emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed reads
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the byte count publish left in rdx for the EOF classification below
@@ -653,7 +786,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_apply_stream_filter");                       // transform in place
     emitter.label("__rt_fread_ret_x86");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // rcx = 0 only when the read failed
-    emitter.instruction("add rsp, 48");                                         // release the fread() spill slots before returning the successful string slice
+    emitter.instruction("add rsp, 64");                                         // release the fread() spill slots before returning the successful string slice
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the successful fread() path
     emitter.instruction("ret");                                                 // return the borrowed concat-buffer string slice to the caller
 
@@ -666,19 +799,35 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fread_failed_x86");                           // a FAILED read does not exhaust the stream
 
     emitter.label("__rt_fread_would_block_x86");
+    // Whatever the holding area already supplied stands: php does not lose bytes it has served
+    // out of its buffer because the descriptor then had nothing more to give.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fread_would_block_empty_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");
+    emitter.instruction("jmp __rt_fread_publish_total_x86");
+    emitter.label("__rt_fread_would_block_empty_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat-buffer start pointer for an empty transient read
     emitter.instruction("xor edx, edx");                                        // return a zero-length read result without setting EOF
     emitter.instruction("mov ecx, 1");                                          // a would-block is an empty READ, not a failure
-    emitter.instruction("add rsp, 48");                                         // release the fread() spill slots before returning the empty string
+    emitter.instruction("add rsp, 64");                                         // release the fread() spill slots before returning the empty string
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the would-block fread() path
     emitter.instruction("ret");                                                 // return the empty non-EOF read result
 
     // A failed read: the same empty result as EOF, but the stream is NOT marked exhausted.
     emitter.label("__rt_fread_failed_x86");
+    // See the would-block path: bytes already served from the holding area are still the answer.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fread_failed_empty_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");
+    emitter.instruction("mov QWORD PTR [rbp - 48], 1");                         // a partial answer is a real result, not php false
+    emitter.instruction("jmp __rt_fread_publish_total_x86");
+    emitter.label("__rt_fread_failed_empty_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // the reserved destination, so the pointer stays valid
     emitter.instruction("xor edx, edx");                                        // no bytes were read
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // rcx = 0: the caller boxes PHP false
-    emitter.instruction("add rsp, 48");                                         // release the fread() spill slots
+    emitter.instruction("add rsp, 64");                                         // release the fread() spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the failed-read result
 
@@ -686,10 +835,18 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
     emitter.instruction("mov esi, 1");                                          // publish the EOF state
     emitter.instruction("call __rt_stream_eof_set");                            // mark this stream exhausted after the zero-byte or failed read
+    // The descriptor is spent, but the holding area may have already answered part of this very
+    // read: those bytes ARE the result, and the stream is at its end behind them.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fread_eof_empty_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");
+    emitter.instruction("jmp __rt_fread_publish_total_x86");
+    emitter.label("__rt_fread_eof_empty_x86");
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer when libc read() reports EOF or failure
     emitter.instruction("xor edx, edx");                                        // return an empty string length when libc read() reports EOF or failure
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // EOF and failure share this path; the slot tells them apart
-    emitter.instruction("add rsp, 48");                                         // release the fread() spill slots before returning the empty-string result
+    emitter.instruction("add rsp, 64");                                         // release the fread() spill slots before returning the empty-string result
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the EOF/error fread() path
     emitter.instruction("ret");                                                 // return the empty string result for the exhausted or failed stream read
 }

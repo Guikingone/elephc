@@ -217,6 +217,64 @@ pub fn emit_stream_pending_clear(emitter: &mut Emitter) {
     }
 }
 
+/// Emits `__rt_stream_pending_held(handle) -> n`, the count of bytes still in the holding area.
+///
+/// `ftell()` probes the DESCRIPTOR, which has already moved past everything a read pulled ahead.
+/// php reports the position it has handed to the caller, so the held bytes are subtracted from
+/// the descriptor's own offset. Answers 0 for a stale handle, a stream with no state, and the
+/// overwhelmingly common case of a stream holding nothing — two loads and a subtract.
+pub fn emit_stream_pending_held(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: how many stream bytes are held ---");
+            emitter.label_global("__rt_stream_pending_held");
+            emitter.instruction("sub sp, sp, #32");
+            emitter.instruction("stp x29, x30, [sp, #16]");
+            emitter.instruction("add x29, sp, #16");
+            emitter.instruction("bl __rt_stream_state");                        // resolve the owning stream state
+            emitter.instruction("cbz x0, __rt_sph_none");                       // a stale handle holds nothing
+            emitter.instruction(&format!("ldr x9, [x0, #{STREAM_PENDING_LEN_OFFSET}]"));
+            emitter.instruction(&format!("ldr x10, [x0, #{STREAM_PENDING_POS_OFFSET}]"));
+            emitter.instruction("subs x0, x9, x10");                            // what remains unhanded
+            emitter.instruction("b.gt __rt_sph_done");                          // a positive remainder is the answer
+            emitter.label("__rt_sph_none");
+            emitter.instruction("mov x0, xzr");                                 // never report a negative hold
+            emitter.label("__rt_sph_done");
+            emitter.instruction("ldp x29, x30, [sp, #16]");
+            emitter.instruction("add sp, sp, #32");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: how many stream bytes are held ---");
+            emitter.label_global("__rt_stream_pending_held");
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("sub rsp, 16");
+            emitter.instruction("call __rt_stream_state");                      // resolve the owning stream state
+            emitter.instruction("test rax, rax");
+            emitter.instruction("jz __rt_sph_none_x86");                        // a stale handle holds nothing
+            emitter.instruction(&format!(
+                "mov r9, QWORD PTR [rax + {STREAM_PENDING_LEN_OFFSET}]"
+            ));
+            emitter.instruction(&format!(
+                "mov r10, QWORD PTR [rax + {STREAM_PENDING_POS_OFFSET}]"
+            ));
+            emitter.instruction("sub r9, r10");                                 // what remains unhanded
+            emitter.instruction("mov rax, r9");
+            emitter.instruction("cmp rax, 0");
+            emitter.instruction("jg __rt_sph_done_x86");                        // a positive remainder is the answer
+            emitter.label("__rt_sph_none_x86");
+            emitter.instruction("xor eax, eax");                                // never report a negative hold
+            emitter.label("__rt_sph_done_x86");
+            emitter.instruction("mov rsp, rbp");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
+}
+
 /// The x86_64 writer.
 fn emit_put_x86_64(emitter: &mut Emitter) {
     emitter.blank();

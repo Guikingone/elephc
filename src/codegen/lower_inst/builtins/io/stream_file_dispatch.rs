@@ -224,6 +224,10 @@ pub(crate) fn lower_ftell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             ctx.emitter.instruction("mov x1, #0");                              // use offset 0 for the ftell lseek probe
             ctx.emitter.instruction("mov x2, #1");                              // use SEEK_CUR for the ftell lseek probe
             ctx.emitter.syscall(199);
+            // Only the DESCRIPTOR runs ahead of php's position. A wrapper's own tracked position
+            // already reports what was handed to the caller, so subtracting there would count
+            // the read-ahead twice.
+            emit_subtract_pending_held(ctx, stream)?;
             ctx.emitter.instruction(&format!("b {}", after_dispatch_label));    // skip wrapper stream_tell after the native probe
             ctx.emitter.label(&wrapper_label);
             load_stream_handle_to_result(ctx, stream, "ftell")?;
@@ -238,6 +242,8 @@ pub(crate) fn lower_ftell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             ctx.emitter.instruction("xor esi, esi");                            // use offset 0 for the ftell lseek probe
             ctx.emitter.instruction("mov edx, 1");                              // use SEEK_CUR for the ftell lseek probe
             ctx.emitter.instruction("call lseek");                              // query the current stream position
+            // See the AArch64 counterpart: only the descriptor runs ahead of php's position.
+            emit_subtract_pending_held(ctx, stream)?;
             ctx.emitter.instruction(&format!("jmp {}", after_dispatch_label));  // skip wrapper stream_tell after the native probe
             ctx.emitter.label(&wrapper_label);
             load_stream_handle_to_result(ctx, stream, "ftell")?;
@@ -273,6 +279,36 @@ fn emit_subtract_append_skip(ctx: &mut FunctionContext<'_>, stream: ValueId) -> 
             ctx.emitter.instruction("mov rdi, rax");
             abi::emit_call_label(ctx.emitter, "__rt_stream_append_skip");
             ctx.emitter.instruction("mov rcx, rax");                            // what O_APPEND jumped over
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("sub rax, rcx");                            // PHP's position
+        }
+    }
+    Ok(())
+}
+
+/// Subtracts the bytes a read pulled AHEAD of what the caller was handed.
+///
+/// php reads a whole chunk and serves the request out of it, so the descriptor sits past the
+/// position php reports. `ftell()` must report what the program has consumed, not where the
+/// descriptor stopped: on a 192-byte file, `fread($h, 5)` leaves the descriptor at 192 and php
+/// answers 5. The helper answers 0 for every stream holding nothing, which is every stream that
+/// has not read ahead — the same shape as the append-skip correction above.
+fn emit_subtract_pending_held(ctx: &mut FunctionContext<'_>, stream: ValueId) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");                              // the position computed so far
+            load_stream_handle_to_result(ctx, stream, "ftell")?;
+            abi::emit_call_label(ctx.emitter, "__rt_stream_pending_held");
+            ctx.emitter.instruction("mov x1, x0");                              // what the read pulled ahead
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("sub x0, x0, x1");                          // PHP's position
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");                             // the position computed so far
+            load_stream_handle_to_result(ctx, stream, "ftell")?;
+            ctx.emitter.instruction("mov rdi, rax");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_pending_held");
+            ctx.emitter.instruction("mov rcx, rax");                            // what the read pulled ahead
             abi::emit_pop_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("sub rax, rcx");                            // PHP's position
         }

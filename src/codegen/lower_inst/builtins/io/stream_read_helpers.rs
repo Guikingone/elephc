@@ -85,6 +85,7 @@ pub(super) fn lower_stream_get_contents_seek(
     wrap_seek: &str,
     seek_failed: &str,
 ) {
+    let seek_ok = ctx.next_label("sgc_seek_ok");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #0");                              // a negative offset means no seek is requested
@@ -107,13 +108,22 @@ pub(super) fn lower_stream_get_contents_seek(
                 ctx.emitter.instruction("cmp x0, #0");                          // Linux reports lseek failure as a negative result
             }
             ctx.emitter.instruction(
-                &ctx.emitter.platform.branch_on_syscall_success(skip_seek)
+                &ctx.emitter.platform.branch_on_syscall_success(&seek_ok)
             );                                                                  // continue only when lseek succeeded
             ctx.emitter.instruction(&format!("b {}", seek_failed));             // failed seek makes stream_get_contents return false
             ctx.emitter.label(wrap_seek);
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
             ctx.emitter.instruction("cmp x0, #0");                              // wrapper fseek returns zero on success
             ctx.emitter.instruction(&format!("b.ne {}", seek_failed));          // failed wrapper seek makes stream_get_contents return false
+            // A SEEK invalidates the stream's read buffer: what it holds was read from wherever
+            // the last read stopped, and this call has just moved somewhere else. Without this,
+            // `stream_get_contents($h, 2)` followed by `stream_get_contents($h, -1, 4)` answered
+            // the buffered remainder AND the bytes from offset 4 — "cdefef" where php says "ef".
+            // Only the SEEKING path clears it: reaching `skip_seek` without a seek must keep
+            // whatever the buffer holds.
+            ctx.emitter.label(&seek_ok);
+            ctx.emitter.instruction("ldr x0, [sp, #24]");                       // the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_pending_clear");
             ctx.emitter.label(skip_seek);
         }
         Arch::X86_64 => {
@@ -137,11 +147,15 @@ pub(super) fn lower_stream_get_contents_seek(
             ctx.emitter.instruction("call lseek");                              // seek the native stream descriptor
             ctx.emitter.instruction("cmp rax, 0");                              // test whether lseek returned a non-negative offset
             ctx.emitter.instruction(&format!("jl {}", seek_failed));            // failed seek makes stream_get_contents return false
-            ctx.emitter.instruction(&format!("jmp {}", skip_seek));             // continue after a successful native seek
+            ctx.emitter.instruction(&format!("jmp {}", seek_ok));               // continue after a successful native seek
             ctx.emitter.label(wrap_seek);
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
             ctx.emitter.instruction("cmp rax, 0");                              // wrapper fseek returns zero on success
             ctx.emitter.instruction(&format!("jne {}", seek_failed));           // failed wrapper seek makes stream_get_contents return false
+            // See the AArch64 counterpart: a seek invalidates the stream's read buffer.
+            ctx.emitter.label(&seek_ok);
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 24]");           // the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_pending_clear");
             ctx.emitter.label(skip_seek);
         }
     }

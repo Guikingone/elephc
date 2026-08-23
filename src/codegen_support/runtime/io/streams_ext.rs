@@ -159,6 +159,27 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor once
     emitter.instruction(&format!("str x0, [sp, #{}]", stream_fd_off));          // save the descriptor for the read loop
 
+    // -- what the stream already HOLDS goes out before the descriptor is touched --
+    //
+    // A read that pulled a whole chunk ahead leaves the surplus in the stream's holding area, and
+    // the descriptor has already moved past it. Reading straight from the descriptor here SKIPPED
+    // those bytes: `fread($h, 4); fpassthru($h);` lost the rest of the first chunk. The loop
+    // repeats because the holding area can outsize this buffer.
+    emitter.label("__rt_fpassthru_drain");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", fd_off));                 // the opaque stream handle
+    emitter.instruction(&format!("add x1, sp, #{}", buf_off));                  // the same scratch the read loop uses
+    emitter.instruction(&format!("mov x2, #{}", buf_size));                     // at most one bufferful per pass
+    emitter.instruction("bl __rt_stream_pending_take");                         // x0 = how many came back
+    emitter.instruction("cbz x0, __rt_fpassthru_loop");                         // nothing held: read the descriptor
+    emitter.instruction("mov x9, x0");                                          // preserve the byte count
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", total_off));             // current total
+    emitter.instruction("add x10, x10, x9");                                    // accumulate total
+    emitter.instruction(&format!("str x10, [sp, #{}]", total_off));             // persist total
+    emitter.instruction(&format!("add x1, sp, #{}", buf_off));                  // buffer pointer
+    emitter.instruction("mov x2, x9");                                          // length
+    emitter.instruction("bl __rt_vd_write");                                    // through the ob/web-aware stdout sink
+    emitter.instruction("b __rt_fpassthru_drain");                              // the holding area may have more
+
     emitter.label("__rt_fpassthru_loop");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", stream_fd_off));          // reload the backend descriptor
     emitter.instruction(&format!("add x1, sp, #{}", buf_off));                  // buffer pointer
@@ -424,6 +445,21 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // resolve the backend descriptor once
     emitter.instruction("call __rt_stream_fd");
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the descriptor for the read loop
+
+    // See the AArch64 counterpart: what the stream already HOLDS goes out before the descriptor
+    // is touched, or a chunked read ahead of `fpassthru()` is skipped.
+    emitter.label("__rt_fpassthru_drain_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_size + 16));        // the same scratch the read loop uses
+    emitter.instruction(&format!("mov rdx, {}", buf_size));                     // at most one bufferful per pass
+    emitter.instruction("call __rt_stream_pending_take");                       // rax = how many came back
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fpassthru_loop_x86");                          // nothing held: read the descriptor
+    emitter.instruction("add QWORD PTR [rbp - 16], rax");                       // accumulate total bytes copied
+    emitter.instruction("mov rdx, rax");                                        // count to write
+    emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_size + 16));        // buffer
+    emitter.instruction("call __rt_vd_write");                                  // through the ob/web-aware stdout sink
+    emitter.instruction("jmp __rt_fpassthru_drain_x86");                        // the holding area may have more
 
     emitter.label("__rt_fpassthru_loop_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // backend descriptor
