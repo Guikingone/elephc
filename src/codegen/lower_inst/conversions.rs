@@ -494,11 +494,38 @@ fn lower_array_like_to_string(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Materializes PHP's array-to-string placeholder in the active string result registers.
+///
+/// The placeholder never travels alone: php raises `Array to string conversion` at EVERY site
+/// that produces it — `echo`, `print`, `.`, `.=`, interpolation, a heredoc, `(string)`,
+/// `strval()` — and answers `Array` regardless. The only array-meets-string case php leaves
+/// silent is a loose COMPARISON, which never converts and never reaches here.
 pub(super) fn emit_array_like_string_result(ctx: &mut FunctionContext<'_>) {
+    emit_array_to_string_warning(ctx);
     let (label, len) = ctx.data.add_string(b"Array");
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+}
+
+/// Emits php's `Array to string conversion` warning through the diagnostic funnel.
+///
+/// Emitted BEFORE the placeholder is materialized: `__rt_diag_warning` is a call, so it must not
+/// land between the two halves of the string result. The array operand is dead by this point —
+/// the conversion's whole answer is the literal — so nothing live crosses the call.
+pub(super) fn emit_array_to_string_warning(ctx: &mut FunctionContext<'_>) {
+    let message = crate::codegen_support::runtime::data::ARRAY_TO_STRING_MSG;
+    let (label, len) = ctx.data.add_string(message.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
 }
 
 /// Converts the loaded native resource payload into PHP's resource id.

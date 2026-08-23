@@ -524,6 +524,13 @@ pub(crate) const DIRNAME_LEVELS_MSG: &str =
 /// stack left), so it reports the same condition without the byte count and location.
 pub(crate) const STACK_OVERFLOW_MSG: &str =
     "Fatal error: Maximum call stack size reached. Infinite recursion?\n";
+/// The warning php raises at EVERY array-to-string conversion, whatever produced it: `echo`,
+/// `print`, `.`, `.=`, interpolation, a heredoc, `(string)`, `strval()`, a `%s` conversion. The
+/// value is always the literal `Array`, so the two travel together and this message is published
+/// once for the whole program rather than interned per conversion site.
+///
+/// The only array-meets-string case php leaves silent is a loose COMPARISON, which never converts.
+pub(crate) const ARRAY_TO_STRING_MSG: &str = "Warning: Array to string conversion\n";
 /// Fatal error message when an array allocation request cannot be sized safely,
 /// i.e. `capacity * elem_size` does not fit in the machine word. PHP reports the
 /// same class of failure as a `ValueError` naming the offending argument

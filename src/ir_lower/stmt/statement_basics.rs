@@ -60,20 +60,37 @@ fn echo_can_coerce_a_float(ir_type: crate::ir::IrType) -> bool {
     )
 }
 
+/// Returns whether a value reaching the output formatter can raise a php warning.
+///
+/// Two shapes can: a float, which warns when it is NaN, and an ARRAY, which prints the literal
+/// `Array` and raises `Array to string conversion`. Both warnings are raised inside the runtime,
+/// which has no idea what line it is on, so the ` in FILE on line N` tail can only come from the
+/// instruction admitting that it may warn. The admission is made here rather than in
+/// `default_effects` so an `echo "literal"` — by far the common case, and unable to warn — does
+/// not pay for it.
+///
+/// Shared with `print`, which renders through the same path and raises the same warnings.
+pub(crate) fn output_value_can_warn(ir_type: crate::ir::IrType) -> bool {
+    echo_can_coerce_a_float(ir_type)
+        || matches!(
+            ir_type,
+            crate::ir::IrType::Heap(
+                crate::ir::IrHeapKind::Array
+                    | crate::ir::IrHeapKind::Hash
+                    | crate::ir::IrHeapKind::Iterable
+                    | crate::ir::IrHeapKind::Union
+            )
+        )
+}
+
 /// Emits EIR for `echo`.
 pub(super) fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span) {
     let value = lower_expr(ctx, expr);
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
-    // A float reaching the output formatter can be NaN, and PHP warns when it is
-    // (`unexpected NAN value was coerced to string`). The warning is raised by `__rt_ftoa` in the
-    // runtime, which has no idea what line it is on, so the ` in FILE on line N` tail can only
-    // come from this instruction admitting that it may warn. The admission is made HERE rather
-    // than in `default_effects` so only an echo that can actually reach a float pays for it: an
-    // `echo "literal"` is by far the common case and cannot warn.
     let mut effects = Op::EchoValue.default_effects();
-    if echo_can_coerce_a_float(value.ir_type) {
+    if output_value_can_warn(value.ir_type) {
         effects |= crate::ir::Effects::MAY_WARN;
     }
     ctx.emit_void(Op::EchoValue, vec![value.value], None, effects, Some(span));

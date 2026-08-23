@@ -817,11 +817,14 @@ impl Op {
         matches!(
             self,
             // Whether an echo can warn depends on WHAT is echoed, not on the opcode: a float
-            // reaching the formatter can be NaN, which PHP warns about, while a string literal
-            // cannot. Declaring `MAY_WARN` unconditionally would make every `echo "..."` in every
-            // program pay for the location stores; refining it per site keeps that pay-for-use,
-            // which is the same reason the call opcodes below refine theirs.
+            // reaching the formatter can be NaN, which PHP warns about, and an array prints
+            // `Array` with a conversion warning, while a string literal cannot warn at all.
+            // Declaring `MAY_WARN` unconditionally would make every `echo "..."` in every program
+            // pay for the location stores; refining it per site keeps that pay-for-use, which is
+            // the same reason the call opcodes below refine theirs. `print` renders through the
+            // same path and refines for the same reason.
             Op::EchoValue
+                | Op::PrintValue
                 | Op::IDiv
                 | Op::ISDiv
                 | Op::ISMod
