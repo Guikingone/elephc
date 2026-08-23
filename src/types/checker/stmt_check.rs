@@ -13,8 +13,6 @@ mod assignments;
 mod control_flow;
 mod narrowing;
 
-use std::collections::HashSet;
-
 use crate::errors::CompileError;
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};
 use crate::types::TypeEnv;
@@ -197,33 +195,25 @@ impl Checker {
     /// Checks a statement group whose body may not run, keeping the local-binding eligibility
     /// state honest about it.
     ///
-    /// Two facts are maintained here rather than at each individual binding site:
-    /// - `local_conditional_depth` is raised for the whole group (the loop/branch CONDITION
-    ///   included, which is conservative and accepted), so no `unset` or retype inside it is
-    ///   eligible — the checker shares one mutable `TypeEnv` across branches, so a kill in one
-    ///   arm would otherwise leak into its siblings and into the code after the join.
-    /// - every name the group INTRODUCED is recorded as bound at the group's inner depth, so a
-    ///   later depth-0 kill knows its slot is not provably initialized. Doing it from the
-    ///   outside covers every binding shape at once — `foreach` and `list()` targets, `catch`
-    ///   variables, builtin out-parameters, array auto-vivification — instead of one opt-in per
-    ///   site. Assignments inside the group already recorded their own (deeper) depth;
-    ///   `or_insert` leaves those alone.
+    /// `local_conditional_depth` is raised for the whole group (the loop/branch CONDITION included,
+    /// which is conservative and accepted), so no `unset` or retype inside it is eligible — the
+    /// checker shares one mutable `TypeEnv` across branches, so a kill in one arm would otherwise
+    /// leak into its siblings and into the code after the join.
+    ///
+    /// Names the group INTRODUCED — `foreach` and `list()` targets, `catch` variables, builtin
+    /// out-parameters, array auto-vivification — are deliberately NOT swept into
+    /// `local_binding_depth` afterwards. The sweep this replaced cloned every key of `env` on entry
+    /// and re-walked them on exit, roughly quadrupling the cost of type-checking a 400-local scope,
+    /// and it bought nothing: a MISSING depth entry and a depth of 1 or more are the same answer to
+    /// [`Checker::local_binding_is_killable`], which is the only killable-relevant reader, and the
+    /// pre-scan's `contains_key` probe runs at body entry, before any group has been walked.
     fn in_conditional_scope<F>(&mut self, env: &mut TypeEnv, f: F) -> Result<(), CompileError>
     where
         F: FnOnce(&mut Self, &mut TypeEnv) -> Result<(), CompileError>,
     {
-        let names_before: HashSet<String> = env.keys().cloned().collect();
         self.local_conditional_depth += 1;
         let result = f(self, env);
         self.local_conditional_depth -= 1;
-        let created_depth = self.local_conditional_depth + 1;
-        for name in env.keys() {
-            if !names_before.contains(name) {
-                self.local_binding_depth
-                    .entry(name.clone())
-                    .or_insert(created_depth);
-            }
-        }
         result
     }
 

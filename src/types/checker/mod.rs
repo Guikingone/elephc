@@ -415,6 +415,13 @@ impl Checker {
             // PARAMETERS are the one seeded shape that IS frame storage, and they are seeded
             // with an explicit depth 0 by `enter_local_binding_scope` — an untyped parameter
             // stays kill-eligible (`test_typed_param_not_killable` pins both halves).
+            //
+            // A name a CONDITIONAL group introduced without going through an assignment (a
+            // `foreach` or `list()` target, a `catch` variable, a builtin out-parameter, array
+            // auto-vivification) also has no entry, and gets the same "not killable" answer for
+            // free — which is why `in_conditional_scope` records nothing for those names. `Some(1)`
+            // or more and `None` are indistinguishable HERE, and this is the only killable-relevant
+            // reader of the map.
             && self.local_binding_depth.get(name).copied() == Some(0)
             && !self.active_ref_params.contains(name)
             && !self.ref_aliased_locals.contains(name)
