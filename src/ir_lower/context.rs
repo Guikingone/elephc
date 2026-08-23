@@ -1899,6 +1899,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// form must NOT widen — every load already lowered above it would keep its narrower IR type
     /// against boxed storage and leak a detached copy per executed read — so it goes through
     /// `release_and_abandon_local_binding`, which zeroes the slot at its own storage type instead.
+    ///
+    /// The null-store form's `set_local_type(name, Void)` is not branch-sensitive, and in ONE shape
+    /// that shows: `unset()` in EXPRESSION position, which is an elephc extension (PHP rejects
+    /// `$b = $c ? unset($a) : 1;` as a parse error). Statement-level conditionals snapshot and
+    /// restore `local_types` across their arms, so a plain `if ($c) { unset($a); } echo $a;` is
+    /// correct; `lower_ternary` restores only `initialized_slots`, so an `unset` in an UNTAKEN
+    /// ternary arm still leaves the name typed `Void` (and its slot widened) below the ternary,
+    /// and the read prints nothing. That predates local-binding kills — a non-recorded `unset` here
+    /// takes exactly the null-store path it took before they existed — and fixing it means giving
+    /// expression-level branch merges the `local_types` treatment statement-level ones have, which
+    /// would change every ternary arm that assigns, not just this one.
     pub(crate) fn unset_local(
         &mut self,
         name: &str,

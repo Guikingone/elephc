@@ -85,6 +85,16 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     // the type the checker bound for the name. This mirrors `boxed_incdec_storage_type`, the other
     // whole-frame boxed-storage contract, which forces the same substitution inside `store_local`.
     //
+    // That is also what makes the checker's flow NARROWING harmless here. Inside
+    // `if (is_string($a)) { strlen($a); }` the checker types this marked name `Str` while its slot
+    // is boxed — but lowering never sees that fact. `load_local` types every read from the
+    // LOWERING's own `local_types`, which this store just set to `Mixed`, and nothing on this side
+    // narrows on a type guard (statement-level conditionals snapshot and restore `local_types`
+    // across arms; they never refine them). So the load is emitted at the slot's real storage type
+    // and the guard's narrowing turns into an unbox/cast APPLIED TO THE LOADED VALUE, inside the
+    // branch, where the runtime tag check belongs. The narrowing is a diagnostics decision — it
+    // says whether `strlen($a)` type-checks — never a load-shape one.
+    //
     // Nothing is forced for a name backed by program-global storage: `store_local` overrides the
     // type with `global_alias_type` (already `Mixed`) and stores through the global symbol, so a
     // marked top-level local another body writes via `global $a` keeps exactly the representation

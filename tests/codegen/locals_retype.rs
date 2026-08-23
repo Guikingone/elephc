@@ -1090,6 +1090,39 @@ fn test_marked_local_assigned_inside_a_type_guarded_branch() {
     assert_eq!(out, "s");
 }
 
+/// READING a marked local inside a type-guarded branch answers correctly on both arms.
+///
+/// The checker narrows the marked name to `Str`/`Int` inside the guard while its slot is boxed
+/// `Mixed`. Nothing misloads, and the reason is structural: `load_local` types every read from the
+/// LOWERING's own `local_types` — which every marked store set to `Mixed` — and no lowering path
+/// narrows on a type guard, so the guard's narrowing becomes an unbox APPLIED TO THE LOADED VALUE
+/// rather than a differently-shaped load. This fixture pins the answers on both sides of the guard
+/// and through a checked builtin that would reject a mis-typed operand.
+#[test]
+fn test_narrowed_reads_of_a_marked_local_answer_on_both_arms() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function probe(int $n): void {
+    if ($n > 1) { $a = "hi" . $n; } else { $a = 42; }
+    if (is_string($a)) { echo "s:", strlen($a), ":", strtoupper($a), "|"; }
+    if (is_int($a)) { echo "i:", $a + 1, "|"; }
+    var_dump($a);
+}
+probe($argc);
+probe($argc + 1);"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "i:43|int(42)\ns:3:HI2|string(3) \"hi2\"\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// The same fixture must not leak: the guarded store goes through the boxed slot the mark declared,
 /// not through a fresh one.
 #[test]
