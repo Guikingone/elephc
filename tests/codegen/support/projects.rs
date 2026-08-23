@@ -143,11 +143,29 @@ pub(crate) fn compile_cli_file_and_run_with_managed_pcre2(
     compile_cli_file_and_run_with_native(source, defines, true)
 }
 
+/// Compiles and runs a CLI fixture with arbitrary compiler FLAGS.
+///
+/// The only way a test can exercise a flag the library fixtures do not thread — `--strict-locals`
+/// among them — through the real pipeline the user gets.
+pub(crate) fn compile_cli_file_and_run_with_flags(source: &str, flags: &[&str]) -> String {
+    compile_cli_file_and_run_with_native_and_flags(source, &[], false, flags)
+}
+
 /// Compiles and runs one CLI fixture with optional managed-PCRE2 project setup.
 fn compile_cli_file_and_run_with_native(
     source: &str,
     defines: &[&str],
     managed_pcre2: bool,
+) -> String {
+    compile_cli_file_and_run_with_native_and_flags(source, defines, managed_pcre2, &[])
+}
+
+/// The body shared by every CLI fixture runner: defines, optional managed PCRE2, extra flags.
+fn compile_cli_file_and_run_with_native_and_flags(
+    source: &str,
+    defines: &[&str],
+    managed_pcre2: bool,
+    flags: &[&str],
 ) -> String {
     let dir = make_cli_test_dir("elephc_cli_test");
 
@@ -161,6 +179,9 @@ fn compile_cli_file_and_run_with_native(
     };
     for define in defines {
         compile_cmd.arg("--define").arg(define);
+    }
+    for flag in flags {
+        compile_cmd.arg(flag);
     }
     compile_cmd.arg(&php_path);
     let compile_out = compile_cmd.output().expect("failed to run elephc CLI");
@@ -472,6 +493,60 @@ pub(crate) fn compile_files_error_message(
 
     let _ = fs::remove_dir_all(&dir);
     result.err()
+}
+
+// Type-checks a multi-file PHP project and returns its WARNING messages, or the error message
+// when the check fails. Runs the pipeline as far as type checking only; does not assemble or link.
+// Lets a multi-file fixture assert which diagnostics a shape produces, which the stdout-only
+// runners cannot show.
+/// Provides the Check files diagnostics helper used by the projects module.
+pub(crate) fn check_files_diagnostics(
+    files: &[(&str, &str)],
+    main_file: &str,
+    strict_locals: bool,
+) -> Result<Vec<String>, String> {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    for (path, content) in files {
+        let full_path = dir.join(path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&full_path, content).unwrap();
+    }
+
+    let php_path = dir.join(main_file);
+    let source = fs::read_to_string(&php_path).unwrap();
+    let base_dir = php_path.parent().unwrap();
+
+    let result = (|| -> Result<Vec<String>, String> {
+        let tokens = elephc::lexer::tokenize(&source).map_err(|e| e.message.clone())?;
+        let ast = elephc::parser::parse(&tokens).map_err(|e| e.message.clone())?;
+        let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
+        let resolved = elephc::resolver::resolve(ast, base_dir).map_err(|e| e.message.clone())?;
+        let resolved = elephc::autoload::collect_aliases(resolved);
+        let resolved = elephc::name_resolver::resolve(resolved).map_err(|e| e.message.clone())?;
+        let resolved = elephc::func_args::desugar(resolved).map_err(|e| e.message.clone())?;
+        let resolved = elephc::optimize::fold_constants(resolved);
+        let check_result = elephc::types::check_with_target_and_options(
+            &resolved,
+            target(),
+            elephc::types::CheckOptions { strict_locals },
+        )
+        .map_err(|e| e.message.clone())?;
+        Ok(check_result
+            .warnings
+            .iter()
+            .map(|warning| warning.message.clone())
+            .collect())
+    })();
+
+    let _ = fs::remove_dir_all(&dir);
+    result
 }
 
 // Attempts compilation of a multi-file PHP project with conditional defines.

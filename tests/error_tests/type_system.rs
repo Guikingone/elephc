@@ -1460,6 +1460,72 @@ fn test_unknown_callee_does_not_over_reach() {
     expect_no_error("<?php function h($x) { return $x; } $a = 1; h($a); $a = \"s\"; echo $a;");
 }
 
+/// An `unset` inside a `try`/`catch`/`finally` sits at conditional depth ≥ 1, so it never kills.
+///
+/// `try` is a conditional group like an `if`: the block may exit through an exception before the
+/// `unset` runs, so the store that would replace the binding is not guaranteed. The kill therefore
+/// records nothing and the `unset` stays the pre-feature typing no-op — which is only visible
+/// through the decision map, because a depth-0 reassignment BELOW the `try` is picked up by the
+/// straight-line retype instead and warns rather than failing.
+#[test]
+fn test_unset_inside_try_catch_finally_records_no_kill() {
+    for source in [
+        "<?php $a = 1; try { unset($a); } catch (Throwable $e) {} $a = \"s\"; echo $a;",
+        "<?php $a = 1; try { throw new Exception(\"x\"); } catch (Throwable $e) { unset($a); } $a = \"s\"; echo $a;",
+        "<?php $a = 1; try { echo \"t\"; } finally { unset($a); } $a = \"s\"; echo $a;",
+    ] {
+        let result = check_source_full(source).expect("fixture should type-check");
+        assert!(
+            result.local_bind_kill_sites.is_empty(),
+            "an unset at conditional depth must record no kill site ({source}): {:?}",
+            result.local_bind_kill_sites
+        );
+    }
+}
+
+/// The same non-eligibility as an ERROR, in the shapes where the straight-line retype cannot
+/// rescue the program: a re-binding assignment that is itself inside a branch, and an
+/// expression-form one. Both are the hard `cannot reassign` a kill would have avoided.
+#[test]
+fn test_unset_inside_try_leaves_the_pre_feature_error() {
+    expect_error(
+        "<?php $a = 1; try { unset($a); } finally { echo \"f\"; } if ($argc > 1) { $a = \"s\"; } echo $a;",
+        "cannot reassign $a from int to string",
+    );
+    expect_error(
+        "<?php $a = 1; try { unset($a); } finally { echo \"f\"; } $b = ($a = \"s\"); echo $b;",
+        "cannot reassign $a from int to string",
+    );
+    // And under --strict-locals the depth-0 rescue is gone too, in both modes' shared shape.
+    expect_error_strict(
+        "<?php $a = 1; try { unset($a); } finally { echo \"f\"; } $a = \"s\"; echo $a;",
+        "cannot reassign $a from int to string",
+    );
+}
+
+/// A NAMED by-reference argument (`f(x: $a)`) aliases `$a` exactly like the positional form.
+///
+/// `Checker::record_reference_alias_root` unwraps `ExprKind::NamedArg` on its way to the local, so
+/// the name is excluded from the kill and the `unset` degrades to the pre-feature typing no-op.
+/// The positional twin is `test_by_ref_call_arg_not_killable`; without the unwrap this shape would
+/// silently keep its eligibility while the callee holds a reference to the slot.
+#[test]
+fn test_named_by_ref_call_arg_not_killable() {
+    expect_error(
+        "<?php function f(&$x) { $x = 2; } $a = 1; f(x: $a); unset($a); $a = \"s\"; echo $a;",
+        "cannot reassign $a from int to string",
+    );
+    let result = check_source_full(
+        "<?php function f(&$x) { $x = 2; } $a = 1; f(x: $a); echo $a;",
+    )
+    .expect("the named by-ref call alone must type-check");
+    assert!(
+        result.local_bind_kill_sites.is_empty(),
+        "no kill is recorded for a named by-ref argument: {:?}",
+        result.local_bind_kill_sites
+    );
+}
+
 /// Declared-typed locals are a contract: never killable, in both modes.
 #[test]
 fn test_typed_local_not_killable() {

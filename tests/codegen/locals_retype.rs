@@ -1924,3 +1924,186 @@ echo $a;"#,
     );
     assert_eq!(out, "5");
 }
+
+/// The two files a `require_once` fixture shares: a top-level pair of incompatible assignments
+/// AND a function whose body does the same thing.
+const REQUIRE_ONCE_LIB: &str = "<?php\n$q = \"a\" . $argc;\n$q = 5;\necho \"|\", $q;\nfunction g(int $n): string {\n    $r = \"b\" . $n;\n    $r = 7;\n    return \"|\" . $r;\n}\n";
+
+/// `require_once` puts every TOP-LEVEL statement of the included file at conditional depth ≥ 1,
+/// while a FUNCTION declared in the same file starts its own body at depth 0.
+///
+/// The include-once guard lowers to a runtime branch, so the top-level `$q = "a" . $argc; $q = 5;`
+/// pair is not eligible for the straight-line retype (shape 2) — the pre-scan's branch-divergent
+/// marking (shape 3, which is depth-gated by nothing) picks it up instead and gives `$q` boxed
+/// `Mixed` storage. `g()`'s body is a separate frame whose depth counter
+/// `enter_local_binding_scope` resets, so `$r` takes the ordinary retype with its warning. Both
+/// print PHP's answer.
+#[test]
+fn test_require_once_scopes_the_depth_rule_to_top_level_statements() {
+    let warnings = check_files_diagnostics(
+        &[
+            ("main.php", "<?php\nrequire_once 'lib.php';\necho g($argc);\n"),
+            ("lib.php", REQUIRE_ONCE_LIB),
+        ],
+        "main.php",
+        false,
+    )
+    .expect("the require_once fixture must type-check");
+    assert_eq!(
+        warnings,
+        vec![
+            "$q is assigned incompatible types (string and int); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)".to_string(),
+            "$r changes type from string to int; the previous value is discarded (compile with --strict-locals to make this an error)".to_string(),
+        ],
+        "the guarded top level must take the MIXED shape and the function body the RETYPE shape"
+    );
+
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php\nrequire_once 'lib.php';\necho g($argc);\n"),
+            ("lib.php", REQUIRE_ONCE_LIB),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "|5|7");
+}
+
+/// The plain-`require` contrast: no include guard, so the included file's top-level statements are
+/// inline code at depth 0 and the SAME pair takes the straight-line retype instead of the mixed
+/// marking. The function body is unaffected either way.
+#[test]
+fn test_plain_require_leaves_the_included_top_level_retype_eligible() {
+    let warnings = check_files_diagnostics(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\necho g($argc);\n"),
+            ("lib.php", REQUIRE_ONCE_LIB),
+        ],
+        "main.php",
+        false,
+    )
+    .expect("the require fixture must type-check");
+    assert_eq!(
+        warnings,
+        vec![
+            "$q changes type from string to int; the previous value is discarded (compile with --strict-locals to make this an error)".to_string(),
+            "$r changes type from string to int; the previous value is discarded (compile with --strict-locals to make this an error)".to_string(),
+        ],
+        "an unguarded include leaves its top-level statements on the retype path"
+    );
+
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\necho g($argc);\n"),
+            ("lib.php", REQUIRE_ONCE_LIB),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "|5|7");
+}
+
+/// `--strict-locals` turns BOTH shapes back into the hard error, whichever include form was used —
+/// the mixed marking and the straight-line retype are the two shapes the flag governs.
+#[test]
+fn test_strict_locals_rejects_both_include_forms() {
+    for main in [
+        "<?php\nrequire_once 'lib.php';\necho g($argc);\n",
+        "<?php\nrequire 'lib.php';\necho g($argc);\n",
+    ] {
+        let error = check_files_diagnostics(
+            &[("main.php", main), ("lib.php", REQUIRE_ONCE_LIB)],
+            "main.php",
+            true,
+        )
+        .expect_err("--strict-locals must reject the retyping include");
+        assert!(
+            error.contains("cannot reassign $q from string to int"),
+            "expected the strict retype error, got: {error}"
+        );
+    }
+}
+
+/// The `unset` KILL is the shape `require_once` genuinely takes away: it is depth-gated like the
+/// straight-line retype, and nothing else picks the pair up, so the program that compiles under a
+/// plain `require` is a hard `cannot reassign` under `require_once`.
+#[test]
+fn test_require_once_makes_a_top_level_unset_kill_ineligible() {
+    const KILL_LIB: &str = "<?php\n$q = 1;\nunset($q);\n$q = \"s\";\necho \"|\", $q;\n";
+    let error = compile_files_error_message(
+        &[
+            ("main.php", "<?php\nrequire_once 'lib.php';\n"),
+            ("lib.php", KILL_LIB),
+        ],
+        "main.php",
+    )
+    .expect("a guarded top-level unset must not be kill-eligible");
+    assert!(
+        error.contains("cannot reassign $q from int to string"),
+        "expected the pre-feature error, got: {error}"
+    );
+
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\n"),
+            ("lib.php", KILL_LIB),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "|s");
+}
+
+/// A `switch` arm is a conditional branch like an `if` arm, so a local assigned incompatible
+/// types across arms is MARKED (shape 3) rather than rejected.
+///
+/// The pre-scan's divergence rule is about branching, not about which statement introduces it —
+/// this pins the `switch` shape alongside the `if`/`else` one the feature is usually shown with.
+/// The mark is depth-gated by nothing, which is exactly why it reaches inside the arms.
+#[test]
+fn test_marked_local_assigned_across_switch_arms() {
+    let out = compile_and_run(
+        "<?php switch ($argc) { case 1: $a = 0; break; default: $a = \"ciao\"; } echo $a, \"|\"; var_dump($a);",
+    );
+    assert_eq!(out, "0|int(0)\n");
+}
+
+/// The mixed-storage WARNING the `switch` shape produces, and its `--strict-locals` rejection.
+#[test]
+fn test_marked_local_across_switch_arms_warns_and_is_strict_rejected() {
+    let source = "<?php switch ($argc) { case 1: $a = 0; break; default: $a = \"ciao\"; } echo $a;";
+    let warnings = check_files_diagnostics(&[("main.php", source)], "main.php", false)
+        .expect("the switch fixture must type-check");
+    assert_eq!(
+        warnings,
+        vec![
+            "$a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)".to_string(),
+        ],
+    );
+    let error = check_files_diagnostics(&[("main.php", source)], "main.php", true)
+        .expect_err("--strict-locals must reject the marked switch local");
+    assert!(
+        error.contains("cannot reassign $a"),
+        "expected the strict rejection, got: {error}"
+    );
+}
+
+/// `--strict-locals` and eval-AOT compose: a literal `eval` fragment still retypes its own locals
+/// and still writes the caller's, because the fragment goes through the dynamic scope map rather
+/// than the AOT local-slot checker the flag tightens.
+///
+/// Structural, not incidental: the eval-AOT lowerers are handed EMPTY decision maps
+/// (`ir_lower::function::eval_aot_decision_maps`), so no binding decision — and no strict-mode
+/// refusal of one — can reach a fragment. Run through the real CLI so the flag under test is the
+/// one users pass.
+#[test]
+fn test_eval_fragment_composes_with_strict_locals() {
+    let own_local = compile_cli_file_and_run_with_flags(
+        "<?php\n$a = \"s\";\necho $a, \"|\";\neval('$b = 1; $b = \"ciao\"; echo $b;');\n",
+        &["--strict-locals"],
+    );
+    assert_eq!(own_local, "s|ciao");
+
+    let caller_local = compile_cli_file_and_run_with_flags(
+        "<?php\n$a = 1;\neval('$a = \"z\";');\necho $a;\n",
+        &["--strict-locals"],
+    );
+    assert_eq!(caller_local, "z");
+}
