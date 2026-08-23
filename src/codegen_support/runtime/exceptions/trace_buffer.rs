@@ -18,8 +18,10 @@
 //! - Argument rendering was MEASURED rather than derived, one value shape at a time, from a php
 //!   frame's own `getTraceAsString()`:
 //!
-//!       42 · -7 · 3.5 · 'short' · 'a string that i...' · true · false · NULL · Array ·
-//!       Object(stdClass) · Resource id #5
+//!   ```text
+//!   42 · -7 · 3.5 · 'short' · 'a string that i...' · true · false · NULL · Array ·
+//!   Object(stdClass) · Resource id #5
+//!   ```
 //!
 //!   The string rule is the one worth stating: fifteen bytes, then a literal `...`, all INSIDE the
 //!   quotes. A sixteen-byte string is not truncated silently to fifteen — the marker says so.
