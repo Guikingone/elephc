@@ -295,10 +295,13 @@ $src = [$inner, $inner];
 $uniq = array_unique($src);
 unset($src);
 unset($inner);
-echo count($uniq) . "|" . $uniq[0][0] . "|" . $uniq[2][0];
 echo count($uniq) . "|" . $uniq[0][0];
 "#,
     );
+    // MEASURED on `php -n` 8.5.6. The program used to read `$uniq[2][0]` too — an index
+    // `array_unique()` has just removed — so it asserted `1|3` against an output that was really
+    // `1|3|1|3` plus two warnings about the missing key. The borrowed inner array surviving both
+    // `unset()`s is what this test is for, and one read shows it.
     assert_eq!(out, "1|3");
 }
 
