@@ -38,9 +38,16 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_supports_lock ---");
     emitter.label_global("__rt_stream_supports_lock");
-    emitter.instruction("sub sp, sp, #16");                                     // frame for the saved linkage
+    // The frame carries the incoming handle and a stat buffer: the socket test below needs the
+    // DESCRIPTOR, which only the handle can produce, and `__rt_stream_state` consumes x0.
+    let stat_buf = emitter.platform.stat_buf_size();
+    let buf_off = 32;
+    let frame = (buf_off + stat_buf + 15) & !15;
+    let mode_off = buf_off + emitter.platform.stat_mode_offset();
+    emitter.instruction(&format!("sub sp, sp, #{}", frame));                    // frame for the linkage, the handle and a stat buffer
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    emitter.instruction("str x0, [sp, #16]");                                   // keep the handle for the descriptor lookup
     emitter.instruction("bl __rt_stream_state");                                // resolve the owning stream state
     emitter.instruction("cbz x0, __rt_ssl_yes");                                // no state: keep the permissive answer
     emitter.instruction(&format!("ldr x9, [x0, #{STREAM_WRAPPER_ID_OFFSET}]")); // which wrapper opened it
@@ -63,13 +70,27 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp w12, #0x69");                                      // 'i' as in input
     emitter.instruction("b.eq __rt_ssl_no");
     emitter.label("__rt_ssl_yes");
+    // A socket has no locking option in php, and no wrapper id says so: `stream_socket_pair()`
+    // and `fopen()` are recorded the same way. Only the descriptor knows.
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the handle this call was given
+    emitter.instruction("bl __rt_stream_fd");                                   // its backend descriptor
+    emitter.instruction("cmp x0, #0");
+    emitter.instruction("b.lt __rt_ssl_yes_final");                             // nothing to stat: keep the permissive answer
+    emitter.instruction(&format!("add x1, sp, #{}", buf_off));                  // the stat buffer
+    emitter.syscall(339);                                                       // fstat(fd, buf)
+    emitter.instruction("cbnz x0, __rt_ssl_yes_final");                         // fstat refused: keep the answer
+    emitter.instruction(&emitter.platform.stat_mode_load_instr("w9", "sp", mode_off));
+    emitter.instruction("and w9, w9, #0xF000");                                 // S_IFMT
+    emitter.instruction("cmp w9, #0xC000");                                     // S_IFSOCK
+    emitter.instruction("b.eq __rt_ssl_no");                                    // a socket stream cannot lock
+    emitter.label("__rt_ssl_yes_final");
     emitter.instruction("mov x0, #1");                                          // stdin/stdout/stderr, fd, and every other wrapper lock
     emitter.instruction("b __rt_ssl_ret");
     emitter.label("__rt_ssl_no");
     emitter.instruction("mov x0, #0");                                          // the memory and output wrappers do not
     emitter.label("__rt_ssl_ret");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // release the helper frame
+    emitter.instruction(&format!("add sp, sp, #{}", frame));                    // release the helper frame
     emitter.instruction("ret");
 }
 
@@ -78,8 +99,16 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_supports_lock ---");
     emitter.label_global("__rt_stream_supports_lock");
+    // See the AArch64 arm: the socket test needs the descriptor, so the handle is kept.
+    let stat_buf = emitter.platform.stat_buf_size();
+    let handle_off = 8;
+    let buf_off = 16 + stat_buf;
+    let frame = (buf_off + 15) & !15;
+    let mode_off = buf_off - emitter.platform.stat_mode_offset();
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
+    emitter.instruction(&format!("sub rsp, {}", frame));                        // room for the handle and a stat buffer
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", handle_off)); // keep the handle for the descriptor lookup
     emitter.instruction("call __rt_stream_state");                              // resolve the owning stream state
     emitter.instruction("test rax, rax");
     emitter.instruction("jz __rt_ssl_yes_x86");                                 // no state: keep the permissive answer
@@ -110,6 +139,21 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9d, 0x69");                                       // 'i' as in input
     emitter.instruction("je __rt_ssl_no_x86");
     emitter.label("__rt_ssl_yes_x86");
+    // See the AArch64 arm: only the descriptor can say whether this is a socket.
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", handle_off)); // the handle this call was given
+    emitter.instruction("call __rt_stream_fd");                                 // its backend descriptor
+    emitter.instruction("cmp rax, 0");
+    emitter.instruction("jl __rt_ssl_yes_final_x86");                           // nothing to stat: keep the permissive answer
+    emitter.instruction("mov rdi, rax");                                        // fd → first libc fstat() argument
+    emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_off));              // the stat buffer
+    emitter.instruction("call fstat");
+    emitter.instruction("cmp eax, 0");
+    emitter.instruction("jne __rt_ssl_yes_final_x86");                          // fstat refused: keep the answer
+    emitter.instruction(&format!("mov r9d, DWORD PTR [rbp - {}]", mode_off));   // st_mode
+    emitter.instruction("and r9d, 0xF000");                                     // S_IFMT
+    emitter.instruction("cmp r9d, 0xC000");                                     // S_IFSOCK
+    emitter.instruction("je __rt_ssl_no_x86");                                  // a socket stream cannot lock
+    emitter.label("__rt_ssl_yes_final_x86");
     emitter.instruction("mov eax, 1");                                          // stdin/stdout/stderr, fd, and every other wrapper lock
     emitter.instruction("jmp __rt_ssl_ret_x86");
     emitter.label("__rt_ssl_no_x86");

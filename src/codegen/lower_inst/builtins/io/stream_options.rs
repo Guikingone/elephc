@@ -121,6 +121,49 @@ const STREAM_SELECT_BAD_ARGUMENT_MESSAGE: &str =
 const STREAM_SELECT_BAD_RESOURCE_MESSAGE: &str =
     "stream_select(): supplied resource is not a valid stream resource";
 
+/// Turns a boxed `Mixed` stream set into what the runtime reads: an array pointer, or null.
+///
+/// The three sets are `?array` by reference, and an argument php has not seen before — the
+/// idiomatic `stream_select($r, $w, $e, 0)` with `$w`/`$e` never assigned — arrives here as a
+/// boxed cell whose tag says null. The runtime's null test knows a zero pointer and the in-band
+/// sentinel, so the cell pointer went through as a container and its TAG WORD was read as the
+/// array's length: eight elements of whatever followed the cell. Nothing else in the call could
+/// show it, because the count is the only thing it answers.
+///
+/// A cell holding an indexed array yields the array; anything else is the empty set php makes of
+/// it. Only a statically-`Mixed` operand pays for this — a declared `array` is already a pointer.
+fn emit_unbox_stream_select_set(ctx: &mut FunctionContext<'_>, loaded: &PhpType) {
+    if !matches!(loaded, PhpType::Mixed) {
+        return;
+    }
+    let done = ctx.next_label("stream_select_set_ready");
+    let empty = ctx.next_label("stream_select_set_empty");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", done));               // already a null pointer
+            ctx.emitter.instruction("ldr x9, [x0]");                             // the cell's runtime tag
+            ctx.emitter.instruction("cmp x9, #4");                               // an indexed array?
+            ctx.emitter.instruction(&format!("b.ne {}", empty));
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                         // the array the cell holds
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&empty);
+            ctx.emitter.instruction("mov x0, #0");                               // null, and anything that is not a set
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}", done));                     // already a null pointer
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 4");                    // an indexed array?
+            ctx.emitter.instruction(&format!("jne {}", empty));
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");              // the array the cell holds
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&empty);
+            ctx.emitter.instruction("xor eax, eax");                              // null, and anything that is not a set
+            ctx.emitter.label(&done);
+        }
+    }
+}
+
 /// Throws one of `stream_select()`'s TypeErrors when the runtime answered its cue.
 ///
 /// The runtime cannot throw: it reports what it saw as a negative sentinel and the lowering, which
@@ -362,7 +405,10 @@ pub(crate) fn lower_stream_select(
     let result_reg = abi::int_result_reg(ctx.emitter);
     for idx in 0..4 {
         let value = expect_operand(inst, idx)?;
-        ctx.load_value_to_result(value)?;
+        let loaded = ctx.load_value_to_result(value)?;
+        if idx < 3 {
+            emit_unbox_stream_select_set(ctx, &loaded);
+        }
         // php-src rejects both negative timeout components before it builds a single fd set.
         // `$seconds` is `?int`, and a null one carries NULL_SENTINEL — a large positive that
         // clears the bound on its own, so "block forever" still reaches the runtime helper.

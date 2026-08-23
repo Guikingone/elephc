@@ -63,6 +63,14 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fwrite ---");
     emitter.label_global("__rt_fwrite");
+    // php's `_php_stream_write` answers 0 for an empty payload before it consults the stream at
+    // all, so `fwrite($readonly, "")` is `int(0)` and not `false` — MEASURED on a `php://temp`
+    // opened "r" and on a plain file opened "r". Nothing below can produce that: every path here
+    // asks the descriptor first, and a descriptor that refuses answers a failure.
+    emitter.instruction("cbnz x2, __rt_fwrite_has_bytes");
+    emitter.instruction("mov x0, #0");                                          // nothing written, and nothing refused
+    emitter.instruction("ret");
+    emitter.label("__rt_fwrite_has_bytes");
 
     // Frame (80 bytes): [0]=fd [8]=pointer [16]=length [24]=handle [32]=session
     //                   [40]=append cursor [48]=byte count [64]=x29 [72]=x30.
@@ -447,6 +455,12 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fwrite ---");
     emitter.label_global("__rt_fwrite");
+    // See the AArch64 counterpart: an empty payload is `int(0)`, decided before the stream is.
+    emitter.instruction("test rdx, rdx");
+    emitter.instruction("jnz __rt_fwrite_has_bytes_x86");
+    emitter.instruction("xor eax, eax");                                        // nothing written, and nothing refused
+    emitter.instruction("ret");
+    emitter.label("__rt_fwrite_has_bytes_x86");
 
     // Frame (rbp-relative): [-8]=fd [-16]=pointer [-24]=length [-32]=handle
     //                        [-40]=session [-48]=append cursor [-56]=byte count

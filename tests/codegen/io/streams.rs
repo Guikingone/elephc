@@ -5238,6 +5238,73 @@ echo $n === false ? "false" : "got";
     assert_eq!(out, "false");
 }
 
+/// A SOCKET does not support locking; a pipe and a plain file do.
+///
+/// MEASURED on `php -n` 8.5.6 across seven streams — the engines already agreed on six, and
+/// disagreed on the socket pair. php gives a socket `php_stream_socket_ops`, which has no
+/// `set_option` and therefore no `PHP_STREAM_OPTION_LOCKING`; a pipe and a plain file share
+/// `php_stream_stdio_ops`, which has both. The wrapper id cannot separate them —
+/// `stream_socket_pair()` and `fopen()` are recorded identically — so the descriptor is asked.
+#[test]
+fn test_stream_supports_lock_says_no_for_a_socket() {
+    let out = compile_and_run(
+        r#"<?php
+$file = tmpfile();
+$mem = fopen("php://memory", "w+");
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+$pipe = popen("true", "r");
+echo var_export(stream_supports_lock($file), true), "|";
+echo var_export(stream_supports_lock($mem), true), "|";
+echo var_export(stream_supports_lock($pair[0]), true), "|";
+echo var_export(stream_supports_lock($pipe), true), "|";
+echo var_export(@flock($pair[0], LOCK_EX), true);
+"#,
+    );
+    assert_eq!(out, "true|false|false|true|false");
+}
+
+/// An empty `fwrite()` answers `int(0)`, decided before the stream is consulted.
+///
+/// php's `_php_stream_write` returns 0 for a zero-length payload before it reaches the stream's
+/// ops at all, so `fwrite($readonly, "")` is `int(0)` where the same call with bytes in it is
+/// `false`. MEASURED on a `php://temp` opened `"r"`. elephc asked the descriptor first, and a
+/// descriptor that refuses answers a failure.
+#[test]
+fn test_fwrite_of_nothing_answers_zero_even_on_a_read_only_stream() {
+    let out = compile_and_run(
+        r#"<?php
+$ro = fopen("php://temp", "r");
+echo var_export(fwrite($ro, ""), true), "|";
+echo var_export(fwrite($ro, "abc"), true), "|";
+$rw = fopen("php://temp", "w+");
+echo var_export(fwrite($rw, ""), true), "|";
+echo var_export(fwrite($rw, "abc"), true), "|";
+rewind($rw);
+echo var_export(stream_get_contents($rw), true);
+"#,
+    );
+    assert_eq!(out, "0|false|0|3|'abc'");
+}
+
+/// `stream_select($r, $w, $e, 0)` with `$w`/`$e` never assigned is a null set, not eight elements.
+///
+/// The three sets are `?array` by reference, so php creates the variables and sees null. elephc
+/// loaded them as boxed `Mixed` cells and handed the CELL pointer to a helper that reads `[ptr]`
+/// as an array length — the null cell's tag word is 8, so the helper walked eight words past the
+/// cell for each of the two sets. MEASURED: `int(15)` where php answers `int(1)`, and the count is
+/// the only thing the call answers, so nothing else could show it.
+#[test]
+fn test_stream_select_treats_an_unassigned_set_as_null() {
+    let out = compile_and_run(
+        r#"<?php
+$r = [tmpfile()];
+$n = stream_select($r, $w, $e, 0);
+echo "int($n)|", var_export($w, true), "|", var_export($e, true), "|", count($r);
+"#,
+    );
+    assert_eq!(out, "int(1)|NULL|NULL|1");
+}
+
 /// `stream_select()` waits the `$microseconds` it was given.
 ///
 /// The x86_64 arm spilled `$microseconds` into the same frame slot the pollfd build then used for
