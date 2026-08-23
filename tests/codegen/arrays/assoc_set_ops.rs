@@ -12,6 +12,33 @@
 
 use crate::support::*;
 
+/// Verifies the two-hash set builtins promote a gradual operand only when it is not ALREADY a
+/// hash at runtime.
+///
+/// `array<mixed>` is what a declared `array` parameter carries, and it says nothing about keys.
+/// Reading it as "indexed, needs promoting" walked hash storage as if it were indexed, so
+/// `array_diff_key(['x'=>1,'y'=>2], ['x'=>1])` answered `2:0,1:7,1024` — invented keys AND
+/// invented values — where php answers `1:y:2`.
+#[test]
+fn test_two_hash_set_builtins_promote_a_gradual_operand_only_when_indexed() {
+    let output = compile_and_run(
+        r#"<?php
+function shape(array $a): string {
+    return count($a) . ":" . implode(",", array_keys($a)) . ":" . implode(",", array_values($a));
+}
+function diffKey(array $a): string {
+    return shape(array_diff_key($a, ["x" => 1]));
+}
+function intersectKey(array $a): string {
+    return shape(array_intersect_key($a, ["x" => 1]));
+}
+echo diffKey(["x" => 1, "y" => 2]), "|", diffKey([7, 8]), "|";
+echo intersectKey(["x" => 1, "y" => 2]), "|", intersectKey([7, 8]);
+"#,
+    );
+    assert_eq!(output, "1:y:2|2:0,1:7,8|1:x:1|0::");
+}
+
 /// Verifies null values can be stored in and strictly searched within a mixed associative array.
 #[test]
 fn test_assoc_mixed_null_storage_and_membership() {

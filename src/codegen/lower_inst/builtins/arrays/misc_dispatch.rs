@@ -357,10 +357,29 @@ pub(super) fn two_hash_operand_needs_conversion(
 /// `__rt_array_to_hash` reads its argument from the first argument register; on AArch64 the result
 /// register already is that register, but on x86_64 the value lives in `rax` and must move to `rdi`.
 pub(super) fn emit_convert_indexed_to_hash(ctx: &mut FunctionContext<'_>) {
+    emit_convert_indexed_to_hash_with_gradual(ctx, false)
+}
+
+/// Promotes an operand to hash storage, checking the RUNTIME kind first when the operand's
+/// static type is the gradual `array<mixed>`.
+///
+/// `array<mixed>` is what a declared `array` parameter carries and says nothing about keys, so
+/// promoting unconditionally walked hash storage as if it were indexed — `array_diff_key()` on
+/// a hash answered with invented keys and values. The conditional helper retains the operand on
+/// its pass-through path, which keeps the caller's release of the "converted temporary" balanced.
+pub(super) fn emit_convert_indexed_to_hash_with_gradual(
+    ctx: &mut FunctionContext<'_>,
+    gradual: bool,
+) {
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // move the array pointer into the first SysV argument register
     }
-    abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+    let label = if gradual {
+        "__rt_array_to_hash_if_indexed"
+    } else {
+        "__rt_array_to_hash"
+    };
+    abi::emit_call_label(ctx.emitter, label);
 }
 
 /// Materializes one array-like operand as an independently owned Mixed-valued hash.
@@ -485,19 +504,25 @@ pub(super) fn lower_two_hash_arg_builtin(
         name,
         allow_heap_indexed,
     )?;
+    let gradual0 = crate::codegen::lower_inst::arrays::array_union_operand_is_gradual(
+        &ctx.value_php_type(first)?,
+    );
+    let gradual1 = crate::codegen::lower_inst::arrays::array_union_operand_is_gradual(
+        &ctx.value_php_type(second)?,
+    );
     let result_reg = abi::int_result_reg(ctx.emitter);
 
     // -- materialize first operand into the result register, convert if indexed, then spill --
     ctx.load_value_to_reg(first, result_reg)?;
     if conv0 {
-        emit_convert_indexed_to_hash(ctx);
+        emit_convert_indexed_to_hash_with_gradual(ctx, gradual0);
     }
     abi::emit_push_reg(ctx.emitter, result_reg);
 
     // -- materialize second operand into the result register, convert if indexed --
     ctx.load_value_to_reg(second, result_reg)?;
     if conv1 {
-        emit_convert_indexed_to_hash(ctx);
+        emit_convert_indexed_to_hash_with_gradual(ctx, gradual1);
     }
 
     if !conv0 && !conv1 {

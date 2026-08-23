@@ -95,6 +95,7 @@ mod array_to_hash;
 mod array_to_hash_reverse;
 mod array_to_mixed;
 mod array_udiff_uintersect;
+mod array_to_hash_if_indexed;
 mod array_union;
 mod array_union_gradual;
 mod array_unique;
@@ -374,6 +375,7 @@ pub use array_to_mixed::emit_array_to_mixed;
 /// Emit array-to-Mixed conversion helper.
 pub use array_udiff_uintersect::emit_array_udiff_uintersect;
 /// Emit array udiff/uintersect comparator helper.
+pub use array_to_hash_if_indexed::emit_array_to_hash_if_indexed;
 pub use array_union::emit_array_union;
 pub use array_union_gradual::emit_array_union_gradual;
 /// Emit array union helper.
