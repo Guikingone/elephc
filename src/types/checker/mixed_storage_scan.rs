@@ -134,14 +134,12 @@ impl Checker {
     /// bound the same name (measured: the body then compiled with no diagnostic at all while
     /// `--strict-locals` rejected it).
     ///
-    /// A marked name from that map is warned about only when the warning would be TRUE. The message
-    /// ends "compile with --strict-locals to make this an error", so it is withheld exactly when
-    /// strict would NOT error, which [`Checker::incoming_binding_survives_body`] answers by
-    /// replaying the name's assignments from its incoming type. A capture arriving as a union that
-    /// absorbs everything the body stores makes strict compile clean — silence. A capture arriving
-    /// as `int` and reassigned to `string` makes strict report `cannot reassign` — warn. Either way
-    /// the mark and the store sites are recorded, so the boxed storage that keeps the capture slot
-    /// leak-free is never withheld.
+    /// A name from that map is replayed from the type it arrives with, and that ONE replay answers
+    /// both questions. If it rejects, the name is marked AND warned about: `--strict-locals` really
+    /// would report `cannot reassign`, so the advice is true. If it merges clean, strict compiles
+    /// the body clean and the advice would be false — so anything the ordinary unseeded replay
+    /// still finds is marked SILENTLY. Marking is never withheld either way, because the boxed
+    /// store type is what releases the value a capture slot arrived holding.
     ///
     /// PARAMETERS are excluded from marking altogether — typed or not, by reference or by value —
     /// through `local_binding_depth`; see [`Checker::first_rejected_assignment`] for why. They are
@@ -218,26 +216,50 @@ impl Checker {
         // name ordering the evidence map imposes. The flag is "say it out loud".
         let mut marks: Vec<(Span, String, String, bool)> = Vec::new();
         for (name, name_facts) in &facts.names {
-            let transparent_regions =
-                self.transparent_guard_regions(name, name_facts, &facts.guard_regions);
-            let Some((existing, site)) =
-                self.first_rejected_assignment(name, name_facts, &transparent_regions)
-            else {
+            // Eligibility first, so the transparency vector below — O(regions x sites) — is only
+            // built for names that can still be marked.
+            if !self.name_is_markable(name, name_facts) {
                 continue;
-            };
-            // The warning claims `--strict-locals` would reject this body. For a name the frame
-            // already holds on entry that has to be CHECKED, not assumed: replay its assignments
-            // from the incoming type, which is exactly what strict does to a pre-bound name (no
-            // fresh insert, no kill — every store must merge). Clean replay, clean strict build,
-            // false advice — so the mark is made silently. A name the body creates itself has no
-            // incoming type and always warns.
-            let warns = match pre_bound_own_storage.get(name) {
-                Some(incoming) => !self.incoming_binding_survives_body(
-                    incoming,
-                    &name_facts.assigns,
+            }
+            let incoming = pre_bound_own_storage.get(name);
+            // A guard region holding the name's FIRST in-body assignment is transparent for a
+            // PRE-BOUND name and not for a fresh one, so the vector depends on which this is.
+            let transparent_regions = self.transparent_guard_regions(
+                name,
+                name_facts,
+                &facts.guard_regions,
+                incoming.is_some(),
+            );
+            let (rejection, warns) = match incoming {
+                // A name the frame already holds on entry is replayed from the type it ARRIVES
+                // with, and never through the depth-0 retype arm: it has no binding depth this
+                // body recorded, so `local_binding_is_killable` refuses it and every store has to
+                // merge. That replay is exactly what `--strict-locals` does to such a name, which
+                // makes it both the evidence AND the truth about the warning's advice.
+                Some(incoming) => match self.first_rejected_assignment(
+                    name,
+                    name_facts,
                     &transparent_regions,
+                    Some(incoming),
+                ) {
+                    Some(rejection) => (Some(rejection), true),
+                    // Strict accepts the body, so anything marked here must be marked SILENTLY —
+                    // the advice would be false. The unseeded replay still gets to ask whether the
+                    // local needs boxed storage at all: a capture arriving as a union absorbs
+                    // every store the body makes, yet its slot must still release the value it
+                    // arrived holding.
+                    None => (
+                        self.first_rejected_assignment(name, name_facts, &transparent_regions, None),
+                        false,
+                    ),
+                },
+                None => (
+                    self.first_rejected_assignment(name, name_facts, &transparent_regions, None),
+                    true,
                 ),
-                None => true,
+            };
+            let Some((existing, site)) = rejection else {
+                continue;
             };
             marks.push((
                 site.span,
@@ -301,9 +323,37 @@ impl Checker {
         name: &str,
         facts: &'a NameFacts,
         transparent_regions: &[bool],
+        incoming: Option<&PhpType>,
     ) -> Option<(PhpType, &'a AssignSite)> {
+        debug_assert!(
+            self.name_is_markable(name, facts),
+            "first_rejected_assignment must run behind name_is_markable",
+        );
+        self.replay_assignments(facts, transparent_regions, incoming)
+    }
+
+    /// Returns whether `name` is eligible for marking at all, before any evidence is weighed.
+    ///
+    /// Separated from the replay so the caller can answer it BEFORE building the per-name
+    /// transparency vector, which walks every guard region in the body.
+    fn name_is_markable(&self, name: &str, facts: &NameFacts) -> bool {
         if facts.disqualified || facts.assigns.len() < 2 {
-            return None;
+            return false;
+        }
+        // A reference-aliased name is NEVER markable: the mark gives the local one boxed `Mixed`
+        // slot, and for a `use (&$m)` capture that slot IS the caller's storage, so the boxed
+        // pointer would be written straight through the alias into the enclosing frame. Measured
+        // before this check: the caller's `var_dump($m)` printed a raw pointer (`int(4378264920)`)
+        // where PHP prints `string(1) "s"`.
+        //
+        // `active_ref_params` is the set to consult rather than `ref_aliased_locals`, which
+        // `enter_local_binding_scope` has just emptied (a name aliased in the CALLER says nothing
+        // about this body). `with_local_storage_context` installs `active_ref_params` — by-ref
+        // parameters AND the closure's by-ref captures — before running this scan, and it is the
+        // same set `local_binding_is_killable` consults, so the two cannot drift. By-ref captures
+        // of closures written INSIDE this body are handled separately, by `disqualify_root`.
+        if self.active_ref_params.contains(name) {
+            return false;
         }
         // EVERY parameter is excluded, typed or not, by reference or by value.
         //
@@ -326,7 +376,7 @@ impl Checker {
         // type-hinted parameters were already excluded via `active_ref_params` /
         // `typed_local_names`; this subsumes both.
         if self.local_binding_depth.contains_key(name) {
-            return None;
+            return false;
         }
         // Names the body's INCOMING environment already binds and whose storage the body does NOT
         // own: a superglobal (seeded into every scope, living in shared `_eir_global_*` storage),
@@ -345,7 +395,7 @@ impl Checker {
         // (`test_marked_local_captured_by_value_and_overwritten_in_a_closure`, measured leaking 48
         // bytes without it).
         if self.name_is_seeded_program_storage(name) {
-            return None;
+            return false;
         }
         // A decision is only usable if EVERY one of the name's store sites can be named. A
         // `Span::dummy()` identifies no node — it is what every compiler-generated AST node
@@ -353,16 +403,35 @@ impl Checker {
         // while the checker types the local `Mixed`) or box unrelated dummy-span assignments
         // across the whole program. Refusing to mark keeps the checker and lowering in
         // lock-step: the body simply reports today's error instead.
-        if !facts
+        facts
             .assigns
             .iter()
             .all(|site| site.span.identifies_a_node())
-        {
-            return None;
-        }
+    }
+
+    /// Replays a markable name's assignments in source order and returns the first one the checker
+    /// will REJECT, paired with the type the binding holds when it is reached.
+    ///
+    /// `incoming` is `Some` for a name the frame already holds on entry (a by-value capture, a
+    /// parameter). Such a name starts from that type instead of from its first store, and never
+    /// takes the depth-0 retype arm below: `local_binding_is_killable` needs a binding depth THIS
+    /// body recorded, which a capture has not got, so the checker rejects where an unseeded replay
+    /// would have re-bound. Both shapes that exposed this hard-errored in permissive mode on code
+    /// PHP runs — `use ($m)` then `$m = 1; $m = "s";` at depth 0, and `$m = null;` first (an
+    /// unseeded replay starts at `Void`, which absorbs the later `string`, while the checker starts
+    /// at the capture's `int`).
+    fn replay_assignments<'a>(
+        &self,
+        facts: &'a NameFacts,
+        transparent_regions: &[bool],
+        incoming: Option<&PhpType>,
+    ) -> Option<(PhpType, &'a AssignSite)> {
         // `(type the binding currently holds, conditional depth the binding was created at)`,
-        // mirroring `Checker::local_binding_depth` for this one name.
-        let mut binding: Option<(PhpType, u32)> = None;
+        // mirroring `Checker::local_binding_depth` for this one name. A pre-bound name is seeded
+        // at depth 0 — it is bound before the body's first statement — which is also what stops
+        // the depth-0 retype arm from applying, since that arm is guarded on eligibility this name
+        // does not have.
+        let mut binding: Option<(PhpType, u32)> = incoming.map(|ty| (ty.clone(), 0));
         for site in &facts.assigns {
             // An assignment governed by a TRANSPARENT guard region is not a conflict the checker
             // will ever report, and it does not move the binding either. Flow narrowing replaced
@@ -425,9 +494,11 @@ impl Checker {
                 binding = Some((merged, binding_depth));
                 continue;
             }
-            if site.depth == 0 && binding_depth == 0 {
+            if incoming.is_none() && site.depth == 0 && binding_depth == 0 {
                 // `local_binding_is_killable` accepts this: the depth-0 retype path re-binds the
-                // name to a fresh slot of the new type, and the replay follows it.
+                // name to a fresh slot of the new type, and the replay follows it. Only for a name
+                // this body CREATED — a pre-bound one has no binding depth recorded here, so the
+                // predicate refuses it and the checker reports the conflict instead.
                 binding = Some((site.ty.clone(), 0));
                 continue;
             }
@@ -445,47 +516,14 @@ impl Checker {
         name: &str,
         facts: &NameFacts,
         guard_regions: &[GuardRegion],
+        name_is_pre_bound: bool,
     ) -> Vec<bool> {
         guard_regions
             .iter()
-            .map(|region| self.guard_region_is_transparent(name, region, &facts.assigns))
+            .map(|region| {
+                self.guard_region_is_transparent(name, region, &facts.assigns, name_is_pre_bound)
+            })
             .collect()
-    }
-
-    /// Returns whether the type a PRE-BOUND name arrives with survives every assignment the body
-    /// makes to it — which is precisely whether `--strict-locals` compiles the body clean.
-    ///
-    /// Strict mode marks nothing, so a name the frame already holds on entry has no fresh-insert
-    /// path to take and is not kill-eligible either (`local_binding_is_killable` needs a binding
-    /// depth this body recorded, and a capture has none). Every store therefore has to MERGE with
-    /// what the name already holds, which is exactly this replay. Assignments inside a transparent
-    /// guard region are skipped for the same reason the marking replay skips them: the checker
-    /// merges those against the guard's target and restores the pre-branch binding afterwards.
-    ///
-    /// The answer decides only whether the mark is announced. It never decides whether to MARK:
-    /// seeding the marking replay with the incoming type would un-mark a capture arriving as a
-    /// union that absorbs everything, and the boxed store type is what keeps that capture slot
-    /// leak-free.
-    fn incoming_binding_survives_body(
-        &self,
-        incoming: &PhpType,
-        assigns: &[AssignSite],
-        transparent_regions: &[bool],
-    ) -> bool {
-        let mut current = incoming.clone();
-        for site in assigns {
-            if site
-                .guard_region
-                .is_some_and(|region| transparent_regions[region])
-            {
-                continue;
-            }
-            match self.merged_assignment_type(&current, &site.ty) {
-                Some(merged) => current = merged,
-                None => return false,
-            }
-        }
-        true
     }
 
     /// Returns whether a guard region is INVISIBLE to the marking: the checker accepts every
@@ -507,6 +545,7 @@ impl Checker {
         name: &str,
         region: &GuardRegion,
         assigns: &[AssignSite],
+        name_is_pre_bound: bool,
     ) -> bool {
         // `guard_regions` is per-BODY while `sites` indexes one per-NAME assignment list, and
         // `transparent_guard_regions` maps the whole body list for each name in turn — so this is
@@ -519,7 +558,14 @@ impl Checker {
         if region.name != name {
             return false;
         }
-        if region.sites.contains(&0) {
+        // A region holding the name's FIRST in-body assignment is transparent only for a name the
+        // frame already holds. For one the body CREATES, the guard had nothing to narrow —
+        // `guard_narrowing` bails on an unbound plain variable — so `target` is not what the branch
+        // actually saw. A capture is bound on entry, the guard really does fire at its first
+        // in-body store, and treating that region as opaque made the body WARN while
+        // `--strict-locals` compiled it clean: the same false advice, arrived at from the other
+        // direction.
+        if !name_is_pre_bound && region.sites.contains(&0) {
             return false;
         }
         let mut current = region.target.clone();

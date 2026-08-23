@@ -946,6 +946,56 @@ fn test_marked_local_assigned_inside_a_type_guarded_branch_leaves_a_clean_heap()
     );
 }
 
+/// The three by-VALUE capture shapes the replay used to get wrong, each printing what PHP prints.
+///
+/// A pre-bound name is replayed from the type it ARRIVES with and never through the depth-0 retype
+/// arm, because a capture has no binding depth this body recorded and `local_binding_is_killable`
+/// refuses it. `$m = 1; $m = "s";` (two depth-0 stores) and `$m = null;` first (an unseeded replay
+/// starts at `Void`, which absorbs the later `string`) both went unmarked and hard-errored in
+/// PERMISSIVE mode. The guarded one is the opposite error: a region over a pre-bound name's FIRST
+/// in-body store IS transparent — the guard has a binding to narrow — so it must not be marked or
+/// warned about at all.
+#[test]
+fn test_capture_replay_shapes_run_php_identically() {
+    assert_eq!(
+        compile_and_run(
+            "<?php\n$m = 1;\n$f = function (int $n) use ($m) { $m = 1; $m = \"s\"; return $m; };\nvar_dump($f(2));"
+        ),
+        "string(1) \"s\"\n"
+    );
+    assert_eq!(
+        compile_and_run(
+            "<?php\n$m = 1;\n$f = function (int $n) use ($m) { $m = null; if ($n > 1) { $m = \"s\"; } return $m; };\nvar_dump($f(2));"
+        ),
+        "string(1) \"s\"\n"
+    );
+    assert_eq!(
+        compile_and_run(
+            "<?php\n$m = 1;\n$f = function (int $n) use ($m) { if (is_string($m)) { $m = \"x\"; } if ($n > 1) { $m = 2; } return $m; };\nvar_dump($f(2));"
+        ),
+        "int(2)\n"
+    );
+}
+
+/// The seeded replay's marks box real storage, so the capture slot still releases cleanly.
+///
+/// The capture arrives holding an owned heap string and the body stores `null` and then an `int`
+/// through it — a conflict only the SEEDED replay sees, since an unseeded one starts at `Void` and
+/// absorbs both. PHP 8.4 prints `int(7)`.
+#[test]
+fn test_a_seeded_capture_mark_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php\n$m = \"k\" . $argc;\n$f = function (int $n) use ($m) { $m = null; if ($n > 1) { $m = 7; } return $m; };\nvar_dump($f(2));",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "int(7)\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// A capture whose INCOMING type rejects the body's stores is marked OUT LOUD, and the boxed slot
 /// it gets still releases cleanly.
 ///

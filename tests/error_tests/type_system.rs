@@ -2205,6 +2205,75 @@ fn test_a_capture_whose_incoming_type_rejects_warns() {
     expect_error_strict(source, "cannot reassign $m");
 }
 
+/// A by-REFERENCE capture is never marked. The mark gives the local one boxed `Mixed` slot, and a
+/// `use (&$m)` capture's slot IS the caller's storage — so the boxed pointer would be written
+/// straight through the alias into the enclosing frame.
+///
+/// Measured before the exclusion: this body was marked, and the caller's `var_dump($m)` printed
+/// `int(4378264920)` — a raw heap pointer — where PHP prints `string(1) "s"`. The design has said
+/// from the start that a reference-aliased name is never markable; the scan simply was not
+/// consulting the set that knows. `active_ref_params` carries the closure's by-ref captures and is
+/// installed before the scan runs, so it is the set that cannot drift from
+/// `local_binding_is_killable`'s own view.
+///
+/// Reverting to "not marked" restores the pre-feature behaviour, which is the hard error.
+#[test]
+fn test_a_by_ref_capture_is_never_marked() {
+    let source = "<?php\n$m = 1;\n$f = function (int $n) use (&$m) { $m = 1; if ($n > 1) { $m = \"s\"; } return $m; };\nvar_dump($f(2));\nvar_dump($m);";
+    expect_error(source, "cannot reassign $m");
+    expect_error_strict(source, "cannot reassign $m");
+}
+
+/// Control for the test above: the same body with a by-VALUE capture is markable, and warns because
+/// its `int` incoming type really does make `--strict-locals` reject it.
+#[test]
+fn test_a_by_value_capture_of_the_same_shape_is_still_marked() {
+    let source = "<?php\n$m = 1;\n$f = function (int $n) use ($m) { $m = 1; if ($n > 1) { $m = \"s\"; } return $m; };\nvar_dump($f(2));";
+    expect_no_error(source);
+    expect_warning(source, "boxed mixed storage");
+}
+
+/// A guard region containing a pre-bound name's FIRST in-body assignment IS transparent: the guard
+/// narrows a capture, which is bound on entry, so `guard_narrowing` really does fire there.
+///
+/// `guard_region_is_transparent` refuses a region holding assignment index 0 because a guard cannot
+/// narrow a name with no binding yet — true for a name the body creates, false for one it inherits.
+/// Sharing that verdict with the seeded replay made this body WARN while `--strict-locals` compiles
+/// it clean: the exact false advice R19b exists to remove, arrived at from the other direction.
+#[test]
+fn test_a_guard_over_a_pre_bound_names_first_assignment_is_transparent() {
+    let source = "<?php\n$m = 1;\n$f = function (int $n) use ($m) { if (is_string($m)) { $m = \"x\"; } if ($n > 1) { $m = 2; } return $m; };\nvar_dump($f(2));";
+    expect_no_warning(source, "boxed mixed storage");
+    expect_no_error(source);
+    expect_no_error_strict(source);
+}
+
+/// A pre-bound name cannot be killed or re-typed, so its evidence replay must start from the type
+/// it ARRIVES with and must not take the depth-0 retype arm.
+///
+/// `$m = 1; $m = "s";` at depth 0 looks re-typable to an unseeded replay — two depth-0 assignments
+/// are exactly what `local_binding_is_killable` accepts — but a capture has no binding depth this
+/// body recorded, so the checker refuses and reports `cannot reassign`. The name went unmarked and
+/// the body hard-errored in PERMISSIVE mode on code PHP runs (`string(1) "s"`).
+#[test]
+fn test_a_pre_bound_name_is_not_assumed_retype_eligible() {
+    let source = "<?php\n$m = 1;\n$f = function (int $n) use ($m) { $m = 1; $m = \"s\"; return $m; };\nvar_dump($f(2));";
+    expect_no_error(source);
+    expect_warning(source, "boxed mixed storage");
+    expect_error_strict(source, "cannot reassign $m");
+}
+
+/// The same seeding fixes a replay that started from the wrong type entirely: `$m = null;` makes an
+/// unseeded replay begin at `Void`, which absorbs the later `string`, while the checker begins at
+/// the capture's `int` and rejects. Another permissive hard error on code PHP runs.
+#[test]
+fn test_a_pre_bound_names_replay_starts_from_its_incoming_type() {
+    let source = "<?php\n$m = 1;\n$f = function (int $n) use ($m) { $m = null; if ($n > 1) { $m = \"s\"; } return $m; };\nvar_dump($f(2));";
+    expect_no_error(source);
+    expect_warning(source, "boxed mixed storage");
+    expect_error_strict(source, "cannot reassign $m");
+}
+
 /// A FRESH closure local is never silenced, however the enclosing scope happens to name its own
 /// variables. The gate keys on the closure's by-value CAPTURE list, not on the environment the
 /// closure body starts from — that environment is a clone of the whole enclosing scope.
