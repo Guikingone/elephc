@@ -149,6 +149,12 @@ impl Checker {
                 }
                 self.retired_mixed_storage_store_sites
                     .insert((site.span, name.clone()));
+                // The mark's WARNING is filed against one of these very site keys, so retiring
+                // them retracts it. A walk that re-marks the name re-files it below; a walk that
+                // does not leaves no warning for a decision that is no longer there. See
+                // `Checker::binding_decision_warnings`.
+                self.binding_decision_warnings
+                    .remove(&(site.span, name.clone()));
             }
         }
 
@@ -175,7 +181,11 @@ impl Checker {
         }
         marks.sort_by_key(|(span, name, _)| (span.line, span.col, name.clone()));
         for (span, name, message) in marks {
-            self.warnings.push(CompileWarning::new(span, &message));
+            // Keyed by the DECISION, so a later walk that stops marking this name retracts the
+            // warning with the store sites. `span` is one of the name's own store-site spans (the
+            // first rejected assignment), which is what makes the retire loop above find it.
+            self.binding_decision_warnings
+                .insert((span, name.clone()), CompileWarning::new(span, &message));
             for site in &facts.names[&name].assigns {
                 self.mixed_storage_store_sites
                     .entry(site.span)

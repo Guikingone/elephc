@@ -794,6 +794,12 @@ fn merge_local_assignment_type(
         .is_some_and(|retyped| retyped == name)
     {
         checker.local_retype_sites.remove(&span);
+        // The WARNING is part of the decision and goes with it. A superseded walk's warning used
+        // to survive its own retraction, which made the diagnostic depend on the order of a
+        // function's call sites — see `Checker::binding_decision_warnings`.
+        checker
+            .binding_decision_warnings
+            .remove(&(span, name.to_string()));
     }
     // The syntactic pre-scan's mark is AUTHORITATIVE, on every assignment path and not just at the
     // first store: the name's frame slot is boxed `Mixed` for the whole body (see
@@ -829,7 +835,18 @@ fn merge_local_assignment_type(
                     "${} changes type from {} to {}; the previous value is discarded (compile with --strict-locals to make this an error)",
                     name, existing, ty
                 );
-                checker.warnings.push(CompileWarning::new(span, &message));
+                // Filed against the DECISION's key, not pushed straight into `warnings`, so a
+                // later walk that re-decides this site and drops the retype drops the warning
+                // too. A span that names no node files no decision either, so its warning has
+                // nothing that could retract it and goes out directly, as before.
+                if span.identifies_a_node() {
+                    checker.binding_decision_warnings.insert(
+                        (span, name.to_string()),
+                        CompileWarning::new(span, &message),
+                    );
+                } else {
+                    checker.warnings.push(CompileWarning::new(span, &message));
+                }
                 // The span EIR lowering consults to abandon the old frame slot instead of
                 // storing the new value through it.
                 //

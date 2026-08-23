@@ -1656,6 +1656,59 @@ fn test_retype_in_real_source_is_recorded() {
     );
 }
 
+/// A warning that belongs to a local-binding decision is retracted when a later walk removes the
+/// decision, so the diagnostic no longer depends on the ORDER of a function's call sites.
+///
+/// `f`'s body is walked once per call-site specialization. With `f(1)` first, `$a` is `int` and
+/// `$a = "s" . $p` retypes it — warning recorded. The `f("x")` walk then widens the parameter to
+/// `mixed`, the assignment merges, and the retype decision is REMOVED — but its warning used to
+/// stay. Reversing the two calls produced no warning at all, for the identical program.
+#[test]
+fn test_retype_warning_does_not_depend_on_call_order() {
+    let call_int_first = check_source_full(
+        "<?php function f($p) { $a = $p; $a = \"s\" . $p; echo $a; } f(1); f(\"x\");",
+    )
+    .expect("both specializations must type-check");
+    let call_string_first = check_source_full(
+        "<?php function f($p) { $a = $p; $a = \"s\" . $p; echo $a; } f(\"x\"); f(1);",
+    )
+    .expect("both specializations must type-check");
+    let retype_warnings = |result: &elephc::types::CheckResult| {
+        result
+            .warnings
+            .iter()
+            .filter(|warning| warning.message.contains("changes type"))
+            .count()
+    };
+    assert_eq!(
+        retype_warnings(&call_int_first),
+        retype_warnings(&call_string_first),
+        "the retype warning must not depend on which call site is checked first: {:?} vs {:?}",
+        call_int_first.warnings,
+        call_string_first.warnings
+    );
+    assert_eq!(
+        retype_warnings(&call_int_first),
+        0,
+        "the surviving decision is no retype, so nothing must warn about one: {:?}",
+        call_int_first.warnings
+    );
+    assert!(
+        call_int_first.local_retype_sites.is_empty(),
+        "the last walk removed the retype decision: {:?}",
+        call_int_first.local_retype_sites
+    );
+}
+
+/// Control for the test above: a retype the LAST walk still makes keeps its warning.
+#[test]
+fn test_a_surviving_retype_still_warns() {
+    expect_warning(
+        "<?php $a = \"old\" . $argc; $a = 7; echo $a;",
+        "changes type from string to int",
+    );
+}
+
 /// Superglobals are seeded into every environment with no binding depth: they are not bindings
 /// the body created, so `unset` must not kill them — EIR lowering would otherwise abandon (and
 /// re-mint as a frame slot) storage that lives in an `_eir_global_*` symbol.

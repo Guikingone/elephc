@@ -343,6 +343,22 @@ pub(crate) struct Checker {
     /// on valid PHP. Same-name collisions are still ambiguous and still rejected; see
     /// `retired_mixed_storage_store_sites`.
     pub mixed_storage_store_sites: HashMap<Span, HashSet<String>>,
+    /// The warnings that BELONG to a local-binding decision, keyed by that decision's
+    /// `(span, local name)` instead of being pushed straight into `warnings`.
+    ///
+    /// Both the retype hook and the mixed-storage marking RE-DECIDE their sites on every walk, and
+    /// the checker walks a body more than once — a function body once per call-site
+    /// specialization. A warning pushed by a SUPERSEDED walk used to survive the removal of the
+    /// decision that justified it, which made the diagnostic depend on the order of the call sites:
+    /// `f(1); f("x");` warned "$a changes type from int to string" while `f("x"); f(1);` — the same
+    /// two calls — did not, because the second specialization widens the parameter to `mixed` and
+    /// the retype stops happening. Keying the warning like the decision lets the removal take the
+    /// warning with it, so what is reported is what the LAST walk decided.
+    ///
+    /// Assembled into `CheckResult::warnings` at the end of the check, sorted by position so the
+    /// output is deterministic. A decision whose span identifies no node keeps pushing its warning
+    /// directly into `warnings`: it files no decision either, so there is nothing to retract it.
+    pub binding_decision_warnings: HashMap<(Span, String), crate::errors::CompileWarning>,
     /// Every `(span, name)` key `run_mixed_storage_scan` ever REMOVED from
     /// `mixed_storage_store_sites`, kept for the checker's whole lifetime.
     ///
@@ -686,6 +702,21 @@ pub fn check_types_with_options(
 
     let mut warnings = crate::types::warnings::collect_warnings(program);
     warnings.extend(checker.warnings);
+    // The warnings that belong to a local-binding decision, appended once the last walk has
+    // settled which decisions actually survive. Sorted by position (then message) because they
+    // come out of a hash map — the order has to be the same on every run.
+    let mut decision_warnings: Vec<crate::errors::CompileWarning> =
+        std::mem::take(&mut checker.binding_decision_warnings)
+            .into_values()
+            .collect();
+    decision_warnings.sort_by(|left, right| {
+        (left.span.line, left.span.col, &left.message).cmp(&(
+            right.span.line,
+            right.span.col,
+            &right.message,
+        ))
+    });
+    warnings.extend(decision_warnings);
     let function_attribute_names = checker
         .fn_decls
         .iter()
