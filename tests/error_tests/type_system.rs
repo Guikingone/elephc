@@ -1863,6 +1863,95 @@ fn test_a_guard_whose_target_rejects_the_value_still_marks() {
     expect_no_error("<?php $a = 1; if (is_float($a)) { $a = \"s\"; } echo $a;");
 }
 
+/// The INNERMOST guard on a name governs the branch it opens, because the checker's narrowings
+/// COMPOSE: `narrow_to` narrows from whatever the environment holds NOW, so the inner
+/// `is_float($a)` re-narrows the `string` the outer `is_string($a)` had just installed.
+///
+/// Testing acceptance against ANY guard on the stack let the outer `string` frame answer for an
+/// assignment the inner `float` frame governs, so the site was skipped as "the checker accepts
+/// this" when the checker rejects it — no mark, and a hard `cannot reassign $a from float to
+/// string` in permissive mode on code PHP runs (it prints `1`).
+#[test]
+fn test_the_innermost_guard_governs_a_nested_guarded_assignment() {
+    expect_no_error(
+        "<?php $a = 1; if (is_string($a)) { if (is_float($a)) { $a = \"x\"; } } echo $a;",
+    );
+    expect_warning(
+        "<?php $a = 1; if (is_string($a)) { if (is_float($a)) { $a = \"x\"; } } echo $a;",
+        "boxed mixed storage",
+    );
+}
+
+/// A guarded region is transparent only when EVERY assignment it governs merges, replayed in
+/// order from the guard's target — because the checker carries an in-branch assignment forward to
+/// the next statement of the same branch and only restores the pre-branch binding when the branch
+/// ENDS.
+///
+/// Judging each assignment against the guard target on its own said "accepted" for `$a = "x"` and
+/// left the replay's binding at `int`, so the following `$a = 2` merged cleanly with it and no
+/// conflict was seen. The checker meanwhile had `$a` at `string` and rejected `$a = 2`, giving a
+/// hard `cannot reassign $a from string to int` where PHP prints `1`.
+#[test]
+fn test_a_guarded_region_that_rejects_later_is_evidence() {
+    expect_no_error("<?php $a = 1; if (is_string($a)) { $a = \"x\"; $a = 2; } echo $a;");
+    expect_warning(
+        "<?php $a = 1; if (is_string($a)) { $a = \"x\"; $a = 2; } echo $a;",
+        "boxed mixed storage",
+    );
+}
+
+/// The same rule across the two arms of a nested NON-guard branch: the checker shares one mutable
+/// environment across `if`/`else`, so the `else` arm sees what the `then` arm assigned.
+#[test]
+fn test_a_guarded_region_rejecting_across_inner_branches_is_evidence() {
+    expect_no_error(
+        "<?php $a = 1; if (is_string($a)) { if ($argc > 1) { $a = \"x\"; } else { $a = 2; } } echo $a;",
+    );
+    expect_warning(
+        "<?php $a = 1; if (is_string($a)) { if ($argc > 1) { $a = \"x\"; } else { $a = 2; } } echo $a;",
+        "boxed mixed storage",
+    );
+}
+
+/// Controls for the three above: `--strict-locals` marks nothing, so each stays the error it was
+/// before this feature existed.
+#[test]
+fn test_guarded_region_shapes_still_error_under_strict() {
+    for source in [
+        "<?php $a = 1; if (is_string($a)) { if (is_float($a)) { $a = \"x\"; } } echo $a;",
+        "<?php $a = 1; if (is_string($a)) { $a = \"x\"; $a = 2; } echo $a;",
+        "<?php $a = 1; if (is_string($a)) { if ($argc > 1) { $a = \"x\"; } else { $a = 2; } } echo $a;",
+    ] {
+        expect_error_strict(source, "cannot reassign $a");
+    }
+}
+
+/// A region whose assignments ALL merge from the guard's target stays transparent, however many
+/// there are: the checker accepts every one of them and restores the pre-branch binding at the
+/// end, so there is nothing to warn about and nothing to box.
+#[test]
+fn test_a_wholly_accepted_guarded_region_is_still_not_marked() {
+    expect_no_warning(
+        "<?php $a = 1; if (is_string($a)) { $a = \"x\"; $a = \"y\"; } echo $a;",
+        "boxed mixed storage",
+    );
+    expect_no_error_strict("<?php $a = 1; if (is_string($a)) { $a = \"x\"; $a = \"y\"; } echo $a;");
+}
+
+/// Regions are grouped by the guard frame that GOVERNS each assignment, not by source adjacency:
+/// the outer `is_string` region governs `$a = "p"` and `$a = "q"` (both accepted, transparent)
+/// while the nested `is_float` region governs `$a = "x"` on its own (rejected, evidence).
+#[test]
+fn test_a_nested_region_is_judged_apart_from_the_one_around_it() {
+    expect_no_error(
+        "<?php $a = 1; if (is_string($a)) { $a = \"p\"; if (is_float($a)) { $a = \"x\"; } $a = \"q\"; } echo $a;",
+    );
+    expect_warning(
+        "<?php $a = 1; if (is_string($a)) { $a = \"p\"; if (is_float($a)) { $a = \"x\"; } $a = \"q\"; } echo $a;",
+        "boxed mixed storage",
+    );
+}
+
 /// Declared-typed locals are never marked (contract wins in both modes).
 #[test]
 fn test_typed_local_never_mixed() {

@@ -946,6 +946,39 @@ fn test_marked_local_assigned_inside_a_type_guarded_branch_leaves_a_clean_heap()
     );
 }
 
+/// The three guarded-region shapes the marking used to miss, each printing PHP 8.4's `1`.
+///
+/// All three hard-errored in PERMISSIVE mode before the guard model followed the checker: the
+/// innermost guard governs its branch (narrowings compose), and a guarded region is only invisible
+/// to the marking when replaying ALL of its assignments from the guard target merges every time
+/// (the checker carries an in-branch assignment forward to the next statement of the same branch,
+/// including across the arms of a nested non-guard `if`).
+#[test]
+fn test_guarded_region_shapes_run_php_identically() {
+    assert_eq!(
+        compile_and_run(
+            "<?php $a = 1; if (is_string($a)) { if (is_float($a)) { $a = \"x\"; } } echo $a;"
+        ),
+        "1"
+    );
+    assert_eq!(
+        compile_and_run("<?php $a = 1; if (is_string($a)) { $a = \"x\"; $a = 2; } echo $a;"),
+        "1"
+    );
+    assert_eq!(
+        compile_and_run(
+            "<?php $a = 1; if (is_string($a)) { if ($argc > 1) { $a = \"x\"; } else { $a = 2; } } echo $a;"
+        ),
+        "1"
+    );
+    assert_eq!(
+        compile_and_run(
+            "<?php $a = 1; if (is_string($a)) { $a = \"p\"; if (is_float($a)) { $a = \"x\"; } $a = \"q\"; } echo $a;"
+        ),
+        "1"
+    );
+}
+
 /// Two DIFFERENT marked names at one shared position keep BOTH of their mixed-storage decisions.
 ///
 /// `main.php` marks `$a` with store sites at lines 5 and 7, column 1; `lib.php`'s function marks

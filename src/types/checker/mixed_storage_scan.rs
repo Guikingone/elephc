@@ -45,16 +45,39 @@ struct AssignSite {
     depth: u32,
     /// The assignment STATEMENT's span, which is what EIR lowering looks the decision up by.
     span: Span,
-    /// Whether this assignment sits inside a branch whose guard is a type test on THIS SAME name
-    /// AND the guard's target ACCEPTS the assigned type (`if (is_string($a)) { $a = "x"; }`).
-    /// The checker narrows the name to the guard's target for that branch and restores the
-    /// pre-branch binding afterwards, so such an assignment is merged against the guard target
-    /// rather than against the running binding — and it never changes that binding.
+    /// The [`GuardRegion`] that GOVERNS this assignment: the INNERMOST still-open guard whose
+    /// subject is this same name (`if (is_string($a)) { $a = "x"; }`), or `None` outside any.
     ///
-    /// The acceptance half is not optional. `if (is_float($a)) { $a = "s"; }` is guarded by a test
-    /// on `$a` too, but `float` and `string` do not merge, so the checker really DOES reject it
-    /// and the name needs its mark. See [`Checker::first_rejected_assignment`].
-    guarded_by_own_type_test: bool,
+    /// Innermost, because the checker's narrowings COMPOSE — `narrow_to` narrows from whatever the
+    /// environment holds at that moment, so an inner `is_float($a)` re-narrows the `string` an
+    /// outer `is_string($a)` had just installed, and it is the INNER target the assignment is
+    /// merged against.
+    ///
+    /// Whether the site is actually skipped as evidence is a property of the whole region rather
+    /// than of this one assignment — see [`GuardRegion`] and
+    /// [`Checker::first_rejected_assignment`].
+    guard_region: Option<usize>,
+}
+
+/// One entered guard: `if (is_string($a)) { … }` opens a region over its body, governing every
+/// assignment to `$a` inside it for which no NESTED guard on `$a` is open.
+///
+/// The checker narrows the name to `target` on entry, carries each in-branch assignment forward to
+/// the next statement of the same branch, and restores the pre-branch binding when the branch ends.
+/// A region is therefore TRANSPARENT — invisible to the marking, because the checker accepts all of
+/// it and leaves the outer binding untouched — exactly when replaying its own assignments in order,
+/// starting from `target`, merges every time. If any merge fails the checker rejects inside the
+/// region, and every assignment the region governs goes back to being ordinary evidence.
+struct GuardRegion {
+    /// The guard's subject. Regions live in one per-BODY list while `sites` indexes one per-NAME
+    /// assignment list, so transparency must only ever be computed for the name that owns them.
+    name: String,
+    /// The type the guard narrows its subject to for the guarded branch.
+    target: PhpType,
+    /// Indices into the subject's [`NameFacts::assigns`], in source order, of the assignments this
+    /// region governs. Not necessarily contiguous: a nested region on the same name takes the
+    /// assignments written between them.
+    sites: Vec<usize>,
 }
 
 /// Everything the scan learned about one name in one body.
@@ -83,10 +106,14 @@ struct Facts {
     /// the one shape that lets it reach an enclosing local — a `use (&$x)` capture — already
     /// makes `$x` reference-aliased and therefore neither killable nor re-bindable out here.
     contains_eval: bool,
-    /// Stack of `(name, the type the guard narrows it TO)` over the region being walked, innermost
-    /// last. One name may appear more than once (nested guards on it), which is why this is a stack
-    /// rather than a map. Read by [`record_assign`] to flag a site as guarded.
-    type_guarded_names: Vec<(String, PhpType)>,
+    /// Every guard region opened while walking this body, indexed by the id stored in
+    /// [`AssignSite::guard_region`]. Kept after the region closes: transparency is decided later,
+    /// once all of the region's assignments are known.
+    guard_regions: Vec<GuardRegion>,
+    /// Stack of `(guarded name, region id)` for the guards currently OPEN, innermost last. One name
+    /// may appear more than once — nested guards on it — which is why this is a stack rather than a
+    /// map, and why the lookup takes the last matching entry.
+    open_guards: Vec<(String, usize)>,
 }
 
 impl Checker {
@@ -170,7 +197,9 @@ impl Checker {
         // name ordering the evidence map imposes.
         let mut marks: Vec<(Span, String, String)> = Vec::new();
         for (name, name_facts) in &facts.names {
-            let Some((existing, site)) = self.first_rejected_assignment(name, name_facts) else {
+            let Some((existing, site)) =
+                self.first_rejected_assignment(name, name_facts, &facts.guard_regions)
+            else {
                 continue;
             };
             marks.push((
@@ -226,6 +255,7 @@ impl Checker {
         &self,
         name: &str,
         facts: &'a NameFacts,
+        guard_regions: &[GuardRegion],
     ) -> Option<(PhpType, &'a AssignSite)> {
         if facts.disqualified || facts.assigns.len() < 2 {
             return None;
@@ -282,28 +312,37 @@ impl Checker {
         {
             return None;
         }
+        // Decided once, before the replay, because a region's verdict depends on assignments the
+        // replay has not reached yet.
+        let transparent_regions: Vec<bool> = guard_regions
+            .iter()
+            .map(|region| self.guard_region_is_transparent(name, region, &facts.assigns))
+            .collect();
         // `(type the binding currently holds, conditional depth the binding was created at)`,
         // mirroring `Checker::local_binding_depth` for this one name.
         let mut binding: Option<(PhpType, u32)> = None;
         for site in &facts.assigns {
-            // An assignment inside a branch guarded by a type test on THIS name, whose target
-            // ACCEPTS the assigned type, is not a conflict the checker will ever report, and it
-            // does not move the binding either. Flow narrowing replaced the name's type with the
-            // guard's TARGET for the guarded body (`control_flow` inserts `guard.then_ty` before
-            // checking it), so the merge the checker performs there is against that target rather
-            // than against the running binding — and it restores the pre-branch binding
-            // afterwards, so nothing the branch assigned survives the construct.
+            // An assignment governed by a TRANSPARENT guard region is not a conflict the checker
+            // will ever report, and it does not move the binding either. Flow narrowing replaced
+            // the name's type with the guard's TARGET for the guarded body (`control_flow` inserts
+            // `guard.then_ty` before checking it) and restores the pre-branch binding when the
+            // branch ends, so a region the checker accepts in full leaves nothing behind.
             //
-            // `record_assign` set this flag only when the merge against the target SUCCEEDS.
-            // `if (is_float($a)) { $a = "s"; }` is guarded by a test on `$a` too, but `float` and
-            // `string` do not merge, so the checker really does reject it and the name keeps its
-            // mark (which then makes the body compile, printing PHP's answer).
-            //
-            // Skipping it is what stops the scan predicting a rejection the checker never makes:
-            // `$a = 1; if (is_string($a)) { $a = "x"; }` used to warn "compile with
+            // Skipping those is what stops the scan predicting a rejection the checker never
+            // makes: `$a = 1; if (is_string($a)) { $a = "x"; }` used to warn "compile with
             // --strict-locals to make this an error" while `--strict-locals` compiled it CLEAN,
             // and boxed the frame slot (plus blocked constant propagation for the name
             // program-wide) for nothing.
+            //
+            // Transparency is a property of the WHOLE region, decided by replaying its own
+            // assignments from the guard target (see `guard_region_is_transparent`), because the
+            // checker carries an in-branch assignment forward to the next statement of the same
+            // branch. Judging each assignment against the target on its own was measured wrong
+            // three ways, all of them hard errors in permissive mode on code PHP runs:
+            // `if (is_string($a)) { $a = "x"; $a = 2; }`, the same across two arms of a nested
+            // non-guard `if`, and `if (is_string($a)) { if (is_float($a)) { $a = "x"; } }` — the
+            // last one because the acceptance test consulted an outer frame instead of the
+            // innermost one, which `record_assign` now selects.
             //
             // The skip is deliberately conditioned on the name ALREADY having a binding: a guard
             // does not narrow a name that has none yet (`guard_narrowing` bails on an unbound
@@ -314,8 +353,12 @@ impl Checker {
             // on OTHER evidence stays marked, keeps every store site (this loop only decides
             // whether to mark, never which sites to record), and the mark then dominates the
             // narrowing at the guarded assignment too. So the two rules compose: marks win over
-            // guards, and a name whose only conflict IS a guarded one is never marked.
-            if binding.is_some() && site.guarded_by_own_type_test {
+            // guards, and a name whose only conflicts are transparently guarded is never marked.
+            if binding.is_some()
+                && site
+                    .guard_region
+                    .is_some_and(|region| transparent_regions[region])
+            {
                 continue;
             }
             let Some((existing, binding_depth)) = binding else {
@@ -350,26 +393,59 @@ impl Checker {
         }
         None
     }
+
+    /// Returns whether a guard region is INVISIBLE to the marking: the checker accepts every
+    /// assignment the region governs, and restores the pre-branch binding when the branch ends, so
+    /// nothing inside it is evidence and nothing inside it moves the outer binding.
+    ///
+    /// The region's own assignments are replayed in source order starting from the guard's TARGET,
+    /// which is what `control_flow` installs before checking the guarded body, and each merge
+    /// carries forward — the checker does not undo an in-branch assignment until the branch is
+    /// over. One failed merge is a rejection the checker really makes, and it disqualifies the
+    /// WHOLE region: with the region opaque, its assignments are judged against the outer binding
+    /// like any others, which is what produces the mark that makes such a body compile.
+    ///
+    /// A region containing the name's FIRST assignment is never transparent. The guard could not
+    /// have narrowed a name that had no binding yet (`guard_narrowing` bails on an unbound plain
+    /// variable), so `target` is not what the branch actually saw and the model does not apply.
+    fn guard_region_is_transparent(
+        &self,
+        name: &str,
+        region: &GuardRegion,
+        assigns: &[AssignSite],
+    ) -> bool {
+        // A region belonging to ANOTHER name indexes another name's assignment list. No site of
+        // this name can point at it, so the answer is unused — but computing it would index out of
+        // range, which is why it is refused here rather than assumed.
+        if region.name != name {
+            return false;
+        }
+        if region.sites.contains(&0) {
+            return false;
+        }
+        let mut current = region.target.clone();
+        for &site in &region.sites {
+            match self.merged_assignment_type(&current, &assigns[site].ty) {
+                Some(merged) => current = merged,
+                None => return false,
+            }
+        }
+        true
+    }
 }
 
 /// Records one statement-form assignment to `name`.
-fn record_assign(
-    checker: &Checker,
-    facts: &mut Facts,
-    name: &str,
-    value: &Expr,
-    depth: u32,
-    span: Span,
-) {
-    // Guarded AND accepted: the branch is guarded by a type test on this very name, and the type
-    // that guard narrows it to merges with what is being stored. Both halves are needed — see
-    // `AssignSite::guarded_by_own_type_test`.
-    let guarded_by_own_type_test = facts.type_guarded_names.iter().any(|(guarded, target)| {
-        guarded == name
-            && checker
-                .merged_assignment_type(target, &infer_expr_type_syntactic(value))
-                .is_some()
-    });
+fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: Span) {
+    // The INNERMOST open guard on this name governs the assignment, because the checker's
+    // narrowings compose: an inner `is_float($a)` re-narrows what an outer `is_string($a)` just
+    // installed. `rev().find` takes that one; an `any` over the whole stack let an outer frame
+    // answer for a branch an inner one owns.
+    let guard_region = facts
+        .open_guards
+        .iter()
+        .rev()
+        .find(|(guarded, _)| guarded == name)
+        .map(|(_, region)| *region);
     let entry = facts.names.entry(name.to_string()).or_default();
     // A value this scan cannot type EXACTLY is not evidence, it is a guess.
     // `infer_expr_type_syntactic` answers `Int` for everything it does not recognise — a plain
@@ -381,12 +457,18 @@ fn record_assign(
         entry.disqualified = true;
         return;
     }
+    let site = entry.assigns.len();
     entry.assigns.push(AssignSite {
         ty: infer_expr_type_syntactic(value),
         depth,
         span,
-        guarded_by_own_type_test,
+        guard_region,
     });
+    // The region has to know which of the name's assignments it governs, because transparency is
+    // decided over the whole region once the walk has seen all of them.
+    if let Some(region) = guard_region {
+        facts.guard_regions[region].sites.push(site);
+    }
 }
 
 /// Marks `name` as never eligible for mixed storage in this body.
@@ -472,13 +554,19 @@ fn collect_type_guarded_block(
 ) {
     let guarded = type_guard_subject(condition);
     if let Some((name, target)) = &guarded {
-        facts
-            .type_guarded_names
-            .push(((*name).to_string(), target.clone()));
+        let region = facts.guard_regions.len();
+        facts.guard_regions.push(GuardRegion {
+            name: (*name).to_string(),
+            target: target.clone(),
+            sites: Vec::new(),
+        });
+        facts.open_guards.push(((*name).to_string(), region));
     }
     collect_block(checker, body, depth, facts);
     if guarded.is_some() {
-        facts.type_guarded_names.pop();
+        // Only the OPEN-guard stack is popped. The region itself outlives the walk of its body:
+        // `first_rejected_assignment` replays it to decide transparency.
+        facts.open_guards.pop();
     }
 }
 
@@ -573,7 +661,7 @@ fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
             if is_compound_assignment_self_read(value, name, stmt.span) {
                 disqualify(facts, name);
             } else {
-                record_assign(checker, facts, name, value, depth, stmt.span);
+                record_assign(facts, name, value, depth, stmt.span);
             }
             collect_expr(checker, value, depth, facts);
         }
