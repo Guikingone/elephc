@@ -105,7 +105,7 @@ No semantic change yet — the option must reach the `Checker` as a field and de
 - Produces: in `src/types/result.rs`: `pub fn check_with_options(program: &Program, options: CheckOptions)` (host platform) and `pub fn check_with_target_and_options(program: &Program, target: Target, options: CheckOptions)`; existing `check` / `check_with_target` delegate with defaults.
 - Produces: `Checker.strict_locals: bool` field; `Config.strict_locals: bool` in `src/cli.rs`.
 
-- [ ] **Step 1: Write the failing CLI test**
+- [x] **Step 1: Write the failing CLI test**
 
 In the `#[cfg(test)]` module of `src/cli.rs`, mirroring the `strict_php` tests (around lines 713–830):
 
@@ -127,16 +127,16 @@ fn no_strict_locals_flag_defaults_off() {
 
 Use the same argv-construction helper the neighbouring `strict_php` tests use (read them and copy the exact pattern — the helper name above is illustrative; keep the file's real one).
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cargo test --test '*' --bin elephc strict_locals 2>/dev/null || cargo test -p elephc strict_locals`
 (unit tests live in the binary crate; use `cargo test strict_locals` and expect a compile error: no field `strict_locals`).
 
-- [ ] **Step 3: Implement flag parsing**
+- [x] **Step 3: Implement flag parsing**
 
 In `src/cli.rs`: add `pub(crate) strict_locals: bool` to the config struct next to `strict_php` (line ~184); `let mut strict_locals = false;` next to `strict_php` init (line ~268); parse arm `else if arg == "--strict-locals" { strict_locals = true; }` next to the `--strict-php` arm (line ~396); add the field to the struct literal (line ~498); add a `--help` line next to `--strict-php` (line ~103): `  --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning`. Check the existing help-coverage test (line ~739 comment: a flag missing from `--help` is caught) and satisfy it.
 
-- [ ] **Step 4: Thread options to the checker**
+- [x] **Step 4: Thread options to the checker**
 
 - In `src/types/checker/mod.rs`: define `CheckOptions`; rename the body of `check_types` into `check_types_with_options(program, target_platform, options)` and make `check_types` delegate with `CheckOptions::default()`. Pass `options` into `driver::check_types_impl`.
 - In `src/types/checker/driver/mod.rs`: add the `options: CheckOptions` parameter to `check_types_impl`, set `checker.strict_locals = options.strict_locals` where the `Checker` is constructed, and pass the same `options` through the nested `check_types` call at line ~458 (switch it to `check_types_with_options`).
@@ -144,12 +144,12 @@ In `src/cli.rs`: add `pub(crate) strict_locals: bool` to the config struct next 
 - In `src/types/result.rs`: add the two `*_with_options` wrappers; keep `check` / `check_with_target` delegating.
 - Find and update the pipeline call site: `grep -rn "check_with_target(" src/ --include="*.rs"` — switch it to `check_with_target_and_options(program, target, CheckOptions { strict_locals: config.strict_locals })` (thread `config` from `src/pipeline.rs` / `src/lib.rs` as the call chain requires).
 
-- [ ] **Step 5: Run tests and build**
+- [x] **Step 5: Run tests and build**
 
 Run: `cargo test strict_locals` — expect the two new tests PASS.
 Run: `cargo build` — expect clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/cli.rs src/types/checker/mod.rs src/types/checker/driver/mod.rs src/types/result.rs src/pipeline.rs
@@ -175,7 +175,7 @@ git commit -m "feat(cli): add --strict-locals flag threaded to the checker as Ch
 - Produces: `fn local_binding_is_killable(&self, name: &str) -> bool` on `Checker`.
 - Produces: `CheckResult.local_bind_kill_sites: HashSet<Span>` and `CheckResult.local_retype_sites: HashSet<Span>` (assembled in `check_types_with_options`).
 
-- [ ] **Step 1: Write the failing checker tests**
+- [x] **Step 1: Write the failing checker tests**
 
 In `tests/error_tests/type_system.rs`:
 
@@ -265,12 +265,12 @@ fn test_typed_property_stays_strict() {
 
 For `test_typed_local_not_killable`, if the plain-`<?php` harness rejects the `int $a = 1;` extension syntax, use the fixture convention the existing `TypedAssign` error tests use (find them: `grep -rn "Typed local" tests/`). For `test_typed_property_stays_strict`, fill the expected substring from the real diagnostic the property path emits today (run the fixture once; the test pins that it errors — the exact message is whatever `assignments/properties.rs` produces).
 
-- [ ] **Step 2: Run to verify failures**
+- [x] **Step 2: Run to verify failures**
 
 Run: `cargo test --test error_tests unset_then_retype`
 Expected: FAIL (`cannot reassign` error still raised — the kill does not exist yet). Also run `cargo test --test error_tests read_after_unset` — FAIL (no error today). If any message substring differs from the real diagnostic (e.g. the exact undefined-variable wording), adjust the assertion to the real message, not vice versa.
 
-- [ ] **Step 3: Add Checker state and the predicate**
+- [x] **Step 3: Add Checker state and the predicate**
 
 In `src/types/checker/mod.rs`, add the six fields listed in Interfaces (init empty/zero where the `Checker` is constructed), plus:
 
@@ -291,12 +291,12 @@ fn local_binding_is_killable(&self, name: &str) -> bool {
 
 Add both span sets to `CheckResult` (`src/types/result.rs` struct, `src/types/checker/mod.rs` assembly in `check_types_with_options`, next to where `warnings` is moved out of the checker).
 
-- [ ] **Step 4: Track conditional depth and per-body reset**
+- [x] **Step 4: Track conditional depth and per-body reset**
 
 - In `src/types/checker/stmt_check.rs`, in the dispatch arm that routes `Foreach | Switch | If | DoWhile | While | For | Throw | Try` to `check_control_flow_stmt` (lines 102–109): increment `self.local_conditional_depth` before the call and decrement after (conditions get depth +1 too — conservative, acceptable).
 - Per-body reset: find where each function/closure body check begins (grep `active_ref_params` seeding and the driver's per-function env construction; closure bodies via `grep -rn "capture_refs" src/types/checker`). At each body entry, save `local_conditional_depth`, `local_binding_depth`, `ref_aliased_locals`, `static_local_names`, `typed_local_names` with `std::mem::take`, reset depth to 0, and restore on exit. If `active_ref_params` is already seeded per-body from `ref_params`, piggyback on the same location.
 
-- [ ] **Step 5: Record binding depth and ref-alias sources**
+- [x] **Step 5: Record binding depth and ref-alias sources**
 
 - In `merge_local_assignment_type` (`locals.rs:749`): in the `else` (fresh insert) branch, also `checker.local_binding_depth.insert(name.to_string(), checker.local_conditional_depth);` — this requires changing the signature from `checker: &Checker` to `checker: &mut Checker` (single caller at `locals.rs:211`). Do the same recording in `check_typed_assign`'s env insert (`locals.rs:786`+).
 - In `check_ref_assign` (`locals.rs:221`): every arm that inserts the target into `active_ref_params` also inserts the target into `ref_aliased_locals`; the `Variable` source arm additionally inserts the source name.
@@ -305,7 +305,7 @@ Add both span sets to `CheckResult` (`src/types/result.rs` struct, `src/types/ch
 - In `src/types/checker/stmt_check/assignments.rs` `StmtKind::StaticVar` arm (line ~151): insert the name into `static_local_names`.
 - Declared types: in `check_typed_assign` (`locals.rs:786`), insert the name into `typed_local_names`; where function parameters are seeded into the body env (find the site in `src/types/checker/driver/functions.rs`), insert every parameter that has a declared type hint (`param type != None`) into `typed_local_names`.
 
-- [ ] **Step 6: Add the unset-kill arm**
+- [x] **Step 6: Add the unset-kill arm**
 
 In `infer_type_with_assignment_effects` (`src/types/checker/inference/expr/effects.rs:44`), add an arm before the fallthrough (read `src/parser/ast/expr.rs:71` for the exact `FunctionCall` field names first):
 
@@ -332,12 +332,12 @@ ExprKind::FunctionCall { name, args, .. }
 
 (Adapt the `php_symbol_key` import path to the one `src/ir_lower/expr/function_calls.rs:56` uses.) Also clear the checker's per-name callable/reflection metadata for killed names the same way a rebinding assignment does — reuse the existing `clear_callable_metadata`-style helpers called around `locals.rs:400-448`.
 
-- [ ] **Step 7: Run tests**
+- [x] **Step 7: Run tests**
 
 Run: `cargo test --test error_tests -- test_unset test_read_after test_multi_arg test_conditional_unset test_branch_created test_ref_aliased test_static_local test_global_local test_by_ref_capture`
 Expected: all PASS. Also run `cargo test --test error_tests` (whole suite) to catch regressions from the depth counter and signature change.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/types tests/error_tests
@@ -358,7 +358,7 @@ git commit -m "feat(checker): unset kills eligible depth-0 local bindings and re
 - Produces: statement-form gating — `merge_local_assignment_type(checker, name, ty, span, env, stmt_form: bool)`; `check_assign` gains the same `stmt_form: bool` parameter, `true` only from the `StmtKind::Assign` statement path.
 - Produces: test helpers `check_source_strict(src) -> Result<(), String>` and `expect_error_strict(src, substr)` in `tests/error_tests.rs`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Helpers in `tests/error_tests.rs` (mirror `check_source` exactly, ending with `types::check_with_options(&ast, elephc::types::CheckOptions { strict_locals: true })`):
 
@@ -420,12 +420,12 @@ fn test_ref_aliased_retype_still_errors() {
 }
 ```
 
-- [ ] **Step 2: Run to verify failures**
+- [x] **Step 2: Run to verify failures**
 
 Run: `cargo test --test error_tests implicit_retype`
 Expected: FAIL — `test_implicit_retype_warns_by_default` errors instead of warning.
 
-- [ ] **Step 3: Implement the retype hook**
+- [x] **Step 3: Implement the retype hook**
 
 In `merge_local_assignment_type` (`locals.rs:749`, already `&mut Checker` from Task 2), replace the `merged_ty.is_none()` early-return with:
 
@@ -453,16 +453,16 @@ if merged_ty.is_none() {
 
 Thread `stmt_form: bool` from the callers: `grep -n "check_assign(" src/types/checker` — pass `true` only from the `StmtKind::Assign` statement path (`check_assignment_like_stmt`), `false` from expression-position assignment checking. On the retype path also clear the per-name callable/reflection metadata (same helpers as Task 2 Step 6). Match `CompileWarning::new`'s real signature (`src/errors/mod.rs:73`).
 
-- [ ] **Step 4: Triage existing `cannot reassign` tests**
+- [x] **Step 4: Triage existing `cannot reassign` tests**
 
 Run: `grep -rn "cannot reassign" tests/`. For each hit (known: `tests/error_tests/type_system.rs:153`, `tests/error_tests/misc/syntax_misc.rs`, `tests/codegen/callables/closures.rs`): if the fixture is now eligible for permissive retype (depth-0, statement-form, unaliased), convert the assertion into the `expect_warning` + `expect_error_strict` pair; if it exercises an ineligible shape, keep it as `expect_error`. Do not weaken fixtures to preserve assertions — change the assertion to match the designed behavior.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `cargo test --test error_tests`
 Expected: PASS. Then `cargo test --test codegen_tests closures` (or the module owning the triaged closure test) — PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/types tests
@@ -483,7 +483,7 @@ git commit -m "feat(checker): incompatible depth-0 local reassignment re-binds w
 - Produces: `LoweringContext.bind_kill_sites: HashSet<Span>`, `LoweringContext.retype_sites: HashSet<Span>` (retype consumed in Task 5).
 - Produces: on a recorded kill, the name is removed from `local_slots`, `local_types`, `local_kinds` after the old value is released — the next `declare_local` mints a fresh slot.
 
-- [ ] **Step 1: Write the failing e2e tests**
+- [x] **Step 1: Write the failing e2e tests**
 
 `tests/codegen/locals_retype.rs`:
 
@@ -517,16 +517,16 @@ fn test_unset_without_reassignment() {
 
 Register the module exactly like a sibling (see how `array_basics` is declared in the codegen test module tree).
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cargo test --test codegen_tests locals_retype`
 Expected: `test_unset_then_retype_*` FAIL at compile-check stage only if Task 2/3 not merged — here they should fail in lowering/codegen (type mismatch or wrong output). Record the actual failure mode.
 
-- [ ] **Step 3: Thread the span sets**
+- [x] **Step 3: Thread the span sets**
 
 In `src/ir_lower/mod.rs` `lower_program` / `_with_source_path` / `_and_web` (lines 47/57/67): clone both sets from `check_result` into the `LoweringContext` construction. Add the two fields to `LoweringContext` in `src/ir_lower/context.rs`, defaulting empty.
 
-- [ ] **Step 4: Implement the kill in `unset_local`**
+- [x] **Step 4: Implement the kill in `unset_local`**
 
 In `unset_local` (`context.rs:1834`): when `span.is_some_and(|s| self.bind_kill_sites.contains(&s))` and the local has a slot:
 
@@ -534,16 +534,16 @@ In `unset_local` (`context.rs:1834`): when `span.is_some_and(|s| self.bind_kill_
 - Ref-bound path: keep the existing release/`Op::UnsetLocal` sequence, then additionally remove the three map entries.
 - Non-recorded spans: behavior unchanged (today's null-store).
 
-- [ ] **Step 5: Run the e2e tests**
+- [x] **Step 5: Run the e2e tests**
 
 Run: `cargo test --test codegen_tests locals_retype`
 Expected: all three PASS (fresh slot is minted by `declare_local` on the next assignment because the name is unmapped, with the checker-approved new type).
 
-- [ ] **Step 6: Ownership verification**
+- [x] **Step 6: Ownership verification**
 
 Read `tests/fresh_result_ownership_leak_tests.rs` and add one analogous leak assertion for `test_unset_then_retype_string_to_int`'s shape (heap value released at the kill). If that harness doesn't transfer cleanly, instead run the string-to-int fixture under the runtime heap-debug mode used elsewhere in the repo (`grep -rn "heap-debug\|heap_debug" src/cli.rs tests/` for the invocation) and assert no leak/UAF diagnostics in its output.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/ir_lower tests/codegen
@@ -564,7 +564,7 @@ git commit -m "feat(lowering): recorded unset kill sites abandon the local slot 
 - Consumes: `LoweringContext.retype_sites` (Task 4), release path identified in Task 4 Step 4.
 - Produces: `pub(crate) fn rebind_local_for_retype(&mut self, name: &str, span: Option<Span>)` on `LoweringContext` — releases the old slot's owned value and removes `name` from `local_slots`, `local_types`, `local_kinds` (same mechanics as the Task 4 kill, factored so both call one helper).
 
-- [ ] **Step 1: Write the failing e2e tests**
+- [x] **Step 1: Write the failing e2e tests**
 
 Append to `tests/codegen/locals_retype.rs`:
 
@@ -623,12 +623,12 @@ fn test_retype_after_conditional_unset_of_heap_local() {
 
 If `compile_and_run` fixtures observe an `$argc` different from 1, adjust the expected literals to the harness's real value at Step 4 (check a sibling test that prints `$argc`).
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cargo test --test codegen_tests locals_retype`
 Expected: the new tests FAIL (wrong output or codegen panic — the store still targets the old slot).
 
-- [ ] **Step 3: Implement the rebind**
+- [x] **Step 3: Implement the rebind**
 
 - Factor the Task 4 kill mechanics (release + three map removals) into `rebind_local_for_retype`; make `unset_local`'s kill path call it.
 - In `lower_assign` (`src/ir_lower/stmt/mod.rs:129`): read the function; after the RHS value is lowered and before the store, insert:
@@ -641,16 +641,16 @@ if ctx.retype_sites.contains(&span) {
 
 (RHS first: `$a = "n=" . $a` must read the old slot.) The subsequent store path then calls `declare_local` on the unmapped name and mints the fresh slot with the new type.
 
-- [ ] **Step 4: Teach the repr fixpoint about kills**
+- [x] **Step 4: Teach the repr fixpoint about kills**
 
 Read `src/ir_lower/stmt/repr_fixpoint.rs` (assign arm at line 329). Where the pass accumulates/merges a storage representation per name across assignments, add: if the assignment's `stmt.span` is in `retype_sites`, replace the accumulated repr for `name` with the new assignment's repr instead of merging; where the pass scans statements, treat an `unset` argument whose span is in `bind_kill_sites` as ending the name's accumulation (start fresh at the next assignment). Mirror the pass's existing structure — if it has unit tests in `src/ir_lower/tests/`, extend them with one retype case.
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cargo test --test codegen_tests locals_retype`
 Expected: all PASS. Then run the neighbouring representative suites the change could disturb: `cargo test --test codegen_tests array_basics` and `cargo test --test error_tests`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/ir_lower tests/codegen
@@ -674,7 +674,7 @@ git commit -m "feat(lowering): recorded retype sites re-bind locals to a fresh s
 - Produces: `impl Checker { fn run_mixed_storage_scan(&mut self, body: &[Stmt], params: &[FnParamInfo]) }` — fills `mixed_storage_locals` for this body, appends to `mixed_storage_store_sites`, and pushes one `CompileWarning` per marked name (permissive mode only; no-op under `strict_locals`). The exact param-info type mirrors whatever the driver already has in hand at the body entry point — the scan only needs each param's name, by-ref flag, and whether it has a type hint.
 - Produces: `CheckResult.mixed_storage_store_sites: HashSet<Span>`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/error_tests/type_system.rs`:
 
@@ -737,12 +737,12 @@ fn test_unset_blocks_marking() {
 
 For `test_typed_local_never_mixed`, reuse the fixture convention chosen in Task 2 for extension syntax.
 
-- [ ] **Step 2: Run to verify failures**
+- [x] **Step 2: Run to verify failures**
 
 Run: `cargo test --test error_tests branch_divergent`
 Expected: FAIL — the accept/warn cases error with `cannot reassign` today.
 
-- [ ] **Step 3: Implement the scan module**
+- [x] **Step 3: Implement the scan module**
 
 `src/types/checker/mixed_storage_scan.rs`: a single recursive walk over `&[Stmt]` carrying a `depth: u32` (increment for the bodies of `If`/`Switch`/`While`/`DoWhile`/`For`/`Foreach`/`Try` — same depth definition as Task 2's runtime counter). Collect per name:
 
@@ -753,15 +753,15 @@ Enumerate the write-capable `StmtKind`/`ExprKind` variants by reading `src/parse
 
 Mark `name` when: not disqualified, params say it is neither by-ref nor type-hinted (or not a param at all), and some pair in `assigns` fails `self.merged_assignment_type(a, b)` (both directions) with at least one member of a failing pair at depth > 0. On marking (permissive mode only): insert into `mixed_storage_locals`, extend `mixed_storage_store_sites` with ALL of the name's assign spans, and push the warning from Global Constraints (naming the first failing pair's two types) at the first failing pair's later span. Under `strict_locals` the scan returns without marking anything.
 
-- [ ] **Step 4: Honor the marking at bind time**
+- [x] **Step 4: Honor the marking at bind time**
 
 In `merge_local_assignment_type` (`locals.rs`), in the fresh-insert `else` branch: if `checker.mixed_storage_locals.contains(name)`, insert `PhpType::Mixed` instead of `ty.clone()` (binding depth recording unchanged). Compatible and incompatible reassignments then merge trivially (`Mixed` absorbs everything), so neither the retype hook nor the error fires for marked names. Invoke `run_mixed_storage_scan` at every per-body entry point from Task 2 Step 4, right after the per-body state reset; add `mixed_storage_locals` to the save/restore set. Assemble `mixed_storage_store_sites` into `CheckResult` next to the other two span sets.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `cargo test --test error_tests` (whole suite — the marking must not disturb Tasks 2–3 behavior; their negative tests are the guard). Fill the two deferred assertion substrings from real diagnostics.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/types tests/error_tests
@@ -781,7 +781,7 @@ git commit -m "feat(checker): syntactic pre-scan compiles branch-divergent local
 - Consumes: `CheckResult.mixed_storage_store_sites` (Task 6), `LoweringContext` span-set pattern from Task 4, `has_local_slot` / `declare_local` (`src/ir_lower/context.rs:658/663`).
 - Produces: `LoweringContext.mixed_storage_store_sites: HashSet<Span>`; marked locals get a `PhpType::Mixed` slot before their first store.
 
-- [ ] **Step 1: Write the failing e2e tests**
+- [x] **Step 1: Write the failing e2e tests**
 
 Append to `tests/codegen/locals_retype.rs`:
 
@@ -816,12 +816,12 @@ fn test_loop_carried_heterogeneous_local() {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cargo test --test codegen_tests locals_retype`
 Expected: the new tests FAIL (the first store declares an unboxed slot; the divergent store then mismatches or miscompiles).
 
-- [ ] **Step 3: Implement the pre-declare hook**
+- [x] **Step 3: Implement the pre-declare hook**
 
 Thread the set in `src/ir_lower/mod.rs` exactly like Task 4's sets. In `lower_assign` (`src/ir_lower/stmt/mod.rs:129`), next to the Task 5 retype hook, before the store:
 
@@ -833,19 +833,19 @@ if ctx.mixed_storage_store_sites.contains(&span) && !ctx.has_local_slot(name) {
 
 Subsequent stores find the existing Mixed slot and box the value through the existing Mixed-storage store path (the same path the string-incdec contract exercises; the previous boxed value is released by the `release_previous` branch in `store_mutated_local_impl`, `src/ir_lower/context.rs:1814-1820`).
 
-- [ ] **Step 4: Verify the repr fixpoint is stable on marked names**
+- [x] **Step 4: Verify the repr fixpoint is stable on marked names**
 
 Read the `repr_fixpoint.rs` assign arm with a marked-name example: the slot starts `Mixed`; confirm the pass's merge keeps `Mixed` (it must never narrow a declared slot). If its per-name accumulation starts from the assignment's value type instead of the declared slot type, seed marked names with `Mixed` using the same span-set check. Extend its unit tests (in `src/ir_lower/tests/`) with one marked-name case if the pass has them.
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cargo test --test codegen_tests locals_retype` — all PASS, including the Task 4/5 tests (no regression). Then `cargo test --test error_tests`.
 
-- [ ] **Step 6: Ownership verification**
+- [x] **Step 6: Ownership verification**
 
 Extend the Task 4 Step 6 leak-check approach to `test_loop_carried_heterogeneous_local` (a boxed heap string overwritten each iteration is the release-pressure case).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/ir_lower tests/codegen
@@ -863,7 +863,7 @@ git commit -m "feat(lowering): pre-declare mixed-storage locals as boxed slots a
 **Interfaces:**
 - Consumes: the shipped behavior of Tasks 1–7.
 
-- [ ] **Step 1: Write the eval parity test**
+- [x] **Step 1: Write the eval parity test**
 
 Read `tests/eval_string_interpolation_tests.rs` to learn the eval test harness, then add (in that style, in the file the harness convention dictates):
 
@@ -878,16 +878,16 @@ fn test_eval_local_retype_matches_aot() {
 
 Run: `cargo test eval_local_retype` — if it already passed before this plan (magician is dynamically typed), keep it as a pinned regression test; note the observed prior behavior in the test doc comment.
 
-- [ ] **Step 2: Update docs**
+- [x] **Step 2: Update docs**
 
 - Run `grep -rn "strict-php" docs/ README.md` — add `--strict-locals` to every surface that lists compiler flags, with the one-line semantics from the CLI help.
 - Run `grep -rni "reassign" docs/` — find the page documenting the monomorphic-local rule; rewrite it to describe: permissive default (warning + fresh binding for straight-line retype; warning + whole-frame boxed Mixed storage for branch-divergent assignment, with its dispatch cost), the eligibility rules (depth-0/unaliased for kill/rebind; the pre-scan markability guards for Mixed), `unset` as explicit kill, `--strict-locals`, and the declared-type exemption (typed locals, typed params, and properties stay strict in both modes). State explicitly that eval'd code is interpreted dynamically and is not gated by `--strict-locals`.
 
-- [ ] **Step 3: Verification sweep**
+- [x] **Step 3: Verification sweep**
 
 Run the touched suites once more: `cargo test --test error_tests`, `cargo test --test codegen_tests locals_retype`, `cargo test strict_locals`. Report results; the user runs the full pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests docs README.md
