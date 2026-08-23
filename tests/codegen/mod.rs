@@ -36,6 +36,7 @@ mod control_flow;
 mod scalar_strings;
 mod array_basics;
 mod array_to_string;
+mod object_to_string;
 mod numeric_scalars;
 mod type_builtins;
 mod casts_and_constants;
