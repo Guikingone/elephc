@@ -126,14 +126,17 @@ fn web_gated_global_env(global_env: &TypeEnv, web: bool) -> TypeEnv {
 
 /// Collects PHP variable names that any function-like STATEMENT body declares with `global`.
 ///
-/// The NARROW scope of `crate::global_decls`, and deliberately narrower than the one the checker's
-/// `unset`-kill veto reads. This set decides STORAGE CLASS: a name in it moves out of main's frame
-/// slot into the `_eir_global_*` symbol, which types it `Mixed` — and the array builtins have
-/// pre-existing `Mixed`-array backend gaps, so a wider answer here breaks programs that compile
-/// and print PHP's output today (`implode` silently empty, `array_sum`/`sort`/`in_array` and
-/// friends a hard backend error). The checker's copy can safely be wider because it only ever
-/// WITHHOLDS a kill. See `crate::global_decls`' preamble for the measurements and for the
-/// pre-existing closure-`global` write loss the narrow scope preserves.
+/// Shared with the CHECKER (`crate::global_decls`), which vetoes ending a top-level binding of one
+/// of these names for the same reason lowering refuses to abandon its slot: `global $x;` in some
+/// other body reaches the very storage the top-level name uses. One walk keeps the two sides
+/// identical, blind spots included — and the blind spots are load-bearing here. This set decides
+/// STORAGE CLASS: a name in it moves out of main's frame slot into the `_eir_global_*` symbol,
+/// which types it `Mixed`, and the array builtins have pre-existing `Mixed`-array backend gaps, so
+/// widening the walk to closure bodies or enum methods broke programs that compile and print PHP's
+/// output today (`implode` crashed, `array_sum`/`sort`/`in_array` and friends became a hard backend
+/// error). `crate::global_decls`' preamble carries those measurements, the matching reason the
+/// checker's veto must not be widened on its own either, and the pre-existing closure-`global`
+/// write loss both sides preserve.
 fn collect_global_var_names(statements: &[Stmt]) -> std::collections::HashSet<String> {
     crate::global_decls::collect_global_var_names(statements)
 }

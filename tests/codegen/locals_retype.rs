@@ -1903,36 +1903,38 @@ fn test_same_name_collision_stays_ambiguous_with_multi_name_spans() {
     );
 }
 
-/// A top-level `unset` must not end a binding whose storage a CLOSURE reaches with `global`.
+/// `unset` then READ, where the only `global` naming the local sits in a CLOSURE body: an honest
+/// compile error, deliberately, until the global-in-closure write loss is fixed.
 ///
-/// The same rule `test_unset_of_a_program_wide_global_name_keeps_the_binding` pins for a named
-/// function, where lowering ALSO sees the declaration and the program prints PHP's `5`. Here it
-/// does not: the checker's veto reads the wide `collect_global_var_names_in_nested_bodies` scope,
-/// lowering reads the narrow one, and the split is deliberate (widening lowering broke working
-/// array programs — see `test_closure_declared_global_leaves_a_top_level_array_alone`).
+/// `test_unset_of_a_program_wide_global_name_keeps_the_binding` pins the NAMED-function twin,
+/// which the shared `collect_global_var_names` walk does see: there the veto keeps the binding,
+/// lowering keeps the shared symbol, and the program prints PHP's `5`. A closure body is invisible
+/// to that walk on BOTH sides, so the kill fires and the read below is `Undefined variable: $a`
+/// where PHP prints `5`.
 ///
-/// What the veto delivers is therefore ACCEPTANCE, not the value: before it, the checker approved
-/// the kill, `$a` left the environment, and this program was a false `Undefined variable: $a`
-/// though PHP runs it. It now compiles and behaves exactly as it did before local-binding kills
-/// existed — the `unset` is a plain typing no-op that nulls the slot, and the closure's write goes
-/// to program storage main never reads, so the `echo` prints nothing where PHP prints `5`. That
-/// residual is the pre-existing global-in-closure write loss (tracked upstream), whose real fix is
-/// blocked on the `Mixed`-array backend gaps; this fixture pins that the kill no longer REJECTS
-/// the program, and that the write loss is unchanged rather than newly introduced.
+/// Vetoing the kill here was tried and reverted. It did not make the program print `5` — the
+/// closure's write still went to program storage main no longer reads — it only converted this
+/// error into SILENT EMPTY output, while also withholding the kill from every unrelated program
+/// that merely mentions the name in a nested body (see
+/// `test_nested_body_global_does_not_veto_an_unrelated_kill`, which it regressed under
+/// `--strict-locals`). A compile error beats a silent wrong answer, so this shape stays an error
+/// until the global-in-closure write loss (tracked upstream) is closed — at which point the
+/// program should print `5` and this fixture should say so.
 #[test]
-fn test_unset_of_a_name_a_closure_declares_global_keeps_the_binding() {
-    let out = compile_and_run(
+fn test_unset_then_read_of_a_closure_declared_global_is_a_compile_error() {
+    let error = compile_expect_type_error(
         "<?php $a = 1; unset($a); $f = function() { global $a; $a = 5; }; $f(); echo $a;",
     );
-    assert_eq!(out, "");
+    assert!(
+        error.contains("Undefined variable: $a"),
+        "expected the honest undefined-variable error, got: {error}"
+    );
 }
 
-/// The same for an ENUM method body, the other declaration the veto's wide scope walks and
-/// lowering's narrow scope does not. Compiles instead of being falsely rejected; the value is lost
-/// to the same pre-existing write loss.
+/// The same for an ENUM method body, the other declaration the shared walk does not descend into.
 #[test]
-fn test_unset_of_a_name_an_enum_method_declares_global_keeps_the_binding() {
-    let out = compile_and_run(
+fn test_unset_then_read_of_an_enum_declared_global_is_a_compile_error() {
+    let error = compile_expect_type_error(
         r#"<?php
 enum E: int {
     case A = 1;
@@ -1943,7 +1945,10 @@ unset($a);
 E::A->go();
 echo $a;"#,
     );
-    assert_eq!(out, "");
+    assert!(
+        error.contains("Undefined variable: $a"),
+        "expected the honest undefined-variable error, got: {error}"
+    );
 }
 
 /// The two files a `require_once` fixture shares: a top-level pair of incompatible assignments
@@ -2166,4 +2171,48 @@ fn test_closure_in_an_assignment_expression_leaves_a_top_level_array_alone() {
         "<?php $a = [3, 1, 2]; $n = ($d = function () { global $a; echo \"x\"; }) ? 1 : 0; echo implode(\",\", $a), \"|\", $n;",
     );
     assert_eq!(out, "3,1,2|1");
+}
+
+/// An `unset` followed by a reassignment stays eligible when the only `global` naming that local
+/// sits in a NESTED body — a closure literal or an enum method.
+///
+/// The counter-pin to the two `keeps_the_binding` fixtures above. Vetoing the kill for every name
+/// a nested body declares `global` costs this program its kill: `$a` never leaves the environment,
+/// so `$a = "s"` becomes an incompatible reassignment — a permissive warning, and a hard
+/// `cannot reassign $a from int to string` under `--strict-locals`, on a program base ACCEPTS in
+/// both modes and PHP runs. That is why the veto reads the same statement-only collector lowering
+/// does: a wider answer buys nothing here and takes acceptance away.
+#[test]
+fn test_nested_body_global_does_not_veto_an_unrelated_kill() {
+    const CLOSURE: &str =
+        "<?php $a = $argc; unset($a); $f = function () { global $a; }; $a = \"s\"; echo $a;";
+    const ENUM: &str = r#"<?php
+enum E: int {
+    case A = 1;
+    public function go(): int { global $a; return 1; }
+}
+$a = $argc;
+unset($a);
+$a = "s";
+echo $a;"#;
+
+    for source in [CLOSURE, ENUM] {
+        let strict = check_files_diagnostics(&[("main.php", source)], "main.php", true);
+        assert!(
+            strict.is_ok(),
+            "the kill must stay eligible under --strict-locals, got: {:?}",
+            strict.err()
+        );
+        let permissive = check_files_diagnostics(&[("main.php", source)], "main.php", false)
+            .expect("the same program must type-check permissively");
+        assert!(
+            !permissive
+                .iter()
+                .any(|warning| warning.contains("changes type from")),
+            "an eligible kill emits no retype warning, got: {permissive:?}"
+        );
+    }
+
+    assert_eq!(compile_and_run(CLOSURE), "s");
+    assert_eq!(compile_and_run(ENUM), "s");
 }
