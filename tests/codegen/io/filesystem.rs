@@ -135,6 +135,31 @@ unlink("orig.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// `is_dir()` works in a program that names nothing else.
+///
+/// It SEGFAULTED. `__rt_is_dir` is the wrapper guard and `__rt_is_dir_core` the body, declared as
+/// a second global a few instructions later, and the guard branches over the refusal into it. On
+/// macOS every global starts its own SUBSECTION, and that branch — resolved by the assembler
+/// inside one section — carries no relocation: the linker saw nothing referencing the core,
+/// stripped it, and the branch landed in whatever took its place.
+///
+/// MEASURED: the same program with a `glob("*.txt", GLOB_ONLYDIR)` call added — the core's only
+/// other caller — ran correctly. That is what kept this out of every suite: real test programs
+/// name enough other things to keep the core alive.
+///
+/// The test is deliberately minimal for the same reason. Adding another filesystem call to it
+/// would hide the defect again.
+#[test]
+fn test_is_dir_alone_in_a_program() {
+    let out = compile_and_run(
+        r#"<?php
+echo is_dir(".") ? "dir" : "not", "|";
+echo is_dir("no_such_directory_here") ? "dir" : "not";
+"#,
+    );
+    assert_eq!(out, "dir|not");
+}
+
 /// php refuses to copy a file onto ITSELF, and knows which file that is by (st_dev, st_ino).
 ///
 /// MEASURED on `php -n` 8.5.6: the same path, `./` before the same path, a hard link to the source
