@@ -1423,6 +1423,40 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         crate::ir_lower::ownership::release_if_owned(self, previous, span);
     }
 
+    /// Releases the slot's occupant unless it is the very value the store is about to keep.
+    ///
+    /// Comparable single-pointer payloads only, the same restriction the argument side applies:
+    /// a boxed Mixed that WRAPS a container holds a different pointer than the container, so
+    /// comparing them would read "not aliased" for a value the store does keep.
+    fn release_stored_local_value_unless_aliases(
+        &mut self,
+        name: &str,
+        slot: LocalSlotId,
+        stored: LoweredValue,
+        span: Option<Span>,
+    ) {
+        let storage_type = self.builder.local_php_type(slot);
+        if !Ownership::php_type_needs_lifetime_tracking(&storage_type) {
+            return;
+        }
+        let stored_repr = self.builder.value_php_type(stored.value).codegen_repr();
+        let slot_repr = storage_type.codegen_repr();
+        if !matches!(stored_repr, PhpType::Mixed | PhpType::Union(_))
+            || !matches!(slot_repr, PhpType::Mixed | PhpType::Union(_))
+        {
+            self.release_stored_local_value(name, slot, span);
+            return;
+        }
+        let previous = self.load_local_storage(name, slot, storage_type, span);
+        self.emit_void(
+            Op::ReleaseUnlessAliases,
+            vec![previous.value, stored.value],
+            None,
+            Op::ReleaseUnlessAliases.default_effects(),
+            span,
+        );
+    }
+
     /// Releases the previous occupant immediately before a retaining store overwrites it.
     ///
     /// The caller must first retain the incoming value because borrowing operations
@@ -1441,10 +1475,25 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         &mut self,
         name: &str,
         slot: LocalSlotId,
+        stored: Option<LoweredValue>,
         span: Option<Span>,
     ) {
         let storage_type = self.builder.local_php_type(slot);
         if Ownership::php_type_needs_lifetime_tracking(&storage_type) {
+            // `$acc = f($acc, …)`: when the callee hands one of its parameters back, the value
+            // about to be stored IS the occupant we are about to release. Releasing it deeply
+            // frees the payload the store is keeping — Symfony's
+            // `Config\Definition\Processor::process()` died here, in `_rt_mixed_free_deep`,
+            // through `BaseNode::merge()` whose tail is `return $this->mergeValues($l, $r);`.
+            if let Some(stored) = stored {
+                if self
+                    .call_argument_read_from_slot(stored.value, slot)
+                    .is_some()
+                {
+                    self.release_stored_local_value_unless_aliases(name, slot, stored, span);
+                    return;
+                }
+            }
             self.release_stored_local_value(name, slot, span);
             return;
         }
@@ -1649,7 +1698,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| self.initialized_slots.contains(&slot))
         {
-            self.release_stored_local_value_before_overwrite(name, slot, span);
+            self.release_stored_local_value_before_overwrite(name, slot, Some(source), span);
         }
         // A loop-carried slot can exist globally without being definitely initialized
         // on this CFG path. Release the runtime occupant before overwriting it.
@@ -1658,7 +1707,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
             && !self.loop_stack.is_empty()
         {
-            self.release_stored_local_value_before_overwrite(name, slot, span);
+            self.release_stored_local_value_before_overwrite(name, slot, Some(source), span);
         }
         // A first syntactic store inside a loop body (main or function) can still
         // overwrite a prior runtime iteration's value: the slot has no straight-line
@@ -1672,7 +1721,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && previous_slot.is_none()
             && !self.loop_stack.is_empty()
         {
-            self.release_stored_local_value_before_overwrite(name, slot, span);
+            self.release_stored_local_value_before_overwrite(name, slot, Some(source), span);
         }
         // NO release of the previous occupant is emitted here for the string case: the
         // BACKEND already does it. `lower_store_static_local` calls
