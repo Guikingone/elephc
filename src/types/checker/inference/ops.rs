@@ -434,10 +434,15 @@ impl Checker {
         self.loop_storage_types
             .retain(|(scope, _), _| scope != &loop_storage_scope);
         self.current_loop_storage_scope = loop_storage_scope;
+        // Snapshot before the closure below borrows `closure_sig.env` mutably. This is where the
+        // by-VALUE captures live: they are bound on entry, so a mark on one is silent.
+        let incoming_env_names: std::collections::HashSet<String> =
+            closure_sig.env.keys().cloned().collect();
         let body_result = self.with_local_storage_context(
             closure_ref_params,
             closure_param_names,
             closure_typed_params,
+            incoming_env_names,
             body,
             |checker| {
                 for stmt in body {

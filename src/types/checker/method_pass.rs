@@ -174,10 +174,14 @@ impl Checker {
                         )
                         .collect();
                     let mut method_errors = Vec::new();
+                    // Snapshot before the closure below borrows `method_env` mutably.
+                    let incoming_env_names: std::collections::HashSet<String> =
+                        method_env.keys().cloned().collect();
                     self.with_local_storage_context(
                         method_ref_params,
                         method_param_names,
                         method_typed_params,
+                        incoming_env_names,
                         &method.body,
                         |checker| {
                             for s in &method.body {

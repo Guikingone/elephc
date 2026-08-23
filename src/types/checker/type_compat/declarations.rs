@@ -407,6 +407,7 @@ impl Checker {
         ref_param_names: Vec<String>,
         param_names: Vec<String>,
         typed_param_names: Vec<String>,
+        incoming_env_names: std::collections::HashSet<String>,
         body: &[crate::parser::ast::Stmt],
         f: F,
     ) -> Result<T, CompileError>
@@ -440,7 +441,12 @@ impl Checker {
         // parameters, which is how EVERY parameter — typed or not, by reference or by value — is
         // kept unmarked. It also records here whether the body calls `eval()` anywhere, which
         // `Checker::local_binding_is_killable` then consults for the whole body.
-        self.run_mixed_storage_scan(body);
+        //
+        // `incoming_env_names` is the caller's snapshot of the environment this body STARTS from,
+        // taken before the closure below borrows it mutably. A name already in it that gets marked
+        // is marked silently — the storage was not this marking's doing, so there is no new cost
+        // to warn about (and the warning's `--strict-locals` advice would be false).
+        self.run_mixed_storage_scan(body, &incoming_env_names);
 
         let result = f(self);
 

@@ -2163,10 +2163,36 @@ fn test_a_plain_local_beside_a_seeded_name_still_marks() {
 /// releases the previous occupant of the capture slot.
 /// `codegen::locals_retype::test_marked_local_captured_by_value_and_overwritten_in_a_closure` is
 /// the leak half of this claim (48 bytes without the mark).
+///
+/// The mark is SILENT, though. The warning's "compile with --strict-locals to make this an error"
+/// clause would be FALSE here: `--strict-locals` compiles this body clean, because the capture was
+/// already bound (and already boxed) on entry and the marking created none of that storage. No new
+/// cost means nothing to signal, and no message means no false advice. The store sites and the
+/// mark itself are unaffected — only the diagnostic is withheld.
 #[test]
-fn test_a_by_value_capture_is_still_markable() {
+fn test_a_by_value_capture_is_marked_silently() {
+    let source = "<?php\n$m = $argc > 1 ? 1 : \"z\";\n$f = function (int $n) use ($m) { if ($n > 1) { $m = 0; } else { $m = \"s\"; } return $m; };\nvar_dump($f($argc));";
+    expect_no_warning(source, "boxed mixed storage");
+    expect_no_error_strict(source);
+    let result = check_source_full(source).expect("a marked capture must type-check");
+    assert!(
+        !result.mixed_storage_store_sites.is_empty(),
+        "the silent mark must still record its store sites: {:?}",
+        result.mixed_storage_store_sites
+    );
+    assert!(
+        result.mixed_storage_local_names().contains("m"),
+        "the silent mark must still box the capture: {:?}",
+        result.mixed_storage_store_sites
+    );
+}
+
+/// Control for the test above: an ordinary LOCAL of the same closure — one the body itself
+/// creates — is marked out loud, because the boxed slot really is a new cost the marking chose.
+#[test]
+fn test_a_closure_local_is_still_marked_out_loud() {
     expect_warning(
-        "<?php\n$m = $argc > 1 ? 1 : \"z\";\n$f = function (int $n) use ($m) { if ($n > 1) { $m = 0; } else { $m = \"s\"; } return $m; };\nvar_dump($f($argc));",
+        "<?php\n$f = function (int $n) { if ($n > 1) { $q = 0; } else { $q = \"s\"; } return $q; };\nvar_dump($f($argc));",
         "boxed mixed storage",
     );
 }
@@ -2261,7 +2287,6 @@ fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
         "<?php $a = 0; for ($i = 0; $i < $argc + 3; $i++) { $a = \"s\" . $i; } echo $a;",
         "<?php if ($argc > 1) { $a = 42; } else { $a = \"hello\" . $argc; } echo $a;",
         "<?php\nif ($argc > 1) { $m = 1; } else { $m = \"z\"; }\n$f = function (int $n) use ($m) {\n    if ($n > 1) { $m = 0; } else { $m = \"s\"; }\n    return $m;\n};\nvar_dump($f($argc));\n$g = function () use ($m) { return $m; };\nvar_dump($g());",
-        "<?php\n$m = $argc > 1 ? 1 : \"z\";\n$f = function (int $n) use ($m) { if ($n > 1) { $m = 0; } else { $m = \"s\"; } return $m; };\nvar_dump($f($argc));\n$g = function () use ($m) { return $m; };\nvar_dump($g());",
         "<?php\nfunction q() { global $a; var_dump($a); }\nif ($argc > 1) { $a = 0; } else { $a = \"hello\"; }\nq();\n$a = 42;\nq();",
         "<?php\n$w = function () { global $a; $a = 42; };\nif ($argc > 1) { $a = 0; } else { $a = \"hello\"; }\necho $a, \"|\";\n$w();\necho $a, \"|\";",
         "<?php\nif ($argc > 1) { $a = 42; } else { $a = \"hello\"; }\n$a = 99;\necho strlen($a);",
@@ -2290,6 +2315,42 @@ fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
             source
         );
     }
+}
+
+/// The one `codegen::locals_retype` fixture whose ONLY marked name is a by-value capture is
+/// verified separately: its mark is SILENT, so it records store sites without warning.
+///
+/// The outer `$m` here is assigned once (through a ternary) and is not marked at all, so the
+/// closure's captured `$m` is the whole of the fixture's mixed-storage claim — and a capture is
+/// bound on entry, which is exactly the case the silent-mark rule covers. Verifying it by store
+/// sites rather than by warning is what keeps
+/// `codegen::locals_retype::test_marked_local_captured_by_value_and_overwritten_in_a_closure`
+/// honest about still taking the boxed path.
+#[test]
+fn test_the_capture_only_lowering_fixture_is_marked_silently() {
+    let source = "<?php\n$m = $argc > 1 ? 1 : \"z\";\n$f = function (int $n) use ($m) { if ($n > 1) { $m = 0; } else { $m = \"s\"; } return $m; };\nvar_dump($f($argc));\n$g = function () use ($m) { return $m; };\nvar_dump($g());";
+    let result = check_source_full(source).expect("fixture must type-check");
+    assert!(
+        result.mixed_storage_local_names().contains("m"),
+        "the capture must still be boxed: {:?}",
+        result.mixed_storage_store_sites
+    );
+    assert!(
+        result
+            .mixed_storage_store_sites
+            .keys()
+            .all(|span| span.identifies_a_node()),
+        "recorded store sites must name a node: {:?}",
+        result.mixed_storage_store_sites
+    );
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("boxed mixed storage")),
+        "a mark on a pre-bound name must be silent: {:?}",
+        result.warnings
+    );
 }
 
 /// A body that calls `eval()` anywhere keeps every local binding: the `unset` kill becomes a

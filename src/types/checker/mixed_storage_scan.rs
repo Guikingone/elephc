@@ -23,7 +23,7 @@
 //!   "have we crossed an eval yet" flag cannot see an eval BELOW the `unset` it has to veto),
 //!   and because it runs in BOTH modes — the collect above is not gated on `--strict-locals`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::errors::CompileWarning;
 use crate::names::Name;
@@ -122,15 +122,24 @@ impl Checker {
     ///
     /// Fills `mixed_storage_locals` for this body (consumed by `merge_local_assignment_type`),
     /// records every marked name's assignment spans in `mixed_storage_store_sites` (consumed by
-    /// EIR lowering), and pushes ONE warning per marked name. Under `--strict-locals` nothing is
+    /// EIR lowering), and files ONE warning per marked name. Under `--strict-locals` nothing is
     /// marked and nothing is recorded.
     ///
-    /// PARAMETERS are excluded wholesale — typed or not, by reference or by value — through
-    /// `local_binding_depth`, which `enter_local_binding_scope` has just seeded with this body's
-    /// parameter set and nothing else (the scan runs before the first statement is checked). See
-    /// [`Checker::first_rejected_assignment`] for why: a parameter is already bound on entry, so
-    /// the fresh-insert branch the marking works through can never fire for one.
-    pub(crate) fn run_mixed_storage_scan(&mut self, body: &[Stmt]) {
+    /// `incoming_env_names` is every name the body's environment ALREADY binds when the scan runs:
+    /// this body's parameters, a closure's by-value captures, and the seeded superglobals. Marking
+    /// one of those is SILENT — the mark and its store sites are recorded, the warning is not.
+    /// The message ends "compile with --strict-locals to make this an error", and for a pre-bound
+    /// name that is false: the storage was already there (and already boxed), the marking created
+    /// none of it, and `--strict-locals` compiles such a body clean. No new cost to report, and no
+    /// message means no false advice.
+    ///
+    /// PARAMETERS are excluded from marking altogether — typed or not, by reference or by value —
+    /// through `local_binding_depth`; see [`Checker::first_rejected_assignment`] for why.
+    pub(crate) fn run_mixed_storage_scan(
+        &mut self,
+        body: &[Stmt],
+        incoming_env_names: &HashSet<String>,
+    ) {
         // The marking describes ONE frame. The caller saves and restores the enclosing body's
         // set, but clear it here too so the scan owns the whole decision for this body.
         self.mixed_storage_locals.clear();
@@ -222,11 +231,18 @@ impl Checker {
             ))
         });
         for (span, name, message) in marks {
-            // Keyed by the DECISION, so a later walk that stops marking this name retracts the
-            // warning with the store sites. `span` is one of the name's own store-site spans (the
-            // first rejected assignment), which is what makes the retire loop above find it.
-            self.binding_decision_warnings
-                .insert((span, name.clone()), CompileWarning::new(span, &message));
+            // A name the body did not create is marked SILENTLY: the mark and the store sites are
+            // recorded exactly as for any other name, but the warning — whose advice clause claims
+            // `--strict-locals` would reject this body, and would be wrong — is withheld. See this
+            // method's own documentation.
+            if !incoming_env_names.contains(&name) {
+                // Keyed by the DECISION, so a later walk that stops marking this name retracts the
+                // warning with the store sites. `span` is one of the name's own store-site spans
+                // (the first rejected assignment), which is what makes the retire loop above find
+                // it.
+                self.binding_decision_warnings
+                    .insert((span, name.clone()), CompileWarning::new(span, &message));
+            }
             for site in &facts.names[&name].assigns {
                 self.mixed_storage_store_sites
                     .entry(site.span)
