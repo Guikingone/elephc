@@ -951,9 +951,23 @@ pub(super) fn lower_mixed_array_append(
 pub(super) fn lower_array_union(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let left = expect_operand(inst, 0)?;
     let right = expect_operand(inst, 1)?;
-    require_indexed_array(ctx.value_php_type(left)?, inst)?;
-    require_indexed_array(ctx.value_php_type(right)?, inst)?;
+    let left_ty = ctx.value_php_type(left)?;
+    let right_ty = ctx.value_php_type(right)?;
+    require_indexed_array(left_ty.clone(), inst)?;
+    require_indexed_array(right_ty.clone(), inst)?;
     require_indexed_array(inst.result_php_type.codegen_repr(), inst)?;
+    // `array<mixed>` is what a declared `array` parameter gets, and a declared `array` holds
+    // string keys perfectly happily — so this static type does NOT promise indexed storage.
+    // Committing to the indexed walk here ran it over hash storage and silently produced a
+    // short, malformed result. Only the gradual pair needs the runtime check; a narrower
+    // element type (`array<int>`, `array<string>`, ...) can only ever be indexed.
+    let runtime_label = if array_union_operand_is_gradual(&left_ty)
+        && array_union_operand_is_gradual(&right_ty)
+    {
+        "__rt_array_union_gradual"
+    } else {
+        "__rt_array_union"
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(left, "x0")?;
@@ -964,8 +978,13 @@ pub(super) fn lower_array_union(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.load_value_to_reg(right, "rsi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_array_union");
+    abi::emit_call_label(ctx.emitter, runtime_label);
     store_if_result(ctx, inst)
+}
+
+/// Reports whether a union operand's static type leaves its runtime storage kind open.
+fn array_union_operand_is_gradual(ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed)
 }
 
 /// Lowers indexed+associative array union through the shared hash runtime helper.

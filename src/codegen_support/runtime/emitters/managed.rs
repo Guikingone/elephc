@@ -38,6 +38,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_set_refcounted(emitter);
     arrays::emit_array_set_str(emitter);
     arrays::emit_array_union(emitter);
+    arrays::emit_array_union_gradual(emitter);
     arrays::emit_array_hash_union(emitter);
     arrays::emit_hash_array_union(emitter);
     arrays::emit_random_u32(emitter);

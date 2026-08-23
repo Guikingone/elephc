@@ -302,6 +302,66 @@ foreach ($a as $k => $v) {
     assert_eq!(out, "2|3=x;5=y;");
 }
 
+/// Verifies `+` on two values whose static type is the gradual `array<mixed>` reads their
+/// RUNTIME storage kind instead of assuming indexed.
+///
+/// A declared `array` parameter carries `array<mixed>`, which promises nothing about keys: it
+/// holds string keys perfectly happily. Picking the union helper from that static type alone ran
+/// the indexed walk over hash storage, which returned a short array — `count()` said 1 where php
+/// says 2 — and left it malformed enough that iterating it afterwards exhausted the heap. The
+/// literal-operand tests above never caught it because their refined types really are indexed.
+///
+/// Symfony reaches this through `Config\Definition\Processor::process()`, which accumulates with
+/// `$currentConfig = $configTree->merge($currentConfig, $config);`.
+#[test]
+fn test_array_union_of_two_gradual_array_parameters_dispatches_on_runtime_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function u(array $left, array $right): string {
+    $out = $left + $right;
+    return count($out) . ":" . implode(",", array_keys($out));
+}
+echo u(["a" => 1], ["b" => 2]), "|";
+echo u([1, 2], [3]), "|";
+echo u(["a" => 1], [7]), "|";
+echo u([1], ["b" => 2]);
+"#,
+    );
+    assert_eq!(out, "2:a,b|2:0,1|2:a,0|2:0,b");
+}
+
+/// Verifies the same union survives the accumulator shape that found it: a local reassigned in a
+/// loop from a call that receives it, reached through an interface so the callee is not known
+/// statically.
+#[test]
+fn test_array_union_accumulator_through_interface_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+interface NodeInterface {
+    public function merge(array $left, array $right): array;
+}
+class Node implements NodeInterface {
+    public function merge(array $left, array $right): array {
+        if (!$right) {
+            return $left;
+        }
+        return $left + $right;
+    }
+}
+function process(NodeInterface $tree, array $configs): array {
+    $current = [];
+    foreach ($configs as $config) {
+        $current = $tree->merge($current, $config);
+    }
+    return $current;
+}
+$out = process(new Node(), [["a" => 1], [], ["b" => 2], []]);
+echo count($out), ":", implode(",", array_keys($out));
+"#,
+    );
+    assert_eq!(out, "2:a,b");
+}
+
 /// Compiles a PHP script that performs array union (+) with two assoc arrays sharing a key "a" and verifies the left operand's value is retained for the duplicate key.
 #[test]
 fn test_assoc_array_union_keeps_left_duplicate_keys() {
