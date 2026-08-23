@@ -393,7 +393,13 @@ pub(crate) fn compile(config: CliConfig) {
     }
     let ast = crate::array_reduce_prelude::inject_if_used(ast);
     let ast = crate::filter_var_prelude::inject_if_used(ast);
-    let ast = crate::backend_gap_prelude::inject_if_used(ast);
+    let ast = crate::backend_gap_prelude::inject_if_used(ast, &mut prelude_inventory);
+    if prelude_inventory
+        .groups
+        .contains_key(crate::backend_gap_prelude::BACKEND_GAP_GROUP)
+    {
+        forced_groups.insert(crate::backend_gap_prelude::BACKEND_GAP_GROUP.to_string());
+    }
     timings.record_since("compat-preludes", phase_started);
 
     // Desugar PHP's argument-introspection constructs (`func_num_args`, `func_get_args`,

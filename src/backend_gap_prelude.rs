@@ -740,7 +740,13 @@ function str_getcsv(string $string, string $separator = ',', string $enclosure =
 "#;
 
 /// Prepends each narrow helper whose corresponding PHP builtin is referenced.
-pub fn inject_if_used(program: Program) -> Program {
+/// Reachability group every backend-gap helper is recorded under.
+pub const BACKEND_GAP_GROUP: &str = "backend_gap";
+
+pub fn inject_if_used(
+    program: Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
     let usage = crate::ast_usage::collect(&program);
     let mut sources = Vec::new();
     let inject_randomizer = usage.constructs(RANDOMIZER_CLASS_NAME)
@@ -842,9 +848,16 @@ pub fn inject_if_used(program: Program) -> Program {
                 .expect("Randomizer compatibility prelude must name-resolve"),
         );
     }
+    // Every helper here is named ONLY by the EIR lowering (a Rust constant), never by any PHP
+    // source. `prune_unreachable_declarations` walks the PHP, finds no reference, and erases the
+    // BODY while the call survives — the failure then surfaces a pass later as
+    // `Call to undefined function __elephc_asort_mixed()`. Recording the group is the proof
+    // that the injection already happened, which is what keeps the declarations alive.
     for source in sources {
         let tokens = crate::lexer::tokenize(source).expect("backend gap prelude must tokenize");
-        combined.extend(crate::parser::parse(&tokens).expect("backend gap prelude must parse"));
+        let parsed = crate::parser::parse(&tokens).expect("backend gap prelude must parse");
+        inventory.record_program(BACKEND_GAP_GROUP, &parsed);
+        combined.extend(parsed);
     }
     combined.extend(program);
     combined

@@ -259,7 +259,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved = elephc::assert_prelude::inject_if_used(resolved);
     let resolved = elephc::array_merge_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_reduce_prelude::inject_if_used(resolved);
-    let resolved = elephc::backend_gap_prelude::inject_if_used(resolved);
+    let resolved = elephc::backend_gap_prelude::inject_if_used(resolved, &mut prelude_inventory);
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP after autoloading and
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
@@ -275,6 +275,12 @@ fn try_compile_source_to_asm_with_defines_repr(
     let mut forced_groups = HashSet::new();
     if prelude_inventory.groups.contains_key("array_merge") {
         forced_groups.insert("array_merge".to_string());
+    }
+    if prelude_inventory
+        .groups
+        .contains_key(elephc::backend_gap_prelude::BACKEND_GAP_GROUP)
+    {
+        forced_groups.insert(elephc::backend_gap_prelude::BACKEND_GAP_GROUP.to_string());
     }
     let optimized = elephc::optimize::prune_unreachable_declarations(
         optimized,
