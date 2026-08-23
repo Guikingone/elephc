@@ -401,11 +401,14 @@ Beyond those shared exclusions the shapes are gated differently:
   code that dominates everything after it. That is what makes ending the
   binding safe, since the store that replaces it definitely runs.
   Top-level code pulled in with **`require_once`** is not at depth 0: its
-  include guard lowers to a runtime branch, so the whole included file sits at
-  conditional depth ≥ 1 and neither shape ever fires inside it (an incompatible
-  reassignment there is the hard error, or the branch-divergent boxing if it
-  qualifies). Plain **`require`** splices the file in with no guard and behaves
-  exactly like inline code.
+  include guard lowers to a runtime branch, so every TOP-LEVEL statement of the
+  included file sits at conditional depth ≥ 1 and neither shape fires there (an
+  incompatible reassignment among them is the hard error, or the
+  branch-divergent boxing if it qualifies). A FUNCTION, method, or closure body
+  declared in that same file is unaffected: depth is counted per body, so its
+  locals are at depth 0 as usual and both shapes apply to them normally. Plain
+  **`require`** splices the file in with no guard, so even its top-level
+  statements behave exactly like inline code.
 - The **`unset()` kill** additionally stands down at top level for any name
   some `global` statement elsewhere in the program names: that variable's
   storage is the program-global symbol other bodies reach, not main's frame
@@ -426,10 +429,10 @@ Beyond those shared exclusions the shapes are gated differently:
   owns — though the warning is withheld where the capture's incoming type
   already absorbs every assignment, since the advice to compile with
   `--strict-locals` would be false there.
-- An assignment inside a branch guarded by a **non-negated type test on the
-  name itself** (`if (is_string($a)) { $a = "x"; }`) is not evidence of
-  divergence and is skipped: the guard already established the type the
-  assignment writes.
+  That same pre-scan also SKIPS an assignment sitting inside a branch guarded by
+  a **non-negated type test on the name itself** (`if (is_string($a)) { $a =
+  "x"; }`): the guard already established the type the assignment writes, so it
+  is not evidence of divergence and does not mark the name.
 
 `--strict-locals` restores the hard error for the two warning shapes above:
 

@@ -2161,11 +2161,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ///   scope wants in the first place, and a marked local the checker already bound `Mixed` would
     ///   miscompile if its slot stayed concrete (`test_branch_divergent_local_survives_an_eval_body`).
     ///
-    /// The eval-AOT FRAGMENT (`eval_scope_read_param`) is refused. It cannot reach here today —
-    /// its lowering receives empty decision maps by construction
-    /// (`ir_lower::function::eval_aot_decision_maps`) — and the refusal states the same rule twice
-    /// on purpose: a fragment's spans are its own, so a key of the outer program's that matched one
-    /// would be an accident.
+    /// The `eval_scope_read_param` test refuses the SCOPE-AWARE eval-AOT fragment specifically —
+    /// it is the only fragment shape that carries a scope param, so it is the only one this test
+    /// names. That is not a gap, because no fragment of either shape can reach here in the first
+    /// place: both eval-AOT lowerers receive empty decision maps by construction
+    /// (`ir_lower::function::eval_aot_decision_maps`), which is where fragments are actually
+    /// excluded. What this line adds is a second statement of the same rule on the one shape whose
+    /// context is visible from here — a fragment's spans are its own, so a key of the outer
+    /// program's that matched one would be an accident.
     fn local_binding_may_force_mixed_storage(&self, name: &str) -> bool {
         let kind = self
             .local_kinds
