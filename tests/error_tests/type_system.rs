@@ -1645,6 +1645,88 @@ fn test_loop_carried_heterogeneous_local_is_accepted() {
     expect_no_error("<?php $a = 0; for ($i = 0; $i < $argc; $i++) { $a = \"s\"; } echo $a;");
 }
 
+/// The MARK wins over flow narrowing: a marked local is `Mixed` at EVERY assignment, including one
+/// inside a branch that a type guard narrowed.
+///
+/// The invariant the marking rests on is "a marked name is `Mixed`, and `Mixed` absorbs every later
+/// assignment, so the retype hook and the `cannot reassign` error can never fire for it". A guard
+/// falsified it: `control_flow` inserts the narrowed type into the shared environment for the
+/// guarded body, which pulls the marked name back out of `Mixed`, and the mark was only consulted
+/// on the FRESH-INSERT path. Measured before this fix, the fixture below was a hard
+/// `cannot reassign $a from int to string` in BOTH modes — permissive included.
+#[test]
+fn test_marking_survives_a_type_guard_on_the_marked_name() {
+    expect_no_error(
+        "<?php if ($argc > 1) { $a = 1; } else { $a = \"s\"; } if (is_int($a)) { $a = \"z\"; } echo $a;",
+    );
+    expect_warning(
+        "<?php if ($argc > 1) { $a = 1; } else { $a = \"s\"; } if (is_int($a)) { $a = \"z\"; } echo $a;",
+        "boxed mixed storage",
+    );
+}
+
+/// Control for the test above: `--strict-locals` marks nothing, so the DIVERGENT assignment is the
+/// error it always was. The guard changes nothing about that half.
+#[test]
+fn test_marking_survives_a_type_guard_control_under_strict() {
+    expect_error_strict(
+        "<?php if ($argc > 1) { $a = 1; } else { $a = \"s\"; } if (is_int($a)) { $a = \"z\"; } echo $a;",
+        "cannot reassign $a from int to string",
+    );
+}
+
+/// A name whose ONLY conflicting assignment sits inside a branch guarded by a type test on that
+/// same name is not marked: the checker narrows the name to the guard's target for that branch and
+/// restores the pre-`if` binding afterwards, so it never rejects the assignment at all.
+///
+/// Before this, the scan predicted a rejection the checker never makes: the fixture warned "compile
+/// with --strict-locals to make this an error" while `--strict-locals` compiled it CLEAN — false
+/// advice — and boxed the frame slot for nothing, on top of blocking constant propagation for the
+/// name program-wide.
+#[test]
+fn test_guard_narrowed_only_conflict_is_not_marked() {
+    expect_no_warning(
+        "<?php $a = 1; if (is_string($a)) { $a = \"x\"; } echo $a;",
+        "boxed mixed storage",
+    );
+    expect_no_error("<?php $a = 1; if (is_string($a)) { $a = \"x\"; } echo $a;");
+    let result = check_source_full("<?php $a = 1; if (is_string($a)) { $a = \"x\"; } echo $a;")
+        .expect("a guard-narrowed assignment must type-check");
+    assert!(
+        result.mixed_storage_store_sites.is_empty(),
+        "a name the checker never rejects must not be boxed: {:?}",
+        result.mixed_storage_store_sites
+    );
+}
+
+/// Control for the test above: the same fixture compiles CLEAN under `--strict-locals`, which is
+/// exactly why warning about it was wrong.
+#[test]
+fn test_guard_narrowed_only_conflict_compiles_under_strict() {
+    expect_no_error_strict("<?php $a = 1; if (is_string($a)) { $a = \"x\"; } echo $a;");
+}
+
+/// The disqualifier is scoped to the guard's own subject: a conflicting assignment guarded by a
+/// type test on a DIFFERENT name is ordinary evidence and still marks.
+#[test]
+fn test_a_guard_on_another_name_does_not_block_marking() {
+    expect_warning(
+        "<?php $b = \"q\"; $a = 1; if (is_string($b)) { $a = \"x\"; } echo $a;",
+        "boxed mixed storage",
+    );
+}
+
+/// A NEGATED type test does not narrow its subject TO the target in the guarded branch — it
+/// narrows to the complement, which for a concrete type is the type itself — so the checker really
+/// does reject the assignment and the mark is the right answer.
+#[test]
+fn test_a_negated_guard_does_not_block_marking() {
+    expect_warning(
+        "<?php $a = 1; if (!is_string($a)) { $a = \"x\"; } echo $a;",
+        "boxed mixed storage",
+    );
+}
+
 /// Declared-typed locals are never marked (contract wins in both modes).
 #[test]
 fn test_typed_local_never_mixed() {

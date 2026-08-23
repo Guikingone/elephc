@@ -45,6 +45,12 @@ struct AssignSite {
     depth: u32,
     /// The assignment STATEMENT's span, which is what EIR lowering looks the decision up by.
     span: Span,
+    /// Whether this assignment sits inside a branch whose guard is a type test on THIS SAME name
+    /// (`if (is_string($a)) { $a = "x"; }`). The checker narrows the name to the guard's target
+    /// for that branch and restores the pre-branch binding afterwards, so such an assignment is
+    /// merged against the guard target rather than against the running binding — and it never
+    /// changes that binding. See [`Checker::first_rejected_assignment`].
+    guarded_by_own_type_test: bool,
 }
 
 /// Everything the scan learned about one name in one body.
@@ -73,6 +79,10 @@ struct Facts {
     /// the one shape that lets it reach an enclosing local — a `use (&$x)` capture — already
     /// makes `$x` reference-aliased and therefore neither killable nor re-bindable out here.
     contains_eval: bool,
+    /// Stack of the names a type guard is narrowing over the region being walked, innermost last.
+    /// One name may appear more than once (nested guards on it), which is why this is a stack of
+    /// names rather than a set. Read by [`record_assign`] to flag a site as guarded.
+    type_guarded_names: Vec<String>,
 }
 
 impl Checker {
@@ -235,6 +245,33 @@ impl Checker {
         // mirroring `Checker::local_binding_depth` for this one name.
         let mut binding: Option<(PhpType, u32)> = None;
         for site in &facts.assigns {
+            // An assignment inside a branch guarded by a type test on THIS name is not a conflict
+            // the checker will ever report, and it does not move the binding either. Flow
+            // narrowing replaced the name's type with the guard's TARGET for the guarded body
+            // (`control_flow` inserts `guard.then_ty` before checking it), so the merge the
+            // checker performs there is against that target rather than against the running
+            // binding — and it restores the pre-branch binding afterwards, so nothing the branch
+            // assigned survives the construct.
+            //
+            // Skipping it is what stops the scan predicting a rejection the checker never makes:
+            // `$a = 1; if (is_string($a)) { $a = "x"; }` used to warn "compile with
+            // --strict-locals to make this an error" while `--strict-locals` compiled it CLEAN,
+            // and boxed the frame slot (plus blocked constant propagation for the name
+            // program-wide) for nothing.
+            //
+            // The skip is deliberately conditioned on the name ALREADY having a binding: a guard
+            // does not narrow a name that has none yet (`guard_narrowing` bails on an unbound
+            // plain variable), so the FIRST assignment to a name still counts even when it sits
+            // inside a guard naming it.
+            //
+            // Interplay with the mark's authority in `merge_local_assignment_type`: a name marked
+            // on OTHER evidence stays marked, keeps every store site (this loop only decides
+            // whether to mark, never which sites to record), and the mark then dominates the
+            // narrowing at the guarded assignment too. So the two rules compose: marks win over
+            // guards, and a name whose only conflict IS a guarded one is never marked.
+            if binding.is_some() && site.guarded_by_own_type_test {
+                continue;
+            }
             let Some((existing, binding_depth)) = binding else {
                 binding = Some((site.ty.clone(), site.depth));
                 continue;
@@ -264,6 +301,10 @@ impl Checker {
 
 /// Records one statement-form assignment to `name`.
 fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: Span) {
+    let guarded_by_own_type_test = facts
+        .type_guarded_names
+        .iter()
+        .any(|guarded| guarded == name);
     let entry = facts.names.entry(name.to_string()).or_default();
     // A value this scan cannot type EXACTLY is not evidence, it is a guess.
     // `infer_expr_type_syntactic` answers `Int` for everything it does not recognise — a plain
@@ -279,6 +320,7 @@ fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: 
         ty: infer_expr_type_syntactic(value),
         depth,
         span,
+        guarded_by_own_type_test,
     });
 }
 
@@ -346,6 +388,88 @@ fn has_exact_syntactic_type(expr: &Expr) -> bool {
 fn collect_block(checker: &Checker, stmts: &[Stmt], depth: u32, facts: &mut Facts) {
     for stmt in stmts {
         collect_stmt(checker, stmt, depth, facts);
+    }
+}
+
+/// Walks the body a `condition` GUARDS, remembering the local that condition narrows (if any) for
+/// the whole of it.
+///
+/// An assignment to that local inside the body is merged by the checker against the guard's TARGET
+/// type rather than against the running binding, and is undone when the construct restores the
+/// pre-branch narrowing — so it is neither conflict evidence nor a change to the binding. See
+/// [`Checker::first_rejected_assignment`], which acts on the flag this records.
+fn collect_type_guarded_block(
+    checker: &Checker,
+    condition: &Expr,
+    body: &[Stmt],
+    depth: u32,
+    facts: &mut Facts,
+) {
+    let guarded = type_guard_subject(condition);
+    if let Some(name) = guarded {
+        facts.type_guarded_names.push(name.to_string());
+    }
+    collect_block(checker, body, depth, facts);
+    if guarded.is_some() {
+        facts.type_guarded_names.pop();
+    }
+}
+
+/// Returns the LOCAL a condition narrows TO a type in the branch it guards, if any.
+///
+/// Mirrors `checker::stmt_check::narrowing::guard_receiver_and_target` — the checker's own guard
+/// recogniser — narrowed to the cases where the guarded branch really sees the guard's TARGET:
+/// - the receiver must be a plain `Variable`, the only receiver shape `guard_env_key` keys as a
+///   local (property places live under a `\x01` sigil and are not locals at all);
+/// - the guard must not be negated. A leading `!`, a `!==` comparison and `isset(…)` all give the
+///   guarded branch the guard's COMPLEMENT, which for a concrete type is that type unchanged — so
+///   the checker really does reject an incompatible assignment there and the marking is right.
+///
+/// Answering `None` for a shape the checker does narrow costs only a spurious warning (the
+/// pre-existing behaviour); answering `Some` for one it does not would suppress a mark the body
+/// needs, so this stays strictly narrower than the recogniser it mirrors.
+fn type_guard_subject(condition: &Expr) -> Option<&str> {
+    match &condition.kind {
+        ExprKind::FunctionCall { name, args } if args.len() == 1 => {
+            // `php_symbol_key` rather than a plain lowercase, so `\is_int($x)` and `Ns\is_int($x)`
+            // are recognised the same way the checker's own recogniser recognises them.
+            match crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str() {
+                "is_int" | "is_integer" | "is_long" | "is_float" | "is_double" | "is_real"
+                | "is_string" | "is_bool" | "is_null" | "is_callable" | "is_array" => {
+                    guarded_variable_name(&args[0])
+                }
+                _ => None,
+            }
+        }
+        ExprKind::InstanceOf { value, target } => match target {
+            InstanceOfTarget::Name(_) => guarded_variable_name(value),
+            InstanceOfTarget::Expr(_) => None,
+        },
+        // `$x === null` / `$x === false` (either operand order). `!==` is the negated form and is
+        // deliberately not recognised.
+        ExprKind::BinaryOp {
+            left,
+            op: crate::parser::ast::BinOp::StrictEq,
+            right,
+        } => {
+            let (receiver, literal) = match guarded_variable_name(left) {
+                Some(receiver) => (receiver, &right.kind),
+                None => (guarded_variable_name(right)?, &left.kind),
+            };
+            match literal {
+                ExprKind::Null | ExprKind::BoolLiteral(false) => Some(receiver),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Returns the name behind a plain `$var` guard receiver, and `None` for every other shape.
+fn guarded_variable_name(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Variable(name) => Some(name.as_str()),
+        _ => None,
     }
 }
 
@@ -462,11 +586,13 @@ fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
         }
         StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
             collect_expr(checker, condition, depth + 1, facts);
-            collect_block(checker, then_body, depth + 1, facts);
+            collect_type_guarded_block(checker, condition, then_body, depth + 1, facts);
             for (condition, body) in elseif_clauses {
                 collect_expr(checker, condition, depth + 1, facts);
-                collect_block(checker, body, depth + 1, facts);
+                collect_type_guarded_block(checker, condition, body, depth + 1, facts);
             }
+            // The ELSE body sees the guard's COMPLEMENT, not its target, so an assignment there is
+            // merged against the running binding exactly as an unguarded one is.
             if let Some(else_body) = else_body {
                 collect_block(checker, else_body, depth + 1, facts);
             }
@@ -477,7 +603,15 @@ fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
                 collect_block(checker, else_body, depth + 1, facts);
             }
         }
-        StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
+        // `check_control_flow_stmt` narrows a `while` CONDITION's guard over the loop body (the
+        // condition is re-evaluated before every iteration, so it holds on entry to each one).
+        StmtKind::While { condition, body } => {
+            collect_expr(checker, condition, depth + 1, facts);
+            collect_type_guarded_block(checker, condition, body, depth + 1, facts);
+        }
+        // A `do`/`while` body runs BEFORE its condition is ever evaluated, so the checker applies
+        // no narrowing to it and neither does this.
+        StmtKind::DoWhile { body, condition } => {
             collect_expr(checker, condition, depth + 1, facts);
             collect_block(checker, body, depth + 1, facts);
         }

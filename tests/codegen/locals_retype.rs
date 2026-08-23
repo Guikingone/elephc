@@ -888,6 +888,38 @@ fn test_different_name_same_position_across_files_still_compiles() {
     assert_eq!(out, "a1|5");
 }
 
+/// A marked local assigned inside a branch a type guard narrowed still lowers through its one boxed
+/// slot, and prints what PHP prints.
+///
+/// The mark is what makes the local's frame storage boxed `Mixed`; flow narrowing used to pull the
+/// name back out of `Mixed` in the guarded branch, and the assignment there became a hard
+/// `cannot reassign $a from int to string` in BOTH modes. With the mark authoritative on every
+/// assignment path, the guarded store is boxed like every other store of the name.
+/// PHP 8.4 prints `s` (argc is 1, so the else arm binds `"s"` and `is_int` is false).
+#[test]
+fn test_marked_local_assigned_inside_a_type_guarded_branch() {
+    let out = compile_and_run(
+        "<?php if ($argc > 1) { $a = 1; } else { $a = \"s\"; } if (is_int($a)) { $a = \"z\"; } echo $a;",
+    );
+    assert_eq!(out, "s");
+}
+
+/// The same fixture must not leak: the guarded store goes through the boxed slot the mark declared,
+/// not through a fresh one.
+#[test]
+fn test_marked_local_assigned_inside_a_type_guarded_branch_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php if ($argc > 1) { $a = 1; } else { $a = \"s\" . $argc; } if (is_int($a)) { $a = \"z\"; } echo $a;",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "s1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Two DIFFERENT marked names at one shared position keep BOTH of their mixed-storage decisions.
 ///
 /// `main.php` marks `$a` with store sites at lines 5 and 7, column 1; `lib.php`'s function marks
