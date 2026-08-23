@@ -131,7 +131,12 @@ pub(super) fn lower_mixed_method_call(
         if builtins::has_eval_context(ctx) {
             return builtins::lower_eval_method_call(ctx, inst, object, method_name);
         }
-        emit_method_call_on_null_fatal(ctx, method_name);
+        // No class in the module declares this method, so nothing can be dispatched — but the
+        // receiver can still say WHAT it is, and php names that. Unboxing here puts the ladder in
+        // the same state the dispatching path leaves it.
+        ctx.load_value_to_result(object)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        super::method_intrinsics::emit_method_call_on_non_object_fatal(ctx, method_name);
         return Ok(());
     }
 
@@ -175,7 +180,9 @@ pub(super) fn lower_mixed_method_call(
     }
 
     ctx.emitter.label(&non_object_label);
-    emit_method_call_on_null_fatal(ctx, method_name);
+    // The unbox left the tag in the result register and the guard above only compared it, so the
+    // receiver can still say what it is.
+    super::method_intrinsics::emit_method_call_on_non_object_fatal(ctx, method_name);
 
     ctx.emitter.label(&done_label);
     Ok(())
