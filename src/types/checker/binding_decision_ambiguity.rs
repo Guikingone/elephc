@@ -23,6 +23,11 @@
 //!   the checker and lowering stay in lock-step on exactly which programs are accepted.
 //! - The scan counts MATCHING NODES, not decisions. One decision matching two nodes is the hazard;
 //!   one node visited by several checker walks is not (the walks re-decide one AST node).
+//! - The scan covers `program` ONLY. An `eval` fragment is parsed from a string literal into its
+//!   own span space (line 1 of that string), which no walk here reaches, so a fragment node can
+//!   neither raise a collision nor be protected by one. Nothing is missing: the eval-AOT lowerers
+//!   receive EMPTY decision maps (`ir_lower::function::eval_aot_decision_maps`), so a fragment
+//!   never consults a decision this pass could have been asked to arbitrate.
 //! - RETIRED mixed-storage keys are checked alongside the live ones. A re-decision REMOVES the
 //!   decisions filed against the sites it is about to re-decide, and the removal matches by
 //!   `(span, name)` — so one body's scan can strip another body's decision and leave this pass

@@ -1703,3 +1703,83 @@ fn test_branch_divergent_local_survives_an_eval_body() {
     );
     assert_eq!(out, "z|w");
 }
+
+// ---------------------------------------------------------------------------
+// Eval-AOT fragments are OUTSIDE the decision maps.
+// ---------------------------------------------------------------------------
+
+/// An eval-AOT fragment must never consult the OUTER program's binding decisions.
+///
+/// A fragment is parsed from a string literal, so its spans live in an independent span space
+/// that starts at line 1 of that string and that nothing in the ambiguity tally can see. A match
+/// against a decision the checker recorded for the main file is therefore always an ACCIDENT of
+/// two unrelated nodes landing on the same line and column — and it is observable: the main file's
+/// marked `$b` records a store site at 2:1, the fragment's own unrelated `$b = 9;` sits at 2:1 of
+/// the eval string, and the mixed pre-declare fired on the fragment's local, giving it boxed
+/// storage the checker never asked for.
+///
+/// Both eval-AOT lowerers now receive EMPTY maps, so the fragment's `$b` keeps the unboxed `Int`
+/// storage its own value implies.
+#[test]
+fn test_eval_aot_fragment_ignores_a_colliding_outer_decision() {
+    let dir = make_cli_test_dir("elephc_eval_aot_maps");
+    let php_path = dir.join("main.php");
+    std::fs::write(
+        &php_path,
+        "<?php\n$b = \"s\";\nif ($argc > 1) { $b = 1; }\necho $b;\necho eval(\"\\n\\$b = 9;\\nreturn \\$b;\");\n",
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--emit-ir")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI with --emit-ir");
+    assert!(
+        output.status.success(),
+        "elephc --emit-ir failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let fragment = eval_aot_fragment_body(&stdout);
+    assert!(
+        fragment.contains("const_i64 9"),
+        "expected the fragment's own literal, got: {fragment}"
+    );
+    assert!(
+        !fragment.contains("php=mixed own=maybe_owned = load_local"),
+        "the fragment local was boxed by the outer program's decision: {fragment}"
+    );
+    assert!(
+        fragment.contains("mixed_box"),
+        "an unboxed fragment local must be boxed at the eval return: {fragment}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Returns the body of the single eval-AOT fragment function in an `--emit-ir` dump.
+fn eval_aot_fragment_body(module_text: &str) -> String {
+    let mut lines = module_text.lines().skip_while(|line| {
+        !line.trim_start().starts_with("function __eir@evalaot")
+    });
+    let header = lines.next().expect("no eval-AOT fragment function in the IR dump");
+    let mut body = String::from(header);
+    for line in lines {
+        body.push('\n');
+        body.push_str(line);
+        if line == "  }" {
+            break;
+        }
+    }
+    body
+}
+
+/// The same program still prints PHP's answer.
+#[test]
+fn test_eval_aot_fragment_with_a_colliding_outer_decision_runs() {
+    let out = compile_and_run(
+        "<?php\n$b = \"s\";\nif ($argc > 1) { $b = 1; }\necho $b;\necho eval(\"\\n\\$b = 9;\\nreturn \\$b;\");\n",
+    );
+    assert_eq!(out, "s9");
+}

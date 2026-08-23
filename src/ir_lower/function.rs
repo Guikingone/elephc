@@ -321,6 +321,31 @@ pub(crate) fn lower_class_method(
     module.class_methods.push(function);
 }
 
+/// Returns the local-binding decision maps an eval-AOT fragment lowers against: all three EMPTY.
+///
+/// A fragment is parsed from a string literal, so every span in it is measured from line 1 of
+/// THAT string. Those spans live in a space of their own that no pass over the program ever
+/// visits: the ambiguity tally (`checker::binding_decision_ambiguity`) counts the nodes of
+/// `program` only, so it cannot see a fragment node and cannot report a collision with one.
+///
+/// A key that matched anyway would therefore be an ACCIDENT — two unrelated nodes at the same line
+/// and column — and acting on it is never right: the fragment's code was never CHECKED, so no
+/// decision in these maps was ever made about it. Handing over empty maps is the structural
+/// statement of that, and it is observable: the outer program's marked `$b` recorded a store site
+/// at 2:1, an eval string's own `$b = 9;` sat at 2:1 of that string, and the mixed pre-declare gave
+/// the fragment's unrelated local boxed storage nothing had asked for.
+fn eval_aot_decision_maps() -> (
+    std::collections::HashMap<Span, String>,
+    std::collections::HashMap<Span, String>,
+    std::collections::HashMap<Span, std::collections::HashSet<String>>,
+) {
+    (
+        std::collections::HashMap::new(),
+        std::collections::HashMap::new(),
+        std::collections::HashMap::new(),
+    )
+}
+
 /// Lowers one no-scope literal eval fragment as an internal EIR function.
 pub(crate) fn lower_eval_aot_function(
     name: &str,
@@ -351,6 +376,7 @@ pub(crate) fn lower_eval_aot_function(
     );
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
+    let (bind_kill_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
@@ -371,9 +397,9 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
-        &check_result.local_bind_kill_sites,
-        &check_result.local_retype_sites,
-        &check_result.mixed_storage_store_sites,
+        &bind_kill_sites,
+        &retype_sites,
+        &mixed_storage_store_sites,
         "main".to_string(),
         constants,
         None,
@@ -460,6 +486,7 @@ pub(crate) fn lower_eval_aot_scope_function(
             scope_flush_writes.clone(),
         )
     });
+    let (bind_kill_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
@@ -480,9 +507,9 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
-        &check_result.local_bind_kill_sites,
-        &check_result.local_retype_sites,
-        &check_result.mixed_storage_store_sites,
+        &bind_kill_sites,
+        &retype_sites,
+        &mixed_storage_store_sites,
         "main".to_string(),
         constants,
         None,

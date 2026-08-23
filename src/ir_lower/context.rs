@@ -2114,12 +2114,66 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Keyed by span AND name for the same two reasons as `is_recorded_retype_site`: a
     /// `Span::dummy()` names no node, and equal spans in different included files are
     /// indistinguishable without the local's name.
+    ///
+    /// The STORAGE gate is applied here rather than at the call site, so the one answer covers both
+    /// halves of the mixed contract (pre-declaring the slot boxed, and forcing the store's PHP type
+    /// to `Mixed`) — the same way `local_binding_slot_is_abandonable` covers both the kill and the
+    /// retype.
     pub(crate) fn is_recorded_mixed_storage_site(&self, span: Span, name: &str) -> bool {
         span.identifies_a_node()
             && self
                 .mixed_storage_store_sites
                 .get(&span)
                 .is_some_and(|boxed| boxed.contains(name))
+            && self.local_binding_may_force_mixed_storage(name)
+    }
+
+    /// Returns whether `name`'s storage shape can carry the whole-frame boxed-`Mixed` contract.
+    ///
+    /// The `Mixed` sibling of `local_binding_slot_is_abandonable`, and it refuses the same shapes
+    /// for the same reason: where the name's local slot is not the value's home, the frame-wide
+    /// promise "every read of this name is a boxed read" is not this layer's to make. Every one of
+    /// these already degrades harmlessly inside `store_local` (a global-backed name has its type
+    /// overridden by `global_alias_type`, an extern global bypasses the slot, a ref-bound name
+    /// stores through its cell at the cell's type) — stating the refusal here makes it a decision
+    /// instead of a coincidence, and stops the pre-declare from minting a plain `PhpLocal` slot for
+    /// a name whose value lives elsewhere.
+    ///
+    /// Two deliberate NON-refusals, both differences from the abandonable set rather than
+    /// omissions:
+    ///
+    /// - a name with NO slot yet is exactly what the pre-declare is for, so "no `local_kinds`
+    ///   entry" is a pass here where it is a refusal there;
+    /// - a body that CALLS `eval` (`eval_barrier_active`) keeps its marks. The kill/retype must
+    ///   stand down there because the eval scope addresses locals BY NAME and abandoning a slot
+    ///   moves the name's storage out from under it — but boxed `Mixed` is the representation that
+    ///   scope wants in the first place, and a marked local the checker already bound `Mixed` would
+    ///   miscompile if its slot stayed concrete (`test_branch_divergent_local_survives_an_eval_body`).
+    ///
+    /// The eval-AOT FRAGMENT (`eval_scope_read_param`) is refused. It cannot reach here today —
+    /// its lowering receives empty decision maps by construction
+    /// (`ir_lower::function::eval_aot_decision_maps`) — and the refusal states the same rule twice
+    /// on purpose: a fragment's spans are its own, so a key of the outer program's that matched one
+    /// would be an accident.
+    fn local_binding_may_force_mixed_storage(&self, name: &str) -> bool {
+        let kind = self
+            .local_kinds
+            .get(name)
+            .copied()
+            .unwrap_or(LocalKind::PhpLocal);
+        if kind != LocalKind::PhpLocal {
+            return false;
+        }
+        if self.uses_global_storage(name, kind) || self.extern_globals.contains_key(name) {
+            return false;
+        }
+        if self.ref_cell_owner_locals.contains_key(name) || self.is_ref_bound_local(name) {
+            return false;
+        }
+        if self.eval_scope_read_param.is_some() {
+            return false;
+        }
+        true
     }
 
     /// Clears an owned hidden temp after its value has been loaded into SSA.
