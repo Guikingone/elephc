@@ -182,6 +182,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub local_kinds: HashMap<String, LocalKind>,
     pub local_types: TypeEnv,
     initialized_slots: HashSet<LocalSlotId>,
+    /// Slots that have received a string still living in the shared concat scratch buffer.
+    ///
+    /// Kept as a MAY set that only ever grows: a slot that once held scratch-backed bytes is
+    /// treated as scratch-backed from then on. Escape points (`return`) consult it, because a
+    /// LOAD of such a slot has `Op::LoadLocal` as its defining op and would otherwise look
+    /// persistent to every check keyed on the defining opcode alone.
+    scratch_backed_slots: HashSet<LocalSlotId>,
     pub functions: &'m HashMap<String, FunctionSig>,
     pub extern_functions: &'m HashMap<String, ExternFunctionSig>,
     pub extern_globals: &'m HashMap<String, PhpType>,
@@ -310,6 +317,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             local_kinds: HashMap::new(),
             local_types: env,
             initialized_slots: HashSet::new(),
+            scratch_backed_slots: HashSet::new(),
             functions,
             extern_functions,
             extern_globals,
@@ -2821,6 +2829,60 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Emits a store opcode to an already declared local or static-local slot.
+    /// Reports whether a string value may still point into the shared concat scratch buffer.
+    ///
+    /// Two ways that happens: the value was produced by a scratch-writing opcode, or it was
+    /// LOADED from a slot that previously received such a value. The second case is the one a
+    /// check on `value_defining_op` alone cannot see — `$v .= ...` in a loop leaves `$v`'s slot
+    /// holding scratch bytes, and `return $v` then hands the caller a pointer the next string
+    /// operation is free to overwrite.
+    pub(crate) fn value_is_scratch_backed(&self, value: LoweredValue) -> bool {
+        if value.ir_type != IrType::Str {
+            return false;
+        }
+        self.value_id_is_scratch_backed(value.value, 0)
+    }
+
+    /// Walks a value back through the retains a store inserts, so the scratch fact is not lost
+    /// behind an `Acquire` the store emitted around the concat result.
+    fn value_id_is_scratch_backed(&self, value: crate::ir::ValueId, depth: usize) -> bool {
+        if depth > 4 {
+            return false;
+        }
+        let Some(inst) = self.builder.value_defining_instruction(value) else {
+            return false;
+        };
+        if inst.op == Op::StrPersist {
+            return false;
+        }
+        if crate::ir_lower::expr::string_op_uses_scratch_storage(inst.op) {
+            return true;
+        }
+        if matches!(inst.op, Op::Acquire) {
+            return inst
+                .operands
+                .first()
+                .is_some_and(|operand| self.value_id_is_scratch_backed(*operand, depth + 1));
+        }
+        self.value_source_slot(value)
+            .is_some_and(|slot| self.scratch_backed_slots.contains(&slot))
+    }
+
+    /// The local slot a value was loaded from, when it is a plain slot load.
+    fn value_source_slot(&self, value: crate::ir::ValueId) -> Option<LocalSlotId> {
+        let inst = self.builder.value_defining_instruction(value)?;
+        if !matches!(
+            inst.op,
+            Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell
+        ) {
+            return None;
+        }
+        match inst.immediate.as_ref()? {
+            Immediate::LocalSlot(slot) => Some(*slot),
+            _ => None,
+        }
+    }
+
     fn store_slot_with_op(
         &mut self,
         slot: LocalSlotId,
@@ -2828,6 +2890,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         op: Op,
         span: Option<Span>,
     ) {
+        // Flow-sensitive on purpose: a later persistent store CLEARS the mark. Keeping it as a
+        // grow-only MAY set makes every subsequent `return $slot` persist, which duplicates
+        // strings that already own their bytes and changes who is responsible for freeing them.
+        if self.value_is_scratch_backed(value) {
+            self.scratch_backed_slots.insert(slot);
+        } else {
+            self.scratch_backed_slots.remove(&slot);
+        }
         self.builder.emit_with_effects(
             op,
             vec![value.value],

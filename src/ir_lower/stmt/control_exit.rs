@@ -121,10 +121,11 @@ pub(super) fn persist_scratch_return_string(
     if value.ir_type != IrType::Str {
         return value;
     }
-    let Some(op) = ctx.builder.value_defining_op(value.value) else {
-        return value;
-    };
-    if !string_op_uses_scratch_storage(op) {
+    // Asking the CONTEXT, not just this value's defining opcode: `return $v;` loads a slot, so
+    // the load is what defines the returned value. A slot that received `$v .= ...` still holds
+    // bytes in the shared concat scratch buffer, and handing that pointer to the caller lets the
+    // next string operation overwrite the returned string in place.
+    if !ctx.value_is_scratch_backed(value) {
         return value;
     }
     ctx.emit_value(
