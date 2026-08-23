@@ -508,9 +508,14 @@ impl Checker {
         region: &GuardRegion,
         assigns: &[AssignSite],
     ) -> bool {
-        // A region belonging to ANOTHER name indexes another name's assignment list. No site of
-        // this name can point at it, so the answer is unused — but computing it would index out of
-        // range, which is why it is refused here rather than assumed.
+        // `guard_regions` is per-BODY while `sites` indexes one per-NAME assignment list, and
+        // `transparent_guard_regions` maps the whole body list for each name in turn — so this is
+        // reached on any body that guards one name and marks another, which is ordinary rather than
+        // exotic (`$x` guarded by `is_string`, `$a` divergently assigned, in the same body). It is
+        // load-bearing, not a belt-and-braces assertion: without it the replay below would index
+        // `assigns` with another name's site numbers and panic out of range. Answering `false`
+        // leans the safe way — no site of THIS name can point at a foreign region, so the answer is
+        // never consulted, and "not transparent" only ever means "keep the evidence".
         if region.name != name {
             return false;
         }
