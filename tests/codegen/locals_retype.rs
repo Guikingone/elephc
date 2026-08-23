@@ -946,6 +946,27 @@ fn test_marked_local_assigned_inside_a_type_guarded_branch_leaves_a_clean_heap()
     );
 }
 
+/// A capture whose INCOMING type rejects the body's stores is marked OUT LOUD, and the boxed slot
+/// it gets still releases cleanly.
+///
+/// The enclosing `$m` is `int` here, so `--strict-locals` really does reject the closure body and
+/// the warning's advice is true. What must not change is the storage: the mark and its store sites
+/// are recorded whether or not the warning is emitted, so the capture slot is boxed and its
+/// previous occupant released exactly as in the silent case. PHP 8.4 prints `string(1) "s"`.
+#[test]
+fn test_a_warned_capture_mark_still_boxes_and_releases() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php\n$m = \"k\" . $argc;\n$f = function (int $n) use ($m) { $m = \"j\" . $n; if ($n > 1) { $m = 7; } return $m; };\nvar_dump($f(2));",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "int(7)\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// The three guarded-region shapes the marking used to miss, each printing PHP 8.4's `1`.
 ///
 /// All three hard-errored in PERMISSIVE mode before the guard model followed the checker: the

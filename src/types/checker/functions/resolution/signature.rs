@@ -162,15 +162,16 @@ impl Checker {
         // a called function saves and restores the enclosing name), so friend
         // channels can identify compiler-owned procedural aliases.
         let previous_function = self.current_function.replace(function_key.clone());
-        // Snapshot the environment the body STARTS from, before the closure below borrows it
-        // mutably. A name already bound here that the pre-scan marks is marked silently.
-        let incoming_env_names: std::collections::HashSet<String> =
-            local_env.keys().cloned().collect();
+        // The storage this frame already holds on entry: the parameters, with the types this
+        // call site specialized them to. The superglobals `local_env` also carries are not the
+        // frame's own storage and are excluded from marking outright, so they are left out.
+        let pre_bound_own_storage: std::collections::HashMap<String, PhpType> =
+            param_types.iter().cloned().collect();
         let body_check_result = self.with_local_storage_context(
             ref_param_names,
             param_names,
             typed_param_names,
-            incoming_env_names,
+            pre_bound_own_storage,
             &decl.body,
             |checker| {
                 for stmt in &decl.body {

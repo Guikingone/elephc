@@ -2158,17 +2158,20 @@ fn test_a_plain_local_beside_a_seeded_name_still_marks() {
     );
 }
 
-/// A by-VALUE closure capture is seeded too, but its storage IS the closure frame's own — the
-/// capture arrives as a hidden parameter — so it stays markable, and the boxed store type is what
+/// A by-VALUE closure capture is genuinely pre-bound own storage: it arrives as a hidden parameter
+/// into a slot the CLOSURE's frame owns, so it stays markable, and the boxed store type is what
 /// releases the previous occupant of the capture slot.
 /// `codegen::locals_retype::test_marked_local_captured_by_value_and_overwritten_in_a_closure` is
 /// the leak half of this claim (48 bytes without the mark).
 ///
-/// The mark is SILENT, though. The warning's "compile with --strict-locals to make this an error"
-/// clause would be FALSE here: `--strict-locals` compiles this body clean, because the capture was
-/// already bound (and already boxed) on entry and the marking created none of that storage. No new
-/// cost means nothing to signal, and no message means no false advice. The store sites and the
-/// mark itself are unaffected — only the diagnostic is withheld.
+/// The mark is SILENT here, and the reason is a REPLAY, not the mere fact of being pre-bound. The
+/// warning ends "compile with --strict-locals to make this an error", so it may only be withheld
+/// when strict really would NOT error. That is answered by replaying the body's assignments to the
+/// name from its INCOMING type: here the enclosing `$m` is a ternary-merged union, `int` and
+/// `string` both merge into it, strict compiles clean — the advice would be false, so nothing is
+/// said. `test_a_capture_whose_incoming_type_rejects_warns` is the other half: an `int`-typed
+/// capture reassigned to `string` DOES make strict error, and there the warning is true and is
+/// emitted. The mark and the store sites are unaffected either way.
 #[test]
 fn test_a_by_value_capture_is_marked_silently() {
     let source = "<?php\n$m = $argc > 1 ? 1 : \"z\";\n$f = function (int $n) use ($m) { if ($n > 1) { $m = 0; } else { $m = \"s\"; } return $m; };\nvar_dump($f($argc));";
@@ -2185,6 +2188,39 @@ fn test_a_by_value_capture_is_marked_silently() {
         "the silent mark must still box the capture: {:?}",
         result.mixed_storage_store_sites
     );
+}
+
+/// A capture whose INCOMING type rejects the body's assignments WARNS: `--strict-locals` really
+/// does error on it, so the advice is true and withholding it would hide a real difference.
+///
+/// The enclosing `$m` is `int` here, not a union, so replaying `$m = 1; … $m = "s";` from `int`
+/// fails — exactly what strict reports as `cannot reassign $m from int to string`. Silencing every
+/// pre-bound name regardless of that replay muted this one: measured, the body compiled with ZERO
+/// diagnostics in permissive mode while strict rejected it.
+#[test]
+fn test_a_capture_whose_incoming_type_rejects_warns() {
+    let source = "<?php\n$m = 1;\n$f = function (int $n) use ($m) { $m = 1; if ($n > 1) { $m = \"s\"; } return $m; };\nvar_dump($f(2));";
+    expect_no_error(source);
+    expect_warning(source, "boxed mixed storage");
+    expect_error_strict(source, "cannot reassign $m");
+}
+
+/// A FRESH closure local is never silenced, however the enclosing scope happens to name its own
+/// variables. The gate keys on the closure's by-value CAPTURE list, not on the environment the
+/// closure body starts from — that environment is a clone of the whole enclosing scope.
+///
+/// Measured before the gate keyed on captures: `$m` here was silenced purely because the top level
+/// also binds a `$m`, so the body compiled with no diagnostic at all while `--strict-locals`
+/// rejected it. Renaming the closure's local to `$q` — which collides with nothing — warned
+/// normally, which is what isolated the cause to the name collision.
+#[test]
+fn test_a_fresh_closure_local_colliding_with_an_outer_name_still_warns() {
+    let colliding = "<?php\n$m = 1;\n$f = function (int $n) { $m = 1; if ($n > 1) { $m = \"s\"; } return $m; };\nvar_dump($f(2));\necho $m;";
+    let distinct = "<?php\n$m = 1;\n$f = function (int $n) { $q = 1; if ($n > 1) { $q = \"s\"; } return $q; };\nvar_dump($f(2));\necho $m;";
+    expect_warning(colliding, "boxed mixed storage");
+    expect_warning(distinct, "boxed mixed storage");
+    expect_error_strict(colliding, "cannot reassign $m");
+    expect_error_strict(distinct, "cannot reassign $q");
 }
 
 /// Control for the test above: an ordinary LOCAL of the same closure — one the body itself

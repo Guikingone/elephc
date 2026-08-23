@@ -434,15 +434,23 @@ impl Checker {
         self.loop_storage_types
             .retain(|(scope, _), _| scope != &loop_storage_scope);
         self.current_loop_storage_scope = loop_storage_scope;
-        // Snapshot before the closure below borrows `closure_sig.env` mutably. This is where the
-        // by-VALUE captures live: they are bound on entry, so a mark on one is silent.
-        let incoming_env_names: std::collections::HashSet<String> =
-            closure_sig.env.keys().cloned().collect();
+        // The storage this closure's frame ALREADY holds on entry: its by-VALUE captures, each
+        // with the type it arrives with, read from the ENCLOSING environment. Deliberately not
+        // `closure_sig.env`, which `prepare_closure_signature_context_with_param_hints` builds by
+        // cloning the whole enclosing scope — keying on that made every enclosing local look
+        // pre-bound, and silenced a FRESH closure local whose name merely collided with one.
+        // Parameters are added too, so the map means "the frame's own pre-bound storage"; the
+        // marking excludes them anyway.
+        let pre_bound_own_storage: std::collections::HashMap<String, PhpType> = captures
+            .iter()
+            .chain(params.iter().map(|(name, _, _, _)| name))
+            .filter_map(|name| env.get(name).map(|ty| (name.clone(), ty.clone())))
+            .collect();
         let body_result = self.with_local_storage_context(
             closure_ref_params,
             closure_param_names,
             closure_typed_params,
-            incoming_env_names,
+            pre_bound_own_storage,
             body,
             |checker| {
                 for stmt in body {

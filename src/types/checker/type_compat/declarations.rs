@@ -408,7 +408,7 @@ impl Checker {
         ref_param_names: Vec<String>,
         param_names: Vec<String>,
         typed_param_names: Vec<String>,
-        incoming_env_names: std::collections::HashSet<String>,
+        pre_bound_own_storage: std::collections::HashMap<String, crate::types::PhpType>,
         body: &[crate::parser::ast::Stmt],
         f: F,
     ) -> Result<T, CompileError>
@@ -443,11 +443,13 @@ impl Checker {
         // kept unmarked. It also records here whether the body calls `eval()` anywhere, which
         // `Checker::local_binding_is_killable` then consults for the whole body.
         //
-        // `incoming_env_names` is the caller's snapshot of the environment this body STARTS from,
-        // taken before the closure below borrows it mutably. A name already in it that gets marked
-        // is marked silently — the storage was not this marking's doing, so there is no new cost
-        // to warn about (and the warning's `--strict-locals` advice would be false).
-        self.run_mixed_storage_scan(body, &incoming_env_names);
+        // `pre_bound_own_storage` is what this body's OWN frame already holds on entry — a
+        // closure's by-value captures, and the parameters — with the type each arrives with. NOT
+        // the body's incoming environment: a closure body starts from a clone of the whole
+        // enclosing scope, and keying on that silenced fresh closure locals that merely shared a
+        // name with something outside. A marked name from this map is announced only when
+        // `--strict-locals` would really reject the body; see `run_mixed_storage_scan`.
+        self.run_mixed_storage_scan(body, &pre_bound_own_storage);
 
         let result = f(self);
 
