@@ -953,8 +953,11 @@ fn test_marked_local_assigned_inside_a_type_guarded_branch_leaves_a_clean_heap()
 /// refuses it. `$m = 1; $m = "s";` (two depth-0 stores) and `$m = null;` first (an unseeded replay
 /// starts at `Void`, which absorbs the later `string`) both went unmarked and hard-errored in
 /// PERMISSIVE mode. The guarded one is the opposite error: a region over a pre-bound name's FIRST
-/// in-body store IS transparent — the guard has a binding to narrow — so it must not be marked or
-/// warned about at all.
+/// in-body store IS transparent — the guard has a binding to narrow — so the seeded replay clears
+/// it and no WARNING is emitted. It is still MARKED: the unseeded replay finds its own conflict and
+/// the capture slot gets its boxed storage (the closure body carries the marked pattern, a
+/// `Heap(Mixed)` load and release before each store). Silent, not unmarked — the two are different
+/// answers, and only the diagnostic is withheld.
 #[test]
 fn test_capture_replay_shapes_run_php_identically() {
     assert_eq!(

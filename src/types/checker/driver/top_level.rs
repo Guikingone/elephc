@@ -37,13 +37,22 @@ impl Checker {
         // second pass would start with the first pass's aliases and binding depths already in
         // place, so the same `unset` could be eligible in one pass and not the other.
         let saved_local_binding_scope = self.enter_local_binding_scope(Vec::new(), Vec::new());
+        // `enter_local_binding_scope` does NOT touch `active_ref_params`, so the top level installs
+        // it here the way `with_local_storage_context` does for every other body: saved, emptied,
+        // restored. Top level declares no by-reference parameters and captures nothing, so the set
+        // is empty for it — and the pre-scan reads it (a reference-aliased name is never markable),
+        // which is what makes an empty set the correct state rather than merely the tidy one. This
+        // pass runs TWICE, so an inherited or leftover entry would also make the same name markable
+        // in one pass and not the other.
+        let saved_ref_params = std::mem::take(&mut self.active_ref_params);
         let mut global_env = self.seed_global_env();
         // The pre-scan has to decide before the first statement is checked: a marked local binds
-        // boxed `Mixed` at its FIRST store. Top level has no parameters, so the scan sees an
-        // empty by-reference/declared-type exclusion set, as `enter_local_binding_scope` just
-        // installed it — and no pre-bound storage OF ITS OWN either: `$argc`, `$argv`, the
-        // superglobals and the extern C globals all live in program storage, and
-        // `name_is_seeded_program_storage` keeps the marking off them outright.
+        // boxed `Mixed` at its FIRST store. Top level has no parameters, so the by-reference and
+        // declared-type exclusion sets the scan consults are empty — `enter_local_binding_scope`
+        // installed the declared-type one and the line above the by-reference one — and there is no
+        // pre-bound storage OF ITS OWN either: `$argc`, `$argv`, the superglobals and the extern C
+        // globals all live in program storage, and `name_is_seeded_program_storage` keeps the
+        // marking off them outright.
         self.run_mixed_storage_scan(program, &std::collections::HashMap::new());
         let mut all_errors = Vec::with_capacity(program.len());
         // `(statement index, name, span)` for every null probe this pass tolerated, so the
@@ -67,6 +76,7 @@ impl Checker {
         self.top_level_env = global_env.clone();
         self.eval_barrier_active = saved_eval_barrier_active;
         self.null_probe_scope_is_top_level = saved_null_probe_scope;
+        self.active_ref_params = saved_ref_params;
         self.exit_local_binding_scope(saved_local_binding_scope);
         (global_env, all_errors)
     }

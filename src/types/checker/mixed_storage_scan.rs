@@ -724,9 +724,14 @@ fn collect_type_guarded_block(
 /// - the guard must not be negated. A leading `!`, a `!==` comparison and `isset(…)` all give the
 ///   guarded branch the guard's COMPLEMENT, which for a concrete type is that type unchanged — so
 ///   the checker really does reject an incompatible assignment there and the marking is right;
-/// - the target must be one exact `PhpType`. `is_array($x)` narrows to the element-agnostic array
-///   FAMILY (`GuardTarget::AnyArray`, whose fallback is `Mixed`), which this cannot state, so it
-///   is not recognised.
+/// - the target must be stateable as one `PhpType`. `is_array($x)` narrows to the element-agnostic
+///   array FAMILY (`GuardTarget::AnyArray`), and is modelled by that target's own fallback,
+///   `Mixed` — see the arm itself for why that is exact for every name this scan can mark.
+///
+/// `isset($x)`, `!==` and a leading `!` are the checker's SELF-NEGATING guards: their branch sees
+/// the COMPLEMENT, which for a concrete type is that type unchanged, so the checker really does
+/// reject an incompatible store there and the mark is right. `is_object` is not a narrowing
+/// predicate the checker supports at all. All four are correctly absent.
 ///
 /// The type is returned because the caller has to ask whether the guard's target ACCEPTS what the
 /// guarded branch assigns: `is_string($a)` followed by `$a = "x"` is accepted and is not evidence,
@@ -748,6 +753,15 @@ fn type_guard_subject(condition: &Expr) -> Option<(&str, PhpType)> {
                 "is_bool" => PhpType::Bool,
                 "is_null" => PhpType::Void,
                 "is_callable" => PhpType::Callable,
+                // `is_array` narrows to the element-agnostic array FAMILY, which has no single
+                // `PhpType`. `Mixed` is what `GuardTarget::AnyArray::fallback_type` yields, and
+                // `narrow_to` reaches for that fallback whenever the guarded name is not ALREADY
+                // array-typed — which a name this scan can mark never is, because
+                // `has_exact_syntactic_type` refuses array literals and `(array)` casts outright.
+                // Leaving it unrecognised was the one remaining source of false advice:
+                // `$a = 1; if (is_array($a)) { $a = "x"; }` warned that `--strict-locals` would
+                // reject the body while strict compiled it clean.
+                "is_array" => PhpType::Mixed,
                 _ => return None,
             };
             Some((guarded_variable_name(&args[0])?, target))

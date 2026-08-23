@@ -2233,6 +2233,73 @@ fn test_a_by_value_capture_of_the_same_shape_is_still_marked() {
     expect_warning(source, "boxed mixed storage");
 }
 
+/// The top level installs `active_ref_params` the way every other body does: saved, emptied,
+/// restored. `enter_local_binding_scope` does not touch that set, and `check_top_level_program`
+/// runs TWICE, so without the reset pass 2 would start with pass 1's `=&` targets already in it —
+/// and the pre-scan reads the set now (a reference-aliased name is never markable), which is what
+/// turned a tidiness point into a structural one.
+///
+/// This pin is a TRIPWIRE rather than a reproduction: the leak is provably unobservable today. Every
+/// write to `active_ref_params` outside a body scope comes from `check_ref_assign`, and every one of
+/// them inserts the `=&` TARGET — a name the scan's `StmtKind::RefAssign` arm disqualifies outright,
+/// in both passes, whatever the set says. It would start mattering the moment either half changed,
+/// which is exactly when a silent cross-pass difference would be hardest to find.
+#[test]
+fn test_a_top_level_reference_assignment_does_not_disturb_marking() {
+    let source = "<?php $x = 1; $r =& $x; $a = 0; if ($argc > 1) { $a = \"s\"; } echo $a, $r;";
+    expect_no_error(source);
+    expect_warning(source, "boxed mixed storage");
+    let result = check_source_full(source).expect("the fixture must type-check");
+    assert!(
+        result.mixed_storage_local_names().contains("a"),
+        "the unrelated local must still be marked: {:?}",
+        result.mixed_storage_store_sites
+    );
+    assert!(
+        !result.mixed_storage_local_names().contains("r"),
+        "a reference-assignment target must never be marked: {:?}",
+        result.mixed_storage_store_sites
+    );
+}
+
+/// `is_array($a)` narrows too, so a conflicting store inside its branch is not evidence.
+///
+/// The recogniser skipped it because `GuardTarget::AnyArray` has no single `PhpType`, on the
+/// reasoning that missing a guard "costs only a spurious warning". It is the same truthfulness
+/// violation this feature removed everywhere else: measured, `$a = 1; if (is_array($a)) { $a = "x"; }`
+/// warned "compile with --strict-locals to make this an error" while `--strict-locals` compiled it
+/// CLEAN — the only such hit in a ~120-fixture sweep.
+///
+/// The target is modelled as `Mixed`, which is what `GuardTarget::AnyArray::fallback_type` yields
+/// whenever the guarded name is not already array-typed. It cannot be one for a name this scan
+/// marks: `has_exact_syntactic_type` refuses array literals and `(array)` casts outright, so a
+/// markable name's replay never holds an array. Over-recognising for an array-typed pre-bound name
+/// would only suppress a mark, which reverts that body to the pre-feature error rather than to a
+/// wrong answer.
+#[test]
+fn test_an_is_array_guard_does_not_produce_false_advice() {
+    let source = "<?php $a = 1; if (is_array($a)) { $a = \"x\"; } echo $a;";
+    expect_no_warning(source, "boxed mixed storage");
+    expect_no_error(source);
+    expect_no_error_strict(source);
+}
+
+/// Controls: the guards whose warning is TRUE keep it. `is_object` is not a narrowing predicate the
+/// checker supports at all, `isset` is self-negating (its branch sees the COMPLEMENT), and
+/// `is_callable` narrows to a target that rejects a `string` — all three really do make
+/// `--strict-locals` report `cannot reassign`, so the advice is accurate and stays.
+#[test]
+fn test_guards_whose_advice_is_true_still_warn() {
+    for source in [
+        "<?php $a = 1; if (is_object($a)) { $a = \"x\"; } echo $a;",
+        "<?php $a = 1; if (isset($a)) { $a = \"x\"; } echo $a;",
+        "<?php $a = 1; if (is_callable($a)) { $a = \"x\"; } echo $a;",
+    ] {
+        expect_warning(source, "boxed mixed storage");
+        expect_error_strict(source, "cannot reassign $a");
+    }
+}
+
 /// A guard region containing a pre-bound name's FIRST in-body assignment IS transparent: the guard
 /// narrows a capture, which is bound on entry, so `guard_narrowing` really does fire there.
 ///
@@ -2246,6 +2313,16 @@ fn test_a_guard_over_a_pre_bound_names_first_assignment_is_transparent() {
     expect_no_warning(source, "boxed mixed storage");
     expect_no_error(source);
     expect_no_error_strict(source);
+    // SILENT, not unmarked. The seeded replay clears the body — which is why no warning is
+    // emitted — but the unseeded replay still finds its own conflict, so the capture keeps its
+    // boxed slot. Pinned because "no warning" and "no mark" are different answers and the
+    // difference is invisible in a diagnostic-only assertion.
+    let result = check_source_full(source).expect("the fixture must type-check");
+    assert!(
+        result.mixed_storage_local_names().contains("m"),
+        "a silently marked capture must still be boxed: {:?}",
+        result.mixed_storage_store_sites
+    );
 }
 
 /// A pre-bound name cannot be killed or re-typed, so its evidence replay must start from the type
