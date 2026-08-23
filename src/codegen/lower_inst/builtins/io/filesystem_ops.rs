@@ -169,6 +169,7 @@ fn emit_copy_from_lowered_source(
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // the bytes, across the path load
             load_string_to_result(ctx, destination, "copy")?;
             abi::emit_pop_reg_pair(ctx.emitter, "x3", "x4");                    // the data pair the writer reads
+            ctx.emitter.instruction("mov x5, xzr");                             // the writer reads $flags for FILE_APPEND: this caller has none
             abi::emit_call_label(ctx.emitter, "__rt_file_put_contents");
             ctx.emitter.instruction("cmp x0, #0");
             ctx.emitter.instruction("cset x0, ge");                             // a zero-byte write copied an empty file
@@ -183,6 +184,7 @@ fn emit_copy_from_lowered_source(
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // the bytes, across the path load
             load_string_to_result(ctx, destination, "copy")?;
             abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");                  // the data pair the writer reads
+            ctx.emitter.instruction("xor ecx, ecx");                            // the writer reads $flags for FILE_APPEND: this caller has none
             abi::emit_call_label(ctx.emitter, "__rt_file_put_contents");
             ctx.emitter.instruction("cmp rax, 0");
             ctx.emitter.instruction("setge al");                                // a zero-byte write copied an empty file

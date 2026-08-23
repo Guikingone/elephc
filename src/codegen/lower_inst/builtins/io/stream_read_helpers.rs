@@ -8,6 +8,9 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use crate::codegen_support::runtime::data::{
+    STREAM_COPY_NO_SEEK, STREAM_COPY_SEEK_FAILED_HEAD, STREAM_COPY_SEEK_FAILED_TAIL,
+};
 
 /// Reserves temporary storage for `stream_get_contents` stream and length operands.
 pub(super) fn emit_stream_get_contents_frame_enter(ctx: &mut FunctionContext<'_>) {
@@ -422,10 +425,70 @@ pub(super) fn lower_stream_copy_loop_and_box(
         }
     }
     ctx.emitter.label(seek_failed);
+    emit_stream_copy_seek_refusal(ctx);
     emit_stream_copy_frame_leave(ctx);
     emit_bool_result(ctx, false);
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
     ctx.emitter.label(boxed_done);
+}
+
+/// Says why `stream_copy_to_stream()` refused, in php's two lines.
+///
+/// The copier's own message is unconditional on a failed seek and names the offset it could not
+/// reach. The line before it belongs to `_php_stream_seek` and appears only when the stream has no
+/// seek operation AT ALL — for a userspace wrapper, when the class declares no `stream_seek`. php
+/// discovers that by CALLING the method and finding it absent, then marks the stream unseekable
+/// and falls through to the refusal; `__rt_user_wrapper_lacks_seek` asks the vtable the same
+/// question directly, and answers no for every other kind of stream, whose seek failed on its own
+/// terms. MEASURED on `php -n` 8.5.6 with two wrappers differing in nothing but that method.
+///
+/// Emitted while the copy frame is still up, because the offset it prints lives in it.
+fn emit_stream_copy_seek_refusal(ctx: &mut FunctionContext<'_>) {
+    let has_seek_op = ctx.next_label("scs_has_seek_op");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // the opaque source handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_fd");
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_lacks_seek");
+            ctx.emitter.instruction(&format!("cbz x0, {}", has_seek_op));       // the stream has a seek that simply failed
+            abi::emit_symbol_address(ctx.emitter, "x1", "_scts_no_seek");
+            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_COPY_NO_SEEK.len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            ctx.emitter.label(&has_seek_op);
+            abi::emit_symbol_address(ctx.emitter, "x1", "_scts_seek_head");
+            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_COPY_SEEK_FAILED_HEAD.len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            ctx.emitter.instruction("ldr x0, [sp, #40]");                       // the offset the seek was asked for
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");                     // x1 = digits, x2 = length
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "x1", "_scts_seek_tail");
+            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_COPY_SEEK_FAILED_TAIL.len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");             // the newline writes the composed line out
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // the opaque source handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_fd");
+            ctx.emitter.instruction("mov rdi, rax");
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_lacks_seek");
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}", has_seek_op));            // the stream has a seek that simply failed
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_scts_no_seek");
+            ctx.emitter.instruction(&format!("mov rsi, {}", STREAM_COPY_NO_SEEK.len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            ctx.emitter.label(&has_seek_op);
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_scts_seek_head");
+            ctx.emitter.instruction(&format!("mov rsi, {}", STREAM_COPY_SEEK_FAILED_HEAD.len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 40]");           // the offset the seek was asked for
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");                     // rax = digits, rdx = length
+            ctx.emitter.instruction("mov rdi, rax");
+            ctx.emitter.instruction("mov rsi, rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_scts_seek_tail");
+            ctx.emitter.instruction(&format!("mov rsi, {}", STREAM_COPY_SEEK_FAILED_TAIL.len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");             // the newline writes the composed line out
+        }
+    }
 }
 
 /// Emits the AArch64 stream-copy read/write loop.

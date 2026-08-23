@@ -24,6 +24,9 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// The `stream_tell` vtable slot, mirroring `__rt_user_wrapper_ftell`.
 const VTABLE_SLOT_TELL: usize = 5;
 
+/// The `stream_seek` vtable slot, mirroring `__rt_user_wrapper_fseek`.
+const VTABLE_SLOT_SEEK: usize = 6;
+
 /// Emits `__rt_user_wrapper_seek_reconcile(handle, fd, head_ptr, head_len) -> 0 | -1`.
 ///
 /// AArch64 takes `x0`/`x1`/`x2`/`x3`; x86_64 takes `rdi`/`rsi`/`rdx`/`rcx`. Answers 0 when the
@@ -153,4 +156,68 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");
     emitter.instruction("pop rbp");
     emitter.instruction("ret");
+}
+
+/// Emits `__rt_user_wrapper_lacks_seek(fd) -> 1` when the wrapper's class defines no `stream_seek`.
+///
+/// php separates "this stream has no seek OP" from "the seek failed", and says both when both are
+/// true — MEASURED with two wrappers differing only in whether the method exists. Anything that is
+/// not a userspace wrapper answers 0: its seek came from somewhere else and failed on its own
+/// terms.
+pub fn emit_user_wrapper_lacks_seek(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: does this wrapper's class define stream_seek at all ---");
+    emitter.label_global("__rt_user_wrapper_lacks_seek");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov w9, #0x4000");                             // high half of the synthetic fd base
+            emitter.instruction("lsl x9, x9, #16");                             // form 0x40000000
+            emitter.instruction("subs x9, x0, x9");                             // slot index = fd - base
+            emitter.instruction("b.lt __rt_uwls_no");                           // a native descriptor is not a wrapper
+            super::emit_load_handles_cap(emitter, "x10");
+            emitter.instruction("cmp x9, x10");
+            emitter.instruction("b.hs __rt_uwls_no");                           // out of range: not a wrapper either
+            super::emit_load_handles_base(emitter, "x10");
+            emitter.instruction("ldr x10, [x10, x9, lsl #3]");                  // obj = _user_wrapper_handles[slot]
+            emitter.instruction("cbz x10, __rt_uwls_no");                       // already closed
+            emitter.instruction("ldr x11, [x10]");                              // class id
+            abi::emit_symbol_address(emitter, "x12", "_user_wrapper_vtable_ptrs");
+            emitter.instruction("ldr x12, [x12, x11, lsl #3]");                 // this class's wrapper vtable
+            emitter.instruction("cbz x12, __rt_uwls_yes");                      // no vtable reads as no method
+            emitter.instruction(&format!("ldr x12, [x12, #{}]", VTABLE_SLOT_SEEK * 8));
+            emitter.instruction("cbnz x12, __rt_uwls_no");                      // the method exists
+            emitter.label("__rt_uwls_yes");
+            emitter.instruction("mov x0, #1");
+            emitter.instruction("ret");
+            emitter.label("__rt_uwls_no");
+            emitter.instruction("mov x0, #0");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r9, rdi");
+            emitter.instruction("sub r9, 0x40000000");                          // slot index = fd - base
+            emitter.instruction("js __rt_uwls_no_x86");                         // a native descriptor is not a wrapper
+            super::emit_load_handles_cap(emitter, "r10");
+            emitter.instruction("cmp r9, r10");
+            emitter.instruction("jae __rt_uwls_no_x86");                        // out of range: not a wrapper either
+            super::emit_load_handles_base(emitter, "r10");
+            emitter.instruction("mov r10, QWORD PTR [r10 + r9*8]");             // obj = _user_wrapper_handles[slot]
+            emitter.instruction("test r10, r10");
+            emitter.instruction("jz __rt_uwls_no_x86");                         // already closed
+            emitter.instruction("mov r11, QWORD PTR [r10]");                    // class id
+            abi::emit_symbol_address(emitter, "rax", "_user_wrapper_vtable_ptrs");
+            emitter.instruction("mov rax, QWORD PTR [rax + r11*8]");            // this class's wrapper vtable
+            emitter.instruction("test rax, rax");
+            emitter.instruction("jz __rt_uwls_yes_x86");                        // no vtable reads as no method
+            emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", VTABLE_SLOT_SEEK * 8));
+            emitter.instruction("test rax, rax");
+            emitter.instruction("jnz __rt_uwls_no_x86");                        // the method exists
+            emitter.label("__rt_uwls_yes_x86");
+            emitter.instruction("mov rax, 1");
+            emitter.instruction("ret");
+            emitter.label("__rt_uwls_no_x86");
+            emitter.instruction("xor eax, eax");
+            emitter.instruction("ret");
+        }
+    }
 }

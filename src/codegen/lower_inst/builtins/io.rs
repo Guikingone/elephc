@@ -244,6 +244,17 @@ pub(super) use string_validation::load_string_to_result;
 /// `fopen()` on the same URI worked. The opener already scans the wrapper registry and reports an
 /// unknown scheme the way php does, so delegating covers both outcomes.
 /// php-src's `CHECK_NULL_PATH` wording for an empty filename reaching a stream open.
+/// Whether this URL names one of php's OWN sub-streams, the ones only the opener can serve.
+///
+/// `php://filter/` is deliberately absent: it needs a filter chain attached to the stream it
+/// wraps, and both one-shot builtins have their own route for it. Everything else under the
+/// scheme — `memory`, `temp` (with or without `/maxmemory:N`), `input`, `output`, `stdin`,
+/// `stdout`, `stderr`, `fd/N` — is an ordinary open followed by one read or one write, which is
+/// exactly what php-src does for them.
+pub(super) fn is_php_substream_uri(uri: &str) -> bool {
+    uri.starts_with("php://") && !uri.starts_with("php://filter/")
+}
+
 pub(super) const EMPTY_PATH_MESSAGE: &str = "Path must not be empty";
 
 /// `scandir()`'s own empty-directory wording, which is NOT the shared one.

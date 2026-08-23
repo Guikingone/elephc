@@ -5238,6 +5238,60 @@ echo $n === false ? "false" : "got";
     assert_eq!(out, "false");
 }
 
+/// A refused seek says WHY, and says it twice when the wrapper has no `stream_seek` at all.
+///
+/// php's copier warns `Failed to seek to position N in the stream` on any failed seek, and
+/// `_php_stream_seek` warns `Stream does not support seeking` BEFORE it when the stream has no
+/// seek operation — which, for a userspace wrapper, means the class declares no `stream_seek`.
+/// MEASURED on `php -n` 8.5.6 with the two wrappers below, which differ in nothing else: the
+/// first produces both lines, the second only the copier's. elephc answered `false` correctly all
+/// along and said nothing, so only a diagnostics assertion could see this.
+#[test]
+fn test_stream_copy_to_stream_seek_refusal_names_the_offset() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class LacksSeekW {
+    public $context;
+    public $b = "abcdef";
+    public function stream_open($p, $m, $o, &$op): bool { return true; }
+    public function stream_read(int $n): string { $r = substr($this->b, 0, $n); $this->b = substr($this->b, $n); return $r; }
+    public function stream_eof(): bool { return $this->b === ""; }
+}
+class RefusesSeekW extends LacksSeekW {
+    public function stream_seek(int $offset, int $whence): bool { return false; }
+}
+stream_wrapper_register("lacksseek", "LacksSeekW");
+stream_wrapper_register("refusesseek", "RefusesSeekW");
+foreach (["lacksseek", "refusesseek"] as $scheme) {
+    $src = fopen($scheme . "://x", "r");
+    $dst = fopen("php://memory", "r+");
+    echo var_export(stream_copy_to_stream($src, $dst, 3, 2), true), "|";
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false|false|");
+    let lines: Vec<&str> = out
+        .diagnostics
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert_eq!(lines.len(), 3, "expected three warnings, got {:?}", lines);
+    assert!(
+        lines[0].contains("Warning: stream_copy_to_stream(): Stream does not support seeking"),
+        "the wrapper without the method should be told so first: {:?}",
+        lines
+    );
+    for line in [lines[1], lines[2]] {
+        assert!(
+            line.contains(
+                "Warning: stream_copy_to_stream(): Failed to seek to position 2 in the stream"
+            ),
+            "every refused seek names the offset it could not reach: {line}"
+        );
+    }
+}
+
 /// Verifies a runtime-computed negative length copies to EOF, matching PHP's
 /// default `-1` length semantics.
 #[test]

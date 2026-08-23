@@ -278,6 +278,7 @@ pub(crate) use stream_get_line::emit_stream_get_line;
 pub(crate) use stream_context_shape::emit_stream_context_options_shape_ok;
 pub(crate) use stream_select_cast_warning::emit_stream_select_cast_warning;
 pub(crate) use user_wrapper_seek_reconcile::emit_user_wrapper_seek_reconcile;
+pub(crate) use user_wrapper_seek_reconcile::emit_user_wrapper_lacks_seek;
 pub(crate) use stream_select_memory_guard::emit_stream_select_memory_guard;
 pub(crate) use stream_pending::{
     emit_stream_pending_clear, emit_stream_pending_put, emit_stream_pending_take,

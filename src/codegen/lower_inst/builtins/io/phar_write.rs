@@ -88,7 +88,8 @@ pub(crate) fn lower_file_put_contents(
                 .any(|known| *known == scheme)
                 && scheme != "compress.zlib"
                 && scheme != "compress.bzip2"
-        }) {
+        }) || super::is_php_substream_uri(path_literal)
+        {
             return lower_literal_wrapper_file_put_contents(ctx, inst, path_literal, data);
         }
     }

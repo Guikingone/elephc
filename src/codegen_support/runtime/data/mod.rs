@@ -273,6 +273,26 @@ pub(crate) const SELECT_CAST_UNREPRESENTABLE_MEMORY: &str = concat!(
     " as a select()able descriptor\n"
 );
 
+/// What `stream_copy_to_stream()` says when the source has no way to seek AT ALL.
+///
+/// This one comes from `_php_stream_seek` and not from the copier: a userspace wrapper whose class
+/// declares no `stream_seek` makes php mark the stream unseekable and fall through to the refusal,
+/// which names whichever userland function is running — here, the copier. A wrapper that DOES
+/// declare the method and answers `false` never reaches it. MEASURED on `php -n` 8.5.6 with two
+/// wrappers differing in nothing else.
+pub(crate) const STREAM_COPY_NO_SEEK: &str =
+    "Warning: stream_copy_to_stream(): Stream does not support seeking\n";
+
+/// The head of the copier's own refusal, before the offset it could not reach.
+///
+/// Unconditional on any failed seek, so it is the only line a wrapper refusing from inside its own
+/// `stream_seek` produces, and the second of the two the wrapper without one produces.
+pub(crate) const STREAM_COPY_SEEK_FAILED_HEAD: &str =
+    "Warning: stream_copy_to_stream(): Failed to seek to position ";
+
+/// The tail of that refusal, after the offset.
+pub(crate) const STREAM_COPY_SEEK_FAILED_TAIL: &str = " in the stream\n";
+
 /// `stream_eof`'s tail, the only one that also reports what php assumed.
 pub(crate) const WRAPPER_MISSING_HOOK_TAIL_EOF: &str =
     "::stream_eof is not implemented! Assuming EOF\n";

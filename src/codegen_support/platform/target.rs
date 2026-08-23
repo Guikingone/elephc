@@ -440,6 +440,18 @@ impl Platform {
         }
     }
 
+    /// Whether this platform's `st_dev` occupies only the low 32 bits of its slot.
+    ///
+    /// Darwin's `dev_t` is `int32_t`; Linux's is 64 bits. A comparison that reads eight bytes on
+    /// Darwin reads `st_mode` and `st_nlink` along with it.
+    pub fn stat_dev_is_narrow(&self) -> bool {
+        match self {
+            Platform::MacOS => true,
+            Platform::Linux => false,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// Returns the byte offset of `st_rdev` within `struct stat`.
     pub fn stat_rdev_offset(&self) -> usize {
         match self {

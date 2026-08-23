@@ -135,6 +135,59 @@ unlink("orig.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// php refuses to copy a file onto ITSELF, and knows which file that is by (st_dev, st_ino).
+///
+/// MEASURED on `php -n` 8.5.6: the same path, `./` before the same path, a hard link to the source
+/// and a symlink to it all answer `false`, say nothing, and leave the file alone; a destination
+/// that does not exist yet is an ordinary copy. elephc answered `true` to all four. Comparing the
+/// path STRINGS would answer three of the five correctly and is not the rule php implements.
+#[test]
+fn test_copy_refuses_a_destination_that_is_the_same_file() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("sf.txt", "AB");
+link("sf.txt", "sf_hard.txt");
+symlink("sf.txt", "sf_soft.txt");
+var_dump(copy("sf.txt", "sf.txt"));
+var_dump(copy("sf.txt", "./sf.txt"));
+var_dump(copy("sf.txt", "sf_hard.txt"));
+var_dump(copy("sf.txt", "sf_soft.txt"));
+var_dump(file_get_contents("sf.txt"));
+var_dump(copy("sf.txt", "sf_new.txt"));
+var_dump(file_get_contents("sf_new.txt"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\nstring(2) \"AB\"\n\
+         bool(true)\nstring(2) \"AB\"\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `copy()` truncates its destination whatever the last `file_put_contents()` was told.
+///
+/// The one-shot writer reads `$flags` from a register and tests FILE_APPEND. `copy()`, the phar
+/// finalizer and the lowered-source copy all called it without setting that register, so the last
+/// lowering to leave something there decided whether the destination was TRUNCATED or EXTENDED.
+/// MEASURED: with an appending write to an unrelated file in between, `copy()` appended its source
+/// to a destination php replaces — and the same program without that write copied correctly, which
+/// is what made it invisible.
+#[test]
+fn test_copy_truncates_after_an_appending_write_elsewhere() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("cf_src.txt", "NEW");
+file_put_contents("cf_dst.txt", "OLDOLD");
+file_put_contents("cf_other.txt", "x", FILE_APPEND);
+var_dump(copy("cf_src.txt", "cf_dst.txt"));
+var_dump(file_get_contents("cf_dst.txt"));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nstring(3) \"NEW\"\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies rename by creating a file, renaming it, confirming the new name
 /// holds the data, confirming the old name is gone, and cleaning up.
 #[test]

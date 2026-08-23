@@ -98,6 +98,13 @@ pub(super) fn emit_file_get_contents_bytes(
             emit_literal_data_uri_file_get_contents_bytes(ctx, path_literal, persist_literal_bytes);
             return Ok(false);
         }
+        // `php://memory` and its siblings are what the OPENER serves; the one-shot reader below
+        // is `open(2)` and can only take them for filenames. `php://input` keeps its own reader
+        // just above, and `php://filter/` was handled before that.
+        if super::is_php_substream_uri(path_literal) && path_literal != "php://input" {
+            super::emit_literal_wrapper_file_get_contents_bytes(ctx, path_literal)?;
+            return Ok(false);
+        }
         if let Some(scheme_end) = path_literal.find("://") {
             let scheme = &path_literal[..scheme_end];
             let builtin = crate::types::stream_constants::STREAM_WRAPPERS

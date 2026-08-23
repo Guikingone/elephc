@@ -228,14 +228,51 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.label_global("__rt_copy");
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
+    // The two stat buffers sit ABOVE the original 48 bytes, so every offset below still reads
+    // what it always did.
+    let stat_buf = emitter.platform.stat_buf_size();
+    let copy_frame = 48 + ((2 * stat_buf + 15) & !15);
+    let src_stat = 48;
+    let dst_stat = 48 + stat_buf;
+    let ino_off = emitter.platform.stat_ino_offset();
+    let dev_off = emitter.platform.stat_dev_offset();
+    emitter.instruction(&format!("sub sp, sp, #{}", copy_frame));               // allocate the frame plus two stat buffers
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
 
-    // -- save destination path for after reading source --
+    // -- save both paths: the same-file test below needs each of them in turn --
+    emitter.instruction("stp x1, x2, [sp, #0]");                                // save 'from' path ptr and len on stack
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save 'to' path ptr and len on stack
 
+    // php refuses to copy a file onto ITSELF, and decides that by (st_dev, st_ino) rather than by
+    // comparing the paths: a hard link and a symlink to the source are refused too, and `./x` is
+    // refused for `x`. It answers false, says nothing, and leaves the file alone. A destination
+    // that does not exist yet cannot be stat'ed, which is what lets an ordinary copy through.
+    emitter.instruction("bl __rt_cstr");                                        // the source path as a C string
+    emitter.instruction(&format!("add x1, sp, #{}", src_stat));                 // fill the source stat buffer
+    emitter.syscall(338);
+    emitter.instruction("cbnz x0, __rt_copy_not_same_file");                    // no source to stat: the read below reports it
+    emitter.instruction("ldp x1, x2, [sp, #16]");                               // the destination path
+    emitter.instruction("bl __rt_cstr");
+    emitter.instruction(&format!("add x1, sp, #{}", dst_stat));                 // fill the destination stat buffer
+    emitter.syscall(338);
+    emitter.instruction("cbnz x0, __rt_copy_not_same_file");                    // nothing there yet: an ordinary copy
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", src_stat + ino_off));
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", dst_stat + ino_off));
+    emitter.instruction("cmp x9, x10");
+    emitter.instruction("b.ne __rt_copy_not_same_file");                        // different inode: different file
+    // Darwin stores st_dev as a signed 32-bit int, so only a word of it is the device.
+    let dev_reg = if emitter.platform.stat_dev_is_narrow() { ("w9", "w10") } else { ("x9", "x10") };
+    emitter.instruction(&format!("ldr {}, [sp, #{}]", dev_reg.0, src_stat + dev_off));
+    emitter.instruction(&format!("ldr {}, [sp, #{}]", dev_reg.1, dst_stat + dev_off));
+    emitter.instruction(&format!("cmp {}, {}", dev_reg.0, dev_reg.1));
+    emitter.instruction("b.ne __rt_copy_not_same_file");                        // same inode on another device
+    emitter.instruction("mov x0, #0");                                          // php answers false and copies nothing
+    emitter.instruction("b __rt_copy_return");
+    emitter.label("__rt_copy_not_same_file");
+
     // -- read source file contents --
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // the source path the stats consumed
     emitter.instruction("bl __rt_file_get_contents");                           // read source, x1=data ptr, x2=data len
 
     // php opens the SOURCE first and never touches the destination when that open fails, so a
@@ -248,6 +285,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.instruction("mov x3, x1");                                          // move data ptr to x3 (data arg)
     emitter.instruction("mov x4, x2");                                          // move data len to x4 (data arg)
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload destination path ptr and len
+    emitter.instruction("mov x5, xzr");                                         // the writer reads $flags for FILE_APPEND: this caller has none
     emitter.instruction("bl __rt_file_put_contents");                           // write data to dest file, x0=bytes written
 
     // A zero-byte write is a SUCCESS: php copies an empty file and answers true. This asked for
@@ -262,7 +300,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
 
     // -- restore frame and return --
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
+    emitter.instruction(&format!("add sp, sp, #{}", copy_frame));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -327,9 +365,53 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_copy");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while copy() uses path and payload spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved destination path and copied file payload
-    emitter.instruction("sub rsp, 32");                                         // reserve aligned stack space for the destination path pair and copied payload pair
+    // The two stat buffers sit BELOW the original four slots, so every offset below still reads
+    // what it always did.
+    let stat_buf = emitter.platform.stat_buf_size();
+    let copy_frame = 48 + ((2 * stat_buf + 15) & !15);
+    let src_stat = 48 + stat_buf;
+    let dst_stat = 48 + 2 * stat_buf;
+    let ino_off = emitter.platform.stat_ino_offset();
+    let dev_off = emitter.platform.stat_dev_offset();
+    emitter.instruction(&format!("sub rsp, {}", copy_frame));                   // reserve the path/payload slots plus two stat buffers
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the destination elephc path pointer while the source file is read into owned storage
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the destination elephc path length while the source file is read into owned storage
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the source path pointer: the same-file test below consumes it
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the source path length alongside it
+
+    // See the AArch64 arm: php refuses to copy a file onto itself, judged by (st_dev, st_ino).
+    emitter.instruction("call __rt_cstr");                                      // the source path as a C string
+    emitter.instruction("mov rdi, rax");
+    emitter.instruction(&format!("lea rsi, [rbp - {}]", src_stat));             // fill the source stat buffer
+    emitter.instruction("call stat");
+    emitter.instruction("test eax, eax");
+    emitter.instruction("jnz __rt_copy_not_same_file_x86");                     // no source to stat: the read below reports it
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the destination path
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");
+    emitter.instruction("call __rt_cstr");
+    emitter.instruction("mov rdi, rax");
+    emitter.instruction(&format!("lea rsi, [rbp - {}]", dst_stat));             // fill the destination stat buffer
+    emitter.instruction("call stat");
+    emitter.instruction("test eax, eax");
+    emitter.instruction("jnz __rt_copy_not_same_file_x86");                     // nothing there yet: an ordinary copy
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", src_stat - ino_off));
+    emitter.instruction(&format!("cmp r10, QWORD PTR [rbp - {}]", dst_stat - ino_off));
+    emitter.instruction("jne __rt_copy_not_same_file_x86");                     // different inode: different file
+    // Darwin stores st_dev as a signed 32-bit int, so only a word of it is the device.
+    let (dev_reg, dev_ptr) = if emitter.platform.stat_dev_is_narrow() {
+        ("r10d", "DWORD")
+    } else {
+        ("r10", "QWORD")
+    };
+    emitter.instruction(&format!("mov {}, {} PTR [rbp - {}]", dev_reg, dev_ptr, src_stat - dev_off));
+    emitter.instruction(&format!("cmp {}, {} PTR [rbp - {}]", dev_reg, dev_ptr, dst_stat - dev_off));
+    emitter.instruction("jne __rt_copy_not_same_file_x86");                     // same inode on another device
+    emitter.instruction("xor eax, eax");                                        // php answers false and copies nothing
+    emitter.instruction("jmp __rt_copy_return_x86");
+    emitter.label("__rt_copy_not_same_file_x86");
+
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the source path the stats consumed
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");
     emitter.instruction("call __rt_file_get_contents");                         // read the source file into an owned elephc string before writing it to the destination path
     // See the AArch64 arm: a failed source open must leave the destination untouched.
     emitter.instruction("test rax, rax");
@@ -340,6 +422,7 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the destination elephc path length into the primary x86_64 string length register
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the copied file payload pointer as the data pointer argument to file_put_contents()
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the copied file payload length as the data length argument to file_put_contents()
+    emitter.instruction("xor ecx, ecx");                                        // the writer reads $flags for FILE_APPEND: this caller has none
     emitter.instruction("call __rt_file_put_contents");                         // write the copied file payload into the destination path through the shared file_put_contents() helper
     emitter.instruction("cmp rax, 0");                                          // treat zero-byte writes as success so empty files can still be copied correctly
     emitter.instruction("setge al");                                            // convert the signed write result into a boolean success byte where any non-negative byte count is success
@@ -348,7 +431,7 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_copy_source_failed_x86");
     emitter.instruction("xor eax, eax");                                        // php answers false and leaves the destination alone
     emitter.label("__rt_copy_return_x86");
-    emitter.instruction("add rsp, 32");                                         // release the aligned stack locals used by copy()
+    emitter.instruction(&format!("add rsp, {}", copy_frame));                   // release the aligned stack locals used by copy()
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the copy() success predicate
     emitter.instruction("ret");                                                 // return the copy() success predicate to the caller
 
