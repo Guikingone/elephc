@@ -304,7 +304,7 @@ pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) 
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(message, message_ptr_reg, message_len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
-    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "Error");
+    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "Error", None);
     emit_dynamic_throwable_object(ctx, "_spl_error_class_id");
     Ok(())
 }
@@ -321,9 +321,22 @@ pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) 
 /// Emitting each wording as a static throw instead would inline a whole throwable construction
 /// per wording at every call site.
 pub(super) fn emit_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
+    emit_type_error_from_string_result_at(ctx, None);
+}
+
+/// The located sibling: the report ends in ` in FILE:LINE`, carries php's frame #0 and the trace
+/// block, and a caught instance answers `getLine()`.
+///
+/// The message is built at run time; the LOCATION is not, so it arrives the way it does for the
+/// static thrower — from the instruction's own span. Without it the report was one line where php
+/// writes five.
+pub(super) fn emit_type_error_from_string_result_at(
+    ctx: &mut FunctionContext<'_>,
+    location: Option<(String, u32)>,
+) {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
-    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "TypeError");
+    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "TypeError", location.as_ref());
     emit_dynamic_throwable_object(ctx, "_spl_type_error_class_id");
 }
 
@@ -339,7 +352,7 @@ pub(super) fn emit_type_error_from_string_result(ctx: &mut FunctionContext<'_>) 
 pub(super) fn emit_value_error_from_string_result(ctx: &mut FunctionContext<'_>) {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
-    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "ValueError");
+    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "ValueError", None);
     emit_dynamic_throwable_object(ctx, "_spl_value_error_class_id");
 }
 
@@ -550,11 +563,20 @@ fn emit_uncaught_exception_fatal_if_no_handler(
 fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
+    location: Option<&(String, u32)>,
 ) {
     let throw_label = ctx.next_label("dynamic_error_throw");
     let prefix = format!("\nFatal error: Uncaught {}: ", class_name);
     let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
-    let (suffix_label, suffix_len) = ctx.data.add_string(b"\n");
+    // php ends the first line with the location, then writes the trace block. The suffix carries
+    // the location because the MESSAGE between them is a run-time pointer, so the two constants
+    // cannot be one string.
+    let suffix = match location {
+        Some((file, line)) => format!(" in {}:{}\n", file, line),
+        None => "\n".to_string(),
+    };
+    let (suffix_label, suffix_len) = ctx.data.add_string(suffix.as_bytes());
+    let creation_line = location.map_or(0, |(_, line)| *line);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_exc_handler_top", 0);
@@ -563,6 +585,9 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
             // exit without flushing, discarding everything a program had buffered. `bl` leaves sp
             // untouched, so the message slots read below are unaffected.
             ctx.emitter.instruction("bl __rt_ob_flush_all");                    // drain buffered output before the fatal report
+            if location.is_some() {
+                emit_raising_builtin_trace_frame(ctx);                          // php's frame #0 is the builtin that raised
+            }
             ctx.emitter.instruction("mov x0, #1");                              // fd = stdout for the dynamic-error prefix
             abi::emit_symbol_address(ctx.emitter, "x1", &prefix_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", prefix_len as i64);
@@ -575,6 +600,13 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
             abi::emit_symbol_address(ctx.emitter, "x1", &suffix_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", suffix_len as i64);
             ctx.emitter.syscall(4);
+            if location.is_some() {
+                abi::emit_load_int_immediate(ctx.emitter, "x0", i64::from(creation_line));
+                // See the static reporter: a builtin called directly from `main` has a complete
+                // chain whatever else the module declares.
+                abi::emit_load_int_immediate(ctx.emitter, "x1", i64::from(ctx.is_main));
+                ctx.emitter.instruction("bl __rt_trace_write_block");
+            }
             abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
         }
         Arch::X86_64 => {
@@ -589,6 +621,9 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
             ctx.emitter.instruction("and rsp, -16");                            // realign the stack to the 16-byte call boundary
             ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain buffered output before the fatal report
             ctx.emitter.instruction("mov rsp, r15");                            // restore the entry rsp so the message stack slots stay addressable
+            if location.is_some() {
+                emit_raising_builtin_trace_frame(ctx);                          // php's frame #0 is the builtin that raised
+            }
             abi::emit_symbol_address(ctx.emitter, "rsi", &prefix_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", prefix_len as i64);
             ctx.emitter.instruction("mov edi, 1");                              // fd = stdout for the dynamic-error prefix
@@ -604,6 +639,12 @@ fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
             ctx.emitter.instruction("mov edi, 1");                              // fd = stdout to terminate the diagnostic
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the dynamic-error suffix
+            if location.is_some() {
+                abi::emit_load_int_immediate(ctx.emitter, "rdi", i64::from(creation_line));
+                // See the static reporter: `main` gives the chain its completeness.
+                abi::emit_load_int_immediate(ctx.emitter, "rsi", i64::from(ctx.is_main));
+                ctx.emitter.instruction("call __rt_trace_write_block");
+            }
             abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
         }
     }

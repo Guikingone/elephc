@@ -416,6 +416,12 @@ impl<'a> FunctionContext<'a> {
         let name = match target {
             crate::ir::RuntimeCallTarget::Function(target)
             | crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. } => {
+                // The argument lowering's own `array|false` unwrap is not a php function: naming
+                // it wrote `#0 expect_array_arg(false, 'array_keys(): A...')` where php writes
+                // `#0 array_keys(false)`. Its lowering opens the frame php would.
+                if matches!(target, crate::ir::RuntimeFnId::ExpectArrayArg) {
+                    return None;
+                }
                 target.as_eir()
             }
             _ => return None,
