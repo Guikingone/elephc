@@ -324,9 +324,17 @@ pub(crate) struct Checker {
     /// Names of the CURRENT body's locals that the syntactic pre-scan marked as whole-frame boxed
     /// `Mixed` storage, because they are assigned incompatible types across a branch.
     ///
-    /// A marked name binds `PhpType::Mixed` at its first store (see `merge_local_assignment_type`),
-    /// which absorbs every later assignment, so the retype hook and the "cannot reassign" error
-    /// never fire for it. Per-body, like every other field in [`SavedLocalBindingScope`].
+    /// A marked name is bound `PhpType::Mixed` on EVERY assignment path, not just at its first
+    /// store: `merge_local_assignment_type` consults this set before it looks at the environment
+    /// at all, so the retype hook and the "cannot reassign" error never fire for a marked name.
+    ///
+    /// "Mixed at the first store, and `Mixed` absorbs the rest" was the original story and it does
+    /// not hold. Flow narrowing writes the guard's target straight into the shared environment for
+    /// a guarded branch, so a marked local reached the merge bound `int` — an EXISTING binding,
+    /// which the first-store consult never saw — and `if (…) { $a = 1; } else { $a = "s"; }
+    /// if (is_int($a)) { $a = "z"; }` was a hard "cannot reassign" in both modes. The mark has to
+    /// be authoritative rather than merely initial. Per-body, like every other field in
+    /// [`SavedLocalBindingScope`].
     pub mixed_storage_locals: HashSet<String>,
     /// Every statement-form assignment to a mixed-storage local, as span -> the SET of local names
     /// boxed at that position, so EIR lowering can declare the slot boxed BEFORE the first store

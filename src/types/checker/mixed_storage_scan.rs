@@ -9,8 +9,10 @@
 //!
 //! Key details:
 //! - Runs BEFORE the body is statement-checked, because the decision has to be in place at the
-//!   local's FIRST store: a marked name binds `PhpType::Mixed` there, and `Mixed` absorbs every
-//!   later assignment, so neither the retype hook nor the "cannot reassign" error can fire for it.
+//!   local's FIRST store — that is where the slot's type is fixed. The mark is not merely an
+//!   initial type, though: `merge_local_assignment_type` re-asserts `PhpType::Mixed` for a marked
+//!   name on EVERY assignment path, so neither the retype hook nor the "cannot reassign" error can
+//!   fire for it even where flow narrowing has just re-typed the name for a guarded branch.
 //! - Purely syntactic. It never consults the type environment, so it produces the same answer on
 //!   every one of the checker's repeated walks over the same body (top level twice, method bodies
 //!   to stability, function bodies once per call-site specialization).
@@ -278,14 +280,17 @@ impl Checker {
         }
         // EVERY parameter is excluded, typed or not, by reference or by value.
         //
-        // The marking's only mechanism is the FRESH-INSERT branch of `merge_local_assignment_type`,
-        // and a parameter is already bound when the body starts, so that branch structurally never
-        // runs for one: the mark could not give it boxed storage even if it were sound to. Marking
-        // one anyway is not merely inert, it is wrong twice over — the warning credits this feature
-        // for storage the parameter already had (an untyped by-value parameter called with two
-        // incompatible argument types is `mixed` on the pre-existing path), and it files store
-        // sites for a binding the marking never created, which then block DCE tail-sinking and
-        // enter the binding-decision ambiguity tally for nothing.
+        // The exclusion is load-bearing, not merely tidy. `merge_local_assignment_type` honours
+        // the mark on EVERY assignment path (it used to consult it only on the fresh-insert
+        // branch, which a parameter — bound before the first statement — could never take), so a
+        // marked parameter would really be re-typed `Mixed` for the whole body and really have its
+        // stores boxed. That is storage the parameter already has by another route: an untyped
+        // by-value parameter called with two incompatible argument types is `mixed` on the
+        // pre-existing specialization path, and a typed one is a contract. Marking it would take
+        // the credit for storage this feature did not create, box a slot on the strength of
+        // SYNTACTIC evidence where the specialization already has the real types, and file store
+        // sites that block DCE tail-sinking and enter the binding-decision ambiguity tally for
+        // nothing.
         //
         // `local_binding_depth` is exactly the parameter set here: `enter_local_binding_scope`
         // seeds it with every parameter at depth 0 and this scan runs before the first statement

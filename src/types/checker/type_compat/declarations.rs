@@ -398,10 +398,11 @@ impl Checker {
     ///
     /// `body` is the statement list `f` is about to check. It is taken so the mixed-storage
     /// pre-scan can run here, once the per-body state is installed and before any statement is
-    /// checked: the scan's decision has to be in place at each marked local's FIRST store, and the
-    /// freshly seeded `local_binding_depth` is exactly this body's parameter set, which the scan
-    /// excludes from marking wholesale (a parameter is already bound, so the fresh-insert hook the
-    /// marking works through can never fire for it).
+    /// checked: the scan's decision has to be in place at each marked local's FIRST store, where
+    /// the slot's type is fixed. The freshly seeded `local_binding_depth` is exactly this body's
+    /// parameter set, which the scan excludes from marking wholesale — a parameter's storage is
+    /// already `mixed` by call-site specialization, or a declared contract, so marking would take
+    /// credit for storage this feature did not create.
     pub(crate) fn with_local_storage_context<T, F>(
         &mut self,
         ref_param_names: Vec<String>,
