@@ -203,14 +203,17 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// every read of the slot is already a boxed load instead of an owned string detach.
     pub string_incdec_locals: &'m HashSet<(String, String)>,
     /// Spans of the `unset()` ARGUMENTS whose local binding the CHECKER decided to kill
-    /// (`CheckResult::local_bind_kill_sites`). At one of these spans `unset_local` abandons the
-    /// frame slot after releasing its value, so the next `declare_local` mints a fresh one.
-    /// The checker is the single decision point: nothing here re-derives eligibility.
-    pub bind_kill_sites: &'m HashMap<Span, String>,
+    /// (`CheckResult::local_bind_kill_sites`), each mapped to the SET of locals killed at that
+    /// position. At one of these spans `unset_local` abandons the frame slot after releasing its
+    /// value, so the next `declare_local` mints a fresh one. The checker is the single decision
+    /// point: nothing here re-derives eligibility. The value is a set because a `Span` names no
+    /// file, so two different killed locals can share one position.
+    pub bind_kill_sites: &'m HashMap<Span, HashSet<String>>,
     /// Spans of statement-form assignments the CHECKER re-bound to a fresh binding of an
-    /// incompatible type (`CheckResult::local_retype_sites`). Carried alongside
-    /// `bind_kill_sites` so both travel together; consumed by the retype lowering.
-    pub retype_sites: &'m HashMap<Span, String>,
+    /// incompatible type (`CheckResult::local_retype_sites`), each mapped to the SET of locals
+    /// re-bound at that position. Carried alongside `bind_kill_sites` so both travel together;
+    /// consumed by the retype lowering.
+    pub retype_sites: &'m HashMap<Span, HashSet<String>>,
     /// Spans of the statement-form assignments to a local the CHECKER marked as branch-divergently
     /// assigned (`CheckResult::mixed_storage_store_sites`), each mapped to the SET of locals boxed
     /// at that position. At one of these spans `lower_assign` declares the slot `PhpType::Mixed`
@@ -298,8 +301,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         builtin_call_types: &'m HashMap<Span, PhpType>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
-        bind_kill_sites: &'m HashMap<Span, String>,
-        retype_sites: &'m HashMap<Span, String>,
+        bind_kill_sites: &'m HashMap<Span, HashSet<String>>,
+        retype_sites: &'m HashMap<Span, HashSet<String>>,
         mixed_storage_store_sites: &'m HashMap<Span, HashSet<String>>,
         loop_storage_scope: String,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
@@ -1918,7 +1921,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ) -> LoweredValue {
         let abandons_binding = span.is_some_and(|span| {
             span.identifies_a_node()
-                && self.bind_kill_sites.get(&span).is_some_and(|killed| killed == name)
+                && self
+                    .bind_kill_sites
+                    .get(&span)
+                    .is_some_and(|killed| killed.contains(name))
         }) && self.local_binding_slot_is_abandonable(name);
         if !self.is_ref_bound_local(name) {
             if abandons_binding {
@@ -2116,7 +2122,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && self
                 .retype_sites
                 .get(&span)
-                .is_some_and(|retyped| retyped == name)
+                .is_some_and(|retyped| retyped.contains(name))
     }
 
     /// Returns whether the checker marked `name` as branch-divergently assigned and recorded THIS

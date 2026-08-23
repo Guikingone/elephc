@@ -347,8 +347,15 @@ impl Checker {
                                 // still happens — only the lowering instruction is withheld, which
                                 // leaves such a site on the plain null-store path it had before
                                 // kills were lowered at all.
+                                //
+                                // Inserted into the span's SET of killed names rather than over
+                                // it: two DIFFERENT locals killed at one (line, column) in two
+                                // files are two decisions, and one used to evict the other.
                                 if arg.span.identifies_a_node() {
-                                    self.local_bind_kill_sites.insert(arg.span, var.clone());
+                                    self.local_bind_kill_sites
+                                        .entry(arg.span)
+                                        .or_default()
+                                        .insert(var.clone());
                                 }
                             } else {
                                 // This visit RE-DECIDES the site. The checker walks a body more
@@ -363,13 +370,15 @@ impl Checker {
                                 //
                                 // Qualified by NAME for the same reason the insert above is: a
                                 // `Span` has no file identity, so an `unset($other)` at the same
-                                // (line, column) of another file must not disarm this one.
-                                if self
-                                    .local_bind_kill_sites
-                                    .get(&arg.span)
-                                    .is_some_and(|killed| killed == var)
+                                // (line, column) of another file must not disarm this one. Exactly
+                                // ONE name leaves the span's set, and the key itself goes only
+                                // when the set is empty.
+                                if let Some(killed) = self.local_bind_kill_sites.get_mut(&arg.span)
                                 {
-                                    self.local_bind_kill_sites.remove(&arg.span);
+                                    killed.remove(var.as_str());
+                                    if killed.is_empty() {
+                                        self.local_bind_kill_sites.remove(&arg.span);
+                                    }
                                 }
                             }
                         }

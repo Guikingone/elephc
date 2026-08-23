@@ -1713,7 +1713,9 @@ fn test_retype_in_real_source_is_recorded() {
         result
             .local_retype_sites
             .iter()
-            .all(|(span, name)| span.identifies_a_node() && name == "a"),
+            .all(|(span, names)| span.identifies_a_node()
+                && names.len() == 1
+                && names.contains("a")),
         "recorded retype sites must name a node AND the local they re-bind: {:?}",
         result.local_retype_sites
     );

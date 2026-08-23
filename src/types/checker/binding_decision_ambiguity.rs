@@ -80,8 +80,8 @@ use super::is_unset_call;
 /// (`test_stripped_retype_decision_still_compiles_and_runs` pins one).
 pub(super) fn reject_ambiguous_local_binding_decisions(
     program: &Program,
-    kill_sites: &HashMap<Span, String>,
-    retype_sites: &HashMap<Span, String>,
+    kill_sites: &HashMap<Span, HashSet<String>>,
+    retype_sites: &HashMap<Span, HashSet<String>>,
     mixed_storage_store_sites: &HashMap<Span, HashSet<String>>,
     retired_mixed_storage_store_sites: &HashSet<(Span, String)>,
 ) -> Result<(), CompileError> {
@@ -116,11 +116,12 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
     // imprecise — the parser gives `$x .= "a"` a synthesized `$x` READ at the very span of the
     // assignment statement, so one ordinary compound assignment would look like two colliding
     // sites.
+    // EVERY decision map carries a SET of names per span (two different locals can be killed,
+    // re-bound or marked at the same line and column in two different files), and each name is its
+    // own decision to check against the tally.
     let decisions = retype_sites
         .iter()
-        // A mixed-storage span carries a SET of names (two different locals can be marked at the
-        // same line and column in two different files), and each name is its own decision to
-        // check against the tally.
+        .flat_map(|(span, names)| names.iter().map(move |name| (span, name)))
         .chain(
             mixed_storage_store_sites
                 .iter()
@@ -138,6 +139,7 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
         .chain(
             kill_sites
                 .iter()
+                .flat_map(|(span, names)| names.iter().map(move |name| (span, name)))
                 .map(|(span, name)| (span, name, &tally.unset_args)),
         );
     for (span, name, sites) in decisions {

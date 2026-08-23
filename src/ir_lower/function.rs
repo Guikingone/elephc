@@ -335,8 +335,8 @@ pub(crate) fn lower_class_method(
 /// at 2:1, an eval string's own `$b = 9;` sat at 2:1 of that string, and the mixed pre-declare gave
 /// the fragment's unrelated local boxed storage nothing had asked for.
 fn eval_aot_decision_maps() -> (
-    std::collections::HashMap<Span, String>,
-    std::collections::HashMap<Span, String>,
+    std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    std::collections::HashMap<Span, std::collections::HashSet<String>>,
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
 ) {
     (
@@ -1204,8 +1204,8 @@ fn lower_body_into_function(
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
     loop_storage_types: &crate::types::LoopStorageTypes,
     string_incdec_locals: &std::collections::HashSet<(String, String)>,
-    bind_kill_sites: &std::collections::HashMap<Span, String>,
-    retype_sites: &std::collections::HashMap<Span, String>,
+    bind_kill_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    retype_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     mixed_storage_store_sites: &std::collections::HashMap<
         Span,
         std::collections::HashSet<String>,

@@ -1816,3 +1816,78 @@ fn test_eval_aot_fragment_with_a_colliding_outer_decision_runs() {
     );
     assert_eq!(out, "s9");
 }
+
+/// Two DIFFERENT locals killed at one (line, column) both keep their decision.
+///
+/// A `Span` carries line/column and nothing about which file they name, so `unset($w);` at line 4
+/// column 1 of `lib.php` and `unset($m);` at line 4 column 1 of `main.php` file their kills under
+/// the SAME key. With one name per span the later insert silently evicted the earlier one, and
+/// the evicted site fell back to the pre-feature null store — which widens the `Str` slot to
+/// boxed `Mixed` while every read already lowered above it keeps its `Str` IR type, leaking one
+/// detached copy per executed read. Measured before the maps carried a SET of names: `Fatal
+/// error: heap memory exhausted` where PHP prints `400005|s`.
+#[test]
+fn test_two_different_names_killed_at_one_position_both_take_effect() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\n$m = 1;\nunset($m);\n$m = \"s\";\necho \"|\", $m;\n",
+            ),
+            (
+                "lib.php",
+                "<?php\n$w = \"x\" . $argc; $t = 0;\nfor ($i = 0; $i < 200000; $i++) { $t += strlen($w); }\nunset($w);\n$w = 5;\necho $t + $w;\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "400005|s");
+}
+
+/// The RETYPE twin of the fixture above: two different locals re-bound at one (line, column).
+///
+/// `$w = 5;` (lib, line 4 column 1) re-binds a `string` to `int` under a loop of reads, and
+/// `$m = "s";` (main, line 4 column 1) re-binds an `int` to `string`. The same eviction left the
+/// library's retype on the slot-widening path and exhausted the heap.
+#[test]
+fn test_two_different_names_retyped_at_one_position_both_take_effect() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\n$m = 1;\n$m = \"s\";\necho \"|\", $m;\n",
+            ),
+            (
+                "lib.php",
+                "<?php\n$w = \"x\" . $argc; $t = 0;\nfor ($i = 0; $i < 200000; $i++) { $t += strlen($w); }\n$w = 5;\necho $t + $w;\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "400005|s");
+}
+
+/// Control: the same-NAME collision keeps its current outcome — the hard ambiguity error, not a
+/// silently merged pair of decisions. A set of names per span must not turn two genuinely
+/// indistinguishable sites into two accepted ones.
+#[test]
+fn test_same_name_collision_stays_ambiguous_with_multi_name_spans() {
+    let error = compile_files_error_message(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\necho \"|\";\n$q = 5;\necho $q;\n",
+            ),
+            (
+                "lib.php",
+                "<?php\n$q = \"a\" . $argc;\nif ($argc > 5) {\n$q = \"b\" . $argc;\n}\necho $q;\n",
+            ),
+        ],
+        "main.php",
+    )
+    .expect("a same-name (span, name) collision must still be rejected");
+    assert!(
+        error.contains("Cannot re-bind $q here"),
+        "expected the ambiguity diagnostic, got: {error}"
+    );
+}

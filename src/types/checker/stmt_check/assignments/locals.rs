@@ -787,13 +787,19 @@ fn merge_local_assignment_type(
     // Qualified by NAME, because a `Span` has no file identity: the same (line, column) in an
     // included file is an EQUAL span, and this visit must not drop the decision recorded for
     // that unrelated assignment — a `$x = …` in the main file would otherwise silently disarm
-    // the retype of a `$w = …` at the same position in a library.
+    // the retype of a `$w = …` at the same position in a library. Exactly ONE name leaves the
+    // span's set of re-bound locals; the key itself goes only once the set is empty.
     if checker
         .local_retype_sites
         .get(&span)
-        .is_some_and(|retyped| retyped == name)
+        .is_some_and(|retyped| retyped.contains(name))
     {
-        checker.local_retype_sites.remove(&span);
+        if let Some(retyped) = checker.local_retype_sites.get_mut(&span) {
+            retyped.remove(name);
+            if retyped.is_empty() {
+                checker.local_retype_sites.remove(&span);
+            }
+        }
         // The WARNING is part of the decision and goes with it. A superseded walk's warning used
         // to survive its own retraction, which made the diagnostic depend on the order of a
         // function's call sites — see `Checker::binding_decision_warnings`.
@@ -859,8 +865,16 @@ fn merge_local_assignment_type(
                 // happens in the type ENVIRONMENT (that is what keeps such a body compiling
                 // at all); withholding only the span leaves the assignment on the storage
                 // widening path it used before retypes were lowered.
+                //
+                // Inserted into the span's SET of re-bound names rather than over it: two
+                // DIFFERENT locals re-bound at one (line, column) in two files are two decisions,
+                // and one used to evict the other.
                 if span.identifies_a_node() {
-                    checker.local_retype_sites.insert(span, name.to_string());
+                    checker
+                        .local_retype_sites
+                        .entry(span)
+                        .or_default()
+                        .insert(name.to_string());
                 }
                 // The fresh binding is created here, at depth 0 — pin that explicitly so a
                 // later kill or retype of the same name is judged against THIS binding.

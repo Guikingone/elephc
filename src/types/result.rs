@@ -90,9 +90,9 @@ pub struct CheckResult {
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
     /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
     pub string_incdec_locals: HashSet<(String, String)>,
-    /// The `unset()` arguments whose local binding the checker killed, as span -> local NAME, so
-    /// EIR lowering abandons the old frame slot (after releasing its value) instead of
-    /// null-storing into it.
+    /// The `unset()` arguments whose local binding the checker killed, as span -> the SET of local
+    /// NAMES killed at that position, so EIR lowering abandons the old frame slot (after releasing
+    /// its value) instead of null-storing into it.
     ///
     /// The name is not decoration, it is half the key. A `Span` carries line/col and NOTHING
     /// about which file they are in, and include resolution splices every included file's AST
@@ -103,7 +103,14 @@ pub struct CheckResult {
     /// `$w = …` in an included file lost its whole binding, printing `|s` where PHP prints
     /// `a1|s`).
     ///
-    /// The name does NOT make the key unique: the same name at the same line and column in two
+    /// The value is a SET, exactly like [`CheckResult::mixed_storage_store_sites`], because two
+    /// DIFFERENT locals can be killed at the same (line, column) in two different files. With one
+    /// name per span the later insert silently EVICTED the earlier decision; the evicted site then
+    /// fell back to the pre-feature null store, which widens the abandoned slot to boxed `Mixed`
+    /// while every read already lowered above it keeps its narrower IR type — measured as `Fatal
+    /// error: heap memory exhausted` on a loop of `string` reads where PHP prints its sum.
+    ///
+    /// The name does NOT make the key unique: the same NAME at the same line and column in two
     /// files is still one key for two sites, and that shape was measured printing `|s` where PHP
     /// prints `a1|5` — in a program that was a plain compile error before this feature existed.
     /// It is not left ambiguous. `checker::binding_decision_ambiguity` counts, per role, how many
@@ -111,12 +118,12 @@ pub struct CheckResult {
     /// one, so an ambiguous decision is a compile error and never a silent re-bind. Giving `Span`
     /// file identity would remove the ambiguity outright, and every span-keyed map here would
     /// want it.
-    pub local_bind_kill_sites: HashMap<Span, String>,
+    pub local_bind_kill_sites: HashMap<Span, HashSet<String>>,
     /// The statement-form assignments the checker re-bound to a fresh binding of an incompatible
-    /// type, as span -> local NAME, so EIR lowering mints a new slot there. Read by
-    /// `crate::ir_lower` alongside `local_bind_kill_sites`, and keyed the same way for the same
-    /// reason — see that field.
-    pub local_retype_sites: HashMap<Span, String>,
+    /// type, as span -> the SET of local NAMES re-bound at that position, so EIR lowering mints a
+    /// new slot there. Read by `crate::ir_lower` alongside `local_bind_kill_sites`, and keyed the
+    /// same way for the same reasons — see that field.
+    pub local_retype_sites: HashMap<Span, HashSet<String>>,
     /// Every statement-form assignment to a local the checker's syntactic pre-scan marked as
     /// whole-frame boxed `Mixed` storage (a branch-divergently assigned local), as span -> the SET
     /// of local NAMES boxed at that position, so EIR lowering declares the slot boxed before the

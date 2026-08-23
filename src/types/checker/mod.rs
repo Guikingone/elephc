@@ -288,16 +288,17 @@ pub(crate) struct Checker {
     /// and parameters carrying a type hint. A declaration is a programmer contract and stays
     /// strict in both permissive and `--strict-locals` mode.
     pub typed_local_names: HashSet<String>,
-    /// The `unset()` ARGUMENTS whose local binding the checker killed, as span -> local NAME.
-    /// EIR lowering consults these to abandon the old frame slot instead of null-storing into
-    /// it. The name is half the key: a `Span` has no file identity and include resolution does
-    /// not rebase line numbers, so lowering has to confirm the decision is about the variable in
-    /// front of it. See `CheckResult::local_bind_kill_sites`.
-    pub local_bind_kill_sites: HashMap<Span, String>,
+    /// The `unset()` ARGUMENTS whose local binding the checker killed, as span -> the SET of local
+    /// NAMES killed there. EIR lowering consults these to abandon the old frame slot instead of
+    /// null-storing into it. The name is half the key: a `Span` has no file identity and include
+    /// resolution does not rebase line numbers, so lowering has to confirm the decision is about
+    /// the variable in front of it — and two DIFFERENT names at one position are two decisions,
+    /// not one. See `CheckResult::local_bind_kill_sites`.
+    pub local_bind_kill_sites: HashMap<Span, HashSet<String>>,
     /// Statement-form assignments the checker re-bound to a fresh binding of an incompatible
-    /// type, as span -> local NAME. Filled in Task 3; carried in `CheckResult` from here so the
-    /// two decision maps travel together, keyed the same way.
-    pub local_retype_sites: HashMap<Span, String>,
+    /// type, as span -> the SET of local NAMES re-bound there. Carried in `CheckResult` from here
+    /// so the three decision maps travel together, keyed and shaped the same way.
+    pub local_retype_sites: HashMap<Span, HashSet<String>>,
     /// AST address of the expression that forms the ENTIRE expression-statement currently being
     /// checked, or `None` outside one.
     ///
