@@ -354,18 +354,33 @@ compile error:
   plain assignment, such as `$x = 1; $x .= "a";`) re-binds the name to a fresh
   slot of the new type and emits a warning instead of failing:
   ```text
-  $a changes type from Int to Str; the previous value is discarded (compile with --strict-locals to make this an error)
+  $a changes type from int to string; the previous value is discarded (compile with --strict-locals to make this an error)
   ```
 - **Branch-divergent assignment.** `if (…) { $a = 0; } else { $a = "ciao"; }`
   — and the same shape for a single-branch retype of an outer binding, or a
   heterogeneous loop-carried local — compiles instead of failing, as
   whole-frame boxed `Mixed` storage for that local, with a warning:
   ```text
-  $a is assigned incompatible types (Int and Str); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)
+  $a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)
   ```
   The warning is a performance signal as much as a correctness one: every read
   of a `Mixed`-storage local goes through boxed dispatch instead of a plain
   register/stack slot for the rest of the body.
+
+**Migrating.** The `unset()` kill is the one shape that can reject code that
+compiled before. Reading a variable after a straight-line `unset()` of it is now
+`Undefined variable: $a` — in BOTH modes, since the kill is not gated by
+`--strict-locals` — where the read previously saw the nulled slot. That matches
+PHP, which warns on the same read and evaluates it as `null`. The idiomatic
+probe is `isset()` (or `empty()` / `??`), all of which stay legal on an unbound
+name and answer "not set":
+
+```php
+$a = "x"; unset($a);
+echo $a;                            // Undefined variable: $a — compile error
+echo isset($a) ? "set" : "unset";   // fine: prints "unset"
+echo $a ?? "dflt";                  // fine: prints "dflt"
+```
 
 All three shapes require the name to be **never reference-aliased** — no `=&`
 target or source, no `use (&$x)` capture, no by-reference parameter (including
@@ -385,6 +400,17 @@ Beyond those shared exclusions the shapes are gated differently:
   `unset`/reassignment must both sit at conditional depth 0 — straight-line
   code that dominates everything after it. That is what makes ending the
   binding safe, since the store that replaces it definitely runs.
+  Top-level code pulled in with **`require_once`** is not at depth 0: its
+  include guard lowers to a runtime branch, so the whole included file sits at
+  conditional depth ≥ 1 and neither shape ever fires inside it (an incompatible
+  reassignment there is the hard error, or the branch-divergent boxing if it
+  qualifies). Plain **`require`** splices the file in with no guard and behaves
+  exactly like inline code.
+- The **`unset()` kill** additionally stands down at top level for any name
+  some `global` statement elsewhere in the program names: that variable's
+  storage is the program-global symbol other bodies reach, not main's frame
+  slot, so the binding is kept and `unset` is a plain typing no-op on it. The
+  straight-line retype is unaffected there and still applies.
 - The **branch-divergent** shape has no such requirement, and could not: it
   exists precisely for the case where at least one of the two conflicting
   assignments is inside a branch or loop, as its `if`/`else` example is. It
@@ -395,12 +421,20 @@ Beyond those shared exclusions the shapes are gated differently:
   target, a by-reference call argument, an `unset()` mention, `=&`, `global`,
   or `static`) disqualifies the name from boxing and leaves it on today's hard
   error, and a **parameter** is never boxed by it at all (it is already bound
-  when the body starts).
+  when the body starts). A by-value closure **capture** is the one pre-bound
+  shape that IS boxed — dropping its mark would strand the value the capture
+  owns — though the warning is withheld where the capture's incoming type
+  already absorbs every assignment, since the advice to compile with
+  `--strict-locals` would be false there.
+- An assignment inside a branch guarded by a **non-negated type test on the
+  name itself** (`if (is_string($a)) { $a = "x"; }`) is not evidence of
+  divergence and is skipped: the guard already established the type the
+  assignment writes.
 
 `--strict-locals` restores the hard error for the two warning shapes above:
 
 ```text
-Type error: cannot reassign $a from Int to Str
+Type error: cannot reassign $a from int to string
 ```
 
 The `unset()` kill is unaffected, since it was never gated by the flag.

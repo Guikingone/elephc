@@ -114,24 +114,24 @@ A **declared** type — a typed local (`int $x = 5;`), a type-hinted parameter, 
 
 For an **untyped** local, DEFAULT (permissive) mode instead allows a local to change type in three shapes that would otherwise be this same error. All three exclude a name that is reference-aliased (no `=&` target or source, no `use (&$x)` capture, no by-reference parameter including a variadic `&...$xs` tail, no by-reference call argument, and no by-reference `foreach` iterable — `foreach ($arr as &$v)` permanently aliases `$arr`, the container being iterated, not `$v`), and a `global`-bound name, a `static` name, or a superglobal/seeded name, since this body does not own their storage.
 
-Shapes 1 and 2 — the ones that END a binding — are additionally gated by `Checker::local_binding_is_killable`: the local's CURRENT binding must have been created unconditionally at the top of its body, and the `unset`/reassignment must itself sit at conditional depth 0 (not inside an `if`/loop/`try`/`switch`/…), so the store that replaces the binding definitely runs. That test also answers `false` for EVERY name in a body that calls `eval()` anywhere — the eval scope reaches caller locals by name, while ending a binding hands the name a different frame slot — which is why `unset` is a plain typing no-op in such a body and an incompatible reassignment there is the hard error in both modes. Shape 3 is gated by neither rule: it never ends a binding (see its own paragraph below), and requiring depth 0 would exclude its flagship `if`/`else` example, whose two assignments are both inside branches.
+Shapes 1 and 2 — the ones that END a binding — are additionally gated by `Checker::local_binding_is_killable`: the local's CURRENT binding must have been created unconditionally at the top of its body, and the `unset`/reassignment must itself sit at conditional depth 0 (not inside an `if`/loop/`try`/`switch`/…), so the store that replaces the binding definitely runs. `require_once`'d top-level code never satisfies that: its include guard lowers to a runtime branch, so every statement of the included file sits at depth ≥ 1; plain `require` splices the file in unguarded and behaves like inline code. Shape 1 has one further top-level exclusion of its own, `Checker::program_global_names`: inside main, a name some `global` statement anywhere in the program mentions lives in a `_eir_global_*` symbol other bodies reach by name, so `unset` keeps the binding there and is a plain typing no-op. Shape 2 is deliberately NOT gated by that list — the retype through such a name lowers correctly today, and vetoing it would reject working code. That test also answers `false` for EVERY name in a body that calls `eval()` anywhere — the eval scope reaches caller locals by name, while ending a binding hands the name a different frame slot — which is why `unset` is a plain typing no-op in such a body and an incompatible reassignment there is the hard error in both modes. Shape 3 is gated by neither rule: it never ends a binding (see its own paragraph below), and requiring depth 0 would exclude its flagship `if`/`else` example, whose two assignments are both inside branches.
 
 1. **`unset()` kill.** `unset($a)` on an eligible binding removes `$a` from the type environment entirely. A later READ is `Undefined variable: $a`; a later assignment binds `$a` fresh, at any type, with no warning. This kill is **not gated by `strict_locals`** — `unset` behaves identically in both modes, because dropping a binding is always sound where the eligibility test holds.
 2. **Straight-line retype.** A plain statement-form reassignment (`$a = 0; $a = "ciao";`) — including a compound form the parser desugars to a plain assignment, such as `$x = 1; $x .= "a";` — re-binds the name to a fresh binding of the new type and pushes this warning instead of failing:
    ```text
-   $a changes type from Int to Str; the previous value is discarded (compile with --strict-locals to make this an error)
+   $a changes type from int to string; the previous value is discarded (compile with --strict-locals to make this an error)
    ```
    Only STATEMENT-form assignments are eligible; an expression-form assignment (`$b = ($a = "s");`) keeps the hard error, because its result has no single well-defined type to hand the enclosing expression.
 3. **Branch-divergent assignment (boxed `Mixed` storage).** `run_mixed_storage_scan` runs a purely SYNTACTIC pre-scan of a body BEFORE it is type-checked, looking for a local whose statement-form assignments cannot all merge — the shape of `if (…) { $a = 0; } else { $a = "ciao"; }`, a single-branch retype of an outer binding, or a heterogeneous loop-carried local. A marked name binds `PhpType::Mixed` at its FIRST store, so every later assignment merges trivially and neither the retype hook nor the hard error ever fires for it; EIR lowering gives the name boxed frame storage for the whole body — every later read dispatches on the boxed value instead of using a plain register/stack slot. One warning is pushed per marked name:
    ```text
-   $a is assigned incompatible types (Int and Str); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)
+   $a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)
    ```
-   The pre-scan only trusts evidence it can type EXACTLY from an expression's shape alone: a literal, a scalar cast (not `(array)`, whose element type is not knowable syntactically), or a `.` string concatenation (which always yields `Str` regardless of its operands). Any OTHER write to the name anywhere in the body — a plain variable or call-result value, `++`/`--`, a `foreach`/`list()` target, a by-reference call argument, an `unset()` mention, `=&`, `global`, or `static` — disqualifies the whole name from marking, and the pair falls back to the hard error.
+   The pre-scan only trusts evidence it can type EXACTLY from an expression's shape alone: a literal, a scalar cast (not `(array)`, whose element type is not knowable syntactically), or a `.` string concatenation (which always yields `Str` regardless of its operands). Any OTHER write to the name anywhere in the body — a plain variable or call-result value, `++`/`--`, a `foreach`/`list()` target, a by-reference call argument, an `unset()` mention, `=&`, `global`, or `static` — disqualifies the whole name from marking, and the pair falls back to the hard error. An assignment inside a branch guarded by a NON-NEGATED type test on the name itself (`if (is_string($a)) { $a = "x"; }`) is skipped rather than counted: the guard established the type the assignment writes, so it is not evidence of divergence. A PARAMETER is never marked (it is already bound when the body starts, at a type the frame's ABI fixed), but a by-value closure CAPTURE — the other pre-bound shape — is: suppressing its mark strands the value the capture owns. Its warning is withheld when replaying the name's assignments from the capture's INCOMING type merges cleanly, because the advice to compile with `--strict-locals` would be false there; the mark and its boxed store sites stay either way.
 
 `--strict-locals` turns shapes 2 and 3 back into the hard error:
 
 ```text
-Type error: cannot reassign $a from Int to Str
+Type error: cannot reassign $a from int to string
 ```
 
 Shape 1 (`unset()` kill) is unaffected in either mode.
@@ -150,7 +150,7 @@ None of this is affected by the permissive local retyping described in [Local re
 
 ```php
 int $x = 42;
-$x = "hello";  // ← Type error: cannot reassign $x from Int to Str (declared type, strict in every mode)
+$x = "hello";  // ← Type error: cannot reassign $x from int to string (declared type, strict in every mode)
 ```
 
 This is intentional — it lets the compiler know exactly what a declared `$x` is at every point, without needing runtime type tags.
@@ -630,13 +630,13 @@ This is passed to the [code generator](the-codegen.md), which uses it to:
 ```php
 int $x = 42;
 $x = "hello";
-// Error: Type error: cannot reassign $x from Int to Str
+// Error: Type error: cannot reassign $x from int to string
 // (a DECLARED type stays strict in every mode; an untyped local instead warns by
 // default and only errors under --strict-locals — see "Local retyping and strict
 // locals mode" above)
 
 strlen(42);
-// Error: strlen() expects string, got Int
+// Error: strlen() argument must be string
 
 unknown_func();
 // Error: Undefined function: unknown_func
