@@ -16,6 +16,7 @@
 //!   backs `php://memory` with a real temporary descriptor.
 
 use crate::codegen_support::runtime::resources::layout::{
+    STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_FLAG_UNLINK_ON_CLOSE,
     STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET, STREAM_WRAPPER_ID_OFFSET,
 };
 use crate::codegen_support::{emit::Emitter, platform::Arch};
@@ -162,4 +163,123 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");
+}
+
+/// Emits `__rt_stream_own_its_file(handle)`: marks a stream as owning the file its URI names.
+///
+/// `tmpfile()` is the only caller. php keeps that file LINKED while the handle lives and removes
+/// it on close, so the close path needs to know which streams to clean up after; the flag is what
+/// tells it. Everything else opened a file it did not create.
+pub fn emit_stream_own_its_file(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: this stream owns the file its URI names ---");
+    emitter.label_global("__rt_stream_own_its_file");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #16");
+            emitter.instruction("str x30, [sp, #8]");
+            emitter.instruction("bl __rt_stream_state");                        // resolve the owning stream state
+            emitter.instruction("cbz x0, __rt_soif_ret");                       // a stale handle owns nothing
+            emitter.instruction(&format!(
+                "ldr x9, [x0, #{}]", STREAM_OWNERSHIP_FLAGS_OFFSET
+            ));
+            emitter.instruction(&format!(
+                "orr x9, x9, #{}", STREAM_STATE_FLAG_UNLINK_ON_CLOSE
+            ));
+            emitter.instruction(&format!(
+                "str x9, [x0, #{}]", STREAM_OWNERSHIP_FLAGS_OFFSET
+            ));
+            emitter.label("__rt_soif_ret");
+            emitter.instruction("ldr x30, [sp, #8]");
+            emitter.instruction("add sp, sp, #16");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("call __rt_stream_state");                      // resolve the owning stream state
+            emitter.instruction("test rax, rax");
+            emitter.instruction("jz __rt_soif_ret_x86");                        // a stale handle owns nothing
+            emitter.instruction(&format!(
+                "or QWORD PTR [rax + {}], {}",
+                STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_FLAG_UNLINK_ON_CLOSE
+            ));
+            emitter.label("__rt_soif_ret_x86");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
+}
+
+/// Emits `__rt_stream_unlink_if_owned(handle)`: removes the file a stream owns, once.
+///
+/// Only `tmpfile()` marks a stream this way. The flag is cleared before the unlink so the two
+/// callers — an explicit `fclose()`, which closes its own descriptor, and the backend close every
+/// other destruction goes through — cannot both remove a path that a later stream may have been
+/// given by the operating system.
+pub fn emit_stream_unlink_if_owned(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: remove the file a stream owns ---");
+    emitter.label_global("__rt_stream_unlink_if_owned");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #16");
+            emitter.instruction("str x30, [sp, #8]");
+            emitter.instruction("bl __rt_stream_state");                        // resolve the owning stream state
+            emitter.instruction("cbz x0, __rt_suio_ret");                       // a stale handle owns nothing
+            emitter.instruction(&format!(
+                "ldr x9, [x0, #{}]", STREAM_OWNERSHIP_FLAGS_OFFSET
+            ));
+            emitter.instruction(&format!(
+                "tst x9, #{}", STREAM_STATE_FLAG_UNLINK_ON_CLOSE
+            ));                                                                 // does this stream own its file?
+            emitter.instruction("b.eq __rt_suio_ret");
+            emitter.instruction(&format!(
+                "bic x9, x9, #{}", STREAM_STATE_FLAG_UNLINK_ON_CLOSE
+            ));                                                                 // exactly once, whichever caller arrives first
+            emitter.instruction(&format!(
+                "str x9, [x0, #{}]", STREAM_OWNERSHIP_FLAGS_OFFSET
+            ));
+            emitter.instruction(&format!("ldr x1, [x0, #{}]", STREAM_URI_PTR_OFFSET));
+            emitter.instruction(&format!("ldr x2, [x0, #{}]", STREAM_URI_LEN_OFFSET));
+            emitter.instruction("cbz x1, __rt_suio_ret");                       // nothing recorded: nothing to remove
+            emitter.instruction("bl __rt_cstr");                                // the path as a C string
+            emitter.bl_c("unlink");                                             // a missing file is not an error here
+            emitter.label("__rt_suio_ret");
+            emitter.instruction("ldr x30, [sp, #8]");
+            emitter.instruction("add sp, sp, #16");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("call __rt_stream_state");                      // resolve the owning stream state
+            emitter.instruction("test rax, rax");
+            emitter.instruction("jz __rt_suio_ret_x86");                        // a stale handle owns nothing
+            emitter.instruction(&format!(
+                "test QWORD PTR [rax + {}], {}",
+                STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_FLAG_UNLINK_ON_CLOSE
+            ));                                                                 // does this stream own its file?
+            emitter.instruction("jz __rt_suio_ret_x86");
+            emitter.instruction(&format!(
+                "and QWORD PTR [rax + {}], {}",
+                STREAM_OWNERSHIP_FLAGS_OFFSET, !STREAM_STATE_FLAG_UNLINK_ON_CLOSE as i64
+            ));                                                                 // exactly once, whichever caller arrives first
+            emitter.instruction(&format!(
+                "mov r10, QWORD PTR [rax + {}]", STREAM_URI_PTR_OFFSET
+            ));
+            emitter.instruction(&format!(
+                "mov rdx, QWORD PTR [rax + {}]", STREAM_URI_LEN_OFFSET
+            ));
+            emitter.instruction("test r10, r10");
+            emitter.instruction("jz __rt_suio_ret_x86");                        // nothing recorded: nothing to remove
+            emitter.instruction("mov rax, r10");
+            emitter.instruction("call __rt_cstr");                              // the path as a C string
+            emitter.instruction("mov rdi, rax");
+            emitter.instruction("call unlink");                                 // a missing file is not an error here
+            emitter.label("__rt_suio_ret_x86");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
 }

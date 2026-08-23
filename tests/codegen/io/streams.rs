@@ -5238,6 +5238,57 @@ echo $n === false ? "false" : "got";
     assert_eq!(out, "false");
 }
 
+/// The file `tmpfile()` names EXISTS while the handle is open, and is gone once it closes.
+///
+/// MEASURED on `php -n` 8.5.6 with four bytes written through the handle: `file_exists()` is true,
+/// `filesize()` is 4, and a second `fopen()` on the reported URI reads them back — then `fclose()`
+/// removes it. elephc unlinked the file the moment `mkstemp` returned, which is the right trick
+/// for the ANONYMOUS temp storage `data:` and the https reader use, and wrong for the one whose
+/// path php publishes: all four answers were false.
+///
+/// The last line is the other half of the rule: what php removes, elephc must remove too.
+#[test]
+fn test_tmpfile_keeps_the_file_its_uri_names_until_close() {
+    let out = compile_and_run(
+        r#"<?php
+$h = tmpfile();
+fwrite($h, "seed");
+fflush($h);
+$uri = stream_get_meta_data($h)["uri"];
+echo var_export(file_exists($uri), true), "|";
+echo var_export(filesize($uri), true), "|";
+$re = fopen($uri, "r");
+echo var_export(fread($re, 16), true), "|";
+fclose($re);
+fclose($h);
+echo var_export(file_exists($uri), true);
+"#,
+    );
+    assert_eq!(out, "true|4|'seed'|false");
+}
+
+/// The OTHER close route removes it too: the last reference going away, not `fclose()`.
+///
+/// An explicit `fclose()` closes its own descriptor; everything else — `unset()`, a scope ending,
+/// the deterministic shutdown at exit — goes through the backend close, and both had to learn the
+/// removal. Only a program that never calls `fclose()` can tell whether the second one did.
+/// MEASURED on `php -n` 8.5.6, which answers the same two.
+#[test]
+fn test_tmpfile_is_removed_when_its_last_reference_goes_away() {
+    let out = compile_and_run(
+        r#"<?php
+$h = tmpfile();
+fwrite($h, "seed");
+fflush($h);
+$uri = stream_get_meta_data($h)["uri"];
+echo var_export(file_exists($uri), true), "|";
+unset($h);
+echo var_export(file_exists($uri), true);
+"#,
+    );
+    assert_eq!(out, "true|false");
+}
+
 /// A SOCKET does not support locking; a pipe and a plain file do.
 ///
 /// MEASURED on `php -n` 8.5.6 across seven streams — the engines already agreed on six, and

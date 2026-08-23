@@ -533,6 +533,12 @@ fn emit_stream_close_backend(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #0");                                          // skip absent descriptors
     emitter.instruction("b.lt __rt_stream_close_backend_mark");                 // an absent descriptor needs no syscall
     emitter.syscall(6);                                                         // close the native file or socket descriptor
+    // `tmpfile()` owns the file its URI names, and php removes it exactly here: the path stays
+    // reachable — `file_exists()`, `filesize()`, a second `fopen()` — for as long as the handle
+    // lives. The deterministic shutdown closes request-owned resources at exit, so a program that
+    // never calls `fclose()` still leaves nothing behind.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_unlink_if_owned");                      // `tmpfile()` removes its file here
     emitter.instruction("b __rt_stream_close_backend_mark");                    // finish lifecycle publication
     emitter.label("__rt_stream_close_backend_user_wrapper");
     emitter.instruction("mov x0, x10");                                         // pass the synthetic wrapper handle to stream_close dispatch

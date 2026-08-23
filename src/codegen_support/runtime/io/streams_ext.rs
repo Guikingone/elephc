@@ -286,6 +286,11 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction("stp x10, x11, [x9]");
     emitter.instruction("ldr x10, [sp, #16]");                                  // and its remaining bytes
     emitter.instruction("str x10, [x9, #16]");
+    // `tmpfile()` has its own copy of this below, without the unlink: php keeps its temp file
+    // linked until the stream closes, and the URI published just above is the path it names.
+    // Everything else that wants scratch storage — `data:`, the https reader — calls this one and
+    // gets the anonymous file it always did. The two share no code, because a branch INTO another
+    // global's body does not survive a linker that strips by symbol.
     emitter.instruction("add x0, sp, #0");                                      // unlink path argument (the now-resolved template)
     emitter.bl_c("unlink");                                                     // libc unlink — file auto-deletes when fd closes
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload fd as the return value
@@ -298,6 +303,39 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", tmpl_save));        // restore frame pointer and return address (failure path)
     emitter.instruction(&format!("add sp, sp, #{}", tmpl_frame));               // deallocate frame (failure path)
     emitter.instruction("ret");                                                 // return -1
+    // The named entry point: the same helper with the unlink skipped.
+    emitter.blank();
+    emitter.raw("    .p2align 2");
+    emitter.comment("--- runtime: tmpfile, keeping the file its URI names ---");
+    emitter.label_global("__rt_tmpfile_named");
+    emitter.instruction(&format!("sub sp, sp, #{}", tmpl_frame));               // allocate frame + template buffer
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", tmpl_save));        // save frame pointer and return address
+    emitter.instruction(&format!("add x29, sp, #{}", tmpl_save));               // establish new frame pointer
+    abi::emit_symbol_address(emitter, "x9", "_tmpfile_template");
+    emitter.instruction("ldp x10, x11, [x9]");
+    emitter.instruction("stp x10, x11, [sp]");
+    emitter.instruction("ldr x10, [x9, #16]");
+    emitter.instruction("str x10, [sp, #16]");
+    emitter.instruction("add x0, sp, #0");                                      // mkstemp template argument
+    emitter.bl_c("mkstemp");
+    emitter.instruction("cmp w0, #0");
+    emitter.instruction("b.lt __rt_tmpfile_named_fail");                        // its OWN failure path: see the note above
+    emitter.instruction("sxtw x0, w0");                                         // normalize the C int fd
+    emitter.instruction("str x0, [sp, #24]");
+    abi::emit_symbol_address(emitter, "x9", "_tmpfile_last_path");
+    emitter.instruction("ldp x10, x11, [sp, #0]");                              // the resolved name php will publish
+    emitter.instruction("stp x10, x11, [x9]");
+    emitter.instruction("ldr x10, [sp, #16]");
+    emitter.instruction("str x10, [x9, #16]");
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", tmpl_save));        // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", tmpl_frame));               // deallocate frame
+    emitter.instruction("ret");                                                 // the file stays where mkstemp put it
+    emitter.label("__rt_tmpfile_named_fail");
+    emitter.instruction("mov x0, #-1");                                         // tmpfile failure sentinel
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", tmpl_save));        // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", tmpl_frame));               // deallocate frame
+    emitter.instruction("ret");                                                 // return -1
+
 }
 
 /// Emits x86_64 Linux stream-extension runtime helpers (`__rt_fgetc`, `__rt_readfile`,
@@ -480,6 +518,7 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r9 + 8], r10");
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // and the remainder
     emitter.instruction("mov QWORD PTR [r9 + 16], r10");
+    // See the AArch64 counterpart: `tmpfile()` has its own copy of this below, without the unlink.
     emitter.instruction("lea rdi, [rbp - 32]");                                 // unlink path
     emitter.instruction("call unlink");                                         // libc unlink — file auto-deletes on close
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return fd
@@ -492,4 +531,39 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release frame (failure path)
     emitter.instruction("pop rbp");                                             // restore caller frame pointer (failure path)
     emitter.instruction("ret");                                                 // return -1
+    emitter.blank();
+    emitter.comment("--- runtime: tmpfile, keeping the file its URI names ---");
+    emitter.label_global("__rt_tmpfile_named");
+    emitter.instruction("push rbp");
+    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("sub rsp, 48");                                         // template buffer plus fd spill slot
+    abi::emit_symbol_address(emitter, "rsi", "_tmpfile_template");
+    emitter.instruction("mov rax, QWORD PTR [rsi]");
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");
+    emitter.instruction("mov rax, QWORD PTR [rsi + 8]");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");
+    emitter.instruction("mov rax, QWORD PTR [rsi + 16]");
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");
+    emitter.instruction("lea rdi, [rbp - 32]");                                 // mkstemp template arg
+    emitter.instruction("call mkstemp");
+    emitter.instruction("cmp eax, 0");
+    emitter.instruction("jl __rt_tmpfile_named_fail_x86");                      // its OWN failure path: see the note above
+    emitter.instruction("cdqe");                                                // normalize the C int fd
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");
+    abi::emit_symbol_address(emitter, "r9", "_tmpfile_last_path");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // the resolved name php will publish
+    emitter.instruction("mov QWORD PTR [r9], r10");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");
+    emitter.instruction("mov QWORD PTR [r9 + 8], r10");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");
+    emitter.instruction("mov QWORD PTR [r9 + 16], r10");
+    emitter.instruction("add rsp, 48");                                         // release frame
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // the file stays where mkstemp put it
+    emitter.label("__rt_tmpfile_named_fail_x86");
+    emitter.instruction("mov rax, -1");                                         // failure sentinel
+    emitter.instruction("add rsp, 48");                                         // release frame (failure path)
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer (failure path)
+    emitter.instruction("ret");                                                 // return -1
+
 }

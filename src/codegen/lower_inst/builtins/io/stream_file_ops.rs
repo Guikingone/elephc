@@ -30,6 +30,11 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             // It runs BEFORE the teardown below, which detaches the chains it has to walk.
             ctx.emitter.instruction("ldr x0, [sp, #16]");                       // the handle the closing flush walks
             abi::emit_call_label(ctx.emitter, "__rt_stream_write_chain_close_flush");
+            // `tmpfile()` owns the file its URI names and php removes it on close. This route
+            // closes the descriptor ITSELF further down, so the backend-close path — which every
+            // other destruction goes through, including the shutdown at exit — never sees it.
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // the handle that may own a file
+            abi::emit_call_label(ctx.emitter, "__rt_stream_unlink_if_owned");
             ctx.emitter.instruction("ldr x0, [sp, #16]");                       // resolve the opaque handle while preserving its descriptor
             abi::emit_call_label(ctx.emitter, "__rt_stream_state");
             // PHP invalidates attached filter resources at fclose(), not when the
@@ -64,6 +69,9 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             // below detaches the very chains it walks.
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // the handle the closing flush walks
             abi::emit_call_label(ctx.emitter, "__rt_stream_write_chain_close_flush");
+            // See the AArch64 counterpart: this route closes its own descriptor.
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // the handle that may own a file
+            abi::emit_call_label(ctx.emitter, "__rt_stream_unlink_if_owned");
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // resolve the opaque handle while preserving its descriptor
             abi::emit_call_label(ctx.emitter, "__rt_stream_state");
             // PHP invalidates attached filter resources at fclose(), not when the

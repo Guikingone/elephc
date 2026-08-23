@@ -268,6 +268,14 @@ pub(crate) const STREAM_OWNERSHIP_FLAGS_OFFSET: i64 = 296;
 /// Marks a stream instance whose wrapper definition declared `STREAM_IS_URL`.
 pub(crate) const STREAM_STATE_FLAG_IS_URL: u64 = 1 << 8;
 
+/// Marks a stream whose recorded URI must be unlinked when its descriptor closes.
+///
+/// This is what `tmpfile()` is: php keeps the file it created LINKED for as long as the handle
+/// lives — `file_exists()`, `filesize()` and a second `fopen()` all reach it — and removes it on
+/// close. Unlinking at creation, which is the right trick for an anonymous scratch file, makes the
+/// URI php publishes name nothing.
+pub(crate) const STREAM_STATE_FLAG_UNLINK_ON_CLOSE: u64 = 1 << 9;
+
 /// Backend kind for a directly owned OS descriptor.
 pub(crate) const STREAM_BACKEND_FD: u64 = 1;
 

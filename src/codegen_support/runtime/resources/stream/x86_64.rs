@@ -551,6 +551,10 @@ fn emit_stream_close_backend(emitter: &mut Emitter) {
     emitter.instruction("test rdi, rdi");                                       // skip absent descriptors
     emitter.instruction("js __rt_stream_close_backend_mark");                   // an absent descriptor needs no syscall
     emitter.instruction("call close");                                          // close the native file or socket descriptor
+    // See the AArch64 counterpart: `tmpfile()` owns the file its URI names, and php removes it
+    // exactly here.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_unlink_if_owned");                    // `tmpfile()` removes its file here
     emitter.instruction("jmp __rt_stream_close_backend_mark");                  // finish lifecycle publication
     emitter.label("__rt_stream_close_backend_user_wrapper");
     emitter.instruction("mov rdi, r11");                                        // pass the synthetic wrapper handle to stream_close dispatch

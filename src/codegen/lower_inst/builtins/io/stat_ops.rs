@@ -80,13 +80,47 @@ pub(crate) fn lower_sys_get_temp_dir(
 /// Lowers `tmpfile()` and boxes the anonymous stream descriptor or PHP false.
 pub(crate) fn lower_tmpfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "tmpfile", 0)?;
-    abi::emit_call_label(ctx.emitter, "__rt_tmpfile");
+    // The NAMED helper: php keeps the file it created linked for as long as the handle lives, so
+    // the URI it reports below names something `file_exists()`, `filesize()` and a second
+    // `fopen()` can all reach. The anonymous `__rt_tmpfile` — unlinked on the spot — stays what
+    // `data:` and the https reader use for scratch storage.
+    abi::emit_call_label(ctx.emitter, "__rt_tmpfile_named");
     box_stream_fd_or_false_result(ctx, "tmpfile");
     // PHP reports the file `tmpfile()` created as the stream URI. The name only exists in the
-    // buffer the helper published, because the file is unlinked before the handle comes back.
+    // buffer the helper published.
     emit_record_stream_meta_after_boxed_symbol(ctx, 0, "_tmpfile_last_path", TMPFILE_PATH_LEN);
     emit_record_stream_mode_literal_after_boxed(ctx, "r+b");
+    emit_stream_owns_its_file_after_boxed(ctx);
     store_if_result(ctx, inst)
+}
+
+/// Marks the freshly boxed stream as owning the file its URI names.
+///
+/// The close path removes it then, which is when php removes it. Without the mark the file would
+/// outlive the process; with it, and with the deterministic shutdown that already closes
+/// request-owned resources at exit, a program that never calls `fclose()` still leaves nothing.
+fn emit_stream_owns_its_file_after_boxed(ctx: &mut FunctionContext<'_>) {
+    let done = ctx.next_label("tmpfile_owns_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect the boxed result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("b.ne {}", done));                 // a failed tmpfile owns nothing
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                        // the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_own_its_file");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 9");                  // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("jne {}", done));                  // a failed tmpfile owns nothing
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rax + 8]");            // the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_own_its_file");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    ctx.emitter.label(&done);
 }
 
 /// Lowers `filesize(path)` through the target-aware runtime stat helper.
