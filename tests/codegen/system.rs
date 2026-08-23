@@ -1744,6 +1744,37 @@ fn test_json_decode_unicode_surrogate_pair() {
 
 // --- Regex functions ---
 
+/// Verifies every PHP regex delimiter is honoured, not just `/`.
+///
+/// PHP accepts any non-alphanumeric, non-backslash, non-whitespace delimiter, and the bracket
+/// forms close with their mate. Hardcoding `/` made every other delimiter fall through as an
+/// UNDELIMITED pattern: PCRE2 then received the delimiters and modifiers as pattern bytes and
+/// simply never matched — a silent zero, not an error. Symfony's Yaml component writes every
+/// pattern as `#...#`, so its whole parser failed on `a: 1`.
+#[test]
+fn test_preg_match_honours_every_delimiter() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (['/^a: (\d+)$/', '#^a: (\d+)$#', '~^a: (\d+)$~', '{^a: (\d+)$}', '!^a: (\d+)$!',
+          '%^a: (\d+)$%', '(^a: (\d+)$)', '[^a: (\d+)$]', '<^a: (\d+)$>'] as $pattern) {
+    echo preg_match($pattern, 'a: 1', $m), ($m[1] ?? '-');
+}
+echo "|", preg_match('#^a: (\d+)$#u', 'a: 1', $u), ($u[1] ?? '-');
+"#,
+    );
+    assert_eq!(out, "111111111111111111|11");
+}
+
+/// Verifies an alphanumeric leading byte still means "undelimited", the behaviour a raw payload
+/// depends on: a pattern that does not open with a delimiter is passed through unchanged.
+#[test]
+fn test_preg_match_leaves_an_undelimited_pattern_alone() {
+    let out = compile_and_run(
+        r#"<?php echo preg_match('/a/', 'a'), preg_match('#a#', 'a');"#,
+    );
+    assert_eq!(out, "11");
+}
+
 /// Verifies `preg_match("/hello/", "hello world")` returns 1 (match found).
 #[test]
 fn test_preg_match_simple() {

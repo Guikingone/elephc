@@ -42,10 +42,47 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     emitter.instruction("mov x3, #0");                                          // flags = 0
     emitter.instruction("str x3, [sp, #16]");                                   // save flags
 
-    // -- check if pattern starts with '/' --
-    emitter.instruction("ldrb w9, [x1]");                                       // load first byte
-    emitter.instruction("cmp w9, #47");                                         // compare with '/'
-    emitter.instruction("b.ne __rt_preg_strip_done");                           // not delimited, return as-is
+    // -- the delimiter is whatever non-alphanumeric byte opens the pattern --
+    // PHP accepts any non-alphanumeric, non-backslash, non-whitespace delimiter, and
+    // Symfony's Yaml component writes every pattern as `#...#`. Hardcoding '/' made every
+    // other delimiter fall through as an UNDELIMITED pattern, so PCRE2 received the
+    // delimiters and modifiers as pattern bytes and simply never matched — silently.
+    emitter.instruction("ldrb w9, [x1]");                                       // load the opening delimiter candidate
+    emitter.instruction("cmp w9, #92");                                         // a backslash can never be a delimiter
+    emitter.instruction("b.eq __rt_preg_strip_done");                           // treat it as an undelimited payload
+    emitter.instruction("cmp w9, #32");                                         // control characters and space cannot delimit either
+    emitter.instruction("b.ls __rt_preg_strip_done");                           // treat it as an undelimited payload
+    emitter.instruction("sub w12, w9, #48");                                    // shift '0'..'9' to the bottom of the range
+    emitter.instruction("cmp w12, #10");                                        // is the candidate a digit?
+    emitter.instruction("b.lo __rt_preg_strip_done");                           // digits are not delimiters
+    emitter.instruction("sub w12, w9, #65");                                    // shift 'A'..'Z' to the bottom of the range
+    emitter.instruction("cmp w12, #26");                                        // is the candidate an uppercase letter?
+    emitter.instruction("b.lo __rt_preg_strip_done");                           // letters are not delimiters
+    emitter.instruction("sub w12, w9, #97");                                    // shift 'a'..'z' to the bottom of the range
+    emitter.instruction("cmp w12, #26");                                        // is the candidate a lowercase letter?
+    emitter.instruction("b.lo __rt_preg_strip_done");                           // letters are not delimiters
+
+    // -- bracket delimiters close with their mate; every other one closes with itself --
+    emitter.instruction("mov w11, w9");                                         // default: the closing delimiter equals the opening one
+    emitter.instruction("cmp w9, #40");                                         // '(' pairs with ')'
+    emitter.instruction("b.ne __rt_preg_strip_pair_brace");                     // try the next bracket pair
+    emitter.instruction("mov w11, #41");                                        // closing delimiter is ')'
+    emitter.instruction("b __rt_preg_strip_close_ready");                       // the closing delimiter is settled
+    emitter.label("__rt_preg_strip_pair_brace");
+    emitter.instruction("cmp w9, #123");                                        // '{' pairs with '}'
+    emitter.instruction("b.ne __rt_preg_strip_pair_bracket");                   // try the next bracket pair
+    emitter.instruction("mov w11, #125");                                       // closing delimiter is '}'
+    emitter.instruction("b __rt_preg_strip_close_ready");                       // the closing delimiter is settled
+    emitter.label("__rt_preg_strip_pair_bracket");
+    emitter.instruction("cmp w9, #91");                                         // '[' pairs with ']'
+    emitter.instruction("b.ne __rt_preg_strip_pair_angle");                     // try the last bracket pair
+    emitter.instruction("mov w11, #93");                                        // closing delimiter is ']'
+    emitter.instruction("b __rt_preg_strip_close_ready");                       // the closing delimiter is settled
+    emitter.label("__rt_preg_strip_pair_angle");
+    emitter.instruction("cmp w9, #60");                                         // '<' pairs with '>'
+    emitter.instruction("b.ne __rt_preg_strip_close_ready");                    // everything else closes with itself
+    emitter.instruction("mov w11, #62");                                        // closing delimiter is '>'
+    emitter.label("__rt_preg_strip_close_ready");
 
     // -- find closing delimiter by scanning from the end --
     emitter.instruction("sub x10, x2, #1");                                     // start from last char
@@ -53,7 +90,7 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, #1");                                         // must have at least 1 char between delimiters
     emitter.instruction("b.lt __rt_preg_strip_done");                           // no closing delimiter found
     emitter.instruction("ldrb w9, [x1, x10]");                                  // load byte at position
-    emitter.instruction("cmp w9, #47");                                         // check for closing '/'
+    emitter.instruction("cmp w9, w11");                                         // check for the pattern's own closing delimiter
     emitter.instruction("b.eq __rt_preg_strip_found");                          // found it
 
     // -- check supported PCRE2 POSIX-wrapper flags --
@@ -121,9 +158,47 @@ fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor ecx, ecx");                                        // clear the regex flag accumulator so undelimited patterns default to no modifiers
     emitter.instruction("test rdx, rdx");                                       // skip delimiter stripping when the pattern string is empty
     emitter.instruction("jz __rt_preg_strip_done_linux_x86_64");                // empty patterns already behave like raw undelimited regex payloads
-    emitter.instruction("movzx r8d, BYTE PTR [rax]");                           // load the first pattern byte so delimiter detection can inspect the opening character
-    emitter.instruction("cmp r8d, 47");                                         // test whether the pattern starts with the canonical '/' regex delimiter
-    emitter.instruction("jne __rt_preg_strip_done_linux_x86_64");               // return the original pattern unchanged when it is not slash-delimited
+    // -- the delimiter is whatever non-alphanumeric byte opens the pattern (see the
+    // AArch64 path for why hardcoding '/' silently broke every `#...#` pattern) --
+    emitter.instruction("movzx r8d, BYTE PTR [rax]");                           // load the opening delimiter candidate
+    emitter.instruction("cmp r8d, 92");                                         // a backslash can never be a delimiter
+    emitter.instruction("je __rt_preg_strip_done_linux_x86_64");                // treat it as an undelimited payload
+    emitter.instruction("cmp r8d, 32");                                         // control characters and space cannot delimit either
+    emitter.instruction("jbe __rt_preg_strip_done_linux_x86_64");               // treat it as an undelimited payload
+    emitter.instruction("mov r10d, r8d");                                       // shift '0'..'9' to the bottom of the range
+    emitter.instruction("sub r10d, 48");                                        // 
+    emitter.instruction("cmp r10d, 10");                                        // is the candidate a digit?
+    emitter.instruction("jb __rt_preg_strip_done_linux_x86_64");                // digits are not delimiters
+    emitter.instruction("mov r10d, r8d");                                       // shift 'A'..'Z' to the bottom of the range
+    emitter.instruction("sub r10d, 65");                                        // 
+    emitter.instruction("cmp r10d, 26");                                        // is the candidate an uppercase letter?
+    emitter.instruction("jb __rt_preg_strip_done_linux_x86_64");                // letters are not delimiters
+    emitter.instruction("mov r10d, r8d");                                       // shift 'a'..'z' to the bottom of the range
+    emitter.instruction("sub r10d, 97");                                        // 
+    emitter.instruction("cmp r10d, 26");                                        // is the candidate a lowercase letter?
+    emitter.instruction("jb __rt_preg_strip_done_linux_x86_64");                // letters are not delimiters
+
+    // -- bracket delimiters close with their mate; every other one closes with itself --
+    emitter.instruction("mov r11d, r8d");                                       // default: the closing delimiter equals the opening one
+    emitter.instruction("cmp r8d, 40");                                         // '(' pairs with ')'
+    emitter.instruction("jne __rt_preg_strip_pair_brace_linux_x86_64");         // try the next bracket pair
+    emitter.instruction("mov r11d, 41");                                        // closing delimiter is ')'
+    emitter.instruction("jmp __rt_preg_strip_close_ready_linux_x86_64");        // the closing delimiter is settled
+    emitter.label("__rt_preg_strip_pair_brace_linux_x86_64");
+    emitter.instruction("cmp r8d, 123");                                        // '{' pairs with '}'
+    emitter.instruction("jne __rt_preg_strip_pair_bracket_linux_x86_64");       // try the next bracket pair
+    emitter.instruction("mov r11d, 125");                                       // closing delimiter is '}'
+    emitter.instruction("jmp __rt_preg_strip_close_ready_linux_x86_64");        // the closing delimiter is settled
+    emitter.label("__rt_preg_strip_pair_bracket_linux_x86_64");
+    emitter.instruction("cmp r8d, 91");                                         // '[' pairs with ']'
+    emitter.instruction("jne __rt_preg_strip_pair_angle_linux_x86_64");         // try the last bracket pair
+    emitter.instruction("mov r11d, 93");                                        // closing delimiter is ']'
+    emitter.instruction("jmp __rt_preg_strip_close_ready_linux_x86_64");        // the closing delimiter is settled
+    emitter.label("__rt_preg_strip_pair_angle_linux_x86_64");
+    emitter.instruction("cmp r8d, 60");                                         // '<' pairs with '>'
+    emitter.instruction("jne __rt_preg_strip_close_ready_linux_x86_64");        // everything else closes with itself
+    emitter.instruction("mov r11d, 62");                                        // closing delimiter is '>'
+    emitter.label("__rt_preg_strip_close_ready_linux_x86_64");
     emitter.instruction("mov r9, rdx");                                         // seed the reverse scan cursor from the full source pattern length
     emitter.instruction("sub r9, 1");                                           // start scanning from the final byte looking for flags or the closing delimiter
 
@@ -131,7 +206,7 @@ fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, 1");                                           // stop when there is no room left for a distinct closing delimiter
     emitter.instruction("jl __rt_preg_strip_done_linux_x86_64");                // malformed slash patterns fall back to the original undelimited payload
     emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the current reverse-scan byte from the slash-delimited pattern literal
-    emitter.instruction("cmp r8d, 47");                                         // did the reverse scan find the closing '/' delimiter?
+    emitter.instruction("cmp r8d, r11d");                                       // did the reverse scan find this pattern's closing delimiter?
     emitter.instruction("je __rt_preg_strip_found_linux_x86_64");               // stop once the closing slash delimiter is located
     emitter.instruction("cmp r8d, 105");                                        // detect the trailing 'i' case-insensitive modifier while walking backward
     emitter.instruction("jne __rt_preg_strip_flag_m_linux_x86_64");             // try the next supported regex modifier
