@@ -308,56 +308,69 @@ impl Checker {
                     // fresh, at whatever type it likes. Ineligible names (conditional depth,
                     // reference-aliased, `global`, `static`, declared-typed) keep today's
                     // typing no-op. Iterating the SOURCE args keeps the recorded span on a node
-                    // EIR lowering actually visits. `unset` is statement-only in PHP's grammar,
-                    // so this always runs against the statement-level environment.
-                    for arg in args {
-                        let ExprKind::Variable(var) = &arg.kind else {
-                            continue;
-                        };
-                        // A top-level name some other body declares `global` is NOT killable
-                        // however eligible it otherwise looks: `global $a;` in a function binds
-                        // the very cell this slot holds, so dropping the name here leaves the
-                        // rest of the program reaching storage the environment no longer knows.
-                        // Lowering refuses to abandon the same slots, from the same collected
-                        // set — see `Checker::top_level_binding_is_program_global`.
-                        if env.contains_key(var)
-                            && self.local_binding_is_killable(var)
-                            && !self.top_level_binding_is_program_global(var)
-                        {
-                            env.remove(var);
-                            self.local_binding_depth.remove(var);
-                            self.clear_local_binding_metadata(var);
-                            // A span that names no node must never enter a map lowering keys
-                            // BY span. `Span::dummy()` is shared by every compiler-generated
-                            // node (`Span::identifies_a_node`), so one prelude `unset` filed
-                            // under it would make lowering abandon the binding at EVERY other
-                            // dummy-span `unset` argument in the program. The env kill above
-                            // still happens — only the lowering instruction is withheld, which
-                            // leaves such a site on the plain null-store path it had before
-                            // kills were lowered at all.
-                            if arg.span.identifies_a_node() {
-                                self.local_bind_kill_sites.insert(arg.span, var.clone());
-                            }
-                        } else {
-                            // This visit RE-DECIDES the site. The checker walks a body more
-                            // than once (top level twice, method bodies to stability, a
-                            // function body once per call-site re-specialization), and only
-                            // the LAST walk's decisions may reach EIR lowering — the same
-                            // rule `loop_storage_types` follows by clearing its scope before
-                            // each re-walk. A kill recorded by a superseded walk whose
-                            // successor refuses (a callee's by-reference parameter that only
-                            // became visible later, say) would otherwise make lowering
-                            // abandon a slot the final check kept alive.
-                            //
-                            // Qualified by NAME for the same reason the insert above is: a
-                            // `Span` has no file identity, so an `unset($other)` at the same
-                            // (line, column) of another file must not disarm this one.
-                            if self
-                                .local_bind_kill_sites
-                                .get(&arg.span)
-                                .is_some_and(|killed| killed == var)
+                    // EIR lowering actually visits.
+                    //
+                    // ONLY from statement position. `unset` is a statement in PHP's grammar, but
+                    // elephc's parser also accepts it as an expression, so this arm is reachable
+                    // from a `?:`/`??`/`&&` operand — a position whose `TypeEnv` clone is
+                    // DISCARDED when the branch loses. Everything the kill does below lives on
+                    // the checker instead (the recorded kill site, the per-name metadata clear,
+                    // the dropped binding depth), so it would escape that discard: measured as a
+                    // kill recorded for a never-executed ternary arm (the program then printed
+                    // nothing where the local was still live) and as a callable-argument
+                    // diagnostic lost with the metadata. Outside statement position this whole
+                    // block is a no-op — including the re-decision below, which must not disarm
+                    // a kill a statement-position visit legitimately recorded.
+                    if self.expr_is_in_statement_position(expr) {
+                        for arg in args {
+                            let ExprKind::Variable(var) = &arg.kind else {
+                                continue;
+                            };
+                            // A top-level name some other body declares `global` is NOT killable
+                            // however eligible it otherwise looks: `global $a;` in a function binds
+                            // the very cell this slot holds, so dropping the name here leaves the
+                            // rest of the program reaching storage the environment no longer knows.
+                            // Lowering refuses to abandon the same slots, from the same collected
+                            // set — see `Checker::top_level_binding_is_program_global`.
+                            if env.contains_key(var)
+                                && self.local_binding_is_killable(var)
+                                && !self.top_level_binding_is_program_global(var)
                             {
-                                self.local_bind_kill_sites.remove(&arg.span);
+                                env.remove(var);
+                                self.local_binding_depth.remove(var);
+                                self.clear_local_binding_metadata(var);
+                                // A span that names no node must never enter a map lowering keys
+                                // BY span. `Span::dummy()` is shared by every compiler-generated
+                                // node (`Span::identifies_a_node`), so one prelude `unset` filed
+                                // under it would make lowering abandon the binding at EVERY other
+                                // dummy-span `unset` argument in the program. The env kill above
+                                // still happens — only the lowering instruction is withheld, which
+                                // leaves such a site on the plain null-store path it had before
+                                // kills were lowered at all.
+                                if arg.span.identifies_a_node() {
+                                    self.local_bind_kill_sites.insert(arg.span, var.clone());
+                                }
+                            } else {
+                                // This visit RE-DECIDES the site. The checker walks a body more
+                                // than once (top level twice, method bodies to stability, a
+                                // function body once per call-site re-specialization), and only
+                                // the LAST walk's decisions may reach EIR lowering — the same
+                                // rule `loop_storage_types` follows by clearing its scope before
+                                // each re-walk. A kill recorded by a superseded walk whose
+                                // successor refuses (a callee's by-reference parameter that only
+                                // became visible later, say) would otherwise make lowering
+                                // abandon a slot the final check kept alive.
+                                //
+                                // Qualified by NAME for the same reason the insert above is: a
+                                // `Span` has no file identity, so an `unset($other)` at the same
+                                // (line, column) of another file must not disarm this one.
+                                if self
+                                    .local_bind_kill_sites
+                                    .get(&arg.span)
+                                    .is_some_and(|killed| killed == var)
+                                {
+                                    self.local_bind_kill_sites.remove(&arg.span);
+                                }
                             }
                         }
                     }

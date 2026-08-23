@@ -298,6 +298,21 @@ pub(crate) struct Checker {
     /// type, as span -> local NAME. Filled in Task 3; carried in `CheckResult` from here so the
     /// two decision maps travel together, keyed the same way.
     pub local_retype_sites: HashMap<Span, String>,
+    /// AST address of the expression that forms the ENTIRE expression-statement currently being
+    /// checked, or `None` outside one.
+    ///
+    /// PHP's grammar makes `unset(...)` a statement; elephc's parser is more permissive and accepts
+    /// it as an expression, so `$c = $cond ? 1 : unset($a);` reaches the checker. The binding kill
+    /// must not fire from there: the operand may never run, and the kill's side effects (the
+    /// recorded kill site, the cleared per-name metadata, the dropped binding depth) live on the
+    /// CHECKER, so they survive even when the branch's cloned `TypeEnv` is discarded. Measured: a
+    /// kill recorded for a never-executed ternary arm (the program then printed nothing), and a
+    /// callable-argument diagnostic lost because the metadata clear escaped the discarded clone.
+    ///
+    /// The address is exact because the statement walk and the expression walk borrow the same
+    /// immutable AST, and it is scoped by the save/restore around the one place that sets it
+    /// (`check_stmt`'s `ExprStmt` arm), so it can never name a stale node.
+    pub statement_position_expr: Option<usize>,
     /// Whether the body being checked calls `eval()` ANYWHERE, above or below the statement being
     /// checked. Recorded by `mixed_storage_scan::run_mixed_storage_scan` before the body's first
     /// statement is checked, and consulted by [`Checker::local_binding_is_killable`].
@@ -428,6 +443,14 @@ impl Checker {
     /// bound, and lowering already refuses to abandon the slot for exactly these names, so that
     /// site degrades to the pre-feature widening path and prints PHP's answer (measured). Vetoing
     /// it too would turn a working program into a compile error.
+    /// True when `expr` IS the whole expression of the expression-statement being checked.
+    ///
+    /// The gate the `unset` binding kill fires behind. See [`Checker::statement_position_expr`] for
+    /// why an `unset` anywhere else must leave the checker untouched.
+    pub(crate) fn expr_is_in_statement_position(&self, expr: &Expr) -> bool {
+        self.statement_position_expr == Some(expr as *const Expr as usize)
+    }
+
     pub(crate) fn top_level_binding_is_program_global(&self, name: &str) -> bool {
         self.null_probe_scope_is_top_level && self.program_global_names.contains(name)
     }

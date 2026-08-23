@@ -124,7 +124,18 @@ impl Checker {
             StmtKind::Break(levels) => self.check_loop_exit(stmt.span, "break", *levels),
             StmtKind::Continue(levels) => self.check_loop_exit(stmt.span, "continue", *levels),
             StmtKind::ExprStmt(expr) => {
-                self.infer_type_with_assignment_effects(expr, env)?;
+                // The one position an `unset(...)` may end a local binding from. elephc's parser
+                // accepts `unset` as an expression (PHP's grammar does not), so the kill has to
+                // be told where it is: from a `?:`/`??`/`&&` operand it would record decisions
+                // for an operand that may never run, and its checker-side effects outlive the
+                // discarded branch env. Saved and restored so a nested statement (a prelude
+                // block, say) cannot leave this pointing at a finished node.
+                let saved_statement_position = self
+                    .statement_position_expr
+                    .replace(expr as *const crate::parser::ast::Expr as usize);
+                let result = self.infer_type_with_assignment_effects(expr, env);
+                self.statement_position_expr = saved_statement_position;
+                result?;
                 Ok(())
             }
             StmtKind::FunctionDecl { .. } => Ok(()),

@@ -2082,6 +2082,53 @@ fn test_unset_in_an_eval_body_records_no_kill_site() {
     );
 }
 
+/// An `unset` that is NOT a whole statement records nothing and changes nothing.
+///
+/// PHP's grammar makes `unset(...)` a statement and rejects this program outright; elephc's parser
+/// accepts it as an expression, so the kill arm was reachable from a ternary operand. The operand
+/// may never run, and the kill's effects live on the CHECKER (kill site, binding depth, per-name
+/// metadata), so they escaped the discarded branch environment: measured as a recorded kill for the
+/// never-taken arm, after which the program printed NOTHING for a local that is still live.
+#[test]
+fn test_unset_in_a_ternary_arm_records_no_kill() {
+    let result = check_source_full(
+        "<?php $a = \"x\" . $argc; $c = $argc > 0 ? 1 : unset($a); echo $a, $c;",
+    )
+    .expect("an expression-position unset must still type-check");
+    assert!(
+        result.local_bind_kill_sites.is_empty(),
+        "an unset outside statement position must record no kill site: {:?}",
+        result.local_bind_kill_sites
+    );
+}
+
+/// The same shape must not silently drop a per-name diagnostic either.
+///
+/// The kill clears the callable/reflection metadata for the name. Fired from a discarded ternary
+/// arm, that clear survived the discard and `$f("s")` lost the signature that reports the bad
+/// argument — the program then compiled clean.
+#[test]
+fn test_unset_in_a_ternary_arm_keeps_the_callable_signature() {
+    expect_error(
+        "<?php $f = function (int $x) { return $x + 1; }; $c = $argc > 0 ? 1 : unset($f); echo $f(\"s\"), $c;",
+        "callable $f parameter $x expects Int, got Str",
+    );
+}
+
+/// Control for the two tests above: a statement-position `unset` still kills, so the gate is about
+/// POSITION and not about a kill that stopped working.
+#[test]
+fn test_statement_position_unset_still_kills() {
+    let result = check_source_full("<?php $a = \"x\" . $argc; unset($a); $a = 5; echo $a;")
+        .expect("a statement-position kill must type-check");
+    assert_eq!(
+        result.local_bind_kill_sites.len(),
+        1,
+        "a statement-position unset must still record its kill site: {:?}",
+        result.local_bind_kill_sites
+    );
+}
+
 /// Control for the test above: the identical program WITHOUT the `eval` still records its kill,
 /// so the gate is about eval rather than a checker that stopped killing.
 #[test]
