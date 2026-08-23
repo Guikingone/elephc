@@ -450,6 +450,24 @@ impl Checker {
     /// bound, and lowering already refuses to abandon the slot for exactly these names, so that
     /// site degrades to the pre-feature widening path and prints PHP's answer (measured). Vetoing
     /// it too would turn a working program into a compile error.
+    /// True when `name` is bound in a body's INCOMING environment by seeding rather than by
+    /// anything the body does, and the storage behind it is not this frame's.
+    ///
+    /// That is exactly `driver::top_level::seed_global_env`'s contents — `$argc`, `$argv`, the
+    /// request superglobals and the extern C globals — with the superglobals additionally
+    /// recognised in every scope, because `resolve_function_signature` and `seed_method_env` seed
+    /// them into function/method/closure environments too.
+    ///
+    /// Enumerated rather than read off the environment so the pre-scan, which runs before the first
+    /// statement is checked and holds no environment, can consult it. PARAMETERS and by-value
+    /// closure captures are deliberately NOT in it: both are seeded, but both live in a slot the
+    /// body's own frame owns.
+    pub(crate) fn name_is_seeded_program_storage(&self, name: &str) -> bool {
+        crate::superglobals::is_superglobal(name)
+            || (self.null_probe_scope_is_top_level
+                && (name == "argc" || name == "argv" || self.extern_globals.contains_key(name)))
+    }
+
     /// True when `expr` IS the whole expression of the expression-statement being checked.
     ///
     /// The gate the `unset` binding kill fires behind. See [`Checker::statement_position_expr`] for
@@ -538,6 +556,11 @@ impl Checker {
     /// through the callee (stored in a property, captured by a closure it creates), so the
     /// alias is permanent rather than scoped to the call. Walking the whole chain is
     /// deliberate: a reference to `$a[0]` or `$o->p` keeps `$a` / `$o` alive too.
+    ///
+    /// The unwrapping arms are kept in step with `mixed_storage_scan::disqualify_root`, which asks
+    /// the same question about the same expressions: `sort(...$args)`, `sort(@$a)` and
+    /// `sort(array: $a)` all reach the local behind the wrapper, and a shape one walker sees
+    /// through while the other stops at is exactly how the checker and the pre-scan drift apart.
     pub(crate) fn record_reference_alias_root(&mut self, expr: &Expr) {
         let mut current = expr;
         loop {
@@ -550,7 +573,10 @@ impl Checker {
                 | ExprKind::PropertyAccess { object: base, .. }
                 | ExprKind::NullsafePropertyAccess { object: base, .. }
                 | ExprKind::DynamicPropertyAccess { object: base, .. }
-                | ExprKind::NullsafeDynamicPropertyAccess { object: base, .. } => current = base,
+                | ExprKind::NullsafeDynamicPropertyAccess { object: base, .. }
+                | ExprKind::Spread(base)
+                | ExprKind::ErrorSuppress(base)
+                | ExprKind::NamedArg { value: base, .. } => current = base,
                 _ => return,
             }
         }

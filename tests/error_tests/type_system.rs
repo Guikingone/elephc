@@ -1965,6 +1965,76 @@ fn test_parameter_is_never_marked() {
     );
 }
 
+/// A name the body's INCOMING environment seeds, backed by storage the body does not own, is never
+/// marked either.
+///
+/// `$argc`/`$argv` and the extern C globals are seeded into the top-level environment by
+/// `seed_global_env`; the request superglobals are seeded into every scope. None of them is a slot
+/// this frame created. The marking used to reach them anyway: measured, both fixtures below WARNED
+/// and then type-checked, where they are the pre-existing hard error — and a marked name binds
+/// `Mixed` at every assignment, so the mark would have boxed program-wide storage the rest of the
+/// compiler reaches at its declared type.
+///
+/// The rejection IS the proof that nothing was marked: a marked name binds `Mixed`, which absorbs
+/// every later assignment, so a marked fixture type-checks instead of erroring.
+#[test]
+fn test_seeded_program_storage_is_never_marked() {
+    expect_error(
+        "<?php $argv = 1; if ($argc > 1) { $argv = \"s\"; } var_dump($argv);",
+        "cannot reassign $argv",
+    );
+    expect_error(
+        "<?php $_SESSION = 1; if ($argc > 1) { $_SESSION = \"s\"; } var_dump($_SESSION);",
+        "cannot reassign $_SESSION",
+    );
+}
+
+/// Control for the test above: a superglobal NAME used as an ordinary local inside a FUNCTION body
+/// is still the shared storage (every scope seeds the superglobals), so it stays excluded there
+/// too, while a plain local in the same body marks normally.
+#[test]
+fn test_a_plain_local_beside_a_seeded_name_still_marks() {
+    expect_warning(
+        "<?php function h(int $n): void { if ($n > 1) { $x = 0; } else { $x = \"s\"; } var_dump($x); } h(2);",
+        "boxed mixed storage",
+    );
+}
+
+/// A by-VALUE closure capture is seeded too, but its storage IS the closure frame's own — the
+/// capture arrives as a hidden parameter — so it stays markable, and the boxed store type is what
+/// releases the previous occupant of the capture slot.
+/// `codegen::locals_retype::test_marked_local_captured_by_value_and_overwritten_in_a_closure` is
+/// the leak half of this claim (48 bytes without the mark).
+#[test]
+fn test_a_by_value_capture_is_still_markable() {
+    expect_warning(
+        "<?php\n$m = $argc > 1 ? 1 : \"z\";\n$f = function (int $n) use ($m) { if ($n > 1) { $m = 0; } else { $m = \"s\"; } return $m; };\nvar_dump($f($argc));",
+        "boxed mixed storage",
+    );
+}
+
+/// A by-reference builtin argument passed as a SPREAD still aliases the local behind it.
+///
+/// `check_builtin` skipped the whole by-reference arm for a spread — the lvalue-shape diagnostic
+/// underneath has nothing to say about one — and skipped the alias recording with it, so `$args`
+/// looked kill/retype eligible after `sort(...$args)` even though `sort` holds a reference into it.
+/// The recording now happens before that bail-out, and `record_reference_alias_root` sees through
+/// the `Spread` wrapper (as `mixed_storage_scan::disqualify_root` already did).
+#[test]
+fn test_spread_by_ref_builtin_argument_is_ref_aliased() {
+    expect_error(
+        "<?php $args = [[3, 1, 2]]; sort(...$args); $args = \"s\"; echo $args;",
+        "cannot reassign",
+    );
+}
+
+/// Control for the test above: the same local with no by-reference builtin in sight is still
+/// re-bindable, so the alias is about `sort` and not about spreads generally.
+#[test]
+fn test_spread_argument_of_a_by_value_builtin_stays_rebindable() {
+    expect_no_error("<?php $args = [[3, 1, 2]]; var_dump(...$args); $args = \"s\"; echo $args;");
+}
+
 /// Control for the test above: the same shape written as a LOCAL still marks and warns, so the
 /// exclusion above is about parameters rather than a scan that stopped working inside functions.
 #[test]

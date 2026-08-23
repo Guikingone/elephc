@@ -228,6 +228,25 @@ impl Checker {
         if self.local_binding_depth.contains_key(name) {
             return None;
         }
+        // Names the body's INCOMING environment already binds and whose storage the body does NOT
+        // own: a superglobal (seeded into every scope, living in shared `_eir_global_*` storage),
+        // and `$argc`/`$argv` plus every extern C global (seeded into the TOP-LEVEL environment by
+        // `seed_global_env`). Marking one is wrong twice over — the warning credits this feature
+        // for storage it never created, and a marked name is bound `PhpType::Mixed` at every
+        // assignment, so the mark would BOX program-wide storage the rest of the compiler reaches
+        // at its declared type. Measured before this exclusion: `$argv = 1; if (…) { $argv = "s"; }`
+        // and the same shape on `$_SESSION` both warned and type-checked, where they are the
+        // pre-existing hard error.
+        //
+        // By-VALUE closure captures are deliberately NOT excluded, even though they too are bound
+        // on entry. A capture arrives as a hidden parameter and lives in a slot the CLOSURE's frame
+        // owns, so the mark is load-bearing there rather than spurious: the boxed store type is
+        // what releases the previous occupant of the capture slot
+        // (`test_marked_local_captured_by_value_and_overwritten_in_a_closure`, measured leaking 48
+        // bytes without it).
+        if self.name_is_seeded_program_storage(name) {
+            return None;
+        }
         // A decision is only usable if EVERY one of the name's store sites can be named. A
         // `Span::dummy()` identifies no node — it is what every compiler-generated AST node
         // carries — so lowering would either miss the first store (leaving the slot unboxed
