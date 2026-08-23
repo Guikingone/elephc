@@ -5238,6 +5238,85 @@ echo $n === false ? "false" : "got";
     assert_eq!(out, "false");
 }
 
+/// `stream_select()` waits the `$microseconds` it was given.
+///
+/// The x86_64 arm spilled `$microseconds` into the same frame slot the pollfd build then used for
+/// its castable tally, and the timeout was computed by reading that slot back — so a call asking
+/// for 300 ms polled for `tally / 1000` = 0 ms and returned instantly. The comment beside the
+/// spill said it existed to stop exactly that, which is how long the collision survived.
+///
+/// Only a CLOCK can see this: every value the call answers is identical either way. The bounds are
+/// wide on purpose — the assertion is "it waited", not "it waited precisely".
+#[test]
+fn test_stream_select_waits_for_the_microsecond_timeout() {
+    let out = compile_and_run(
+        r#"<?php
+$p = popen("sleep 5", "r");
+$r = [$p];
+$w = null;
+$e = null;
+$t0 = microtime(true);
+$n = stream_select($r, $w, $e, 0, 300000);
+$elapsed = microtime(true) - $t0;
+echo var_export($n, true), "|";
+echo ($elapsed >= 0.25 && $elapsed < 3.0) ? "waited" : ("WRONG " . round($elapsed, 3));
+"#,
+    );
+    assert_eq!(out, "0|waited");
+}
+
+/// `stream_select()` refuses an array holding something that is not a stream, in php's two wordings.
+///
+/// MEASURED on `php -n` 8.5.6 across twelve shapes. The rule: php counts what it can select FIRST,
+/// and a zero count is `ValueError: No stream arrays were passed` whatever else the arrays held —
+/// an int, a closed stream, an empty array and an all-null call all land there. Only with
+/// something selectable present does a bad entry become a `TypeError`, and then the wording splits
+/// the way `zend_fetch_resource` splits it: a value that is not a resource at all is an
+/// "argument", a resource of the wrong kind — a closed stream — is a "resource".
+///
+/// elephc answered `int(1)`, `int(2)`… for six of the twelve, because `__rt_stream_fd` passes a
+/// raw descriptor through unchanged and `42` therefore looked like one. A COUNT is exactly what
+/// the caller reads, so this was plausible-looking data in place of a refusal.
+#[test]
+fn test_stream_select_refuses_an_entry_that_is_not_a_stream() {
+    let out = compile_and_run(
+        r#"<?php
+$open = tmpfile();
+$dead = tmpfile();
+fclose($dead);
+$none = null;
+
+$a = [42];
+try { $n = stream_select($a, $none, $none, 0); echo "int($n)|"; }
+catch (Throwable $t) { echo get_class($t), ":", $t->getMessage(), "|"; }
+
+$b = [$open, "nope"];
+try { $n = stream_select($b, $none, $none, 0); echo "int($n)|"; }
+catch (Throwable $t) { echo get_class($t), ":", $t->getMessage(), "|"; }
+
+$c = [$dead];
+try { $n = stream_select($c, $none, $none, 0); echo "int($n)|"; }
+catch (Throwable $t) { echo get_class($t), ":", $t->getMessage(), "|"; }
+
+$d = [$open, $dead];
+try { $n = stream_select($d, $none, $none, 0); echo "int($n)|"; }
+catch (Throwable $t) { echo get_class($t), ":", $t->getMessage(), "|"; }
+
+$e = [$open];
+try { $n = stream_select($e, $none, $none, 0); echo "int($n)|"; }
+catch (Throwable $t) { echo get_class($t), ":", $t->getMessage(), "|"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError:No stream arrays were passed|\
+         TypeError:stream_select(): supplied argument is not a valid stream resource|\
+         ValueError:No stream arrays were passed|\
+         TypeError:stream_select(): supplied resource is not a valid stream resource|\
+         int(1)|"
+    );
+}
+
 /// A refused seek says WHY, and says it twice when the wrapper has no `stream_seek` at all.
 ///
 /// php's copier warns `Failed to seek to position N in the stream` on any failed seek, and

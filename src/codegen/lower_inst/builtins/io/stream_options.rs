@@ -108,6 +108,46 @@ const STREAM_SELECT_MICROSECONDS_WITHOUT_SECONDS_MESSAGE: &str =
 /// closed stream and a `php://memory` handle all produce this one message.
 const STREAM_SELECT_NO_STREAM_ARRAYS_MESSAGE: &str = "No stream arrays were passed";
 
+/// php's wording for an entry that is not a resource at all, beside at least one real stream.
+///
+/// `zend_fetch_resource` says "argument" for a value of the wrong TYPE and "resource" for a
+/// resource of the wrong KIND, which for these arrays means a closed stream. MEASURED on `php -n`
+/// 8.5.6: `[$open, "nope"]` gives the first, `[$open, $closed]` the second, and either array
+/// WITHOUT the open stream gives neither — the ValueError above wins on a zero count.
+const STREAM_SELECT_BAD_ARGUMENT_MESSAGE: &str =
+    "stream_select(): supplied argument is not a valid stream resource";
+
+/// php's wording for a closed stream beside at least one real one.
+const STREAM_SELECT_BAD_RESOURCE_MESSAGE: &str =
+    "stream_select(): supplied resource is not a valid stream resource";
+
+/// Throws one of `stream_select()`'s TypeErrors when the runtime answered its cue.
+///
+/// The runtime cannot throw: it reports what it saw as a negative sentinel and the lowering, which
+/// has the class ids and the throw machinery, turns it into the exception. `emit_type_error` never
+/// returns, so the label after it is the ordinary path.
+fn emit_stream_select_type_error_on(
+    ctx: &mut FunctionContext<'_>,
+    result_reg: &str,
+    sentinel: i64,
+    message: &str,
+) {
+    let skip = ctx.next_label("stream_select_not_bad");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // `cmn` adds, so this compares the result against the NEGATIVE sentinel.
+            ctx.emitter.instruction(&format!("cmn {}, #{}", result_reg, -sentinel));
+            ctx.emitter.instruction(&format!("b.ne {}", skip));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, sentinel));
+            ctx.emitter.instruction(&format!("jne {}", skip));
+        }
+    }
+    super::super::exceptions::emit_type_error(ctx, message);
+    ctx.emitter.label(&skip);
+}
+
 /// Lowers `stream_set_chunk_size(stream, size)` and returns the previous size.
 pub(crate) fn lower_stream_set_chunk_size(
     ctx: &mut FunctionContext<'_>,
@@ -402,6 +442,10 @@ pub(crate) fn lower_stream_select(
     // descriptor, which php answers with a throw rather than a value — an empty array, a closed
     // stream and a `php://memory` handle all land here. The guard runs before the sign test
     // because `false` and the throw are both "negative" otherwise.
+    // -3 and -4 are the runtime's two TypeError cues, tested BEFORE the ValueError guard: that one
+    // fires on anything below -1, which would give all three refusals php's zero-count wording.
+    emit_stream_select_type_error_on(ctx, result_reg, -3, STREAM_SELECT_BAD_ARGUMENT_MESSAGE);
+    emit_stream_select_type_error_on(ctx, result_reg, -4, STREAM_SELECT_BAD_RESOURCE_MESSAGE);
     super::super::exceptions::emit_value_error_unless(
         ctx,
         super::super::exceptions::ValueGuard::SignedAtLeast(result_reg, -1),

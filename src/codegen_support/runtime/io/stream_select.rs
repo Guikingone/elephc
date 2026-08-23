@@ -98,6 +98,8 @@ fn emit_stream_select_aarch64(emitter: &mut Emitter) {
     // -- build the pollfd array: read (POLLIN), write (POLLOUT), except (POLLPRI) --
     emitter.instruction("mov x14, #0");                                          // running pollfd index
     emitter.instruction("str xzr, [sp, #2184]");                                  // clear the castable-descriptor tally
+    emitter.instruction(&format!("str xzr, [sp, #{}]", NON_RESOURCE_SLOT));       // clear the not-a-stream tally
+    emitter.instruction(&format!("str xzr, [sp, #{}]", DEAD_RESOURCE_SLOT));      // clear the closed-stream tally
     emit_build_pollfd_aarch64(emitter, 2048, 2072, POLLIN, "r");
     emit_build_pollfd_aarch64(emitter, 2056, 2080, POLLOUT, "w");
     emit_build_pollfd_aarch64(emitter, 2064, 2088, POLLPRI, "e");
@@ -106,6 +108,12 @@ fn emit_stream_select_aarch64(emitter: &mut Emitter) {
     // php cannot tell "you passed nothing" from "nothing you passed is selectable".
     emitter.instruction("ldr x9, [sp, #2184]");                                   // how many entries yielded a real descriptor?
     emitter.instruction("cbz x9, __rt_stream_select_no_castable");                // none → php's ValueError
+    // php only complains about a bad ENTRY once something selectable was passed: with a zero
+    // count the ValueError above wins whatever else the arrays held. MEASURED both ways.
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", NON_RESOURCE_SLOT));
+    emitter.instruction("cbnz x9, __rt_stream_select_bad_argument");              // a value that is no resource at all
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", DEAD_RESOURCE_SLOT));
+    emitter.instruction("cbnz x9, __rt_stream_select_bad_resource");              // a resource that is a closed stream
 
     // -- compute the poll timeout in milliseconds (reloaded from the frame) --
     emit_compute_timeout_aarch64(emitter, linux);
@@ -141,6 +149,15 @@ fn emit_stream_select_aarch64(emitter: &mut Emitter) {
     // -2 is the lowering's cue to raise php's `ValueError: No stream arrays were passed`. It has
     // to be distinct from the -1 that means "poll failed", which php answers as `false`.
     emitter.instruction("mov x0, #-2");                                         // nothing selectable was passed
+    emitter.instruction("b __rt_stream_select_epilogue");
+
+    // -3 and -4 are the lowering's cues for php's two TypeError wordings, kept apart from the -2
+    // ValueError and the -1 that becomes `false`.
+    emitter.label("__rt_stream_select_bad_argument");
+    emitter.instruction("mov x0, #-3");                                         // an entry that is not a resource
+    emitter.instruction("b __rt_stream_select_epilogue");
+    emitter.label("__rt_stream_select_bad_resource");
+    emitter.instruction("mov x0, #-4");                                         // an entry that is a closed stream
 
     emitter.label("__rt_stream_select_epilogue");
     emitter.instruction("add x9, sp, #2256");                                     // compute the fp/lr restore address (offset > 504 needs add)
@@ -161,6 +178,8 @@ fn emit_build_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64, 
     let cast_done_l = format!("__rt_stream_select_build_{}_cast_done", suffix);
     let cast_ok_l = format!("__rt_stream_select_build_{}_cast_ok", suffix);
     let memory_refused_l = format!("__rt_stream_select_build_{}_mem_refused", suffix);
+    let resolved_l = format!("__rt_stream_select_build_{}_resolved", suffix);
+    let not_stream_l = format!("__rt_stream_select_build_{}_not_stream", suffix);
     let done_l = format!("__rt_stream_select_build_{}_done", suffix);
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", arr_off));                // load the resource array pointer
@@ -178,9 +197,18 @@ fn emit_build_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64, 
     emitter.instruction("ldr x13, [x12, x11, lsl #3]");                         // load the slot value (raw fd or Mixed* cell)
     emitter.instruction("cmp x4, #7");                                          // is this a Mixed-boxed indexed array?
     emitter.instruction(&format!("b.eq {}", unbox_l));                           // unbox the Mixed cell to get the underlying fd
-    emitter.instruction(&format!("b {}", after_unbox_l));                        // raw-int array: x13 already holds the fd
+    // A homogeneous array carries ONE value_type, and only tag 9 is a resource. Without this the
+    // slot word went straight to the descriptor resolver, which passes a raw descriptor through
+    // unchanged — so `stream_select([42], ...)` counted 42 as a selectable stream and answered
+    // `int(1)` where php throws.
+    emitter.instruction(&format!("cmp x4, #{}", VALUE_TYPE_RESOURCE));           // is every element of this array a resource?
+    emitter.instruction(&format!("b.ne {}", not_stream_l));                      // an int/string/object array holds no streams
+    emitter.instruction(&format!("b {}", after_unbox_l));                        // a resource array: x13 already holds the handle
     emitter.label(&unbox_l);
-    emitter.instruction(&format!("cbz x13, {}", next_l));                        // null Mixed cell → skip the descriptor
+    emitter.instruction(&format!("cbz x13, {}", not_stream_l));                  // a null cell is not a stream either
+    emitter.instruction("ldr x16, [x13]");                                       // the Mixed cell's own runtime tag
+    emitter.instruction(&format!("cmp x16, #{}", VALUE_TYPE_RESOURCE));
+    emitter.instruction(&format!("b.ne {}", not_stream_l));                      // this cell holds something that is not a stream
     emitter.instruction("ldr x13, [x13, #8]");                                   // payload_lo of the Mixed cell is the fd
     emitter.label(&after_unbox_l);
     // -- resolve the opaque registry handle to its backend descriptor --
@@ -203,6 +231,16 @@ fn emit_build_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64, 
     emitter.instruction("cmn x0, #1");                                          // did the guard refuse it?
     emitter.instruction(&format!("b.eq {}", memory_refused_l));                 // skip the resolve; -1 is already the answer
     emitter.instruction("bl __rt_stream_fd");                                    // resolve the backend descriptor through StreamState
+    // A resource the registry cannot resolve is a CLOSED stream, and php words that one
+    // differently: `supplied resource` rather than `supplied argument`. The memory guard's own -1
+    // never reaches here — it jumps past this — because an unselectable but LIVE stream is not a
+    // TypeError at all, only a warning php follows with the ValueError.
+    emitter.instruction("cmn x0, #1");
+    emitter.instruction(&format!("b.ne {}", resolved_l));
+    emitter.instruction(&format!("ldr x16, [sp, #{}]", DEAD_RESOURCE_SLOT));
+    emitter.instruction("add x16, x16, #1");
+    emitter.instruction(&format!("str x16, [sp, #{}]", DEAD_RESOURCE_SLOT));
+    emitter.label(&resolved_l);
     emitter.label(&memory_refused_l);
     emitter.instruction("mov x13, x0");                                          // adopt the resolved descriptor
     emitter.instruction("ldr x9, [sp, #2120]");                                  // reload the array pointer
@@ -275,6 +313,15 @@ fn emit_build_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64, 
     emitter.label(&next_l);
     emitter.instruction("add x11, x11, #1");                                     // advance to the next element
     emitter.instruction(&format!("b {}", loop_l));                              // continue scanning the array
+    // An element that is not a stream still occupies a pollfd slot — the compact pass indexes by
+    // array position — so it lands on the ordinary store with the unusable descriptor -1, which
+    // keeps it out of the tally.
+    emitter.label(&not_stream_l);
+    emitter.instruction(&format!("ldr x16, [sp, #{}]", NON_RESOURCE_SLOT));
+    emitter.instruction("add x16, x16, #1");
+    emitter.instruction(&format!("str x16, [sp, #{}]", NON_RESOURCE_SLOT));
+    emitter.instruction("mov x13, #-1");                                         // nothing to poll
+    emitter.instruction(&format!("b {}", cast_done_l));
     emitter.label(&done_l);
 }
 
@@ -447,6 +494,36 @@ fn emit_compute_timeout_aarch64(emitter: &mut Emitter, _linux: bool) {
     emitter.label("__rt_stream_select_ts_done");
 }
 
+/// The runtime `value_type` tag an array of stream resources carries, from
+/// `emit_array_value_type_stamp`.
+///
+/// This is the whole discriminator php has: `php_stream_from_zval_no_verify` yields NULL for
+/// anything that is not a live stream resource, and elephc's equivalent is the element tag. An
+/// indexed array stamps ONE tag for all of its elements; a Mixed array stamps 7 and each cell
+/// carries its own.
+const VALUE_TYPE_RESOURCE: i64 = 9;
+
+/// Frame slot counting entries that were not resources at all (AArch64 `sp`-relative).
+const NON_RESOURCE_SLOT: i64 = 2200;
+
+/// Frame slot counting entries that were resources the registry could not resolve — closed
+/// streams, which php words differently.
+const DEAD_RESOURCE_SLOT: i64 = 2208;
+
+/// The x86_64 counterparts, `rbp`-relative and therefore subtracted.
+const NON_RESOURCE_SLOT_X86: i64 = 2208;
+
+/// See [`DEAD_RESOURCE_SLOT`].
+const DEAD_RESOURCE_SLOT_X86: i64 = 2216;
+
+/// Where the x86_64 castable tally lives.
+///
+/// It used to share `[rbp - 2184]` with the spilled `$microseconds`, which the pollfd build then
+/// overwrote: `emit_compute_timeout_x86` read the TALLY back as a microsecond count, so
+/// `stream_select($r, $w, $e, 0, 200000)` polled for 0 ms and returned instantly — the very
+/// failure the spill beside it was added to prevent. AArch64 never shared the slot.
+const CASTABLE_TALLY_SLOT_X86: i64 = 2200;
+
 /// x86_64 Linux variant of `__rt_stream_select` using `poll` (syscall 7).
 ///
 /// Frame layout (4352 bytes, rbp-relative): `[rbp-4352..rbp-2304)` pollfd array (256 × 8),
@@ -504,14 +581,22 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
 
     // -- build the pollfd array: read (POLLIN), write (POLLOUT), except (POLLPRI) --
     emitter.instruction("xor r14, r14");                                         // running pollfd index
-    emitter.instruction("mov QWORD PTR [rbp - 2184], 0");                        // clear the castable-descriptor tally
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", CASTABLE_TALLY_SLOT_X86)); // clear the castable-descriptor tally
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", NON_RESOURCE_SLOT_X86)); // clear the not-a-stream tally
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", DEAD_RESOURCE_SLOT_X86)); // clear the closed-stream tally
     emit_build_pollfd_x86(emitter, 2064, 2072, POLLIN, "r");
     emit_build_pollfd_x86(emitter, 2056, 2080, POLLOUT, "w");
     emit_build_pollfd_x86(emitter, 2048, 2088, POLLPRI, "e");
     // php counts the streams it could cast and raises `ValueError: No stream arrays were passed`
     // when that count is zero — it cannot tell "you passed nothing" from "nothing is selectable".
-    emitter.instruction("cmp QWORD PTR [rbp - 2184], 0");                        // did anything yield a real descriptor?
+    emitter.instruction(&format!("cmp QWORD PTR [rbp - {}], 0", CASTABLE_TALLY_SLOT_X86)); // did anything yield a real descriptor?
     emitter.instruction("je __rt_stream_select_no_castable_x");                  // none → php's ValueError
+    // See the AArch64 counterpart: a bad ENTRY only becomes a TypeError once something selectable
+    // was passed; with a zero count the ValueError above wins.
+    emitter.instruction(&format!("cmp QWORD PTR [rbp - {}], 0", NON_RESOURCE_SLOT_X86));
+    emitter.instruction("jne __rt_stream_select_bad_argument_x");                // a value that is no resource at all
+    emitter.instruction(&format!("cmp QWORD PTR [rbp - {}], 0", DEAD_RESOURCE_SLOT_X86));
+    emitter.instruction("jne __rt_stream_select_bad_resource_x");                // a resource that is a closed stream
 
     // -- compute the poll timeout in milliseconds (reloaded from the frame) --
     emit_compute_timeout_x86(emitter, linux);
@@ -546,6 +631,14 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
     // -2 is the lowering's cue to raise php's `ValueError: No stream arrays were passed`, kept
     // distinct from the -1 that means "poll failed" and becomes `false`.
     emitter.instruction("mov rax, -2");                                          // nothing selectable was passed
+    emitter.instruction("jmp __rt_stream_select_epilogue_x");
+
+    // -3 and -4 carry php's two TypeError wordings, as on AArch64.
+    emitter.label("__rt_stream_select_bad_argument_x");
+    emitter.instruction("mov rax, -3");                                          // an entry that is not a resource
+    emitter.instruction("jmp __rt_stream_select_epilogue_x");
+    emitter.label("__rt_stream_select_bad_resource_x");
+    emitter.instruction("mov rax, -4");                                          // an entry that is a closed stream
 
     emitter.label("__rt_stream_select_epilogue_x");
     emitter.instruction("leave");                                                // restore rbp + rsp
@@ -561,6 +654,8 @@ fn emit_build_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, even
     let cast_done_l = format!("__rt_stream_select_build_{}_cast_done_x", suffix);
     let cast_ok_l = format!("__rt_stream_select_build_{}_cast_ok_x", suffix);
     let memory_refused_l = format!("__rt_stream_select_build_{}_mem_refused_x", suffix);
+    let resolved_l = format!("__rt_stream_select_build_{}_resolved_x", suffix);
+    let not_stream_l = format!("__rt_stream_select_build_{}_not_stream_x", suffix);
     let done_l = format!("__rt_stream_select_build_{}_done_x", suffix);
 
     emitter.instruction(&format!("mov r11, QWORD PTR [rbp - {}]", arr_off));     // load the resource array pointer
@@ -577,10 +672,16 @@ fn emit_build_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, even
     emitter.instruction("mov rdx, QWORD PTR [r11 + 24 + rsi * 8]");              // load the slot value (raw fd or Mixed* cell)
     emitter.instruction("cmp r12, 7");                                          // is this a Mixed-boxed indexed array?
     emitter.instruction(&format!("je {}", unbox_l));                            // unbox the Mixed cell to get the underlying fd
-    emitter.instruction(&format!("jmp {}", after_unbox_l));                      // raw-int array: rdx already holds the fd
+    // See the AArch64 counterpart: only tag 9 is a resource, and nothing else in an array can be
+    // a stream.
+    emitter.instruction(&format!("cmp r12, {}", VALUE_TYPE_RESOURCE));           // is every element of this array a resource?
+    emitter.instruction(&format!("jne {}", not_stream_l));                       // an int/string/object array holds no streams
+    emitter.instruction(&format!("jmp {}", after_unbox_l));                      // a resource array: rdx already holds the handle
     emitter.label(&unbox_l);
     emitter.instruction("test rdx, rdx");                                       // null Mixed cell?
-    emitter.instruction(&format!("jz {}", next_l));                             // null Mixed cell → skip the descriptor
+    emitter.instruction(&format!("jz {}", not_stream_l));                        // a null cell is not a stream either
+    emitter.instruction(&format!("cmp QWORD PTR [rdx], {}", VALUE_TYPE_RESOURCE)); // the Mixed cell's own runtime tag
+    emitter.instruction(&format!("jne {}", not_stream_l));                       // this cell holds something that is not a stream
     emitter.instruction("mov rdx, QWORD PTR [rdx + 8]");                         // payload_lo of the Mixed cell is the fd
     emitter.label(&after_unbox_l);
     // -- resolve the opaque registry handle to its backend descriptor --
@@ -601,6 +702,12 @@ fn emit_build_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, even
     emitter.instruction(&format!("je {}", memory_refused_l));                    // skip the resolve; -1 is already the answer
     emitter.instruction("mov rdi, rax");                                         // the handle the guard passed through
     emitter.instruction("call __rt_stream_fd");                                  // resolve the backend descriptor through StreamState
+    // See the AArch64 counterpart: a resource the registry cannot resolve is a CLOSED stream, and
+    // php words that one `supplied resource` rather than `supplied argument`.
+    emitter.instruction("cmp rax, -1");
+    emitter.instruction(&format!("jne {}", resolved_l));
+    emitter.instruction(&format!("inc QWORD PTR [rbp - {}]", DEAD_RESOURCE_SLOT_X86));
+    emitter.label(&resolved_l);
     emitter.label(&memory_refused_l);
     emitter.instruction("mov rdx, rax");                                         // adopt the resolved descriptor
     emitter.instruction("mov r11, QWORD PTR [rbp - 2120]");                      // reload the array pointer
@@ -658,10 +765,16 @@ fn emit_build_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, even
     // still written above so the compact pass stays aligned with this one.
     emitter.instruction("cmp rdx, -1");                                          // did this entry yield a real descriptor?
     emitter.instruction(&format!("je {}", next_l));                              // -1 contributes nothing to the tally
-    emitter.instruction("inc QWORD PTR [rbp - 2184]");                           // one more selectable entry
+    emitter.instruction(&format!("inc QWORD PTR [rbp - {}]", CASTABLE_TALLY_SLOT_X86)); // one more selectable entry
     emitter.label(&next_l);
     emitter.instruction("inc rsi");                                             // advance to the next element
     emitter.instruction(&format!("jmp {}", loop_l));                             // continue scanning the array
+    // See the AArch64 counterpart: a non-stream still occupies a pollfd slot, with the unusable
+    // descriptor -1 that keeps it out of the tally.
+    emitter.label(&not_stream_l);
+    emitter.instruction(&format!("inc QWORD PTR [rbp - {}]", NON_RESOURCE_SLOT_X86));
+    emitter.instruction("mov rdx, -1");                                          // nothing to poll
+    emitter.instruction(&format!("jmp {}", cast_done_l));
     emitter.label(&done_l);
 }
 
