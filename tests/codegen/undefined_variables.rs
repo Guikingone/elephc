@@ -447,6 +447,34 @@ fn test_a_use_list_is_evaluated_before_its_own_assignment() {
     assert_eq!(echoed.diagnostics, "Warning: Undefined variable $undefined\n");
 }
 
+/// Verifies an undefined variable used as an ARRAY ELEMENT yields a null element.
+///
+/// The literal's storage element type is chosen syntactically, and an unrecognised expression
+/// fell back to `Int`. An undefined read is neither: it answers null, so the literal was stamped
+/// `array<int>` and the whole program was REFUSED with `unsupported EIR backend feature:
+/// array_push for PHP type Void`. `[null]` and `[$x]` where `$x = null` both compiled, which is
+/// what made the refusal look like a null problem rather than an undefined-name one.
+#[test]
+fn test_an_undefined_variable_as_an_array_element_is_a_null_element() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$d = [$undefinedVar];
+var_dump($d);
+$e = [1, $alsoMissing, "s"];
+var_dump(count($e), $e[1]);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "array(1) {\n  [0]=>\n  NULL\n}\nint(3)\nNULL\n"
+    );
+    assert_eq!(
+        out.diagnostics,
+        "Warning: Undefined variable $undefinedVar\nWarning: Undefined variable $alsoMissing\n"
+    );
+}
+
 /// Verifies a read inside a multi-line interpolated string names the line it is WRITTEN on.
 ///
 /// Every token an interpolated string produced used to carry the span of the string's first
