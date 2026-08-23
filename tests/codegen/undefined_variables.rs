@@ -446,3 +446,39 @@ fn test_a_use_list_is_evaluated_before_its_own_assignment() {
     assert_eq!(echoed.stdout, "done\n");
     assert_eq!(echoed.diagnostics, "Warning: Undefined variable $undefined\n");
 }
+
+/// Verifies a read inside a multi-line interpolated string names the line it is WRITTEN on.
+///
+/// Every token an interpolated string produced used to carry the span of the string's first
+/// character, because `interpolate` built each one from the literal's own span. That is harmless
+/// for a one-line double-quoted string and wrong for anything spanning several: a read on the
+/// fourth line of a heredoc reported the line of the `<<<LABEL` that opened it, and the same for
+/// a double-quoted literal containing real newlines. Measured on `php -n` 8.5.6, which names
+/// lines 4 and 9 here.
+///
+/// The defect belongs to the LEXER, so it reaches every diagnostic an interpolation can raise —
+/// this one, an array-to-string conversion, a NaN coercion. The undefined read is the shape used
+/// to pin it because it is the cheapest one to trigger.
+#[test]
+fn test_an_undefined_read_inside_a_multi_line_string_names_its_own_line() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$s = <<<EOT
+first line
+{$missing}
+third line
+EOT;
+echo strlen($s), "\n";
+$t = "one
+two {$absent}";
+echo strlen($t), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "22\n8\n");
+    assert_eq!(
+        out.located_diagnostics,
+        "Warning: Undefined variable $missing in test.php on line 4\n\
+         Warning: Undefined variable $absent in test.php on line 9\n"
+    );
+}
