@@ -70,17 +70,23 @@ pub fn emit_preg_quote(emitter: &mut Emitter) {
 
     // -- resolve the delimiter to a single byte before anything can clobber x3/x4 --
     // 256 marks "no delimiter": it can never equal a zero-extended source byte, so the
-    // per-byte comparison needs no separate presence flag.
-    emitter.instruction("mov w16, #256");                                       // sentinel meaning the caller supplied no delimiter
+    // per-byte comparison needs no separate presence flag. It does not fit a byte, so the
+    // spill slot below holds a full word.
+    emitter.instruction("mov w9, #256");                                        // sentinel meaning the caller supplied no delimiter
     emitter.instruction("cbz x4, __rt_preg_quote_delim_ready");                 // an absent or empty delimiter keeps the sentinel
-    emitter.instruction("ldrb w16, [x3]");                                      // only the delimiter's FIRST byte participates, like php-src
+    emitter.instruction("ldrb w9, [x3]");                                       // only the delimiter's FIRST byte participates, like php-src
     emitter.label("__rt_preg_quote_delim_ready");
 
     // -- reserve the worst-case four-bytes-per-input-byte result before writing anything --
-    emitter.instruction("sub sp, sp, #32");                                     // allocate spill space for the borrowed source string
+    // Frame: [0..16) source pointer/length, [16..32) saved x29/x30, [32) delimiter word.
+    // The delimiter is SPILLED rather than parked in a register because it has to survive
+    // `bl __rt_concat_reserve`: a linker-inserted branch island clobbers x16/x17 across a
+    // `bl`, and every other scratch register is caller-saved.
+    emitter.instruction("sub sp, sp, #48");                                     // allocate spill space for the source string and the delimiter word
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save the frame pointer and return address across the reservation call
     emitter.instruction("add x29, sp, #16");                                    // establish the preg_quote helper frame pointer
     emitter.instruction("stp x1, x2, [sp]");                                    // save the source pointer and length across the reservation call
+    emitter.instruction("str x9, [sp, #32]");                                   // save the resolved delimiter word across the reservation call
     emitter.instruction("adds x0, x2, x2");                                     // start the worst-case size at 2 * source length
     emitter.instruction("b.cs __rt_preg_quote_size_overflow");                  // reject a wrapped size instead of reserving a too-small destination
     emitter.instruction("adds x0, x0, x0");                                     // NUL expands to four bytes, so the reservation is 4 * source length
@@ -89,6 +95,7 @@ pub fn emit_preg_quote(emitter: &mut Emitter) {
     emitter.instruction("mov x9, x0");                                          // destination cursor
     emitter.instruction("mov x10, x0");                                         // save the result start for the published pointer
     emitter.instruction("ldp x1, x2, [sp]");                                    // reload the borrowed source pointer and length
+    emitter.instruction("ldr x5, [sp, #32]");                                   // reload the delimiter word into a register the escape loop never touches
     emitter.instruction("mov x11, x2");                                         // remaining source byte count
     abi::emit_load_int_immediate(emitter, "x15", PREG_QUOTE_ESCAPE_MASK);
 
@@ -97,7 +104,7 @@ pub fn emit_preg_quote(emitter: &mut Emitter) {
     emitter.instruction("ldrb w12, [x1], #1");                                  // load the next source byte and advance the source cursor
     emitter.instruction("sub x11, x11, #1");                                    // record that one source byte has been consumed
     emitter.instruction("cbz w12, __rt_preg_quote_nul");                        // NUL is spelled \000 rather than backslash-escaped
-    emitter.instruction("cmp w12, w16");                                        // does this byte match the caller's delimiter byte?
+    emitter.instruction("cmp w12, w5");                                         // does this byte match the caller's delimiter byte?
     emitter.instruction("b.eq __rt_preg_quote_escape");                         // the delimiter is escaped wherever it appears
     emitter.instruction(&format!("sub w13, w12, #{PREG_QUOTE_WINDOW_START}"));  // index the escape bitmap by shifting the byte into window space
     emitter.instruction(&format!("cmp w13, #{PREG_QUOTE_WINDOW_LEN}"));         // is the byte outside the bitmap window (unsigned, so low bytes wrap high)?
@@ -134,7 +141,7 @@ pub fn emit_preg_quote(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x9, x10");                                     // the written byte count is the result length
     emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the preg_quote helper frame
+    emitter.instruction("add sp, sp, #48");                                     // release the preg_quote helper frame
     emitter.instruction("ret");                                                 // return the escaped string as a PHP string pair
 
     // -- impossible result size: report the shared allocation-overflow fatal error --
