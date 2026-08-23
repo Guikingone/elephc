@@ -87,9 +87,15 @@ pub(super) fn check_types_impl(
     checker.strict_locals = options.strict_locals;
     // Program-wide and computed once, BEFORE any body is walked: the top-level `unset` that has to
     // consult it can sit textually above the `function w() { global $a; }` that makes the name
-    // program-global. Shared with EIR lowering's `all_global_var_names` so the two sides cannot
-    // drift — see `crate::global_decls`.
-    checker.program_global_names = crate::global_decls::collect_global_var_names(program);
+    // program-global.
+    //
+    // The WIDE scope, unlike EIR lowering's `all_global_var_names` — a deliberate split, not drift.
+    // This set only ever WITHHOLDS the kill, so seeing a `global` that lowering does not (one
+    // written in a closure body, an assignment prelude or an enum method) costs a feature and
+    // nothing else; lowering's copy decides STORAGE CLASS, where the same widening broke working
+    // programs. `crate::global_decls`' preamble carries the measurements.
+    checker.program_global_names =
+        crate::global_decls::collect_global_var_names_in_nested_bodies(program);
     let mut errors = Vec::new();
 
     errors.extend(validate_yield_contexts(program));

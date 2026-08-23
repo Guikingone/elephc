@@ -1393,12 +1393,15 @@ fn test_zero_trip_loop_keeps_the_entry_binding_type() {
 /// A marked TOP-LEVEL local that another body writes through `global $a`.
 ///
 /// The per-body pre-scan cannot see `q()`'s `global $a` while scanning the top level, so the
-/// name is marked there. The invariant that makes it sound is that MARKING CHANGES NOTHING for a
-/// `global`-aliased name: `collect_global_var_names` sees the declaration, so
+/// name is marked there. The invariant that makes it sound is NOT that lowering sees every
+/// `global` — it does not, see `test_marked_and_unmarked_agree_on_a_closure_declared_global`
+/// below — it is that MARKING CHANGES NOTHING for a `global`-aliased name. Where
+/// `collect_global_var_names` does see the declaration (a NAMED function's body, as here),
 /// `LoweringContext::uses_global_storage` puts the top-level name in program-global storage that
-/// `global_alias_type` already types `Mixed`, and `store_local` overrides the marked `Mixed` with
-/// the identical type and writes the shared symbol. The equivalence holds for a closure-declared
-/// `global` too — see `test_marked_and_unmarked_agree_on_a_closure_declared_global` below.
+/// `global_alias_type` already types `Mixed`, so `store_local` overrides the marked `Mixed` with
+/// the identical type and writes the shared symbol; where it does not, the marked and unmarked
+/// programs are wrong in exactly the same pre-existing way. Either way the marked program behaves
+/// like the unmarked one.
 #[test]
 fn test_marked_top_level_local_written_through_a_global_alias() {
     let out = compile_and_run(
@@ -1492,14 +1495,21 @@ q();"#,
     );
 }
 
-/// A `global $a` written inside a CLOSURE literal reaches main's binding, and marking changes
-/// nothing about that.
+/// A `global $a` written inside a CLOSURE literal does NOT reach main's binding, and marking
+/// changes nothing about that.
 ///
-/// `collect_global_var_names` used to walk statements only, so this declaration was invisible to
-/// it: main kept `$a` in a frame slot instead of the shared symbol and the closure's write never
-/// reached it — both programs printed `hello|hello|` where PHP prints `hello|42|`. The collector
-/// now descends into expressions, which moves BOTH sides together (the equivalence this fixture
-/// exists for) and onto PHP's answer.
+/// The walk EIR lowering consumes covers statement bodies only, so this declaration is invisible
+/// to it: main keeps `$a` in a frame slot instead of the shared symbol and the closure's write
+/// never reaches it — both programs print `hello|hello|` where PHP prints `hello|42|`. That is the
+/// PRE-EXISTING global-in-closure write loss (tracked upstream), deliberately preserved: the one
+/// change that closed it moved such names into `_eir_global_*` program storage, which types them
+/// `Mixed` and drove the array builtins into their pre-existing `Mixed`-array backend gaps
+/// (`test_closure_declared_global_leaves_a_top_level_array_alone` pins the repro). The checker's
+/// `unset`-kill veto reads a WIDER scope that does see this declaration, which is safe because it
+/// only ever withholds a kill.
+///
+/// What this fixture asserts either way is the EQUIVALENCE: whatever the hole does, marking must
+/// not change it. If the hole is ever closed, both sides move together or this test says so.
 #[test]
 fn test_marked_and_unmarked_agree_on_a_closure_declared_global() {
     let marked = compile_and_run(
@@ -1522,7 +1532,7 @@ echo $a, "|";"#,
         marked, unmarked,
         "marking must not change what a closure-declared `global` does to a top-level local"
     );
-    assert_eq!(marked, "hello|42|");
+    assert_eq!(marked, "hello|hello|");
 }
 
 /// A loop-carried marked local whose every iteration allocates a fresh heap string: the
@@ -1896,19 +1906,30 @@ fn test_same_name_collision_stays_ambiguous_with_multi_name_spans() {
 /// A top-level `unset` must not end a binding whose storage a CLOSURE reaches with `global`.
 ///
 /// The same rule `test_unset_of_a_program_wide_global_name_keeps_the_binding` pins for a named
-/// function. `collect_global_var_names` used to walk statements only, so a `global $a;` written
-/// inside a closure literal was invisible to it: the checker approved the kill, `$a` left the
-/// environment, and the `echo` below became a false `Undefined variable: $a` on a program PHP
-/// runs (printing `5`).
+/// function, where lowering ALSO sees the declaration and the program prints PHP's `5`. Here it
+/// does not: the checker's veto reads the wide `collect_global_var_names_in_nested_bodies` scope,
+/// lowering reads the narrow one, and the split is deliberate (widening lowering broke working
+/// array programs — see `test_closure_declared_global_leaves_a_top_level_array_alone`).
+///
+/// What the veto delivers is therefore ACCEPTANCE, not the value: before it, the checker approved
+/// the kill, `$a` left the environment, and this program was a false `Undefined variable: $a`
+/// though PHP runs it. It now compiles and behaves exactly as it did before local-binding kills
+/// existed — the `unset` is a plain typing no-op that nulls the slot, and the closure's write goes
+/// to program storage main never reads, so the `echo` prints nothing where PHP prints `5`. That
+/// residual is the pre-existing global-in-closure write loss (tracked upstream), whose real fix is
+/// blocked on the `Mixed`-array backend gaps; this fixture pins that the kill no longer REJECTS
+/// the program, and that the write loss is unchanged rather than newly introduced.
 #[test]
 fn test_unset_of_a_name_a_closure_declares_global_keeps_the_binding() {
     let out = compile_and_run(
         "<?php $a = 1; unset($a); $f = function() { global $a; $a = 5; }; $f(); echo $a;",
     );
-    assert_eq!(out, "5");
+    assert_eq!(out, "");
 }
 
-/// The same for an ENUM method body, the other declaration the collector walked past.
+/// The same for an ENUM method body, the other declaration the veto's wide scope walks and
+/// lowering's narrow scope does not. Compiles instead of being falsely rejected; the value is lost
+/// to the same pre-existing write loss.
 #[test]
 fn test_unset_of_a_name_an_enum_method_declares_global_keeps_the_binding() {
     let out = compile_and_run(
@@ -1922,7 +1943,7 @@ unset($a);
 E::A->go();
 echo $a;"#,
     );
-    assert_eq!(out, "5");
+    assert_eq!(out, "");
 }
 
 /// The two files a `require_once` fixture shares: a top-level pair of incompatible assignments
@@ -2106,4 +2127,43 @@ fn test_eval_fragment_composes_with_strict_locals() {
         &["--strict-locals"],
     );
     assert_eq!(caller_local, "z");
+}
+
+/// A top-level ARRAY whose name some closure declares `global` must keep working.
+///
+/// Widening the SHARED `collect_global_var_names` walk to closure bodies moved such a name into
+/// `_eir_global_*` program storage, whose element type is `Mixed` — and the array builtins have
+/// pre-existing backend gaps for `Mixed` arrays. `implode` went SILENT (this fixture printed
+/// nothing where PHP prints `3,1,2`) and `array_sum`/`sort`/`in_array`/`array_map`/`array_keys`/
+/// `array_reverse` became hard `unsupported EIR backend feature: … for PHP type Mixed`. The
+/// lowering side therefore keeps the statement-only walk; only the CHECKER's kill veto sees the
+/// widened one.
+#[test]
+fn test_closure_declared_global_leaves_a_top_level_array_alone() {
+    let out = compile_and_run(
+        "<?php $d = function () { global $a; echo \"x\"; }; $a = [3, 1, 2]; echo implode(\",\", $a);",
+    );
+    assert_eq!(out, "3,1,2");
+}
+
+/// The hard-error half of the same blast radius: an array builtin with no `Mixed` backend arm.
+///
+/// `array_sum` is the representative; `sort`, `usort`, `in_array`, `array_map`, `array_keys` and
+/// `array_reverse` fail identically. The program must BUILD, not just run.
+#[test]
+fn test_closure_declared_global_leaves_array_builtins_lowerable() {
+    let out = compile_and_run(
+        "<?php $d = function () { global $a; echo \"x\"; }; $a = [3, 1, 2]; echo array_sum($a), \"|\"; sort($a); echo implode(\",\", $a), \"|\", (int) in_array(2, $a);",
+    );
+    assert_eq!(out, "6|1,2,3|1");
+}
+
+/// The same for the ASSIGNMENT-PRELUDE reach the widened walk added: a closure literal nested in
+/// an assignment's synthesized prelude must not move a top-level array either.
+#[test]
+fn test_closure_in_an_assignment_expression_leaves_a_top_level_array_alone() {
+    let out = compile_and_run(
+        "<?php $a = [3, 1, 2]; $n = ($d = function () { global $a; echo \"x\"; }) ? 1 : 0; echo implode(\",\", $a), \"|\", $n;",
+    );
+    assert_eq!(out, "3,1,2|1");
 }
