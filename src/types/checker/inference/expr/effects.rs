@@ -247,7 +247,7 @@ impl Checker {
                         null_probe::end_null_probe_root(probe, env);
                         effects?;
                     }
-                } else if !builtin_name.eq_ignore_ascii_case("unset") {
+                } else if !crate::types::checker::is_unset_call(builtin_name) {
                     // `empty()` shares that tolerance, but its operand is still read (PHP
                     // consults `__isset` then `__get`), so it stays on the eager path with only
                     // the probe binding added.
@@ -299,7 +299,7 @@ impl Checker {
                         }
                     }
                 }
-                if builtin_name.eq_ignore_ascii_case("unset") {
+                if crate::types::checker::is_unset_call(builtin_name) {
                     for arg in &expanded_args {
                         promote_indexed_local_for_element_unset(arg, env);
                     }

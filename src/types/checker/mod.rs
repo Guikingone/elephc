@@ -611,6 +611,20 @@ pub struct CheckOptions {
     pub strict_locals: bool,
 }
 
+/// Returns whether a called name is PHP's `unset`, the only builtin that ends a local binding.
+///
+/// ONE recogniser for all three sides of the feature — the pre-scan's disqualification
+/// (`mixed_storage_scan`), the kill itself (`inference::expr::effects`) and the ambiguity pass's
+/// node tally (`binding_decision_ambiguity`). They have to agree exactly: a name the scan does not
+/// see as `unset`-mentioned can be marked while the kill still fires on it, and a kill the tally
+/// does not count is a decision nothing checks for ambiguity.
+///
+/// `php_symbol_key` is an ASCII lowercase, so this comparison gives that key's answer without the
+/// `String` it would allocate at every call node the pre-scan walks.
+pub(crate) fn is_unset_call(name: &str) -> bool {
+    name.trim_start_matches('\\').eq_ignore_ascii_case("unset")
+}
+
 /// Records an access violation that must lower to a catchable `Error` throw.
 ///
 /// Refuses a span that identifies no single node. `throw_access_sites` is read back by lowering

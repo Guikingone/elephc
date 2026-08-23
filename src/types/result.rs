@@ -111,13 +111,11 @@ pub struct CheckResult {
     /// one, so an ambiguous decision is a compile error and never a silent re-bind. Giving `Span`
     /// file identity would remove the ambiguity outright, and every span-keyed map here would
     /// want it.
-    #[allow(dead_code)]
     pub local_bind_kill_sites: HashMap<Span, String>,
     /// The statement-form assignments the checker re-bound to a fresh binding of an incompatible
     /// type, as span -> local NAME, so EIR lowering mints a new slot there. Read by
     /// `crate::ir_lower` alongside `local_bind_kill_sites`, and keyed the same way for the same
     /// reason — see that field.
-    #[allow(dead_code)]
     pub local_retype_sites: HashMap<Span, String>,
     /// Every statement-form assignment to a local the checker's syntactic pre-scan marked as
     /// whole-frame boxed `Mixed` storage (a branch-divergently assigned local), as span -> the SET

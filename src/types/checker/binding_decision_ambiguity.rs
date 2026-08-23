@@ -39,6 +39,8 @@ use crate::parser::ast::{
 };
 use crate::span::Span;
 
+use super::is_unset_call;
+
 /// Rejects every recorded decision whose key matches more than one node OF ITS OWN ROLE.
 ///
 /// All three maps are keyed the same way and are walked in one pass, but each is checked against
@@ -545,11 +547,6 @@ fn bump_unset_arg(tally: &mut Tally, span: Span, name: &str) {
         return;
     }
     *tally.unset_args.entry((span, name.to_string())).or_insert(0) += 1;
-}
-
-/// Returns whether a called name is PHP's `unset`, the only builtin that ends a local binding.
-fn is_unset_call(name: &str) -> bool {
-    name.trim_start_matches('\\').eq_ignore_ascii_case("unset")
 }
 
 /// The watched spans plus the per-ROLE `(span, name)` node counts collected for them.

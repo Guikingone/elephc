@@ -34,7 +34,7 @@ use crate::parser::ast::{
 use crate::span::Span;
 use crate::types::PhpType;
 
-use super::{infer_expr_type_syntactic, Checker};
+use super::{infer_expr_type_syntactic, is_unset_call, Checker};
 
 /// One statement-form assignment to a candidate local.
 struct AssignSite {
@@ -179,7 +179,15 @@ impl Checker {
                 ),
             ));
         }
-        marks.sort_by_key(|(span, name, _)| (span.line, span.col, name.clone()));
+        // `sort_by` rather than `sort_by_key`: a key closure would have to CLONE the name to own
+        // the tuple it returns, once per comparison.
+        marks.sort_by(|(left_span, left_name, _), (right_span, right_name, _)| {
+            (left_span.line, left_span.col, left_name).cmp(&(
+                right_span.line,
+                right_span.col,
+                right_name,
+            ))
+        });
         for (span, name, message) in marks {
             // Keyed by the DECISION, so a later walk that stops marking this name retracts the
             // warning with the store sites. `span` is one of the name's own store-site spans (the
@@ -312,6 +320,13 @@ impl Checker {
             // The plan asks for the merge to fail in BOTH directions before a conflict counts.
             // The checker only tries `existing -> new`, so a one-way failure is left alone: the
             // body keeps today's diagnostic instead of being quietly boxed.
+            //
+            // Over the types this scan can actually see, no pair reaches here: `record_assign`
+            // admits only the EXACT syntactic types (`Int`, `Float`, `Str`, `Bool`, `Void`, the
+            // scalar casts, and `Str` from a concatenation), and `merged_assignment_type` is
+            // symmetric on every one of those. Kept as a defensive net rather than deleted,
+            // because widening `has_exact_syntactic_type` is the natural next change and an
+            // asymmetric pair would otherwise be marked on one direction's answer alone.
             if let Some(merged) = self.merged_assignment_type(&site.ty, &existing) {
                 binding = Some((merged, binding_depth));
                 continue;
@@ -917,10 +932,14 @@ fn callee_may_bind_arguments_by_ref(checker: &Checker, name: &Name) -> bool {
     let raw = name.as_str();
     let trimmed = raw.trim_start_matches('\\');
     // Language constructs the registry does not carry, all of which only READ their operand.
-    if matches!(
-        crate::names::php_symbol_key(trimmed).as_str(),
-        "isset" | "empty" | "exit" | "die"
-    ) {
+    //
+    // Compared case-insensitively rather than through `php_symbol_key`, which is an ASCII
+    // lowercase and would allocate a `String` at every call node this walk visits for the same
+    // answer.
+    if ["isset", "empty", "exit", "die"]
+        .iter()
+        .any(|construct| trimmed.eq_ignore_ascii_case(construct))
+    {
         return false;
     }
     if let Some(decl) = checker
@@ -937,16 +956,12 @@ fn callee_may_bind_arguments_by_ref(checker: &Checker, name: &Name) -> bool {
     true
 }
 
-/// Returns whether a called name is PHP's `unset`, the only builtin that ends a local binding.
-fn is_unset_call(name: &str) -> bool {
-    name.trim_start_matches('\\').eq_ignore_ascii_case("unset")
-}
-
 /// Returns whether a called name is PHP's `eval`.
 ///
-/// Matched through `php_symbol_key` rather than a plain comparison, so it answers the same way
-/// every other `eval` recogniser in the compiler does (`ir_lower::expr::closures::is_eval_call_name`,
-/// `ir_lower::program::eval_aot`).
+/// Answers exactly what the compiler's other `eval` recognisers answer
+/// (`ir_lower::expr::closures::is_eval_call_name`, `ir_lower::program::eval_aot`), which match
+/// through `php_symbol_key` — an ASCII lowercase, so a case-insensitive compare is the same test
+/// without the `String` this walk would allocate at EVERY call node in the body.
 fn is_eval_call(name: &str) -> bool {
-    crate::names::php_symbol_key(name.trim_start_matches('\\')) == "eval"
+    name.trim_start_matches('\\').eq_ignore_ascii_case("eval")
 }
