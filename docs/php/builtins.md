@@ -449,6 +449,7 @@ sidebar:
 | [`openssl_get_cipher_methods()`](./builtins/string/openssl_get_cipher_methods.md) | `(bool $aliases = false): array` | `array` | ✓ | ✓ |
 | [`ord()`](./builtins/string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
 | [`parse_url()`](./builtins/string/parse_url.md) | `(string $url, int $component = -1): mixed` | `mixed` | ✓ | ✓ |
+| [`preg_quote()`](./builtins/string/preg_quote.md) | `(string $str, string $delimiter = null): string` | `string` | ✓ | ✓ |
 | [`printf()`](./builtins/string/printf.md) | `(string $format, ...$values): int` | `int` | ✓ | ✓ |
 | [`quoted_printable_encode()`](./builtins/string/quoted_printable_encode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`quotemeta()`](./builtins/string/quotemeta.md) | `(string $string): string` | `string` | ✓ | ✓ |
@@ -476,6 +477,7 @@ sidebar:
 | [`strncasecmp()`](./builtins/string/strncasecmp.md) | `(string $string1, string $string2, int $length): int` | `int` | ✓ | — |
 | [`strncmp()`](./builtins/string/strncmp.md) | `(string $string1, string $string2, int $length): int` | `int` | ✓ | — |
 | [`strpos()`](./builtins/string/strpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`strrchr()`](./builtins/string/strrchr.md) | `(string $haystack, string $needle): mixed` | `mixed` | ✓ | ✓ |
 | [`strrev()`](./builtins/string/strrev.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strripos()`](./builtins/string/strripos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`strrpos()`](./builtins/string/strrpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |

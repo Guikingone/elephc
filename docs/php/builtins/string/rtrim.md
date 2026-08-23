@@ -2,7 +2,7 @@
 title: "rtrim()"
 description: "Strips whitespace (or other characters) from the end of a string."
 sidebar:
-  order: 446
+  order: 447
 ---
 
 ## rtrim()

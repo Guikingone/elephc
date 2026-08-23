@@ -187,6 +187,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Pi,
     /// Dispatches `mt_rand(...)`.
     MtRand,
+    /// Dispatches `preg_quote(...)`.
+    PregQuote,
     /// Dispatches `quotemeta(...)`.
     QuoteMeta,
     /// Dispatches `quoted_printable_encode(...)`.
@@ -513,6 +515,7 @@ impl EvalValuesHook {
                 eval_pi_result(values)
             }
             Self::Printf => eval_printf_result(evaluated_args, values),
+            Self::PregQuote => eval_preg_quote_values(evaluated_args, values),
             Self::QuoteMeta => one_arg(evaluated_args, values, eval_quotemeta_result),
             Self::QuotedPrintableEncode => {
                 one_arg(evaluated_args, values, eval_quoted_printable_encode_result)

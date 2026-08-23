@@ -2,7 +2,7 @@
 title: "str_starts_with()"
 description: "Checks if a string starts with a given substring."
 sidebar:
-  order: 457
+  order: 458
 ---
 
 ## str_starts_with()

@@ -332,6 +332,20 @@ expect_builtin_arity_error!(
     "is_callable() takes exactly 1 argument"
 );
 
+// Tests preg_quote() arity error when called with no arguments (accepts 1 to 2).
+expect_builtin_arity_error!(
+    test_error_preg_quote_no_args,
+    "<?php preg_quote();",
+    "preg_quote() takes 1 or 2 arguments"
+);
+
+// Tests preg_quote() arity error when called with too many arguments (accepts 1 to 2).
+expect_builtin_arity_error!(
+    test_error_preg_quote_too_many_args,
+    "<?php preg_quote(\"a\", \"b\", \"c\");",
+    "preg_quote() takes 1 or 2 arguments"
+);
+
 // Tests quotemeta() arity error when called with no arguments.
 expect_builtin_arity_error!(
     test_error_quotemeta_wrong_args,

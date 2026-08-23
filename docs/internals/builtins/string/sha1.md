@@ -2,7 +2,7 @@
 title: "sha1() — internals"
 description: "Compiler internals for sha1(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 447
+  order: 448
 ---
 
 ## `sha1()` — internals

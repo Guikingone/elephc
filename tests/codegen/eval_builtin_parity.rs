@@ -29,6 +29,23 @@ echo eval('return strcspn("22222222aaaa bbb1111 cccc", "1234", 9, 6)
     assert_eq!(out, "6:3:2:0:3");
 }
 
+/// Verifies `preg_quote()` gives eval and compiled code the same answer, delimiter included.
+///
+/// The interpreter owns a second copy of the escape table, so a divergence here means the two
+/// tables have drifted apart rather than that either is merely incomplete.
+#[test]
+fn test_eval_preg_quote_matches_compiled() {
+    let out = compile_and_run(
+        r#"<?php
+$subject = "a.b+c/d";
+$compiled = preg_quote($subject) . "|" . preg_quote($subject, "/");
+$evaluated = eval('return preg_quote("a.b+c/d") . "|" . preg_quote("a.b+c/d", "/");');
+echo $compiled === $evaluated ? "same" : "DIFFER", "|", $evaluated;
+"#,
+    );
+    assert_eq!(out, r#"same|a\.b\+c/d|a\.b\+c\/d"#);
+}
+
 /// Verifies AOT builtin lookup stays case-insensitive without eval being present.
 #[test]
 fn test_aot_function_exists_builtin_case_insensitive_without_eval() {

@@ -2,7 +2,7 @@
 title: "sprintf() — internals"
 description: "Compiler internals for sprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 448
+  order: 449
 ---
 
 ## `sprintf()` — internals

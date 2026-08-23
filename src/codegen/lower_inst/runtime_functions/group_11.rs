@@ -124,6 +124,9 @@ pub(super) fn lower(
         RuntimeFnId::PregMatchAll => Some({
             crate::codegen::lower_inst::builtins::regex::lower_preg_match_all(ctx, inst)
         }),
+        RuntimeFnId::PregQuote => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_preg_quote(ctx, inst)
+        }),
         RuntimeFnId::PregReplace => Some({
             crate::codegen::lower_inst::builtins::regex::lower_preg_replace(ctx, inst)
         }),

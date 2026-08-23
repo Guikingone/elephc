@@ -522,6 +522,7 @@ pub enum RuntimeFnId {
     PregGrep,
     PregMatch,
     PregMatchAll,
+    PregQuote,
     PregReplace,
     PregSplit,
     Putenv,
@@ -930,6 +931,7 @@ impl RuntimeFnId {
             RuntimeFnId::StrStartsWith |
             RuntimeFnId::Strcasecmp |
             RuntimeFnId::Strcmp |
+            RuntimeFnId::PregQuote |
             RuntimeFnId::Strstr |
             RuntimeFnId::Strrchr |
             RuntimeFnId::Substr |
@@ -1530,6 +1532,11 @@ impl RuntimeFnId {
                 // temporary alive for the result's whole lifetime, leaking one block per
                 // `chunk_split(build())` call.
                 | RuntimeFnId::ChunkSplit
+                // `preg_quote()` writes into a `__rt_concat_reserve` reservation and publishes
+                // it, exactly like `chunk_split()` above, so the escaped text can never alias
+                // the subject or the delimiter. The default `MayAliasArguments` bucket would
+                // keep an owned subject temporary alive for the whole result lifetime.
+                | RuntimeFnId::PregQuote
                 | RuntimeFnId::Decbin
                 | RuntimeFnId::Dechex
                 | RuntimeFnId::Decoct
@@ -2018,6 +2025,7 @@ impl RuntimeFnId {
             RuntimeFnId::PregMatch => "preg_match",
             RuntimeFnId::PregMatchAll => "preg_match_all",
             RuntimeFnId::PregReplace => "preg_replace",
+            RuntimeFnId::PregQuote => "preg_quote",
             RuntimeFnId::PregSplit => "preg_split",
             RuntimeFnId::Putenv => "putenv",
             RuntimeFnId::Serialize => "serialize",

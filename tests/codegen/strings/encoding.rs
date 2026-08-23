@@ -764,6 +764,100 @@ echo strlen($u), "|", substr($u, 0, 4), "|", substr($u, -4);
     assert_eq!(out, "60000|A A |A A ");
 }
 
+/// Verifies `preg_quote()` escapes exactly php's PCRE metacharacter set.
+///
+/// The expected text is what `php -n` prints for the same input. Note the two bytes that are
+/// deliberately NOT escaped here: `/` is a metacharacter only when it is the delimiter, and `~`
+/// never is.
+#[test]
+fn test_preg_quote() {
+    let out = compile_and_run(
+        r#"<?php echo preg_quote("a.b\\c+d*e?f[g^h]i\$j(k)l{m}n=o!p>q<r|s:t-u#v/w~x");"#,
+    );
+    assert_eq!(
+        out,
+        r#"a\.b\\c\+d\*e\?f\[g\^h\]i\$j\(k\)l\{m\}n\=o\!p\>q\<r\|s\:t\-u\#v/w~x"#
+    );
+}
+
+/// Verifies the optional delimiter is escaped on top of the metacharacter set, and that only its
+/// FIRST byte participates -- php escapes `a` and not `b` when handed the delimiter `"ab"`.
+#[test]
+fn test_preg_quote_delimiter() {
+    let out = compile_and_run(
+        r#"<?php echo preg_quote("a/b", "/"), "|", preg_quote("a~b", "~"), "|",
+             preg_quote("a.b", "ab"), "|", preg_quote("a.b", "."), "|", preg_quote("////", "/");"#,
+    );
+    assert_eq!(out, r#"a\/b|a\~b|\a\.b|a\.b|\/\/\/\/"#);
+}
+
+/// Verifies an omitted, null, and empty delimiter all behave identically, which is why the
+/// runtime carries no separate presence flag.
+#[test]
+fn test_preg_quote_absent_null_and_empty_delimiter_agree() {
+    let out = compile_and_run(
+        r#"<?php echo preg_quote("a.b"), "|", preg_quote("a.b", null), "|", preg_quote("a.b", "");"#,
+    );
+    assert_eq!(out, r#"a\.b|a\.b|a\.b"#);
+}
+
+/// Verifies NUL is spelled as the four-character sequence `\000`, php's one escape that is not
+/// simply a backslash-prefixed byte.
+#[test]
+fn test_preg_quote_nul_becomes_four_characters() {
+    let out = compile_and_run(
+        r#"<?php echo bin2hex(preg_quote("a\0b")), "|", bin2hex(preg_quote("\0"));"#,
+    );
+    assert_eq!(out, "615c30303062|5c303030");
+}
+
+/// Verifies an empty subject and a subject with nothing to escape pass through untouched.
+#[test]
+fn test_preg_quote_empty_and_plain() {
+    let out = compile_and_run(
+        r#"<?php echo "|", preg_quote(""), "|", preg_quote("no specials here"), "|";"#,
+    );
+    assert_eq!(out, "||no specials here|");
+}
+
+/// Verifies `preg_quote()` resolves through case-insensitive and namespaced call forms.
+#[test]
+fn test_preg_quote_case_insensitive_and_namespaced() {
+    let out = compile_and_run(r#"<?php echo Preg_Quote("A.B"), "|", \preg_quote("C*D");"#);
+    assert_eq!(out, "A\\.B|C\\*D");
+}
+
+/// Sweeps every byte `1..=255` and pins the digest `php -n` produces for the same sweep.
+///
+/// A per-character assertion would restate the implementation; a digest of the whole sweep
+/// fails on any single wrong byte and cannot be satisfied by copying the escape table.
+#[test]
+fn test_preg_quote_matches_php_over_every_byte() {
+    let out = compile_and_run(
+        r#"<?php
+$sweep = "";
+for ($i = 1; $i < 256; $i++) {
+    $sweep .= chr($i);
+}
+$quoted = preg_quote($sweep);
+echo strlen($quoted), "|", md5($quoted);"#,
+    );
+    assert_eq!(out, "276|b80e12d7dd7f7bc4f2d22ae99551b95f");
+}
+
+/// Verifies a result whose worst-case 4x expansion exceeds the 64 KiB concat scratch buffer
+/// keeps every escape intact through the bounded heap fallback.
+#[test]
+fn test_preg_quote_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$big = str_repeat("a.b/", 20000);
+$quoted = preg_quote($big, "/");
+echo strlen($quoted), "|", md5($quoted);"#,
+    );
+    assert_eq!(out, "120000|64aa0923eb317d6813d6f05b097b9187");
+}
+
 /// Verifies `quotemeta()` escapes every php-src metacharacter and leaves other bytes alone.
 #[test]
 fn test_quotemeta() {

@@ -2,7 +2,7 @@
 title: "unpack()"
 description: "Unpacks binary data according to a format string."
 sidebar:
-  order: 482
+  order: 484
 ---
 
 ## unpack()

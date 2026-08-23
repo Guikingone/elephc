@@ -65,6 +65,7 @@ mod base_convert;
 mod chunk_split;
 mod count_chars;
 mod strtr;
+mod preg_quote;
 mod quotemeta;
 mod quoted_printable_encode;
 mod wordwrap;
@@ -217,6 +218,8 @@ pub use chunk_split::emit_chunk_split;
 pub use count_chars::emit_count_chars;
 /// Emit the strtr pairwise and replacement-pair translators.
 pub use strtr::emit_strtr;
+/// Emit the preg_quote PCRE metacharacter and delimiter escaper.
+pub use preg_quote::emit_preg_quote;
 /// Emit the quotemeta regular-expression metacharacter escaper.
 pub use quotemeta::emit_quotemeta;
 /// Emit the quoted_printable_encode MIME transfer encoder.

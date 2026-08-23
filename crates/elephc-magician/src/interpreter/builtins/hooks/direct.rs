@@ -184,6 +184,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Pi,
     /// Dispatches `mt_rand(...)`.
     MtRand,
+    /// Dispatches `preg_quote(...)`.
+    PregQuote,
     /// Dispatches `quotemeta(...)`.
     QuoteMeta,
     /// Dispatches `quoted_printable_encode(...)`.
@@ -439,6 +441,7 @@ impl EvalDirectHook {
             Self::ParseUrl => eval_builtin_parse_url(args, context, scope, values),
             Self::Pi => eval_builtin_pi(args, values),
             Self::Printf => eval_builtin_printf(args, context, scope, values),
+            Self::PregQuote => eval_builtin_preg_quote(args, context, scope, values),
             Self::QuoteMeta => eval_builtin_quotemeta(args, context, scope, values),
             Self::QuotedPrintableEncode => {
                 eval_builtin_quoted_printable_encode(args, context, scope, values)
