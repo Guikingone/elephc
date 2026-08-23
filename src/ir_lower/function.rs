@@ -128,8 +128,9 @@ fn web_gated_global_env(global_env: &TypeEnv, web: bool) -> TypeEnv {
 ///
 /// Shared with the CHECKER (`crate::global_decls`), which vetoes ending a top-level binding of one
 /// of these names for the same reason lowering refuses to abandon its slot: `global $x;` in some
-/// other body reaches the very storage the top-level name uses. One walk keeps the two sides — and
-/// the walk's blind spots — identical.
+/// other body reaches the very storage the top-level name uses. One walk keeps the two sides
+/// identical, whatever it does and does not see — which is why widening it (to closure bodies and
+/// enum methods) moved storage class and eligibility together, in one change.
 fn collect_global_var_names(statements: &[Stmt]) -> std::collections::HashSet<String> {
     crate::global_decls::collect_global_var_names(statements)
 }

@@ -1393,14 +1393,12 @@ fn test_zero_trip_loop_keeps_the_entry_binding_type() {
 /// A marked TOP-LEVEL local that another body writes through `global $a`.
 ///
 /// The per-body pre-scan cannot see `q()`'s `global $a` while scanning the top level, so the
-/// name is marked there. The invariant that makes it sound is NOT that lowering sees every
-/// `global` — it does not, see `test_marked_and_unmarked_agree_through_the_collect_global_hole`
-/// below — it is that MARKING CHANGES NOTHING for a `global`-aliased name. Where
-/// `collect_global_var_names` does see the declaration, `LoweringContext::uses_global_storage`
-/// puts the top-level name in program-global storage that `global_alias_type` already types
-/// `Mixed`, so `store_local` overrides the marked `Mixed` with the identical type and writes the
-/// shared symbol; where it does not see it, the marked and unmarked programs are wrong in exactly
-/// the same pre-existing way. Either way the marked program behaves like the unmarked one.
+/// name is marked there. The invariant that makes it sound is that MARKING CHANGES NOTHING for a
+/// `global`-aliased name: `collect_global_var_names` sees the declaration, so
+/// `LoweringContext::uses_global_storage` puts the top-level name in program-global storage that
+/// `global_alias_type` already types `Mixed`, and `store_local` overrides the marked `Mixed` with
+/// the identical type and writes the shared symbol. The equivalence holds for a closure-declared
+/// `global` too — see `test_marked_and_unmarked_agree_on_a_closure_declared_global` below.
 #[test]
 fn test_marked_top_level_local_written_through_a_global_alias() {
     let out = compile_and_run(
@@ -1494,13 +1492,16 @@ q();"#,
     );
 }
 
-/// `collect_global_var_names_in_body` never descends into EXPRESSIONS, so a `global $a` inside a
-/// closure literal is invisible to it and main keeps `$a` in a frame slot instead of the shared
-/// symbol — the closure's write does not reach main. That is a PRE-EXISTING hole, and this pins
-/// that marking does not change it: the marked program and the unmarked control print the same
-/// shape. If the hole is ever closed, both sides move together or this test says so.
+/// A `global $a` written inside a CLOSURE literal reaches main's binding, and marking changes
+/// nothing about that.
+///
+/// `collect_global_var_names` used to walk statements only, so this declaration was invisible to
+/// it: main kept `$a` in a frame slot instead of the shared symbol and the closure's write never
+/// reached it — both programs printed `hello|hello|` where PHP prints `hello|42|`. The collector
+/// now descends into expressions, which moves BOTH sides together (the equivalence this fixture
+/// exists for) and onto PHP's answer.
 #[test]
-fn test_marked_and_unmarked_agree_through_the_collect_global_hole() {
+fn test_marked_and_unmarked_agree_on_a_closure_declared_global() {
     let marked = compile_and_run(
         r#"<?php
 $w = function () { global $a; $a = 42; };
@@ -1521,7 +1522,7 @@ echo $a, "|";"#,
         marked, unmarked,
         "marking must not change what a closure-declared `global` does to a top-level local"
     );
-    assert_eq!(marked, "hello|hello|");
+    assert_eq!(marked, "hello|42|");
 }
 
 /// A loop-carried marked local whose every iteration allocates a fresh heap string: the
@@ -1890,4 +1891,36 @@ fn test_same_name_collision_stays_ambiguous_with_multi_name_spans() {
         error.contains("Cannot re-bind $q here"),
         "expected the ambiguity diagnostic, got: {error}"
     );
+}
+
+/// A top-level `unset` must not end a binding whose storage a CLOSURE reaches with `global`.
+///
+/// The same rule `test_unset_of_a_program_wide_global_name_keeps_the_binding` pins for a named
+/// function. `collect_global_var_names` used to walk statements only, so a `global $a;` written
+/// inside a closure literal was invisible to it: the checker approved the kill, `$a` left the
+/// environment, and the `echo` below became a false `Undefined variable: $a` on a program PHP
+/// runs (printing `5`).
+#[test]
+fn test_unset_of_a_name_a_closure_declares_global_keeps_the_binding() {
+    let out = compile_and_run(
+        "<?php $a = 1; unset($a); $f = function() { global $a; $a = 5; }; $f(); echo $a;",
+    );
+    assert_eq!(out, "5");
+}
+
+/// The same for an ENUM method body, the other declaration the collector walked past.
+#[test]
+fn test_unset_of_a_name_an_enum_method_declares_global_keeps_the_binding() {
+    let out = compile_and_run(
+        r#"<?php
+enum E: int {
+    case A = 1;
+    public function go(): int { global $a; $a = 5; return 1; }
+}
+$a = 1;
+unset($a);
+E::A->go();
+echo $a;"#,
+    );
+    assert_eq!(out, "5");
 }
