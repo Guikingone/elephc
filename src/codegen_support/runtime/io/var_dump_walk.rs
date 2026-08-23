@@ -1101,7 +1101,12 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
 
     emitter.label("__rt_vd_val_mixed");
     emitter.instruction("ldr x0, [sp, #0]");                                    // boxed Mixed cell pointer
-    emitter.instruction("cbz x0, __rt_vd_val_null");                            // defensive: a null cell renders NULL
+    // php null is TWO values here — a zero pointer and the in-band sentinel — and a property
+    // declared without a default carries the sentinel, so testing only for zero made
+    // `var_dump($o)` on `class One { public $a; }` dereference `0x7ffffffffffffffe`.
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        emitter, "x0", "x9", "__rt_vd_val_null",
+    );
     emitter.instruction("bl __rt_mixed_unbox");                                 // x0=inner tag, x1=lo, x2=hi
     emitter.instruction("bl __rt_var_dump_value");                              // redispatch the unboxed scalar/container
     emitter.instruction("b __rt_vd_val_done");                                  // value rendered
@@ -1234,8 +1239,10 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_vd_val_mixed_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // boxed Mixed cell pointer → RAX
-    emitter.instruction("test rax, rax");                                       // defensive null-cell check
-    emitter.instruction("jz __rt_vd_val_null_x86");                             // a null cell renders NULL
+    // See the AArch64 counterpart: null is the zero pointer AND the in-band sentinel.
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        emitter, "rax", "r10", "__rt_vd_val_null_x86",
+    );
     emitter.instruction("call __rt_mixed_unbox");                               // rax=inner tag, rdi=lo, rdx=hi
     emitter.instruction("mov rsi, rdi");                                        // unboxed lo → value low argument
     emitter.instruction("mov rdi, rax");                                        // unboxed tag → value tag argument

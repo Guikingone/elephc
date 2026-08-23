@@ -111,9 +111,20 @@ pub(crate) fn lower_file_put_contents(
     } else {
         None
     };
+    // A filename assembled at run time may name one of php's OWN sub-streams — `php://output`,
+    // `php://memory`, `php://temp`. The writer below is `open(2)` and can only take those for
+    // filenames; the opener serves them, exactly as it does for the literal spelling.
+    let php_substream_done = if path_literal.is_none() {
+        Some(emit_dynamic_php_substream_write_route(ctx, path, data)?)
+    } else {
+        None
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_file_put_contents_arm64(ctx, path, data, flags, helper)?,
         Arch::X86_64 => lower_file_put_contents_x86_64(ctx, path, data, flags, helper)?,
+    }
+    if let Some(done) = php_substream_done {
+        ctx.emitter.label(&done);                                               // the route rejoins with a raw count or -1
     }
     if let Some(done) = filter_done {
         ctx.emitter.label(&done);                                               // the route rejoins with a raw count or -1
@@ -313,6 +324,96 @@ fn lower_literal_compress_zlib_file_put_contents(
 /// Emits everything up to and including the fall-through; the caller places the returned
 /// done-label after the plain writer, before the shared boxing, so both paths converge on a
 /// raw count-or-minus-one.
+/// Writes a run-time `php://` sub-stream through the same opener `fopen()` uses.
+///
+/// Entry state: nothing staged. On a `php://` URL that is not a filter URL the route opens the
+/// stream, writes the payload, closes it and branches to the returned label with the byte count in
+/// the integer result register (or -1, which the caller's boxing reads as php false); anything else
+/// falls through so the plain writer still runs.
+///
+/// The mode is always `w`: of the sub-streams this reaches, none distinguishes truncating from
+/// appending — `php://output` has no position at all, and `php://memory`/`php://temp` are created
+/// empty by the open itself.
+fn emit_dynamic_php_substream_write_route(
+    ctx: &mut FunctionContext<'_>,
+    path: ValueId,
+    data: ValueId,
+) -> Result<String> {
+    let done = ctx.next_label("fpc_php_done");
+    let not_php = ctx.next_label("fpc_php_plain");
+    let failed = ctx.next_label("fpc_php_failed");
+    load_string_to_result(ctx, path, "file_put_contents filename")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x2, #7");                              // `php://` plus the naming byte
+            ctx.emitter.instruction(&format!("b.lt {}", not_php));
+            for (offset, byte) in b"php://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset));
+                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));
+                ctx.emitter.instruction(&format!("b.ne {}", not_php));
+            }
+            ctx.emitter.instruction("ldrb w9, [x1, #6]");                       // the first byte of the sub-stream name
+            ctx.emitter.instruction("cmp w9, #0x66");                           // 'f' as in filter, which has its own route
+            ctx.emitter.instruction(&format!("b.eq {}", not_php));
+            ctx.emitter.instruction("mov x0, x1");                              // the opener takes ptr/len in x0/x1
+            ctx.emitter.instruction("mov x1, x2");
+            abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");         // x0 = descriptor, or -1
+            ctx.emitter.instruction("cmn x0, #1");
+            ctx.emitter.instruction(&format!("b.eq {}", failed));
+            ctx.emitter.instruction("sub sp, sp, #32");
+            ctx.emitter.instruction("str x0, [sp, #0]");                        // the descriptor, across the payload load
+            load_file_put_contents_payload(ctx, data)?;
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // the payload is already in x1/x2
+            abi::emit_call_label(ctx.emitter, "__rt_fwrite");
+            ctx.emitter.instruction("str x0, [sp, #8]");                        // php reports the INPUT byte count
+            // `__rt_php_wrapper_open` hands back a DESCRIPTOR, so the backend close is the one
+            // that takes it: the same one every implicit destruction goes through.
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_close_backend");
+            ctx.emitter.instruction("ldr x0, [sp, #8]");
+            ctx.emitter.instruction("add sp, sp, #32");
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("mov x0, #-1");                             // the shared boxing reads -1 as PHP false
+            ctx.emitter.instruction(&format!("b {}", done));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rdx, 7");                              // `php://` plus the naming byte
+            ctx.emitter.instruction(&format!("jl {}", not_php));
+            for (offset, byte) in b"php://".iter().enumerate() {
+                ctx.emitter
+                    .instruction(&format!("cmp BYTE PTR [rax + {}], {}", offset, byte));
+                ctx.emitter.instruction(&format!("jne {}", not_php));
+            }
+            ctx.emitter.instruction("cmp BYTE PTR [rax + 6], 0x66");            // 'f' as in filter
+            ctx.emitter.instruction(&format!("je {}", not_php));
+            ctx.emitter.instruction("mov rdi, rax");                            // the opener takes ptr/len in rdi/rsi
+            ctx.emitter.instruction("mov rsi, rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");         // rax = descriptor, or -1
+            ctx.emitter.instruction("cmp rax, -1");
+            ctx.emitter.instruction(&format!("je {}", failed));
+            ctx.emitter.instruction("sub rsp, 32");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // the descriptor, across the payload load
+            load_file_put_contents_payload(ctx, data)?;
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
+            ctx.emitter.instruction("mov rsi, rax");                            // the data pointer; the length is already in rdx
+            abi::emit_call_label(ctx.emitter, "__rt_fwrite");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // php reports the INPUT byte count
+            // See the AArch64 counterpart.
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_close_backend");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");
+            ctx.emitter.instruction("add rsp, 32");
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("mov rax, -1");                             // the shared boxing reads -1 as PHP false
+            ctx.emitter.instruction(&format!("jmp {}", done));
+        }
+    }
+    ctx.emitter.label(&not_php);
+    Ok(done)
+}
+
 fn emit_file_put_contents_filter_route(
     ctx: &mut FunctionContext<'_>,
     path: ValueId,

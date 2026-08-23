@@ -208,6 +208,12 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    for (name, value) in crate::types::output_handler_constants::OUTPUT_HANDLER_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
     for (name, value) in crate::types::zlib_constants::ZLIB_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),

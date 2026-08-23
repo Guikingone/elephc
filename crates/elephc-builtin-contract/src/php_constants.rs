@@ -221,6 +221,37 @@ pub const ZLIB_INT_CONSTANTS: &[(&str, i64)] = &[
     ("ZLIB_ENCODING_GZIP", 31),
 ];
 
+/// The capability flags `ob_start()` gives a buffer when the caller names none.
+///
+/// `PHP_OUTPUT_HANDLER_CLEANABLE | FLUSHABLE | REMOVABLE`. The runtime writes this number into
+/// every buffer it creates, so it lives beside the table that publishes it under php's name rather
+/// than as a literal in one emitter and a name in another.
+pub const OUTPUT_HANDLER_STDFLAGS: i64 = 16 | 32 | 64;
+
+/// Tuple of `(name, value)` pairs for the output-buffering handler constants.
+///
+/// MEASURED on `php -n` 8.5.6 through `get_defined_constants()`. The first seven are PHASE bits a
+/// handler receives in its second argument; the next four are the CAPABILITY flags `ob_start()`
+/// takes in its third, with `STDFLAGS` the union of the three php defaults; the last three are
+/// STATUS bits `ob_get_status()` reports. `CONT` and `END` are php's own aliases for `WRITE` and
+/// `FINAL`, so fourteen names carry eleven distinct values.
+pub const OUTPUT_HANDLER_INT_CONSTANTS: &[(&str, i64)] = &[
+    ("PHP_OUTPUT_HANDLER_START", 1),
+    ("PHP_OUTPUT_HANDLER_WRITE", 0),
+    ("PHP_OUTPUT_HANDLER_FLUSH", 4),
+    ("PHP_OUTPUT_HANDLER_CLEAN", 2),
+    ("PHP_OUTPUT_HANDLER_FINAL", 8),
+    ("PHP_OUTPUT_HANDLER_CONT", 0),
+    ("PHP_OUTPUT_HANDLER_END", 8),
+    ("PHP_OUTPUT_HANDLER_CLEANABLE", 16),
+    ("PHP_OUTPUT_HANDLER_FLUSHABLE", 32),
+    ("PHP_OUTPUT_HANDLER_REMOVABLE", 64),
+    ("PHP_OUTPUT_HANDLER_STDFLAGS", OUTPUT_HANDLER_STDFLAGS),
+    ("PHP_OUTPUT_HANDLER_STARTED", 4096),
+    ("PHP_OUTPUT_HANDLER_DISABLED", 8192),
+    ("PHP_OUTPUT_HANDLER_PROCESSED", 16384),
+];
+
 /// Tuple of `(name, value)` pairs for every `ext/json` integer constant.
 ///
 /// Example entries: `("JSON_HEX_TAG", 1)`, `("JSON_ERROR_NONE", 0)`.
@@ -356,6 +387,7 @@ pub const ALL_INT_CONSTANT_TABLES: &[&[(&str, i64)]] = &[
     ERROR_LEVEL_CONSTANTS,
     ENT_INT_CONSTANTS,
     ZLIB_INT_CONSTANTS,
+    OUTPUT_HANDLER_INT_CONSTANTS,
     JSON_INT_CONSTANTS,
     SESSION_INT_CONSTANTS,
     DATE_INT_CONSTANTS,

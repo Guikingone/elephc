@@ -282,6 +282,68 @@ rmdir("tree");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// `DROP_NEW_LINE` removes the line terminator from every plain-line read.
+///
+/// The flag was honoured only on the READ_CSV path, so a `foreach` over the object handed back
+/// lines with their terminator still on.
+#[test]
+fn test_spl_file_object_drop_new_line_drops_the_terminator() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("dn.txt", "a\rb\nc\r\n\nd");
+$o = new SplFileObject("dn.txt");
+$o->setFlags(SplFileObject::DROP_NEW_LINE);
+foreach ($o as $line) { echo bin2hex($line), "|"; }
+echo "\n";
+$plain = new SplFileObject("dn.txt");
+foreach ($plain as $line) { echo bin2hex($line), "|"; }
+"#,
+    );
+    // MEASURED on `php -n` 8.5.6: the TRAILING terminator goes and an interior carriage return
+    // stays — `"a\rb\n"` becomes `"a\rb"`, not `"a"`. That rules out truncating at the first
+    // `\r`; it is a trailing trim of `"\r\n"`.
+    assert_eq!(
+        out,
+        "610d62|63||64|\n610d620a|630d0a|0a|64|"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A directory iterator over a path it cannot open THROWS, where elephc warned and iterated zero
+/// times.
+///
+/// MEASURED on `php -n` 8.5.6, identical for all three classes, each naming ITSELF: an empty
+/// string is a `ValueError`, and anything that is not a directory is an
+/// `UnexpectedValueException` whose reason is `Not a directory` when the path exists and
+/// `No such file or directory` when it does not. elephc scanned straight away, so the caller got
+/// `scandir()`'s warnings and an EMPTY iterator — indistinguishable from an empty directory.
+#[test]
+fn test_directory_iterators_refuse_what_they_cannot_open() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("plain.txt", "x");
+try { new DirectoryIterator("missing_dir"); } catch (Throwable $t) { echo get_class($t), ":", $t->getMessage(), "|"; }
+try { new DirectoryIterator("plain.txt"); } catch (Throwable $t) { echo get_class($t), ":", $t->getMessage(), "|"; }
+try { new DirectoryIterator(""); } catch (Throwable $t) { echo get_class($t), ":", $t->getMessage(), "|"; }
+try { new FilesystemIterator("missing_dir"); } catch (Throwable $t) { echo get_class($t), ":", $t->getMessage(), "|"; }
+try { new RecursiveDirectoryIterator("plain.txt"); } catch (Throwable $t) { echo get_class($t), ":", $t->getMessage(), "|"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "UnexpectedValueException:DirectoryIterator::__construct(missing_dir): Failed to open \
+         directory: No such file or directory|\
+         UnexpectedValueException:DirectoryIterator::__construct(plain.txt): Failed to open \
+         directory: Not a directory|\
+         ValueError:DirectoryIterator::__construct(): Argument #1 ($directory) must not be empty|\
+         UnexpectedValueException:FilesystemIterator::__construct(missing_dir): Failed to open \
+         directory: No such file or directory|\
+         UnexpectedValueException:RecursiveDirectoryIterator::__construct(plain.txt): Failed to \
+         open directory: Not a directory|"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies SplFileObject stream methods use byte offsets and preserve file position.
 #[test]
 fn test_spl_file_object_stream_position_methods() {

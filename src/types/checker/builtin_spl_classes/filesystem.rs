@@ -566,7 +566,7 @@ fn directory_iterator_methods() -> Vec<ClassMethod> {
             "__construct",
             vec![param("directory", TypeExpr::Str)],
             Some(TypeExpr::Void),
-            directory_construct_body(var_expr("directory"), int_expr(0), false, false),
+            directory_construct_body("DirectoryIterator", var_expr("directory"), int_expr(0), false, false),
         ),
         method_with_body(
             "current",
@@ -595,7 +595,7 @@ fn filesystem_iterator_methods() -> Vec<ClassMethod> {
                 param_default("flags", TypeExpr::Int, int_expr(FS_SKIP_DOTS)),
             ],
             Some(TypeExpr::Void),
-            directory_construct_body(var_expr("directory"), var_expr("flags"), true, false),
+            directory_construct_body("FilesystemIterator", var_expr("directory"), var_expr("flags"), true, false),
         ),
         method_with_body("current", Vec::new(), Some(mixed_type()), filesystem_current_body()),
         method_with_body("key", Vec::new(), Some(mixed_type()), filesystem_key_body()),
@@ -631,7 +631,7 @@ fn recursive_directory_iterator_methods() -> Vec<ClassMethod> {
                 param_default("flags", TypeExpr::Int, int_expr(FS_CURRENT_AS_FILEINFO)),
             ],
             Some(TypeExpr::Void),
-            directory_construct_body(var_expr("directory"), var_expr("flags"), true, false),
+            directory_construct_body("RecursiveDirectoryIterator", var_expr("directory"), var_expr("flags"), true, false),
         ),
         method_with_body("hasChildren", Vec::new(), Some(TypeExpr::Bool), recursive_directory_has_children_body()),
         method_with_body(
@@ -1350,7 +1350,7 @@ fn spl_file_object_current_body() -> Vec<Stmt> {
             ],
             None,
         ),
-        return_stmt(file_current_line_expr()),
+        return_stmt(spl_file_object_drop_new_line_expr(file_current_line_expr())),
     ]
 }
 
@@ -1705,11 +1705,31 @@ fn spl_file_object_fgets_body() -> Vec<Stmt> {
 fn spl_file_object_read_line_stmts() -> Vec<Stmt> {
     vec![assign_stmt(
         "line",
-        cast_expr(
+        spl_file_object_drop_new_line_expr(cast_expr(
             CastType::String,
             function_call("fgets", vec![file_stream_expr()]),
-        ),
+        )),
     )]
+}
+
+/// Wraps a line in the trim `DROP_NEW_LINE` performs, leaving it alone when the flag is clear.
+///
+/// MEASURED on `php -n` 8.5.6: the flag removes the TRAILING terminator and nothing else — a line
+/// reading `"a\rb\n"` becomes `"a\rb"`, keeping the interior carriage return, while `"c\r\n"`
+/// becomes `"c"`. That is `rtrim($line, "\r\n")`, and it is safe as a trailing trim because a line
+/// never holds an interior `\n` to eat.
+fn spl_file_object_drop_new_line_expr(line: Expr) -> Expr {
+    expr(crate::parser::ast::ExprKind::Ternary {
+        condition: Box::new(flag_enabled_expr(
+            file_object_flags_expr(),
+            SPL_FILE_DROP_NEW_LINE,
+        )),
+        then_expr: Box::new(function_call(
+            "rtrim",
+            vec![line.clone(), string_expr("\r\n")],
+        )),
+        else_expr: Box::new(line),
+    })
 }
 
 /// Builds php's refusal to read a file object already positioned at end of file.
@@ -1872,18 +1892,80 @@ fn spl_file_object_fputcsv_body() -> Vec<Stmt> {
 }
 
 /// Builds a directory constructor body.
-fn directory_construct_body(directory: Expr, flags: Expr, filter_dots: bool, entries_are_paths: bool) -> Vec<Stmt> {
-    let mut body = vec![
+fn directory_construct_body(
+    class_name: &str,
+    directory: Expr,
+    flags: Expr,
+    filter_dots: bool,
+    entries_are_paths: bool,
+) -> Vec<Stmt> {
+    let mut body = directory_openable_guard_stmts(class_name, directory.clone());
+    body.extend(vec![
         property_assign_stmt(this_expr(), "directory", string_copy_expr(directory.clone())),
         property_assign_stmt(this_expr(), "fsFlags", flags.clone()),
         property_assign_stmt(this_expr(), "entriesArePathnames", bool_expr(entries_are_paths)),
-    ];
+    ]);
     body.extend(directory_rebuild_entries_body(directory, flags, filter_dots));
     body.extend(vec![
         property_assign_stmt(this_expr(), "position", int_expr(0)),
         expr_stmt(method_call(this_expr(), "__elephcRefreshPath", Vec::new())),
     ]);
     body
+}
+
+/// Builds php's two refusals for a directory a constructor cannot open.
+///
+/// The class NAMES ITSELF in both messages — `RecursiveDirectoryIterator` says its own name, not
+/// the `FilesystemIterator` it extends — so the name travels in rather than being read from
+/// `static::class`, which these synthesized bodies have no need of otherwise.
+fn directory_openable_guard_stmts(class_name: &str, directory: Expr) -> Vec<Stmt> {
+    vec![
+        if_stmt(
+            binary_expr(
+                string_copy_expr(directory.clone()),
+                BinOp::StrictEq,
+                string_expr(""),
+            ),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(&format!(
+                    "{}::__construct(): Argument #1 ($directory) must not be empty",
+                    class_name
+                ))],
+            ))],
+            None,
+        ),
+        if_stmt(
+            not_expr(function_call("is_dir", vec![string_copy_expr(directory.clone())])),
+            vec![throw_stmt(new_object_expr(
+                "UnexpectedValueException",
+                vec![binary_expr(
+                    binary_expr(
+                        binary_expr(
+                            string_expr(&format!("{}::__construct(", class_name)),
+                            BinOp::Concat,
+                            string_copy_expr(directory.clone()),
+                        ),
+                        BinOp::Concat,
+                        string_expr("): Failed to open directory: "),
+                    ),
+                    BinOp::Concat,
+                    expr(crate::parser::ast::ExprKind::Ternary {
+                        condition: Box::new(function_call(
+                            "file_exists",
+                            vec![string_copy_expr(directory)],
+                        )),
+                        // php reports the reason `opendir` would: a path that EXISTS but is not a
+                        // directory is `Not a directory`, and one that does not is `No such file
+                        // or directory`.
+                        then_expr: Box::new(string_expr("Not a directory")),
+                        else_expr: Box::new(string_expr("No such file or directory")),
+                    }),
+                )],
+            ))],
+            None,
+        ),
+    ]
 }
 
 /// Builds statements that populate the directory entry snapshot.

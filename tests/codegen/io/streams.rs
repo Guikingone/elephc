@@ -5238,6 +5238,104 @@ echo $n === false ? "false" : "got";
     assert_eq!(out, "false");
 }
 
+/// A `php://` URL only the RUN TIME knows reaches the opener, in both directions.
+///
+/// The literal spelling routes through the opener; a computed one went to `open(2)`, which knows
+/// nothing of the scheme — so `new SplFileObject("php://temp")` failed, its constructor's argument
+/// never being a literal by the time the reader sees it. MEASURED on `php -n` 8.5.6.
+#[test]
+fn test_a_computed_php_url_reaches_the_opener() {
+    let out = compile_and_run(
+        r#"<?php
+function u(string $s): string { return $s; }
+echo var_export(file_put_contents(u("php://output"), "OUT"), true), "|";
+echo var_export(file_put_contents(u("php://memory"), "MEM"), true), "|";
+echo var_export(file_get_contents(u("php://memory")), true), "|";
+echo var_export(file_get_contents(u("php://temp")), true), "|";
+$o = new SplFileObject("php://temp");
+echo var_export($o->eof(), true);
+"#,
+    );
+    assert_eq!(out, "OUT3|3|''|''|false");
+}
+
+/// `array_keys(stat($p))` compiles, and only a runtime `false` throws.
+///
+/// MEASURED on `php -n` 8.5.6: a real `stat()` gives 26 keys, and a failed one throws
+/// `TypeError: array_keys(): Argument #1 ($array) must be of type array, false given`. elephc
+/// refused the whole program at COMPILE time — eight of one audit round's programs. The mechanism
+/// for the union was already there, listing twenty-four argument slots; this was the
+/// twenty-fifth.
+#[test]
+fn test_array_keys_accepts_the_array_or_false_union() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("s.txt", "abc");
+echo count(array_keys(stat("s.txt"))), "|";
+try {
+    echo count(array_keys(stat("missing.txt"))), "|";
+} catch (Throwable $t) {
+    echo get_class($t), ":", $t->getMessage(), "|";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "26|TypeError:array_keys(): Argument #1 ($array) must be of type array, false given|"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The closed-resource TypeError names the ACTUAL parameter, which the directory family spells
+/// `$dir_handle`.
+///
+/// MEASURED on `php -n` 8.5.6: `closedir()`, `readdir()` and `rewinddir()` all say
+/// `Argument #1 ($dir_handle)`, while every stream function says `$stream`. elephc hard-coded
+/// `$stream`, so the one place that already reads the name from the shared contract and this one
+/// disagreed about the same function.
+#[test]
+fn test_the_closed_resource_error_names_the_directory_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+$d = opendir(sys_get_temp_dir());
+closedir($d);
+foreach (["closedir", "readdir", "rewinddir"] as $fn) {
+    try { $fn($d); } catch (Throwable $t) { echo $t->getMessage(), "|"; }
+}
+$f = tmpfile();
+fclose($f);
+try { fread($f, 1); } catch (Throwable $t) { echo $t->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "closedir(): Argument #1 ($dir_handle) must be an open stream resource|\
+         readdir(): Argument #1 ($dir_handle) must be an open stream resource|\
+         rewinddir(): Argument #1 ($dir_handle) must be an open stream resource|\
+         fread(): Argument #1 ($stream) must be an open stream resource"
+    );
+}
+
+/// php's fourteen `PHP_OUTPUT_HANDLER_*` constants exist, with php's values.
+///
+/// The runtime already wrote 112 for `STDFLAGS`; the NAMES reached no program, so
+/// `ob_start(null, 0, PHP_OUTPUT_HANDLER_REMOVABLE)` was `Undefined constant`. MEASURED through
+/// `get_defined_constants()` on `php -n` 8.5.6; `CONT` and `END` are php's own aliases for `WRITE`
+/// and `FINAL`, so fourteen names carry eleven distinct values.
+#[test]
+fn test_the_output_handler_constants_carry_phps_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo PHP_OUTPUT_HANDLER_START, ",", PHP_OUTPUT_HANDLER_WRITE, ",", PHP_OUTPUT_HANDLER_FLUSH, ",";
+echo PHP_OUTPUT_HANDLER_CLEAN, ",", PHP_OUTPUT_HANDLER_FINAL, ",", PHP_OUTPUT_HANDLER_CONT, ",";
+echo PHP_OUTPUT_HANDLER_END, ",", PHP_OUTPUT_HANDLER_CLEANABLE, ",", PHP_OUTPUT_HANDLER_FLUSHABLE, ",";
+echo PHP_OUTPUT_HANDLER_REMOVABLE, ",", PHP_OUTPUT_HANDLER_STDFLAGS, ",", PHP_OUTPUT_HANDLER_STARTED, ",";
+echo PHP_OUTPUT_HANDLER_DISABLED, ",", PHP_OUTPUT_HANDLER_PROCESSED;
+"#,
+    );
+    assert_eq!(out, "1,0,4,2,8,0,8,16,32,64,112,4096,8192,16384");
+}
+
 /// The file `tmpfile()` names EXISTS while the handle is open, and is gone once it closes.
 ///
 /// MEASURED on `php -n` 8.5.6 with four bytes written through the handle: `file_exists()` is true,

@@ -37,6 +37,7 @@ pub(crate) const ARRAY_OR_FALSE_ARG_SITES: &[(&str, usize, Option<&str>)] = &[
     ("array_intersect", 0, Some("array")),
     ("array_intersect", 1, None),
     ("array_intersect_key", 0, Some("array")),
+    ("array_keys", 0, Some("array")),
     ("array_map", 1, Some("array")),
     // `array_merge(array ...$arrays)` is fully variadic: even its FIRST argument has no
     // parameter name in php's TypeError, where `array_diff`/`array_intersect` name theirs.

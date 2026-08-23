@@ -188,6 +188,15 @@ pub(super) fn emit_file_get_contents_bytes(
     // http/https/ftp/ftps before falling back to a FILE read — so `file_get_contents("data:," .
     // $payload)` looked for a file of that name and answered false, while the same URL written as
     // a literal (decoded at compile time) and `fopen()` on it both worked.
+    // A filename assembled at run time may name one of php's OWN sub-streams. `fopen()` has
+    // resolved those through `__rt_php_wrapper_open` for a while; the reader below is `open(2)`
+    // and can only take `php://temp` for a filename — which is what `new SplFileObject($path)`
+    // hit, since the constructor's argument is never a literal by the time it reaches here.
+    let php_substream_done = if path_literal.is_none() {
+        Some(emit_dynamic_php_substream_read_route(ctx))
+    } else {
+        None
+    };
     let data_done = if path_literal.is_none() {
         Some(emit_dynamic_data_uri_read_route(ctx))
     } else {
@@ -204,6 +213,9 @@ pub(super) fn emit_file_get_contents_bytes(
     if let Some(done) = data_done {
         ctx.emitter.label(&done);
     }
+    if let Some(done) = php_substream_done {
+        ctx.emitter.label(&done);
+    }
     if let Some(done) = filter_done {
         ctx.emitter.label(&done);
     }
@@ -211,6 +223,63 @@ pub(super) fn emit_file_get_contents_bytes(
         ctx.emitter.label(&done);
     }
     Ok(true)
+}
+
+/// Reads a run-time `php://` sub-stream through the same opener `fopen()` uses.
+///
+/// Entry state: the filename is in the string result pair. On a `php://` URL that is not a filter
+/// URL the route opens the stream, reads it whole and branches to the returned label with the byte
+/// pair in place; anything else falls through untouched so the caller's ordinary reader still runs.
+///
+/// `php://filter/` is excluded because it has its own route ABOVE this one, and that route needs
+/// the chain it builds — a plain open would read the resource unfiltered.
+pub(super) fn emit_dynamic_php_substream_read_route(ctx: &mut FunctionContext<'_>) -> String {
+    let not_php = ctx.next_label("fgc_dyn_not_php");
+    let done = ctx.next_label("fgc_dyn_php_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x2, #7");                              // `php://` plus the byte that names the sub-stream
+            ctx.emitter.instruction(&format!("b.lt {}", not_php));
+            for (offset, byte) in b"php://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset));
+                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));
+                ctx.emitter.instruction(&format!("b.ne {}", not_php));
+            }
+            ctx.emitter.instruction("ldrb w9, [x1, #6]");                       // the first byte of the sub-stream name
+            ctx.emitter.instruction("cmp w9, #0x66");                           // 'f' as in filter, which has its own route
+            ctx.emitter.instruction(&format!("b.eq {}", not_php));
+            ctx.emitter.instruction("mov x0, x1");                              // the opener takes ptr/len in x0/x1
+            ctx.emitter.instruction("mov x1, x2");
+            abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");         // x0 = descriptor, or -1
+            ctx.emitter.instruction("cmn x0, #1");                              // a URL it does not know answers php false
+            ctx.emitter.instruction(&format!("b.eq {}", not_php));
+            ctx.emitter.instruction("mov x1, #0");                              // let the state pick its chunk size
+            abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");      // x1 = bytes, x2 = length
+            ctx.emitter.instruction(&format!("b {}", done));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rdx, 7");                              // `php://` plus the naming byte
+            ctx.emitter.instruction(&format!("jl {}", not_php));
+            for (offset, byte) in b"php://".iter().enumerate() {
+                ctx.emitter
+                    .instruction(&format!("cmp BYTE PTR [rax + {}], {}", offset, byte));
+                ctx.emitter.instruction(&format!("jne {}", not_php));
+            }
+            ctx.emitter.instruction("cmp BYTE PTR [rax + 6], 0x66");            // 'f' as in filter
+            ctx.emitter.instruction(&format!("je {}", not_php));
+            ctx.emitter.instruction("mov rdi, rax");                            // the opener takes ptr/len in rdi/rsi
+            ctx.emitter.instruction("mov rsi, rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");         // rax = descriptor, or -1
+            ctx.emitter.instruction("cmp rax, -1");                             // a URL it does not know answers php false
+            ctx.emitter.instruction(&format!("je {}", not_php));
+            ctx.emitter.instruction("mov rdi, rax");                            // the handle
+            ctx.emitter.instruction("xor esi, esi");                            // let the state pick its chunk size
+            abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");
+            ctx.emitter.instruction(&format!("jmp {}", done));
+        }
+    }
+    ctx.emitter.label(&not_php);
+    done
 }
 
 /// Reads a run-time `data:` URI through the same opener `fopen()` uses, and answers its bytes.

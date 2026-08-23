@@ -279,9 +279,15 @@ pub(super) fn emit_closed_stream_type_error(ctx: &mut FunctionContext<'_>, funct
     let message = if function_name == "stream_filter_remove" {
         "stream_filter_remove(): supplied resource is not a valid stream filter resource".to_string()
     } else {
+        // php names the ACTUAL parameter here too, and the directory family calls it
+        // `$dir_handle`: MEASURED, `closedir()`, `readdir()` and `rewinddir()` on a closed handle
+        // all say `Argument #1 ($dir_handle)`. `$stream` was hard-coded, so the one place that
+        // already reads the name from the shared contract — `emit_stream_type_error_case`, right
+        // below — and this one disagreed about the same function.
         format!(
-            "{}(): Argument #1 ($stream) must be an open stream resource",
-            function_name
+            "{}(): Argument #1 (${}) must be an open stream resource",
+            function_name,
+            first_parameter_name(function_name)
         )
     };
     // The shared emitter, not a second copy of it. This used to hand-roll the same allocation,

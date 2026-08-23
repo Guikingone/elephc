@@ -179,7 +179,10 @@ pub fn emit_ob_start(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // no handler stub (default handler)
     emitter.instruction("mov x1, #0");                                          // no handler env word
     emitter.instruction("mov x2, #0");                                          // no chunk size
-    emitter.instruction("mov x3, #112");                                        // PHP_OUTPUT_HANDLER_STDFLAGS
+    emitter.instruction(&format!(
+        "mov x3, #{}",
+        elephc_builtin_contract::php_constants::OUTPUT_HANDLER_STDFLAGS
+    ));                                                                         // PHP_OUTPUT_HANDLER_STDFLAGS, from the table that publishes its name
     abi::emit_symbol_address(emitter, "x4", "_ob_handler_name");                // default display name pointer
     emitter.instruction(&format!("mov x5, #{}", OB_DEFAULT_HANDLER_NAME.len())); // default display name length
     emitter.instruction("b __rt_ob_start_ex");                                  // tail-call the full entry point
@@ -290,7 +293,10 @@ fn emit_ob_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edi, edi");                                        // no handler stub (default handler)
     emitter.instruction("xor esi, esi");                                        // no handler env word
     emitter.instruction("xor edx, edx");                                        // no chunk size
-    emitter.instruction("mov ecx, 112");                                        // PHP_OUTPUT_HANDLER_STDFLAGS
+    emitter.instruction(&format!(
+        "mov ecx, {}",
+        elephc_builtin_contract::php_constants::OUTPUT_HANDLER_STDFLAGS
+    ));                                                                         // PHP_OUTPUT_HANDLER_STDFLAGS, from the table that publishes its name
     abi::emit_symbol_address(emitter, "r8", "_ob_handler_name");                // default display name pointer
     emitter.instruction(&format!("mov r9, {}", OB_DEFAULT_HANDLER_NAME.len())); // default display name length
     emitter.instruction("jmp __rt_ob_start_ex");                                // tail-call the full entry point

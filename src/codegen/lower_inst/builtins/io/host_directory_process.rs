@@ -660,6 +660,9 @@ pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
             || literal.starts_with("data:")
             || literal.starts_with("compress.zlib://")
             || literal.starts_with("compress.bzip2://")
+            // `php://memory` and its siblings are the opener's too: `file("php://temp")` answered
+            // false where php answers an empty array, and `SplFileObject` loads its lines here.
+            || super::is_php_substream_uri(&literal)
         {
             super::emit_literal_wrapper_file_get_contents_bytes(ctx, &literal)?;
             emit_file_flags_then_call(ctx, flags, "__rt_file_from_bytes")?;
@@ -683,6 +686,12 @@ pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     // lines: `__rt_file` performs its own read, so the filtered bytes enter through the
     // split-only second entry instead. The route's fall-through continues below with the path
     // (or, for a chain of unknown names, the swapped RESOURCE) still in the string registers.
+    // A run-time `php://` sub-stream reads through the opener and joins the same split-only entry.
+    let php_substream_bytes = if optional_const_string_operand(ctx, path)?.is_none() {
+        Some(super::emit_dynamic_php_substream_read_route(ctx))
+    } else {
+        None
+    };
     let after = ctx.next_label("file_after");
     let filtered = emit_dynamic_php_filter_read_route(
         ctx,
@@ -693,6 +702,9 @@ pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     emit_file_flags_then_call(ctx, flags, "__rt_file")?;
     abi::emit_jump(ctx.emitter, &after);
     ctx.emitter.label(&filtered);
+    if let Some(landing) = php_substream_bytes {
+        ctx.emitter.label(&landing);
+    }
     if let Some(landing) = compress_bytes {
         ctx.emitter.label(&landing);
     }
