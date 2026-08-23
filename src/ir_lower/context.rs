@@ -105,6 +105,7 @@ pub(crate) struct LoweringSnapshot {
     initialized_slots: HashSet<LocalSlotId>,
     constants: HashMap<String, (ExprKind, PhpType)>,
     loop_stack: Vec<LoopFrame>,
+    loop_edge_depth: u32,
     finally_stack: Vec<FinallyFrame>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     reflection_class_locals: HashMap<String, String>,
@@ -217,6 +218,12 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
+    /// Depth of loop-carried expressions being lowered OUTSIDE the loop body: a `while`/`for`
+    /// condition, a `do while` condition, and a `for` update. The loop's back edge re-executes
+    /// them exactly as it re-executes the body, so every store they emit must release the
+    /// previous occupant of its slot — but none of them is lowered with a `LoopFrame` pushed,
+    /// because `break`/`continue` cannot appear there.
+    loop_edge_depth: u32,
     pub finally_stack: Vec<FinallyFrame>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     reflection_class_locals: HashMap<String, String>,
@@ -331,6 +338,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             top_level_env,
             current_class,
             loop_stack: Vec::new(),
+            loop_edge_depth: 0,
             finally_stack: Vec::new(),
             static_callable_locals: HashMap::new(),
             reflection_class_locals: HashMap::new(),
@@ -378,6 +386,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             initialized_slots: self.initialized_slots.clone(),
             constants: self.constants.clone(),
             loop_stack: self.loop_stack.clone(),
+            loop_edge_depth: self.loop_edge_depth,
             finally_stack: self.finally_stack.clone(),
             static_callable_locals: self.static_callable_locals.clone(),
             reflection_class_locals: self.reflection_class_locals.clone(),
@@ -415,6 +424,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots = snapshot.initialized_slots;
         self.constants = snapshot.constants;
         self.loop_stack = snapshot.loop_stack;
+        self.loop_edge_depth = snapshot.loop_edge_depth;
         self.finally_stack = snapshot.finally_stack;
         self.static_callable_locals = snapshot.static_callable_locals;
         self.reflection_class_locals = snapshot.reflection_class_locals;
@@ -1357,6 +1367,26 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
     }
 
+    /// Returns whether the code being lowered can be re-executed by a loop's back edge.
+    ///
+    /// A store that a back edge repeats overwrites a slot that already holds a live value, so it
+    /// must release that occupant first. The loop BODY is recognised by its `LoopFrame`, but a
+    /// `while`/`for` condition, a `do while` condition and a `for` update are lowered without one
+    /// (`break`/`continue` cannot appear there) while the back edge runs them just the same.
+    pub(crate) fn inside_loop_back_edge(&self) -> bool {
+        !self.loop_stack.is_empty() || self.loop_edge_depth > 0
+    }
+
+    /// Marks the start of a loop-carried expression lowered outside the loop body.
+    pub(crate) fn enter_loop_back_edge_expression(&mut self) {
+        self.loop_edge_depth += 1;
+    }
+
+    /// Marks the end of a loop-carried expression lowered outside the loop body.
+    pub(crate) fn leave_loop_back_edge_expression(&mut self) {
+        self.loop_edge_depth = self.loop_edge_depth.saturating_sub(1);
+    }
+
     /// Returns true when a variable write should be stored into the eval scope handle.
     fn should_store_to_eval_scope(&self, name: &str) -> bool {
         let Some(scope_param) = &self.eval_scope_read_param else {
@@ -1404,7 +1434,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         if local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
-            && !self.loop_stack.is_empty()
+            && self.inside_loop_back_edge()
         {
             self.release_stored_local_value(name, slot, span);
         }
@@ -1508,7 +1538,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.release_stored_local_value(name, slot, span);
             return;
         }
-        if self.loop_stack.is_empty() {
+        if !self.inside_loop_back_edge() {
             // Outside loops no back-edge can execute a later widening store before
             // this one, so the untracked storage type is final for this path.
             return;
@@ -1659,7 +1689,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
-            && !self.loop_stack.is_empty()
+            && self.inside_loop_back_edge()
         {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }
@@ -1673,7 +1703,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_none()
-            && !self.loop_stack.is_empty()
+            && self.inside_loop_back_edge()
         {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }
@@ -1791,13 +1821,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         if local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
-            && !self.loop_stack.is_empty()
+            && self.inside_loop_back_edge()
         {
             self.release_stored_local_value(name, slot, span);
         }
         if local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_none()
-            && !self.loop_stack.is_empty()
+            && self.inside_loop_back_edge()
         {
             self.release_stored_local_value(name, slot, span);
         }
