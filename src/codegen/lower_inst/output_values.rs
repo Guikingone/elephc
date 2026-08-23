@@ -13,7 +13,19 @@ use super::*;
 pub(super) fn lower_echo_value(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)?.codegen_repr() {
-        PhpType::Object(class_name) => return lower_object_echo_value(ctx, value, &class_name),
+        PhpType::Object(class_name) => {
+            let normalized = class_name.trim_start_matches('\\');
+            if interface_has_tostring(ctx, normalized) {
+                super::method_intrinsics::lower_interface_method_call(
+                    ctx,
+                    inst,
+                    normalized,
+                    "__toString",
+                )?;
+                return emit_loaded_value_to_stdout(ctx, &PhpType::Str);
+            }
+            return lower_object_echo_value(ctx, value, &class_name);
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             return conversions::emit_mixed_string_context_stdout(ctx, value);
         }
@@ -27,6 +39,15 @@ pub(super) fn lower_echo_value(ctx: &mut FunctionContext<'_>, inst: &Instruction
         ty
     };
     emit_loaded_value_to_stdout(ctx, &output_ty)
+}
+
+/// Returns true when interface metadata exposes a string-returning `__toString()` contract.
+fn interface_has_tostring(ctx: &FunctionContext<'_>, interface_name: &str) -> bool {
+    ctx.module
+        .interface_infos
+        .get(interface_name)
+        .and_then(|interface| interface.methods.get("__tostring"))
+        .is_some_and(|signature| signature.return_type.codegen_repr() == PhpType::Str)
 }
 
 /// Lowers PHP `print` output for a previously computed SSA value.

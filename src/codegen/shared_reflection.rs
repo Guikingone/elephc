@@ -72,6 +72,10 @@ pub(super) enum ReflectionMaterializerKey {
         owner: ReflectionOwnerKind,
         name: String,
     },
+    SourceFileClass {
+        owner: ReflectionOwnerKind,
+        name: String,
+    },
     ShallowEnum {
         owner: ReflectionOwnerKind,
         name: String,

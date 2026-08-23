@@ -405,7 +405,10 @@ pub(super) fn write_back_invoker_heap_slot(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if values.type_tag(value)? != source_tag {
+    let value_tag = values.type_tag(value)?;
+    let array_shape_changed = matches!(source_tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)
+        && matches!(value_tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC);
+    if value_tag != source_tag && !array_shape_changed {
         return Err(EvalStatus::RuntimeFatal);
     }
     let word = values.raw_value_word(value)?;

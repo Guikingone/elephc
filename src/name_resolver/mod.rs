@@ -151,7 +151,11 @@ pub(crate) fn canonical_compat_prelude_function_name(name: &str) -> Option<Strin
         "str_getcsv",
         "error_reporting",
         "set_error_handler",
+        "get_error_handler",
         "restore_error_handler",
+        "register_shutdown_function",
+        "set_exception_handler",
+        "restore_exception_handler",
         "ini_get",
         "ini_set",
     ];

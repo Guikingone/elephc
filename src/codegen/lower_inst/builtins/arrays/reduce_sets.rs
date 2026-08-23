@@ -184,11 +184,35 @@ pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
                 abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
                 store_if_result(ctx, inst)
             }
+            PhpType::Mixed | PhpType::Union(_) => {
+                super::misc_dispatch::materialize_owned_mixed_hash_operand(
+                    ctx,
+                    operand,
+                    "array_merge",
+                )?;
+                store_if_result(ctx, inst)
+            }
             other => Err(CodegenIrError::unsupported(format!(
                 "array_merge single argument PHP type {:?}",
                 other
             ))),
         };
+    }
+
+    if inst.operands.len() == 2
+        && inst.operands.iter().any(|operand| {
+            ctx.value_php_type(*operand).is_ok_and(|ty| {
+                matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            })
+        })
+    {
+        return super::misc_dispatch::lower_gradual_two_hash_arg_builtin(
+            ctx,
+            inst,
+            "array_merge",
+            "__rt_array_replace",
+            Some(1),
+        );
     }
 
     let operand_types = inst

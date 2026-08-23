@@ -103,6 +103,18 @@ pub(in crate::codegen::lower_inst) fn lower_eval_method_call(
     eval::lower_eval_method_call(ctx, inst, object, method_name)
 }
 
+/// Probes a typed receiver for an eval-owned dynamic override before native dispatch.
+pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    method_name: &str,
+    miss_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    eval::lower_eval_owned_method_call(ctx, inst, object, method_name, miss_label, done_label)
+}
+
 /// Lowers a post-eval static method call to an eval-declared class.
 pub(in crate::codegen::lower_inst) fn lower_eval_static_method_call(
     ctx: &mut FunctionContext<'_>,

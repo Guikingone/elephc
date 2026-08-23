@@ -21,6 +21,13 @@ pub(in crate::interpreter) fn eval_property_get_result(
     };
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
+        if let Some(storage_property_name) =
+            eval_reflection_public_property_storage_name(&class_name, property_name)
+        {
+            return eval_reflection_with_declaring_class_scope(&class_name, context, |_| {
+                values.property_get(object, storage_property_name)
+            });
+        }
         if let Some((declaring_class, visibility, _, is_static)) =
             eval_reflection_aot_property_access_metadata(&class_name, property_name, values)?
         {
@@ -145,10 +152,77 @@ pub(in crate::interpreter) fn eval_property_get_result(
     {
         return eval_reference_target_value(&target, context, values);
     }
-    if let Some(value) = context.dynamic_property_value(identity, &storage_property_name) {
+    let overlay_value = context.dynamic_property_value(identity, &storage_property_name);
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let call_site = context.call_site();
+        eprintln!(
+            "[elephc-eval-trace] phase=dynamic_property_lookup class={object_class_name:?} identity={identity} property={storage_property_name:?} declared={declared_property_found} overlay_found={} file={:?} line={}",
+            overlay_value.is_some(),
+            call_site.0,
+            call_site.2,
+        );
+    }
+    if let Some(value) = overlay_value {
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            let call_site = context.call_site();
+            eprintln!(
+                "[elephc-eval-trace] phase=dynamic_property_get class={object_class_name:?} property={storage_property_name:?} value_tag={:?} file={:?} line={}",
+                values.type_tag(value),
+                call_site.0,
+                call_site.2,
+            );
+        }
         return values.retain(value);
     }
     values.property_get(object, &storage_property_name)
+}
+
+/// Maps native Reflection owner public read-only fields onto their private metadata slots.
+///
+/// Eval materializes Reflection owners through a generated object helper, which stores metadata
+/// in private slots. PHP exposes a small public read-only view of those slots; mapping the reads
+/// here keeps eval-owned owners consistent with AOT reflection lowering without permitting
+/// ordinary dynamic-property creation.
+fn eval_reflection_public_property_storage_name(
+    class_name: &str,
+    property_name: &str,
+) -> Option<&'static str> {
+    let class_name = class_name.trim_start_matches('\\');
+    match property_name {
+        "name"
+            if [
+                "ReflectionAttribute",
+                "ReflectionClass",
+                "ReflectionObject",
+                "ReflectionEnum",
+                "ReflectionFunction",
+                "ReflectionMethod",
+                "ReflectionProperty",
+                "ReflectionParameter",
+                "ReflectionClassConstant",
+                "ReflectionEnumUnitCase",
+                "ReflectionEnumBackedCase",
+            ]
+            .iter()
+            .any(|owner| class_name.eq_ignore_ascii_case(owner)) =>
+        {
+            Some("__name")
+        }
+        "class"
+            if [
+                "ReflectionMethod",
+                "ReflectionProperty",
+                "ReflectionClassConstant",
+                "ReflectionEnumUnitCase",
+                "ReflectionEnumBackedCase",
+            ]
+            .iter()
+            .any(|owner| class_name.eq_ignore_ascii_case(owner)) =>
+        {
+            Some("__class")
+        }
+        _ => None,
+    }
 }
 
 /// Writes one object property while enforcing eval-declared member visibility.
@@ -164,6 +238,18 @@ pub(in crate::interpreter) fn eval_property_set_result(
     };
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
+        if eval_reflection_public_property_storage_name(&class_name, property_name).is_some() {
+            return eval_throw_reflection_exception(
+                &format!(
+                    "Cannot set read-only property {}::${}",
+                    class_name.trim_start_matches('\\'),
+                    property_name
+                ),
+                context,
+                values,
+            )
+            .map(|_| ());
+        }
         if let Some((declaring_class, _, write_visibility, is_static)) =
             eval_reflection_aot_property_access_metadata(&class_name, property_name, values)?
         {
@@ -188,10 +274,12 @@ pub(in crate::interpreter) fn eval_property_set_result(
     let class_is_readonly = class.is_readonly_class();
     let mut storage_property_name = property_name.to_string();
     let mut declared_property_found = false;
+    let mut declared_property_is_private = false;
     if let Some((declaring_class, property)) =
         eval_dynamic_property_for_access(&object_class_name, property_name, context)
     {
         declared_property_found = true;
+        declared_property_is_private = property.visibility() == EvalVisibility::Private;
         if validate_eval_member_access(&declaring_class, property.visibility(), context).is_err() {
             if eval_magic_property_set(
                 object,
@@ -345,6 +433,27 @@ pub(in crate::interpreter) fn eval_property_set_result(
             values,
         );
     }
+    if declared_property_found && !declared_property_is_private {
+        if let Some((declaring_class, visibility, _, is_static)) =
+            eval_dynamic_class_native_property_metadata(
+                &object_class_name,
+                property_name,
+                context,
+                values,
+            )?
+        {
+            if !is_static && visibility != EvalVisibility::Private {
+                eval_with_native_bridge_scope(&declaring_class, context, || {
+                    eval_native_property_store_with_array_shape_fallback(
+                        object,
+                        property_name,
+                        value,
+                        values,
+                    )
+                })?;
+            }
+        }
+    }
     if let Some(target) = context
         .dynamic_property_alias(identity, &storage_property_name)
         .cloned()
@@ -365,9 +474,19 @@ pub(in crate::interpreter) fn eval_property_set_result(
         }
         return Ok(());
     }
-    if let Some(replaced) =
-        context.set_dynamic_property_value(identity, &storage_property_name, value)
-    {
+    let stored = values.retain(value)?;
+    let replaced = context.set_dynamic_property_value(identity, &storage_property_name, stored);
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let call_site = context.call_site();
+        eprintln!(
+            "[elephc-eval-trace] phase=dynamic_property_set class={object_class_name:?} property={storage_property_name:?} value_tag={:?} replaced={} file={:?} line={}",
+            values.type_tag(stored),
+            replaced.is_some(),
+            call_site.0,
+            call_site.2,
+        );
+    }
+    if let Some(replaced) = replaced {
         values.release(replaced)?;
     }
     context.mark_dynamic_property_initialized(identity, &storage_property_name);

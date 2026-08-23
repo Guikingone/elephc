@@ -367,18 +367,29 @@ pub(super) fn materialize_direct_call_arg_for_param(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
             Ok(PhpType::Str)
         }
+        PhpType::Object(_) if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x0, x1");                    // pass the checked object's borrowed payload through the raw object ABI
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rax, rdi");                  // pass the checked object's borrowed payload through the raw object ABI
+                }
+            }
+            Ok(param_ty.codegen_repr())
+        }
         PhpType::Mixed if source_ty.codegen_repr() != PhpType::Mixed => {
             emit_box_current_value_as_mixed(ctx.emitter, source_ty);
             Ok(PhpType::Mixed)
         }
         PhpType::Array(param_elem) if param_elem.codegen_repr() == PhpType::Mixed => {
-            if let PhpType::AssocArray { value, .. } = source_ty.codegen_repr() {
-                let source_value_ty = value.codegen_repr();
-                builtins::arrays::values::emit_loaded_assoc_array_values(ctx, &source_value_ty)?;
-                if source_value_ty != PhpType::Mixed {
-                    emit_loaded_indexed_array_to_mixed(ctx, &source_value_ty);
-                }
-                return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
+            if let PhpType::AssocArray { .. } = source_ty.codegen_repr() {
+                // A declared PHP `array` parameter accepts both indexed and associative
+                // storage. Keep hash keys intact: the callee's Array(Mixed) paths dispatch on
+                // the runtime heap kind, whereas `array_values()` would silently turn every
+                // string key into an integer position before the user function can observe it.
+                return Ok(source_ty.codegen_repr());
             }
             if let PhpType::Array(source_elem) = source_ty.codegen_repr() {
                 let source_elem = source_elem.codegen_repr();
@@ -389,6 +400,26 @@ pub(super) fn materialize_direct_call_arg_for_param(
             }
             if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+                let indexed = ctx.next_label("call_arg_mixed_array_indexed");
+                let associative = ctx.next_label("call_arg_mixed_array_associative");
+                let done = ctx.next_label("call_arg_mixed_array_done");
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("cmp x0, #4");                  // tag 4 is indexed PHP array storage
+                        ctx.emitter.instruction(&format!("b.eq {}", indexed));
+                        ctx.emitter.instruction("cmp x0, #5");                  // tag 5 is associative PHP array storage
+                        ctx.emitter.instruction(&format!("b.eq {}", associative));
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("cmp rax, 4");                  // tag 4 is indexed PHP array storage
+                        ctx.emitter.instruction(&format!("je {}", indexed));
+                        ctx.emitter.instruction("cmp rax, 5");                  // tag 5 is associative PHP array storage
+                        ctx.emitter.instruction(&format!("je {}", associative));
+                    }
+                }
+                exceptions::emit_type_error(ctx, "Argument must be of type array, non-array given");
+
+                ctx.emitter.label(&indexed);
                 match ctx.emitter.target.arch {
                     Arch::AArch64 => {
                         ctx.emitter.instruction("mov x0, x1");                  // pass the borrowed indexed-array payload to the normalizing clone helper
@@ -402,6 +433,19 @@ pub(super) fn materialize_direct_call_arg_for_param(
                     &result_reg,
                     ctx.emitter,
                 );
+                abi::emit_jump(ctx.emitter, &done);
+
+                ctx.emitter.label(&associative);
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),     // pass the borrowed associative payload to the hash clone helper
+                    Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),    // pass the borrowed associative payload to the hash clone helper
+                }
+                callable_invoker_args::emit_clone_assoc_array_for_invoker_with_value_type(
+                    &result_reg,
+                    &PhpType::Mixed,
+                    ctx.emitter,
+                );
+                ctx.emitter.label(&done);
                 return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
             }
             Ok(PhpType::Array(param_elem))

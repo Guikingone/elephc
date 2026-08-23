@@ -905,6 +905,14 @@ impl<'a> FunctionContext<'a> {
         let name = self.global_name_data(data)?.to_string();
         let symbol = crate::names::ir_global_symbol(&name);
         let ty = self.value_php_type(value)?;
+        if crate::superglobals::uses_shared_ref_cell(self.module, &name) {
+            self.load_value_to_result(value)?;
+            return crate::codegen::lower_inst::lower_store_web_superglobal(
+                self,
+                &symbol,
+                &ty,
+            );
+        }
         self.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
         self.load_value_to_result(value)?;
         abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);

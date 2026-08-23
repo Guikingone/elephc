@@ -2,7 +2,7 @@
 title: "headers_sent() — internals"
 description: "Compiler internals for headers_sent(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 316
+  order: 329
 ---
 
 ## `headers_sent()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/headers_sent.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/headers_sent.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:543](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L543) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

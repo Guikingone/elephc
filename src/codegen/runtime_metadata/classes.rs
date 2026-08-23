@@ -82,11 +82,44 @@ pub(in crate::codegen) fn runtime_referenced_class_names(module: &Module) -> Has
             names.insert(class_name);
         }
     }
+    if module_uses_dynamic_class_name_constant_lookup(module) {
+        names.extend(
+            module
+                .class_infos
+                .iter()
+                .filter(|(_, class_info)| !class_info.constants.is_empty())
+                .map(|(class_name, _)| class_name.clone()),
+        );
+    }
     seed_runtime_throwable_class_names(module, &mut names);
     seed_runtime_stdclass_name(module, &mut names);
     seed_builtin_reflection_class_names(module, &mut names);
     expand_class_dependencies(&mut names, &module.class_infos);
     names
+}
+
+/// Returns whether EIR needs name metadata for a runtime `$class::CONSTANT` lookup.
+///
+/// A class referenced only by `SomeClass::class` has no object allocation or static-member
+/// opcode, so ordinary reachability intentionally omits it. Once the class string feeds a
+/// dynamic constant access, however, every already-known class that declares constants must be
+/// addressable by the shared name-to-id table; no extra source files are introduced here.
+fn module_uses_dynamic_class_name_constant_lookup(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .any(|function| {
+            function
+                .instructions
+                .iter()
+                .any(|instruction| instruction.op == Op::ClassNameToId)
+        })
 }
 
 // The eager enum-singleton reachability scan that used to live here is gone.

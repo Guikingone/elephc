@@ -481,6 +481,8 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    emit_class_uninitialized_property_marker_tables(&mut out, max_class_id, &class_info_by_id);
+
     // _class_serprop_ptrs: dense class_id-indexed table of serialize property-info
     // tables. Entry = _class_serprop_<id> for an existing class, else
     // _class_serprop_missing. __rt_serialize_object / __rt_unserialize_object index
@@ -2172,6 +2174,80 @@ fn class_object_payload_size(class_name: &str, class_info: &ClassInfo) -> usize 
     8 + class_info.properties.len() * 16 + dyn_props_slot
 }
 
+/// Emits dense per-class metadata for typed property slots that must begin uninitialized.
+/// `__rt_new_by_name` consumes these physical offsets after zeroing a dynamically selected
+/// class layout, preserving the marker used by direct EIR object allocation and `isset()`.
+fn emit_class_uninitialized_property_marker_tables(
+    out: &mut String,
+    max_class_id: Option<u64>,
+    class_info_by_id: &HashMap<u64, &ClassInfo>,
+) {
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let Some(class_info) = class_info_by_id.get(&class_id) else {
+                continue;
+            };
+            let offsets = class_uninitialized_property_marker_offsets(class_info);
+            if offsets.is_empty() {
+                continue;
+            }
+            out.push_str(&format!(
+                ".globl _class_uninit_prop_offsets_{0}\n_class_uninit_prop_offsets_{0}:\n",
+                class_id
+            ));
+            for offset in offsets {
+                out.push_str(&format!("    .quad {}\n", offset));
+            }
+        }
+    }
+
+    out.push_str(".globl _class_uninit_prop_counts\n_class_uninit_prop_counts:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let count = class_info_by_id
+                .get(&class_id)
+                .map(|class_info| class_uninitialized_property_marker_offsets(class_info).len())
+                .unwrap_or(0);
+            out.push_str(&format!("    .quad {}\n", count));
+        }
+    }
+
+    out.push_str(".globl _class_uninit_prop_offset_ptrs\n_class_uninit_prop_offset_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let has_offsets = class_info_by_id
+                .get(&class_id)
+                .is_some_and(|class_info| !class_uninitialized_property_marker_offsets(class_info).is_empty());
+            if has_offsets {
+                out.push_str(&format!("    .quad _class_uninit_prop_offsets_{}\n", class_id));
+            } else {
+                out.push_str("    .quad 0\n");
+            }
+        }
+    }
+}
+
+/// Returns high-word offsets for property slots that require the typed-uninitialized marker.
+/// Dynamic construction begins from a zeroed object, so these offsets make its observable state
+/// identical to the direct object allocator before property-default initialization runs.
+fn class_uninitialized_property_marker_offsets(class_info: &ClassInfo) -> Vec<usize> {
+    class_info
+        .properties
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (property, _))| {
+            let is_owned_reference = class_info.owned_reference_properties.contains(property)
+                && class_info.property_slot_is_reference(index, property);
+            let starts_uninitialized = class_info
+                .defaults
+                .get(index)
+                .is_some_and(|default| default.is_none())
+                && !is_owned_reference;
+            starts_uninitialized.then_some(8 + index * 16 + 8)
+        })
+        .collect()
+}
+
 /// Returns whether this class layout stores a dynamic-property hash tail.
 fn class_uses_dynamic_property_tail(class_name: &str, class_info: &ClassInfo) -> bool {
     class_name == "stdClass" || class_info.allow_dynamic_properties
@@ -2840,6 +2916,7 @@ mod tests {
             is_readonly_class: false,
             allow_dynamic_properties: false,
             constants: HashMap::new(),
+            constant_order: Vec::new(),
     constant_deprecations: HashMap::new(),
     constant_types: HashMap::new(),
     constant_visibilities: HashMap::new(),

@@ -266,6 +266,8 @@ pub struct ClassInfo {
     /// User-declared class constants (PHP 7.1+). Maps the constant name to
     /// its value expression — codegen inlines the literal at access time.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
+    /// Class constant names in declaration order for PHP reflection iteration.
+    pub constant_order: Vec<String>,
     /// Deprecation reason for class constants carrying `#[\Deprecated]`, keyed
     /// by the case-sensitive constant name. An empty string means no reason.
     pub constant_deprecations: HashMap<String, String>,

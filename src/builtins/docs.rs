@@ -28,6 +28,7 @@ use serde_json::{json, Value};
 fn type_spec_str(ty: &TypeSpec) -> String {
     match ty {
         TypeSpec::Int => "int".to_string(),
+        TypeSpec::NullableInt => "?int".to_string(),
         TypeSpec::Float => "float".to_string(),
         TypeSpec::Str => "string".to_string(),
         TypeSpec::Bool => "bool".to_string(),

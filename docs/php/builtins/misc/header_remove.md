@@ -2,7 +2,7 @@
 title: "header_remove()"
 description: "Removes one or all pending HTTP response headers."
 sidebar:
-  order: 315
+  order: 328
 ---
 
 ## header_remove()
@@ -24,12 +24,6 @@ Removes one or all pending HTTP response headers.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

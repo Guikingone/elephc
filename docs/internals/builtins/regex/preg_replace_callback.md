@@ -2,7 +2,7 @@
 title: "preg_replace_callback() — internals"
 description: "Compiler internals for preg_replace_callback(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 369
+  order: 376
 ---
 
 ## `preg_replace_callback()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/preg_replace_callback.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/preg_replace_callback.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:543](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L543) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,19 +39,21 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_replace_callback(string $pattern, callable $callback, string $subject): string
+function preg_replace_callback(string $pattern, callable $callback, string $subject, int $limit = -1, mixed $count = null): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 3 arguments.
+- **Arity**: takes 3–5 arguments (2 optional).
+- **By-reference parameters**: `$count`.
 
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_replace_callback.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_replace_callback.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `callable-or-reflection`.
+- **Adapter reason**: `by-reference-or-lvalue`.
 - **Dispatch hooks**: `direct`, `values`
+- **By-reference parameters**: `$count`.
 
 ## Cross-references
 

@@ -500,6 +500,126 @@ fn web_server_superglobal_populated() {
     assert!(resp.ends_with("GET /foo?a=1"), "body: {:?}", resp);
 }
 
+/// Verifies a request superglobal survives closure argument collection and runtime spreading.
+#[test]
+fn web_runtime_closure_spread_preserves_superglobal_string_values() {
+    let dir = make_test_dir("web_runtime_closure_superglobal");
+    let src = r#"<?php
+class Loader {
+    private array $values = [];
+    private string $data = '';
+
+    private function parse(): array {
+        $path = __DIR__.'/runtime-context.env';
+        file_put_contents($path, 'APP_ENV=dev');
+        $this->data = str_replace(["\r\n", "\r"], "\n", file_get_contents($path));
+        $this->values['APP_ENV'] = substr($this->data, 8);
+        try {
+            return $this->values;
+        } finally {
+            $this->values = [];
+            $this->data = '';
+        }
+    }
+
+    public function load(): void {
+        foreach ($this->parse() as $name => $value) {
+            $_ENV[$name] = $value;
+            $_SERVER[$name] = $value;
+        }
+    }
+}
+(new Loader())->load();
+$_SERVER += $_ENV;
+class Application {
+    public function __construct(string $environment) { echo $environment; }
+}
+$app = static function (array $context): void { new Application($context['APP_ENV']); };
+$arguments = static function (): array { return [$_SERVER]; };
+[$app, $args] = [$app, $arguments()];
+$app(...$args);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(response.ends_with("dev"), "unexpected response: {response:?}");
+}
+
+/// Verifies a captured runtime resolver closure preserves multiple environment strings.
+///
+/// A resolver-style closure returns a context array built from request globals after
+/// several writes and an array union. The downstream callable must receive every
+/// string intact when its spread arguments are materialized.
+#[test]
+fn web_runtime_resolver_closure_preserves_multiple_environment_strings() {
+    let dir = make_test_dir("web_runtime_resolver_environment_context");
+    let src = r#"<?php
+class EnvironmentLoader {
+    private array $values = [];
+    private string $data = '';
+
+    public function load(): void {
+        $path = __DIR__.'/environment-context.env';
+        file_put_contents($path, "APP_ENV=dev\nAPP_DEBUG=1\nAPP_SECRET=fixture-secret\nAPP_RUNTIME=runtime-class");
+        $this->data = str_replace(["\r\n", "\r"], "\n", file_get_contents($path));
+        foreach (explode("\n", $this->data) as $line) {
+            $parts = explode('=', $line, 2);
+            $this->values[$parts[0]] = $parts[1];
+        }
+        try {
+            foreach ($this->values as $name => $value) {
+                $_ENV[$name] = $value;
+                $_SERVER[$name] = $value;
+            }
+        } finally {
+            $this->values = [];
+            $this->data = '';
+        }
+        $_SERVER += $_ENV;
+    }
+}
+
+class Resolver {
+    public function __construct(private \Closure $application) {}
+
+    public function resolve(): array {
+        $parameters = [true];
+        $arguments = function () use ($parameters): array {
+            $resolved = [];
+            foreach ($parameters as $_) {
+                $resolved[] = $_SERVER;
+            }
+            return $resolved;
+        };
+
+        return [$this->application, $arguments()];
+    }
+}
+
+(new EnvironmentLoader())->load();
+$application = static function (array $context): void {
+    echo $context['APP_ENV'], ':', $context['APP_DEBUG'], ':', $context['APP_SECRET'], ':', $context['APP_RUNTIME'];
+};
+[$application, $arguments] = (new Resolver($application(...)))->resolve();
+$application(...$arguments);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        response.ends_with("dev:1:fixture-secret:runtime-class"),
+        "unexpected response: {response:?}"
+    );
+}
+
 /// Verifies entry-script server variables identify the compiled front controller.
 #[test]
 fn web_server_script_superglobals_match_compiled_entrypoint() {

@@ -696,6 +696,210 @@ echo $r["x"] . "," . $r["y"];
     assert_eq!(out, "10,20");
 }
 
+/// Verifies an associative map returned as `array` survives union, iteration, and property storage.
+#[test]
+fn test_typed_assoc_method_result_populates_array_parameter_property() {
+    let out = compile_and_run(
+        r#"<?php
+class KernelValues {
+    public function parameters(): array {
+        $known = array_flip([]);
+        if (!$known) {
+            foreach ([
+                'Services' => ['all' => true],
+                'Framework' => ['all' => true],
+            ] as $envs) {
+                $known += $envs;
+            }
+            $known += ['dev' => true];
+            unset($known['all']);
+        }
+
+        return [
+            'kernel.debug' => true,
+            'kernel.bundles' => ['Framework' => 'FrameworkBundle'],
+            '.container.known_envs' => array_keys($known),
+        ] + ['kernel.logs_dir' => '/tmp/log'];
+    }
+}
+
+class Bag {
+    private array $parameters = [];
+
+    public function add(array $parameters): void {
+        foreach ($parameters as $key => $value) {
+            $this->parameters[$key] = $value;
+        }
+    }
+
+    public function get(string $name): mixed {
+        return $this->parameters[$name] ?? null;
+    }
+}
+
+$bag = new Bag();
+$bag->add((new KernelValues())->parameters());
+echo ($bag->get('kernel.debug') ? 'debug' : 'missing') . ':' . $bag->get('kernel.logs_dir') . ':' . $bag->get('.container.known_envs')[0];
+"#,
+    );
+    assert_eq!(out, "debug:/tmp/log:dev");
+}
+
+/// Verifies a nested associative write survives a bare `array` method return.
+///
+/// Regression: return lowering retyped the associative pointer to the declared generic array
+/// contract, but the epilogue still released the hash local. The caller then observed a dangling
+/// array and every key lookup produced null.
+#[test]
+fn test_typed_array_method_return_preserves_associative_map_owner() {
+    let out = compile_and_run(
+        r#"<?php
+class ParameterSource {
+    public function values(): array {
+        return [
+            'kernel.debug' => true,
+            'kernel.bundles_metadata' => ['Framework' => ['path' => '/vendor/framework']],
+        ];
+    }
+
+    public function completedValues(): array {
+        $parameters = $this->values();
+        $parameters['kernel.bundles_metadata']['Framework']['namespace'] = 'Fixture';
+
+        return $parameters;
+    }
+}
+
+$parameters = (new ParameterSource())->completedValues();
+echo ($parameters['kernel.debug'] ? 'debug' : 'missing')
+    . ':' . ($parameters['kernel.bundles_metadata']['Framework']['path'] ?? 'missing')
+    . ':' . ($parameters['kernel.bundles_metadata']['Framework']['namespace'] ?? 'missing')
+    . ':' . (array_key_exists('kernel.debug', $parameters) ? 'present' : 'absent');
+"#,
+    );
+    assert_eq!(out, "debug:/vendor/framework:Fixture:present");
+}
+
+/// Verifies a large heterogeneous associative method result survives an array-typed handoff.
+#[test]
+fn test_large_typed_assoc_method_result_populates_parameter_map() {
+    let out = compile_and_run(
+        r#"<?php
+class BundlePath {
+    public function __construct(private string $path) {}
+    public function getPath(): string { return $this->path; }
+}
+
+class KernelValues {
+    private bool $debug = true;
+    private string $environment = 'dev';
+    private array $bundles;
+
+    public function __construct() {
+        $this->bundles = [];
+        foreach ([
+            'Services' => '/vendor/services',
+            'Console' => '/vendor/console',
+            'Framework' => '/vendor/framework',
+        ] as $name => $path) {
+            $this->bundles[$name] = new BundlePath($path);
+        }
+    }
+
+    public function metadata(): array {
+        $metadata = [];
+        foreach ($this->bundles as $name => $bundle) {
+            $metadata[$name] = ['path' => $bundle->getPath()];
+        }
+
+        return $metadata;
+    }
+
+    public function parameters(): array {
+        $bundles = [];
+        $metadata = [];
+        foreach ($this->bundles as $name => $bundle) {
+            $bundles[$name] = $bundle::class;
+            $metadata[$name] = ['path' => $bundle->getPath()];
+        }
+
+        $known = array_flip(['prod', 'dev', 'test']);
+        return [
+            'kernel.project_dir' => '/project',
+            'kernel.environment' => $this->environment,
+            'kernel.runtime_environment' => '%env(default:kernel.environment:APP_RUNTIME_ENV)%',
+            'kernel.runtime_mode' => '%env(query_string:default:container.runtime_mode:APP_RUNTIME_MODE)%',
+            'kernel.runtime_mode.web' => '%env(bool:default::key:web:default:kernel.runtime_mode:)%',
+            'kernel.runtime_mode.cli' => '%env(not:default:kernel.runtime_mode.web:)%',
+            'kernel.runtime_mode.worker' => '%env(int:default::key:worker:default:kernel.runtime_mode:)%',
+            'kernel.debug' => $this->debug,
+            'kernel.build_dir' => '/cache',
+            'kernel.cache_dir' => '/cache',
+            'kernel.bundles' => $bundles,
+            'kernel.bundles_metadata' => $metadata,
+            'kernel.container_class' => 'GeneratedContainer',
+            '.kernel.config_dir' => '/project/config',
+            '.kernel.bundles_definition' => ['Services' => ['all' => true]],
+            '.container.known_envs' => array_keys($known),
+        ] + ['kernel.logs_dir' => '/project/log'];
+    }
+
+    public function completedParameters(): array {
+        $parameters = $this->parameters();
+        $parameters['kernel.charset'] = 'UTF-8';
+        foreach ($this->bundles as $name => $bundle) {
+            $parameters['kernel.bundles_metadata'][$name]['namespace'] = 'Fixture';
+        }
+
+        return $parameters;
+    }
+
+    public function completedSingleParameters(): array {
+        $parameters = $this->parameters();
+        $parameters['kernel.bundles_metadata']['Framework']['namespace'] = 'Fixture';
+
+        return $parameters;
+    }
+
+    public function completedSingleDebug(): string {
+        $parameters = $this->parameters();
+        $parameters['kernel.bundles_metadata']['Framework']['namespace'] = 'Fixture';
+
+        return $parameters['kernel.debug'] ? 'debug' : 'missing';
+    }
+}
+
+class Bag {
+    private array $parameters = [];
+
+    public function add(array $parameters): void {
+        foreach ($parameters as $key => $value) {
+            $this->parameters[$key] = $value;
+        }
+    }
+
+    public function get(string $name): mixed {
+        return $this->parameters[$name] ?? null;
+    }
+}
+
+$kernel = new KernelValues();
+$metadata = $kernel->metadata()['Framework']['path'] ?? 'missing';
+$insideDebug = $kernel->completedSingleDebug();
+$single = $kernel->completedSingleParameters();
+$singleDebug = $single['kernel.debug'] ? 'debug' : 'missing';
+$singleMetadata = $single['kernel.bundles_metadata']['Framework']['path'] ?? 'missing';
+$parameters = $kernel->completedParameters();
+$direct = $parameters['kernel.bundles_metadata']['Framework']['path'] ?? 'missing';
+$bag = new Bag();
+$bag->add($parameters);
+$stored = $bag->get('kernel.bundles_metadata')['Framework']['path'] ?? 'missing';
+echo $insideDebug . ':' . $singleDebug . ':' . $singleMetadata . ':' . ($bag->get('kernel.debug') ? 'debug' : 'missing') . ':' . $metadata . ':' . $direct . ':' . $stored . ':' . $bag->get('.container.known_envs')[1];
+"#,
+    );
+    assert_eq!(out, "debug:debug:/vendor/framework:debug:/vendor/framework:/vendor/framework:/vendor/framework:dev");
+}
+
 /// Verifies an `[]`-initialized property whose whole value is reassigned widens its element type.
 /// Regression: `private $row = [];` types the property as `Array(Never)`, and a later
 /// `$this->row = [10, 20, 30]` left the element type pinned at `Never`, so reading the returned

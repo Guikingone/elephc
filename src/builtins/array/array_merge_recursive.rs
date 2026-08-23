@@ -9,7 +9,7 @@
 //!   arm requires exactly 2 arguments. `min_args: 2, max_args: 2` reproduce that
 //!   enforcement in `check_arity` only; `function_sig` and the parity gate keep the
 //!   variadic shape from the golden.
-//! - `check` validates that both arguments are associative or scalar-indexed arrays and
+//! - `check` validates that both arguments are arrays (including gradual array boundaries) and
 //!   returns an `AssocArray` whose value type is always `Mixed` (scalar collisions
 //!   combine into lists). The key type widens to `Mixed` when the two input key types
 //!   disagree.
@@ -30,19 +30,17 @@ builtin! {
 /// Validates both arguments are compatible arrays and returns the recursively-merged type.
 ///
 /// Arity (exactly 2 args) is pre-validated by `check_arity`. The hook re-infers both
-/// argument types. Both must be associative arrays or indexed arrays of scalars. Scalar
+/// argument types. Both must be arrays. Scalar
 /// collisions combine into lists, so the value type of the result is always `Mixed`; the
 /// key type widens to `Mixed` when the two input key types disagree.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let ty2 = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    let accepted = |t: &PhpType| {
-        matches!(t, PhpType::AssocArray { .. }) || t.is_scalar_indexed_array()
-    };
+    let accepted = crate::types::checker::builtins::array_arg_is_gradually_acceptable;
     if !accepted(&ty1) || !accepted(&ty2) {
         return Err(CompileError::new(
             cx.span,
-            "array_merge_recursive() arguments must be associative arrays or indexed arrays of scalars",
+            "array_merge_recursive() arguments must be arrays",
         ));
     }
     Ok(PhpType::AssocArray {

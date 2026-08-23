@@ -449,6 +449,9 @@ fn validate_opcode_rules(
             IrHeapKind::Object,
             "Heap(Object)",
         ),
+        // Runtime class names can arrive as a concrete string or a boxed Mixed string. The
+        // backend validates the storage representation before invoking its lookup helper.
+        ClassNameToId => check_count(inst_id, inst, 1, "1"),
         INeg | IBitNot => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         FNeg => check_unary(function, inst_id, inst, IrType::F64, "F64"),
         ICmp => check_binary(function, inst_id, inst, IrType::I64, "I64"),

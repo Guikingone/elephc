@@ -198,6 +198,11 @@ pub(super) fn lower_subscript_receiver_silently(
     if let ExprKind::ArrayAccess { array: inner_array, index: inner_index } = &array.kind {
         return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
     }
+    if let Some(value) =
+        super::lazy_branches::lower_initialized_property_null_coalesce_probe(ctx, array)
+    {
+        return value;
+    }
     lower_expr(ctx, array)
 }
 
@@ -463,7 +468,7 @@ pub(super) fn array_access_runtime_call_result_type(
     match ctx.builder.value_php_type(array).codegen_repr() {
         PhpType::Object(class_name) => array_access_offset_get_return_type(ctx, &class_name)
             .unwrap_or_else(|| fallback_expr_type(expr)),
-        PhpType::Mixed => PhpType::Mixed,
+        PhpType::Mixed | PhpType::Callable => PhpType::Mixed,
         _ => fallback_expr_type(expr),
     }
 }
@@ -493,6 +498,17 @@ pub(super) fn array_access_expr_satisfies_array_access(
             .get(name)
             .cloned()
             .unwrap_or_else(|| infer_expr_type_syntactic(array)),
+        ExprKind::PropertyAccess { object, property } => {
+            instance_callable_object_class(ctx, object)
+                .and_then(|class_name| {
+                    ctx.classes
+                        .get(class_name.trim_start_matches('\\'))?
+                        .visible_property(property)
+                        .map(|(_, (_, ty))| ty.clone())
+                })
+                .or_else(|| property_access_expr_type_for_ir(ctx, object, property))
+                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+        }
         _ => infer_expr_type_syntactic(array),
     };
     type_satisfies_array_access_for_ir(ctx, &ty)

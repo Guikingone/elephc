@@ -2,7 +2,7 @@
 title: "openssl_decrypt() — internals"
 description: "Compiler internals for openssl_decrypt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 429
+  order: 436
 ---
 
 ## `openssl_decrypt()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/openssl_decrypt.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/openssl_decrypt.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:543](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L543) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

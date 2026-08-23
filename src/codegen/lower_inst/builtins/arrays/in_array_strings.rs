@@ -26,6 +26,65 @@ pub(super) fn lower_in_array_mixed_container(
     lower_mixed_container_search(ctx, needle, array, needle_ty, mode, false)
 }
 
+/// Lowers strict or loose membership of a gradual needle in a typed indexed container whose
+/// elements require boxed runtime comparison (nested arrays, hashes, objects, or resources).
+///
+/// The shared runtime scanner already obtains each element through the generic array accessor,
+/// preserving PHP's recursive array equality and ownership behavior. A typed indexed source can
+/// enter that scanner directly by passing its raw pointer and runtime kind instead of first
+/// manufacturing a transient boxed container.
+pub(super) fn lower_in_array_typed_container_with_mixed_needle(
+    ctx: &mut FunctionContext<'_>,
+    needle: ValueId,
+    array: ValueId,
+    mode: InArrayMode,
+) -> Result<()> {
+    let needle_ty = ctx.value_php_type(needle)?.codegen_repr();
+    if !matches!(needle_ty, PhpType::Mixed | PhpType::Union(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "typed mixed-container in_array needle PHP type {:?}",
+            needle_ty
+        )));
+    }
+    let container_ty = ctx.value_php_type(array)?.codegen_repr();
+    if !matches!(container_ty, PhpType::Array(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "typed mixed-container in_array PHP type {:?}",
+            container_ty
+        )));
+    }
+
+    ctx.load_value_to_result(needle)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    ctx.load_value_to_result(array)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                            // typed indexed payload becomes the scanner container
+            abi::emit_pop_reg(ctx.emitter, "x0");                             // restore the borrowed boxed Mixed needle
+            abi::emit_load_int_immediate(ctx.emitter, "x2", 4);               // runtime kind 4 = indexed array
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x3",
+                i64::from(matches!(mode, InArrayMode::Strict)),
+            );
+            abi::emit_load_int_immediate(ctx.emitter, "x4", 0);               // in_array returns a boolean, never the matching key
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rax");                          // typed indexed payload becomes the scanner container
+            abi::emit_pop_reg(ctx.emitter, "rdi");                            // restore the borrowed boxed Mixed needle
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", 4);              // runtime kind 4 = indexed array
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "rcx",
+                i64::from(matches!(mode, InArrayMode::Strict)),
+            );
+            abi::emit_load_int_immediate(ctx.emitter, "r8", 0);               // in_array returns a boolean, never the matching key
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_in_array_mixed_container");
+    Ok(())
+}
+
 /// Lowers `array_search()` over an indexed or associative container held in boxed gradual storage.
 pub(super) fn lower_array_search_mixed_container(
     ctx: &mut FunctionContext<'_>,

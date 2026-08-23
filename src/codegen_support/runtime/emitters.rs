@@ -64,6 +64,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_strrpos(emitter);
     strings::emit_stripos(emitter);
     strings::emit_strripos(emitter);
+    strings::emit_strcspn(emitter);
+    strings::emit_strspn(emitter);
     strings::emit_str_repeat(emitter);
     strings::emit_strrev(emitter);
     strings::emit_grapheme_strrev(emitter);

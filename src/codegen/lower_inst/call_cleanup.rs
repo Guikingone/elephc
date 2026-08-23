@@ -194,7 +194,7 @@ pub(super) fn direct_call_arg_temp_cleanup_type(
         PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
     ) && matches!(
         source_ty.codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_) | PhpType::AssocArray { .. }
+        PhpType::Mixed | PhpType::Union(_)
     )
     {
         return Some(PhpType::Array(Box::new(PhpType::Mixed)));

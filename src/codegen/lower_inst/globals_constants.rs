@@ -58,7 +58,7 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 /// Stores a web superglobal through its request-lifetime shared reference cell.
-pub(super) fn lower_store_web_superglobal(
+pub(in crate::codegen) fn lower_store_web_superglobal(
     ctx: &mut FunctionContext<'_>,
     symbol: &str,
     ty: &PhpType,

@@ -93,6 +93,22 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
             &method_name,
         );
     }
+    let owned_dynamic_done_label = if ctx.module.required_runtime_features.eval_bridge {
+        let native_label = ctx.next_label("typed_method_native_dispatch");
+        let done_label = ctx.next_label("typed_method_dynamic_dispatch_done");
+        builtins::lower_eval_owned_method_call(
+            ctx,
+            inst,
+            object,
+            &method_name,
+            &native_label,
+            &done_label,
+        )?;
+        ctx.emitter.label(&native_label);
+        Some(done_label)
+    } else {
+        None
+    };
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(PhpType::Object(class_name));
@@ -121,7 +137,12 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
+    if let Some(done_label) = owned_dynamic_done_label {
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&done_label);
+    }
+    Ok(())
 }
 
 /// Returns whether a ReflectionFunction method depends on retained callable metadata.
@@ -179,7 +200,8 @@ pub(super) fn lower_mixed_method_call(
         return Ok(());
     }
     if builtins::has_eval_context(ctx)
-        && mixed_method_call_needs_eval_callable_adapter(ctx, inst, &candidates)?
+        && (mixed_method_call_needs_eval_callable_adapter(ctx, inst, &candidates)?
+            || mixed_method_call_needs_eval_ref_adapter(ctx, inst, &candidates)?)
     {
         return builtins::lower_eval_method_call(ctx, inst, object, method_name);
     }
@@ -258,6 +280,36 @@ fn mixed_method_call_needs_eval_callable_adapter(
     Ok(false)
 }
 
+/// Returns whether direct dispatch would pass a promoted Mixed reference cell to a typed ref ABI.
+fn mixed_method_call_needs_eval_ref_adapter(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    candidates: &[MixedMethodCandidate],
+) -> Result<bool> {
+    for (operand_index, operand) in inst.operands.iter().enumerate().skip(1) {
+        let Ok(slot) = local_slot_for_loaded_value(ctx, *operand) else {
+            continue;
+        };
+        if !local_slot_stores_ref_cell_pointer(ctx, slot)
+            && ctx.local_php_type(slot)?.codegen_repr() != PhpType::Mixed
+        {
+            continue;
+        }
+        let param_index = operand_index - 1;
+        if candidates.iter().any(|candidate| {
+            candidate
+                .target
+                .ref_params
+                .get(param_index)
+                .copied()
+                .unwrap_or(false)
+        }) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Emits one concrete class branch for a `Mixed` receiver method call.
 pub(super) fn lower_mixed_method_candidate_call(
     ctx: &mut FunctionContext<'_>,
@@ -287,6 +339,7 @@ pub(super) fn lower_mixed_method_candidate_call(
     let mut ref_params = Vec::with_capacity(candidate.target.ref_params.len() + 1);
     ref_params.push(false);
     ref_params.extend(candidate.target.ref_params.iter().copied());
+    guard_mixed_method_candidate_object_arguments(ctx, inst, candidate)?;
     let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
         ctx,
         receiver_reg,
@@ -310,6 +363,87 @@ pub(super) fn lower_mixed_method_candidate_call(
     store_method_call_result(ctx, inst, &candidate.target)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+}
+
+/// Validates boxed arguments against the concrete candidate's nominal object parameters.
+///
+/// A `Mixed` receiver has no single signature during IR lowering, so its arguments cannot be
+/// narrowed before runtime class dispatch chooses a candidate. This guard supplies the missing
+/// candidate-specific PHP check before ABI materialization exposes an object payload.
+fn guard_mixed_method_candidate_object_arguments(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    candidate: &MixedMethodCandidate,
+) -> Result<()> {
+    for (param_index, value) in inst.operands.iter().skip(1).enumerate() {
+        let Some(param_ty) = candidate.target.params.get(param_index) else {
+            continue;
+        };
+        let PhpType::Object(target_name) = param_ty.codegen_repr() else {
+            continue;
+        };
+        let source_ty = ctx.raw_value_php_type(*value)?.codegen_repr();
+        if !matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+            continue;
+        }
+        emit_mixed_method_candidate_object_argument_guard(ctx, *value, &target_name)?;
+    }
+    Ok(())
+}
+
+/// Rejects a non-matching boxed `Mixed` value before it crosses an object parameter ABI.
+fn emit_mixed_method_candidate_object_argument_guard(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    target_name: &str,
+) -> Result<()> {
+    let target_name = target_name.trim_start_matches('\\');
+    let object_label = ctx.next_label("mixed_method_object_argument_object");
+    let wrong_tag_label = ctx.next_label("mixed_method_object_argument_wrong_tag");
+    let accepted_label = ctx.next_label("mixed_method_object_argument_accepted");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                            // runtime tag 6 is the only object ABI payload
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));
+            ctx.emitter.instruction(&format!("b {}", wrong_tag_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                            // runtime tag 6 is the only object ABI payload
+            ctx.emitter.instruction(&format!("je {}", object_label));
+            ctx.emitter.instruction(&format!("jmp {}", wrong_tag_label));
+        }
+    }
+    super::builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &wrong_tag_label,
+        &|given| format!("Argument must be of type {}, {} given", target_name, given),
+    );
+
+    ctx.emitter.label(&object_label);
+    if let Some((target_id, target_kind)) = objects::classify_named_target(ctx, target_name) {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),           // matcher takes the unboxed object payload in its first argument register
+            Arch::X86_64 => {}                                                 // the unboxed object payload already uses the first argument register
+        }
+        objects::emit_match_call(ctx, target_id, target_kind, "__rt_exception_matches");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbnz x0, {}", accepted_label));
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");
+                ctx.emitter.instruction(&format!("jne {}", accepted_label));
+            }
+        }
+    }
+    exceptions::emit_type_error(
+        ctx,
+        &format!("Argument must be of type {}, object given", target_name),
+    );
+    ctx.emitter.label(&accepted_label);
+    Ok(())
 }
 
 /// Lowers an interface receiver call accepted through an `instanceof` capability narrowing.

@@ -688,13 +688,12 @@ fn test_error_array_merge_recursive_wrong_args() {
     );
 }
 
-/// Verifies that array_merge_recursive() rejects string-element indexed arrays (scalar indexed
-/// inputs are supported; string/heap element indexed inputs are a follow-up).
+/// Verifies that array_merge_recursive() rejects a scalar operand.
 #[test]
-fn test_error_array_merge_recursive_string_indexed_unsupported() {
+fn test_error_array_merge_recursive_non_array_operand() {
     expect_error(
-        "<?php array_merge_recursive([\"a\"], [\"b\"]);",
-        "array_merge_recursive() arguments must be associative arrays or indexed arrays of scalars",
+        "<?php array_merge_recursive(1, [\"b\"]);",
+        "array_merge_recursive() arguments must be arrays",
     );
 }
 

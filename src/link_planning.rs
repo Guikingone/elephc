@@ -33,6 +33,8 @@ pub(crate) struct LinkPlanningInputs<'a> {
     pub(crate) managed_packages: &'a [ResolvedNativePackage],
     /// Bridge names whose full archive must survive dead stripping.
     pub(crate) forced_bridges: &'a [String],
+    /// Bridge implementations already embedded by another planned archive.
+    pub(crate) embedded_bridges: &'a [&'a str],
     /// Whether the full web bridge owns the program entrypoint.
     pub(crate) web: bool,
 }
@@ -43,6 +45,9 @@ pub(crate) fn build(inputs: LinkPlanningInputs<'_>) -> LinkPlan {
     let mut named = HashSet::new();
 
     for library in inputs.user_libraries {
+        if bridge_is_embedded(&inputs, library) {
+            continue;
+        }
         push_named_once(&mut plan, &mut named, library, LinkOrigin::User);
     }
     for path in inputs.user_search_paths {
@@ -62,6 +67,9 @@ pub(crate) fn build(inputs: LinkPlanningInputs<'_>) -> LinkPlan {
         );
     }
     for bridge in inputs.forced_bridges {
+        if bridge_is_embedded(&inputs, bridge) {
+            continue;
+        }
         push_named_once(
             &mut plan,
             &mut named,
@@ -72,6 +80,9 @@ pub(crate) fn build(inputs: LinkPlanningInputs<'_>) -> LinkPlan {
         );
     }
     for library in inputs.checker_libraries {
+        if bridge_is_embedded(&inputs, library) {
+            continue;
+        }
         let origin = if is_known_bridge(library) {
             LinkOrigin::Bridge {
                 name: library.clone(),
@@ -89,14 +100,18 @@ pub(crate) fn build(inputs: LinkPlanningInputs<'_>) -> LinkPlan {
     for requirement in inputs.runtime_requirements {
         match requirement {
             LinkRequirement::NativePackage(_) => {}
-            LinkRequirement::Bridge(bridge) => push_named_once(
-                &mut plan,
-                &mut named,
-                bridge,
-                LinkOrigin::Bridge {
-                    name: (*bridge).to_string(),
-                },
-            ),
+            LinkRequirement::Bridge(bridge) => {
+                if !bridge_is_embedded(&inputs, bridge) {
+                    push_named_once(
+                        &mut plan,
+                        &mut named,
+                        bridge,
+                        LinkOrigin::Bridge {
+                            name: (*bridge).to_string(),
+                        },
+                    );
+                }
+            }
             LinkRequirement::SystemLibrary(library) => {
                 push_named_once(&mut plan, &mut named, library, LinkOrigin::Runtime)
             }
@@ -114,6 +129,15 @@ pub(crate) fn build(inputs: LinkPlanningInputs<'_>) -> LinkPlan {
         }
     }
     plan
+}
+
+/// Returns whether another planned archive already supplies this bridge implementation.
+fn bridge_is_embedded(inputs: &LinkPlanningInputs<'_>, library: &str) -> bool {
+    is_known_bridge(library)
+        && inputs
+            .embedded_bridges
+            .iter()
+            .any(|embedded| *embedded == library)
 }
 
 /// Appends one named input at its first semantic occurrence while retaining provenance.
@@ -159,6 +183,7 @@ mod tests {
             runtime_requirements,
             managed_packages,
             forced_bridges: &[],
+            embedded_bridges: &[],
             web: false,
         }
     }
@@ -221,6 +246,7 @@ mod tests {
             runtime_requirements: &runtime_requirements,
             managed_packages: &[],
             forced_bridges: &[],
+            embedded_bridges: &[],
             web: false,
         });
         let origins: Vec<&LinkOrigin> = plan
@@ -238,5 +264,36 @@ mod tests {
         assert!(matches!(origins[3], LinkOrigin::Bridge { name } if name == "elephc_phar"));
         assert!(matches!(origins[4], LinkOrigin::Runtime));
         assert!(matches!(plan.linux_mode(), LinuxLinkMode::Dynamic { .. }));
+    }
+
+    /// Verifies a composite bridge suppresses standalone copies of its embedded bridges.
+    #[test]
+    fn embedded_bridges_are_not_linked_twice() {
+        let checker_libraries = ["elephc_crypto".to_string(), "elephc_phar".to_string()];
+        let runtime_requirements = [
+            LinkRequirement::Bridge("elephc_phar"),
+            LinkRequirement::Bridge("elephc_magician"),
+            LinkRequirement::SystemLibrary("z".to_string()),
+        ];
+        let plan = build(LinkPlanningInputs {
+            user_libraries: &[],
+            user_search_paths: &[],
+            user_frameworks: &[],
+            checker_libraries: &checker_libraries,
+            runtime_requirements: &runtime_requirements,
+            managed_packages: &[],
+            forced_bridges: &[],
+            embedded_bridges: &["elephc_crypto", "elephc_phar"],
+            web: false,
+        });
+        let names = plan
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                LinkItem::NamedLibrary { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["elephc_magician", "z"]);
     }
 }

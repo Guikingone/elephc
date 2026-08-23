@@ -5,7 +5,7 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` accepts an indexed array of associative rows or gradual rows whose shape is
+//! - `check` accepts indexed or associative collections of associative/gradual rows whose shape is
 //!   runtime-known. The result preserves a known associative value type and otherwise becomes
 //!   `array<mixed>`. Other shapes are rejected. A check hook is required because the return type
 //!   depends on the inferred argument type.
@@ -27,7 +27,7 @@ builtin! {
 
 /// Returns the extracted-column array type for an `array_column` call.
 ///
-/// The first argument must be an indexed array of associative or gradual rows. Known
+/// The first argument must be an indexed or associative array of associative or gradual rows. Known
 /// associative rows preserve their value type; gradual rows produce `array<mixed>`. Other
 /// shapes are rejected. The argument is re-inferred here to drive the return type; the registry
 /// already inferred every argument once for side effects, and arity (exactly 2) is pre-validated.
@@ -44,6 +44,14 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 "array_column() requires an array of associative arrays",
             )),
         },
+        PhpType::AssocArray { value, .. } => match *value {
+            PhpType::AssocArray { value, .. } => Ok(PhpType::Array(value)),
+            PhpType::Mixed | PhpType::Union(_) => {
+                Ok(PhpType::Array(Box::new(PhpType::Mixed)))
+            }
+            _ => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
+        },
+        PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
         _ => Err(CompileError::new(
             cx.span,
             "array_column() first argument must be array",

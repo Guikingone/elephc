@@ -182,6 +182,25 @@ rmdir("sd");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies scandir's ascending, descending, named-argument, and context signatures match PHP.
+#[test]
+fn test_scandir_sorting_order_and_optional_context() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("sd");
+file_put_contents("sd/a.txt", "a");
+file_put_contents("sd/z.txt", "z");
+echo implode(",", scandir("sd", SCANDIR_SORT_ASCENDING)) . "|";
+echo implode(",", scandir(directory: "sd", sorting_order: SCANDIR_SORT_DESCENDING, context: null));
+unlink("sd/a.txt");
+unlink("sd/z.txt");
+rmdir("sd");
+"#,
+    );
+    assert_eq!(out, ".,..,a.txt,z.txt|z.txt,a.txt,..,.");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies glob by creating two files matching a pattern, confirming both
 /// are returned with their full paths, and cleaning up.
 #[test]

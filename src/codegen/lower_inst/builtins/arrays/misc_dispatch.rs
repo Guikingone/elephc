@@ -583,10 +583,17 @@ pub(crate) fn lower_array_replace(ctx: &mut FunctionContext<'_>, inst: &Instruct
             inst,
             "array_replace",
             "__rt_array_replace",
-            None,
+            Some(0),
         );
     }
-    lower_two_hash_arg_builtin(ctx, inst, "array_replace", "__rt_array_replace", None, true)
+    lower_two_hash_arg_builtin(
+        ctx,
+        inst,
+        "array_replace",
+        "__rt_array_replace",
+        Some(0),
+        true,
+    )
 }
 
 /// Lowers `array_replace_recursive()` (recursive right-wins hash merge).
@@ -651,6 +658,9 @@ pub(crate) fn lower_array_intersect_assoc(
 }
 
 /// Lowers `array_merge_recursive()` (recursive merge with scalar collisions combined into lists).
+///
+/// Its runtime helper retains or copies every heap-backed entry before publishing the merged hash,
+/// so indexed arrays with string, object, or nested-array values can use the shared conversion.
 pub(crate) fn lower_array_merge_recursive(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -661,6 +671,6 @@ pub(crate) fn lower_array_merge_recursive(
         "array_merge_recursive",
         "__rt_array_merge_recursive",
         None,
-        false,
+        true,
     )
 }

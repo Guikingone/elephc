@@ -125,7 +125,15 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
                 emitter.instruction("call __rt_mixed_from_value");              // box the string payload into a mixed cell
             }
         },
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+        PhpType::Array(_) => match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("bl __rt_mixed_from_array_kind");           // preserve the runtime indexed-or-associative array shape in the boxed Mixed value
+            }
+            Arch::X86_64 => {
+                emitter.instruction("call __rt_mixed_from_array_kind");         // preserve the runtime indexed-or-associative array shape in the boxed Mixed value
+            }
+        },
+        PhpType::AssocArray { .. } | PhpType::Object(_) => {
             match emitter.target.arch {
                 Arch::AArch64 => {
                     emitter.instruction("mov x1, x0");                          // move the current heap pointer into the mixed helper payload register

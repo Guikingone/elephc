@@ -1493,6 +1493,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
         preserve_storage_type: bool,
     ) -> LoweredValue {
+        // A resolver-preserved include executes through Magician and always returns a boxed
+        // runtime cell. The checker can infer an `array` from its known consumer, but storing
+        // that cell in an array-shaped frame slot would make later lowering treat the Mixed
+        // object pointer as a raw container pointer. Keep the value gradual until a concrete
+        // call/property boundary emits its checked `MixedToHash`/unbox conversion.
+        let php_type = if matches!(
+            self.builder.value_defining_instruction(value.value)
+                .and_then(|inst| inst.immediate.as_ref()),
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::DynamicInclude { .. }
+            ))
+        ) {
+            PhpType::Mixed
+        } else {
+            php_type
+        };
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
         self.clear_reflection_function_local(name);

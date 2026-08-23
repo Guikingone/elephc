@@ -35,6 +35,7 @@ mod strpos;
 mod strrpos;
 mod stripos;
 mod strripos;
+mod span;
 mod str_repeat;
 mod strrev;
 mod chr;
@@ -157,6 +158,8 @@ pub use stripos::emit_stripos;
 /// Emit case-insensitive string position lookup (first occurrence).
 pub use strripos::emit_strripos;
 /// Emit case-insensitive string position lookup (last occurrence).
+pub use span::{emit_strcspn, emit_strspn};
+/// Emit byte-oriented initial segment scanners.
 pub use str_repeat::emit_str_repeat;
 /// Emit string repeat helper.
 pub use strrev::emit_strrev;

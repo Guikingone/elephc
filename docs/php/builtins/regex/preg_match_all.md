@@ -2,13 +2,13 @@
 title: "preg_match_all()"
 description: "Performs a global regular expression match and returns the number of matches."
 sidebar:
-  order: 367
+  order: 374
 ---
 
 ## preg_match_all()
 
 ```php
-function preg_match_all(string $pattern, string $subject): int
+function preg_match_all(string $pattern, string $subject, mixed $matches = null, int $flags = 0, int $offset = 0): int
 ```
 
 Performs a global regular expression match and returns the number of matches.
@@ -16,6 +16,9 @@ Performs a global regular expression match and returns the number of matches.
 **Parameters**:
 - `$pattern` (`string`)
 - `$subject` (`string`)
+- `$matches` (`mixed`), passed by reference, default `null`, optional
+- `$flags` (`int`), default `0`, optional
+- `$offset` (`int`), default `0`, optional
 
 **Returns**: `int`
 

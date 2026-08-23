@@ -78,12 +78,10 @@ pub(super) fn lower_static_method_call(
     } else {
         (method, args)
     };
-    if ctx.has_eval_barrier()
-        && matches!(receiver, StaticReceiver::Named(_))
-        && plain_positional_call_args(args)
-    {
+    if matches!(receiver, StaticReceiver::Named(_)) && plain_positional_call_args(args) {
         if let Some(class_name) = static_receiver_class_name(ctx, receiver) {
             if !ctx.classes.contains_key(class_name.as_str()) {
+                ctx.declare_eval_context_local();
                 let operands = lower_args_with_signature(ctx, None, args);
                 let name = format!("{}::{}", class_name, dispatch_method);
                 let data = ctx.intern_string(&name);

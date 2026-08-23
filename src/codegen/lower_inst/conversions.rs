@@ -567,11 +567,28 @@ fn lower_object_to_string(
     class_name: &str,
 ) -> Result<()> {
     let normalized = class_name.trim_start_matches('\\');
+    if interface_has_tostring(ctx, normalized) {
+        return super::method_intrinsics::lower_interface_method_call(
+            ctx,
+            inst,
+            normalized,
+            "__toString",
+        );
+    }
     if object_class_has_tostring(ctx, normalized) {
         return lower_runtime_object_method_call(ctx, inst, normalized, "__toString");
     }
     emit_missing_tostring_fatal(ctx, normalized);
     Ok(())
+}
+
+/// Returns true when interface metadata exposes a string-returning `__toString()` contract.
+fn interface_has_tostring(ctx: &FunctionContext<'_>, interface_name: &str) -> bool {
+    ctx.module
+        .interface_infos
+        .get(interface_name)
+        .and_then(|interface| interface.methods.get("__tostring"))
+        .is_some_and(|signature| signature.return_type.codegen_repr() == PhpType::Str)
 }
 
 /// Returns true when class metadata exposes a `__toString()` method.

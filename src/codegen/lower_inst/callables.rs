@@ -2811,6 +2811,13 @@ fn emit_runtime_descriptor_with_saved_receiver_capture(
         descriptor_reg,
         descriptor_label,
     );
+    let kind_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        kind_reg,
+        callable_descriptor::CALLABLE_DESC_KIND_ARRAY as i64,
+    );
+    abi::emit_store_to_address(ctx.emitter, kind_reg, descriptor_reg, 0);
     abi::emit_pop_reg(ctx.emitter, result_reg);
     callable_descriptor::emit_store_current_result_to_runtime_capture(
         ctx.emitter,
@@ -2853,6 +2860,13 @@ fn emit_selected_template_with_saved_receiver_capture(
         descriptor_reg,
         template_reg,
     );
+    let kind_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        kind_reg,
+        callable_descriptor::CALLABLE_DESC_KIND_ARRAY as i64,
+    );
+    abi::emit_store_to_address(ctx.emitter, kind_reg, descriptor_reg, 0);
     callable_descriptor::emit_store_current_result_to_runtime_capture(
         ctx.emitter,
         descriptor_reg,

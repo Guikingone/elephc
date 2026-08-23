@@ -115,6 +115,14 @@ pub(super) fn lower_array_assign(
         lower_mixed_key_array_set(ctx, array, array_value, index_value, value_value, span);
         return;
     }
+    if op == Op::ArraySet
+        && index_value.ir_type == IrType::I64
+        && index_requires_runtime_array_key_dispatch(index)
+    {
+        let index_value = ctx.box_value_as_mixed(index_value, PhpType::Mixed, Some(index.span));
+        lower_mixed_key_array_set(ctx, array, array_value, index_value, value_value, span);
+        return;
+    }
     if op == Op::ArraySet {
         index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
         let array_ty = ctx.builder.value_php_type(array_value.value);
@@ -182,6 +190,16 @@ pub(super) fn lower_array_assign(
     );
     release_persisted_string_operand(ctx, index_value, span);
     release_persisted_string_operand(ctx, value_value, span);
+}
+
+/// Returns whether an integer-keyed indexed write needs a runtime storage dispatch.
+///
+/// Dense indexed storage can represent only known non-negative literal offsets. A dynamic
+/// integer may be negative or sparse, both of which require hash storage in PHP; boxing it and
+/// routing through `ArraySetMixedKey` keeps the dense fast path for proven literals while the
+/// runtime helper promotes the other cases without losing the key.
+fn index_requires_runtime_array_key_dispatch(index: &Expr) -> bool {
+    !matches!(index.kind, ExprKind::IntLiteral(value) if value >= 0)
 }
 
 /// Returns the widened associative-array type needed by a heterogeneous local write.

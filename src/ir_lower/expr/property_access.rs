@@ -95,11 +95,10 @@ pub(crate) fn lower_ref_assign_call(
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
 }
 
-/// Lowers `$target =& $arr[idx]`: promotes the indexed-array element's inline storage to a
-/// reference cell and binds `$target` to it non-owning. The returned cell pointer addresses
-/// the element within the array payload, so writes through `$target` propagate to `$arr[idx]`
-/// and vice versa. The array must remain live while the alias is in use (the local does not
-/// own the storage). Operands: the lowered array value and the lowered index value.
+/// Lowers `$target =& $arr[idx]`: promotes the array element to reference storage and binds
+/// `$target` to it non-owning. Hash promotion may relocate the container, so a static-property
+/// receiver is republished before the alias escapes. The array must remain live while the alias
+/// is in use because the local does not own its storage.
 pub(crate) fn lower_ref_assign_array_elem(
     ctx: &mut LoweringContext<'_, '_>,
     target: &str,
@@ -141,6 +140,17 @@ pub(crate) fn lower_ref_assign_array_elem(
         op.default_effects(),
         Some(span),
     );
+    if op == Op::HashRefElement {
+        if let ExprKind::StaticPropertyAccess { receiver, property } = &array.kind {
+            crate::ir_lower::stmt::store_static_property(
+                ctx,
+                receiver,
+                property,
+                array_value.value,
+                span,
+            );
+        }
+    }
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
 }
 
@@ -197,6 +207,14 @@ pub(super) fn lower_property_get_from_value(
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
+    if property_receiver_is_unresolved_nominal_class(ctx, object.value) {
+        // PHP declarations may name a class that is absent until a runtime path actually
+        // constructs it. Preserve a property read in such a body as a gradual class-id dispatch
+        // instead of requiring a static slot layout during AOT lowering.
+        let object = ctx.box_value_as_mixed(object, PhpType::Mixed, Some(expr.span));
+        let property_expr = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
+        return lower_dynamic_property_get_from_value(ctx, object, &property_expr, expr);
+    }
     // Route a read of a get-hooked property to its synthetic accessor, except inside that property's
     // own accessor, where `$this->prop` must read the raw backing slot to avoid infinite recursion.
     // A nullsafe read (`$obj?->prop`) routes to a nullsafe call so the null short-circuit is kept.
@@ -223,6 +241,22 @@ pub(super) fn lower_property_get_from_value(
         Some(expr.span),
     );
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
+}
+
+/// Returns whether a nominal object type has no declaration metadata in this compilation unit.
+fn property_receiver_is_unresolved_nominal_class(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+) -> bool {
+    let object_type = ctx.builder.value_php_type(object);
+    let Some((class_name, _)) = singular_object_class(&object_type) else {
+        return false;
+    };
+    let class_name = class_name.trim_start_matches('\\');
+    !class_name.is_empty()
+        && !ctx.classes.contains_key(class_name)
+        && !ctx.interfaces.contains_key(class_name)
+        && !ctx.packed_classes.contains_key(class_name)
 }
 
 /// Lowers a direct backing-slot read without invoking a declared property get hook.

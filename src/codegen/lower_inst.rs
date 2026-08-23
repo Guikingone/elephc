@@ -76,6 +76,7 @@ pub(super) use exception_instructions::lower_mixed_throw_value;
 mod fiber_methods;
 mod generator_instructions;
 mod globals_constants;
+pub(in crate::codegen) use globals_constants::lower_store_web_superglobal;
 mod instruction_helpers;
 mod local_loads;
 mod local_stores;
@@ -165,6 +166,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ConstClassName => strings::lower_const_class_name(ctx, &inst),
         Op::LoadCalledClassId => strings::lower_load_called_class_id(ctx, &inst),
         Op::ObjectClassId => objects::lower_object_class_id(ctx, &inst),
+        Op::ClassNameToId => objects::lower_class_name_to_id(ctx, &inst),
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
         Op::UnsetLocal => lower_unset_local(ctx, &inst),

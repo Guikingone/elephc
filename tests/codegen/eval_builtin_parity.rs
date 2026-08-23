@@ -14,6 +14,21 @@ use crate::support::{
     compile_and_run, compile_and_run_capture_with_regex, compile_and_run_with_regex,
 };
 
+/// Verifies eval uses php-src byte-span and nullable-window semantics.
+#[test]
+fn test_eval_strcspn_and_strspn_php_src_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('return strcspn("22222222aaaa bbb1111 cccc", "1234", 9, 6)
+    . ":" . strspn("22222222aaaa bbb1111 cccc", "1234", 2, 3)
+    . ":" . strcspn("abc123", "123", 1, null)
+    . ":" . strspn("abc", "")
+    . ":" . call_user_func_array("strcspn", ["abc123", "123"]);');
+"#,
+    );
+    assert_eq!(out, "6:3:2:0:3");
+}
+
 /// Verifies AOT builtin lookup stays case-insensitive without eval being present.
 #[test]
 fn test_aot_function_exists_builtin_case_insensitive_without_eval() {

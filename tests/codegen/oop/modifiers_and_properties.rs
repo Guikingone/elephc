@@ -182,6 +182,553 @@ echo $box->value;
     assert_eq!(out, "0");
 }
 
+/// Verifies that an inherited private typed property without a default starts
+/// uninitialized on instances of the child class, so `isset()` can initialize it.
+#[test]
+fn test_inherited_private_typed_property_without_default_starts_uninitialized() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentBox {
+    private string $path;
+
+    public function path(): string {
+        if (!isset($this->path)) {
+            $this->path = "parent";
+        }
+
+        return $this->path;
+    }
+}
+
+class ChildBox extends ParentBox {}
+
+echo (new ChildBox())->path();
+"#,
+    );
+    assert_eq!(out, "parent");
+}
+
+/// Verifies that cloning a child preserves the uninitialized marker of a
+/// private typed property declared by an ancestor.
+#[test]
+fn test_clone_preserves_transitively_inherited_private_typed_property_marker() {
+    let out = compile_and_run(
+        r#"<?php
+class CloneRoot {
+    private string $path;
+
+    public function path(): string {
+        if (!isset($this->path)) {
+            $this->path = "cloned";
+        }
+
+        return $this->path;
+    }
+}
+
+class CloneMiddle extends CloneRoot {}
+class CloneChild extends CloneMiddle {}
+
+$copy = clone new CloneChild();
+echo $copy->path();
+"#,
+    );
+    assert_eq!(out, "cloned");
+}
+
+/// Verifies that a dynamic-evaluation context preserves uninitialized markers
+/// when it constructs an AOT class with a private typed ancestor property.
+#[test]
+fn test_eval_new_preserves_transitively_inherited_private_typed_property_marker() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalRoot {
+    private string $path;
+
+    public function path(): string {
+        if (!isset($this->path)) {
+            $this->path = "evaluated";
+        }
+
+        return $this->path;
+    }
+}
+
+class EvalMiddle extends EvalRoot {}
+class EvalChild extends EvalMiddle {}
+
+eval('$value = new EvalChild(); echo $value->path();');
+"#,
+    );
+    assert_eq!(out, "evaluated");
+}
+
+/// Verifies that a private typed property without a default remains
+/// uninitialized through multiple inheritance levels until its declaring class initializes it.
+#[test]
+fn test_transitively_inherited_private_typed_property_without_default_starts_uninitialized() {
+    let out = compile_and_run(
+        r#"<?php
+class RootBox {
+    private string $path;
+
+    public function path(): string {
+        if (!isset($this->path)) {
+            $this->path = "root";
+        }
+
+        return $this->path;
+    }
+}
+
+class MiddleBox extends RootBox {}
+class ChildBox extends MiddleBox {}
+
+echo (new ChildBox())->path();
+"#,
+    );
+    assert_eq!(out, "root");
+}
+
+/// Verifies that a closure-created child instance preserves transitive private
+/// typed-property initialization metadata through the dynamic callable path.
+#[test]
+fn test_closure_created_transitive_private_typed_property_starts_uninitialized() {
+    let out = compile_and_run(
+        r#"<?php
+class RootBox {
+    private string $path;
+
+    public function path(): string {
+        if (!isset($this->path)) {
+            $this->path = "closure";
+        }
+
+        return $this->path;
+    }
+}
+
+class MiddleBox extends RootBox {}
+class ChildBox extends MiddleBox {}
+
+$factory = static fn (): ChildBox => new ChildBox();
+echo $factory()->path();
+"#,
+    );
+    assert_eq!(out, "closure");
+}
+
+/// Verifies lazy source-directory discovery across transitive inheritance,
+/// reflection, and a closure-created object without depending on a fixture path.
+#[test]
+fn test_transitive_private_typed_property_lazy_reflection_directory_initialization() {
+    let out = compile_cli_files_and_run(
+        &[
+            ("project-root.marker", "root\n"),
+            (
+                "src/RootBox.php",
+                r#"<?php
+namespace App;
+
+function pass_through(mixed $value): mixed {
+    return $value;
+}
+
+trait ParentStorage {
+    private array $entries = [];
+}
+
+trait ChildStorage {
+    private array $entries = [];
+}
+
+class RootBox {
+    protected array $bundles = [];
+    protected mixed $container = null;
+    protected bool $booted = false;
+    protected ?float $startTime = null;
+    private string $directory;
+
+    public function __construct(
+        protected string $environment,
+        protected bool $debug,
+    ) {}
+
+    public function directory(): string {
+        if (!isset($this->directory)) {
+            $file = pass_through((new \ReflectionObject($this))->getFileName());
+            if (!is_file($file)) {
+                return "missing";
+            }
+            $directory = dirname($file);
+            while (!is_file($directory . "/project-root.marker")) {
+                if ($directory === dirname($directory)) {
+                    return "root";
+                }
+                $directory = dirname($directory);
+            }
+            $this->directory = $directory;
+        }
+
+        return $this->directory;
+    }
+}
+"#,
+            ),
+            (
+                "src/MiddleBox.php",
+                "<?php\nnamespace App;\nclass MiddleBox extends RootBox { use ParentStorage; private ?string $warmup = null; private int $counter = 0; private bool $reset = false; }\n",
+            ),
+            (
+                "src/ChildBox.php",
+                "<?php\nnamespace App;\nclass ChildBox extends MiddleBox { use ChildStorage; }\n",
+            ),
+            (
+                "entry/main.php",
+                "<?php\nrequire __DIR__ . '/../src/RootBox.php';\nrequire __DIR__ . '/../src/MiddleBox.php';\nrequire __DIR__ . '/../src/ChildBox.php';\n$factory = static fn (): \\App\\ChildBox => new \\App\\ChildBox('dev', true);\n$directory = $factory()->directory();\necho is_file($directory . '/project-root.marker') ? 'ready' : 'wrong';\n",
+            ),
+        ],
+        "entry/main.php",
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Verifies a dynamic include preserves the lexical class scope for a private method bridge.
+#[test]
+fn test_dynamic_include_preserves_private_method_scope() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+function scope_identity(mixed $value): mixed { return $value; }
+
+trait PrivateScopeAfterDynamicInclude {
+    private string $includePath;
+
+    private function privateLabel(array &$visited, array &$visiting = []): string {
+        $visited['called'] = true;
+        $visiting['entered'] = true;
+        return 'private-ok';
+    }
+
+    private function includeThenCallPrivate(): string {
+        $path = $this->includePath;
+        require $path;
+        $self = scope_identity($this);
+        $visited = [];
+        $label = $self->privateLabel($visited);
+        $copy = $visited;
+        $copy['copied'] = true;
+        return $label . '-' . $visited['called'] . '-' . $copy['copied'];
+    }
+}
+
+class ScopeCarrier {
+    use PrivateScopeAfterDynamicInclude;
+
+    public function __construct(string $path) { $this->includePath = $path; }
+    public function run(): string { return $this->includeThenCallPrivate(); }
+}
+
+final class ScopeCarrierChild extends ScopeCarrier {}
+
+echo (new ScopeCarrierChild(__DIR__.'/payload.php'))->run();
+"#,
+            ),
+            ("payload.php", "<?php $included = true;\n"),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "private-ok-1-1");
+}
+
+/// Verifies a dynamically included class retains constructor parameters from a protected method.
+#[test]
+fn test_dynamic_include_class_constructor_keeps_associative_parameters() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+$path = __DIR__ . '/definition.php';
+require $path;
+$class = 'ParameterCarrier';
+$carrier = new $class();
+echo (($carrier->defaults()['kernel.debug'] ?? false) ? 'd' : 'x') . ($carrier->parameter('kernel.debug') ? 'p' : 'q');
+"#,
+            ),
+            (
+                "definition.php",
+                r#"<?php
+class ParameterCarrier {
+    protected array $parameters = [];
+
+    public function __construct() {
+        $this->parameters = $this->getDefaultParameters();
+    }
+
+    protected function getDefaultParameters(): array {
+        return ['kernel.debug' => true];
+    }
+
+    public function defaults(): array {
+        return $this->getDefaultParameters();
+    }
+
+    public function parameter(string $name): mixed {
+        if (array_key_exists($name, $this->parameters) && '.' !== ($name[0] ?? '')) {
+            return $this->parameters[$name];
+        }
+
+        return null;
+    }
+}
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "dp");
+}
+
+/// Verifies an associative map returned by a dynamic require reaches typed AOT method arguments.
+///
+/// The method receives a PHP `array` contract while the runtime value is hash-backed. Its nested
+/// traversal and by-reference accumulator must retain the associative storage rather than
+/// reinterpreting it as an indexed array.
+#[test]
+fn test_dynamic_require_assoc_map_survives_typed_method_arguments() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+class BundleResolver {
+    public function resolve(array $bundles): array {
+        $resolved = [];
+        foreach ($bundles as $class => $envs) {
+            $this->append($class, $envs, $bundles, $resolved);
+        }
+
+        return $resolved;
+    }
+
+    private function append(string $class, array $envs, array $bundles, array &$resolved, array &$visiting = []): void {
+        $visiting[$class] = true;
+        if (!isset($bundles[$class])) {
+            return;
+        }
+        $resolved[$class] = $envs;
+    }
+}
+
+$path = __DIR__ . '/bundles.php';
+$bundles = is_file($path) ? require $path : [];
+$resolved = (new BundleResolver())->resolve($bundles);
+echo $resolved['Fixture\\Bundle']['all'] ? 'resolved' : 'missing';
+"#,
+            ),
+            (
+                "bundles.php",
+                "<?php\nreturn ['Fixture\\\\Bundle' => ['all' => true]];\n",
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "resolved");
+}
+
+/// Verifies a dynamic subclass updates a protected property used by an AOT parent method.
+#[test]
+fn test_dynamic_subclass_syncs_redeclared_protected_parent_property() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+class ParameterBase {
+    protected array $parameters = [];
+
+    public function parameter(string $name): mixed {
+        return $this->parameters[$name] ?? null;
+    }
+}
+
+$path = __DIR__ . '/definition.php';
+require $path;
+$class = 'ParameterCarrier';
+echo (new $class())->parameter('kernel.debug') ? 'ok' : 'wrong';
+"#,
+            ),
+            (
+                "definition.php",
+                r#"<?php
+class ParameterCarrier extends ParameterBase {
+    protected array $parameters = [];
+
+    public function __construct() {
+        $this->parameters = ['kernel.debug' => true];
+    }
+}
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a namespaced dynamically included class reads its protected associative property.
+#[test]
+fn test_namespaced_dynamic_class_reads_protected_associative_property() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+$path = __DIR__ . '/definition.php';
+require $path;
+$class = 'Generated\\ParameterCarrier';
+echo (new $class())->parameter('kernel.debug') ? 'ok' : 'wrong';
+"#,
+            ),
+            (
+                "definition.php",
+                r#"<?php
+namespace Generated;
+
+class ParameterCarrier {
+    protected array $parameters = [];
+
+    public function __construct() {
+        $this->parameters = ['kernel.debug' => true];
+    }
+
+    public function parameter(string $name): mixed {
+        if (array_key_exists($name, $this->parameters) && '.' !== ($name[0] ?? '')) {
+            return $this->parameters[$name];
+        }
+
+        return null;
+    }
+}
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a generated-style dynamic getter finds values in its protected parameter map.
+#[test]
+fn test_dynamic_generated_style_parameter_getter_reads_protected_map() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+$path = __DIR__ . '/definition.php';
+require $path;
+$class = 'Generated\\ParameterCarrier';
+echo (new $class())->getParameter('kernel.debug') ? 'ok' : 'wrong';
+"#,
+            ),
+            (
+                "definition.php",
+                r#"<?php
+namespace Generated;
+
+class ParameterCarrier {
+    private const DEPRECATED_PARAMETERS = [];
+    private const NONEMPTY_PARAMETERS = [];
+    private array $loadedDynamicParameters = [];
+    private array $dynamicParameters = [];
+    protected array $parameters = [];
+
+    public function __construct(private array $buildParameters = [], protected string $containerDir = __DIR__) {
+        $this->parameters = $this->getDefaultParameters();
+    }
+
+    protected function getDefaultParameters(): array {
+        return [
+            'kernel.project_dir' => dirname(__DIR__, 2),
+            'kernel.environment' => 'dev',
+            'kernel.debug' => true,
+            'kernel.bundles' => [
+                'FrameworkBundle' => 'FrameworkBundle',
+            ],
+            'kernel.bundles_metadata' => [
+                'FrameworkBundle' => [
+                    'path' => dirname(__DIR__),
+                    'namespace' => 'Framework',
+                ],
+            ],
+            '.known_environments' => ['prod', 'dev', 'test'],
+            'kernel.logs_dir' => dirname(__DIR__) . '/log',
+            'kernel.http_method_override' => false,
+            'session.storage.options' => [
+                'cookie_secure' => 'auto',
+                'cookie_httponly' => true,
+            ],
+        ];
+    }
+
+    public function getParameter(string $name): mixed {
+        if (isset(self::DEPRECATED_PARAMETERS[$name])) {
+            return null;
+        }
+
+        if (array_key_exists($name, $this->buildParameters)) {
+            return $this->buildParameters[$name];
+        }
+
+        if (isset($this->loadedDynamicParameters[$name])) {
+            return $this->loadedDynamicParameters[$name]
+                ? $this->dynamicParameters[$name]
+                : null;
+        }
+
+        if (array_key_exists($name, $this->parameters) && '.' !== ($name[0] ?? '')) {
+            return $this->parameters[$name];
+        }
+
+        return null;
+    }
+}
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a statically typed AOT call dispatches to a runtime-defined subclass override.
+#[test]
+fn test_typed_aot_method_call_dispatches_to_dynamic_subclass_override() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseMessage {
+    public function label(): string {
+        return 'base';
+    }
+}
+
+function label_for(BaseMessage $message): string {
+    return $message->label();
+}
+
+$definition = 'namespace Generated; class Message extends \\BaseMessage { public function label(): string { return \'dynamic\'; } }';
+eval($definition);
+$class = 'Generated\\Message';
+echo label_for(new $class()) . label_for(new BaseMessage());
+"#,
+    );
+    assert_eq!(out, "dynamicbase");
+}
+
 /// Verifies that accessing an uninitialized typed static property throws a
 /// catchable `Error` that `catch(\Error $e)` can observe.
 #[test]

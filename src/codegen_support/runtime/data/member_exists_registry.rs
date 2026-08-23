@@ -386,6 +386,7 @@ mod tests {
             is_readonly_class: false,
             allow_dynamic_properties: false,
             constants: HashMap::new(),
+            constant_order: Vec::new(),
             constant_deprecations: HashMap::new(),
             constant_types: HashMap::new(),
             constant_visibilities: HashMap::new(),

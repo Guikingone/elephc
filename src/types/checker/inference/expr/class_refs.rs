@@ -155,20 +155,24 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let receiver_type = self.infer_type(receiver, env)?;
-        let PhpType::Object(class_name) = receiver_type.codegen_repr() else {
-            return Err(CompileError::new(
+        match receiver_type.codegen_repr() {
+            PhpType::Object(class_name) => self.infer_scoped_constant_access(
+                &StaticReceiver::Named(crate::names::Name::from(class_name)),
+                name,
+                expr,
+            ),
+            // PHP permits `$className::CONSTANT` with a runtime class-string. The concrete
+            // class and constant are selected by the closed-world registry during lowering;
+            // until then its value must remain gradual.
+            PhpType::Str | PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+            other => Err(CompileError::new(
                 receiver.span,
                 &format!(
-                    "Dynamic class constant receiver must have one known object type, got {}",
-                    receiver_type
+                    "Dynamic class constant receiver must be an object or class-string, got {}",
+                    other
                 ),
-            ));
-        };
-        self.infer_scoped_constant_access(
-            &StaticReceiver::Named(crate::names::Name::from(class_name)),
-            name,
-            expr,
-        )
+            )),
+        }
     }
 
     /// Returns whether a scoped-constant receiver is known in static class-like metadata.

@@ -13,14 +13,15 @@ use crate::types::PhpType;
 use super::super::Checker;
 
 impl Checker {
-    /// Flattens nested unions, removes duplicates and `PhpType::Mixed` (which absorbs all),
-    /// and returns a single `PhpType` or a `PhpType::Union` with deduped members.
+    /// Flattens nested unions, removes duplicate and bottom (`Never`) members, absorbs into
+    /// `Mixed` when present, and returns a single `PhpType` or a deduped union.
     pub(crate) fn normalize_union_type(&self, members: Vec<PhpType>) -> PhpType {
         let mut flat = Vec::new();
         for member in members {
             match member {
                 PhpType::Union(inner) => flat.extend(inner),
                 PhpType::Mixed => return PhpType::Mixed,
+                PhpType::Never => {}
                 other => flat.push(other),
             }
         }
@@ -40,7 +41,9 @@ impl Checker {
             }
         }
 
-        if deduped.len() == 1 {
+        if deduped.is_empty() {
+            PhpType::Never
+        } else if deduped.len() == 1 {
             deduped.pop().expect("union member exists")
         } else {
             PhpType::Union(deduped)
@@ -258,5 +261,31 @@ impl Checker {
             PhpType::Array(_) | PhpType::AssocArray { .. } => actual_ty.clone(),
             _ => declared_ty.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::Platform;
+
+    /// Verifies inferred bottom paths do not make nullable values reject nullsafe access.
+    #[test]
+    fn normalize_union_drops_never_when_a_value_member_exists() {
+        let checker = Checker::new(Platform::MacOS);
+        assert_eq!(
+            checker.normalize_union_type(vec![PhpType::Void, PhpType::Never]),
+            PhpType::Void
+        );
+    }
+
+    /// Verifies a union containing only bottom paths remains bottom.
+    #[test]
+    fn normalize_union_of_only_never_is_never() {
+        let checker = Checker::new(Platform::MacOS);
+        assert_eq!(
+            checker.normalize_union_type(vec![PhpType::Never, PhpType::Never]),
+            PhpType::Never
+        );
     }
 }

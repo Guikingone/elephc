@@ -22,16 +22,12 @@
 //! - The value is a boxed `Mixed` pointer consumed by the write (stored directly
 //!   into the slot for the indexed path, or stored as a `Mixed`-tagged hash
 //!   payload for the hash path), mirroring `__rt_array_set_mixed` ownership.
-//! - OWNERSHIP: the caller hands this helper an OWNED reference to the incoming
-//!   array (`lower_array_set_mixed_key_*` acquires it, mirroring `Op::ArrayToHash`).
-//!   The in-place paths hand that `+1` back inside the returned pointer; the promote
-//!   paths abandon the source for a freshly built hash and RELEASE it, because
-//!   `__rt_array_hash_union` only borrows its operands. The helper therefore always
-//!   returns a `+1` the caller owns, and `Op::ArraySetMixedKey` is classified as an
-//!   owning temporary so `store_local` releases whatever the slot held before.
-//!   Getting this wrong in either direction is fatal: releasing without the caller's
-//!   acquire is a use-after-free (the source's only reference lives in the caller's
-//!   slot); not releasing at all leaks the whole abandoned array on every promotion.
+//! - OWNERSHIP: the caller lends the incoming array/hash pointer. Promotion builds
+//!   a fresh owned hash and leaves source cleanup to the storeback that replaces the
+//!   caller's slot. In-place indexed/hash writes retain the final pointer immediately
+//!   before return, so the result owns the reference consumed by that same storeback.
+//!   This avoids a fabricated extra owner making an already-hash receiver take a COW
+//!   clone path for every runtime-key write.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -109,6 +105,9 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the target index
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the consumed boxed Mixed value
     emitter.instruction("bl __rt_array_set_mixed");                             // store the value into packed indexed storage and return the array
+    abi::emit_push_reg(emitter, "x0");
+    emitter.instruction("bl __rt_incref");                                      // create the owned result reference that replaces the borrowed indexed source
+    abi::emit_pop_reg(emitter, "x0");
     emitter.instruction("b __rt_array_set_mixed_key_done");                     // finish after an indexed write
 
     // -- indexed destination + out-of-range int key: promote to hash then set --
@@ -142,8 +141,6 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #48]");                                   // save the promoted merged hash pointer
     emitter.instruction("ldr x0, [sp, #40]");                                   // reload the temporary hash for release
     emitter.instruction("bl __rt_decref_hash");                                 // release the empty temporary hash after the union copy
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source indexed array this promotion abandons
-    emitter.instruction("bl __rt_decref_array");                                // release the reference the lowering acquired: hash_union only BORROWED it
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the promoted merged hash for Mixed-box conversion
     emitter.instruction("bl __rt_hash_to_mixed");                               // box union-copied scalar slots as Mixed cells so foreach readback is correct
     emitter.instruction("str x0, [sp, #48]");                                   // save the Mixed-boxed promoted hash pointer (ensure_unique may reallocate)
@@ -183,25 +180,25 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the existing hash to inspect its homogeneous value type
     emitter.instruction("ldr x10, [x9, #16]");                                  // load the hash header value_type tag
     emitter.instruction("cmp x10, #7");                                         // are entries already boxed Mixed cells?
-    emitter.instruction("b.eq __rt_array_set_mixed_key_hash_boxed");             // an already-Mixed hash can consume the incoming box directly
+    emitter.instruction("b.eq __rt_array_set_mixed_key_hash_boxed");            // an already-Mixed hash can consume the incoming box directly
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the consumed boxed value for runtime-tag inspection
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the incoming value tag and payload words
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the hash after the helper call
     emitter.instruction("ldr x10, [x9, #16]");                                  // reload the expected homogeneous value tag
     emitter.instruction("cmp x0, x10");                                         // does the replacement preserve the hash's storage representation?
-    emitter.instruction("b.ne __rt_array_set_mixed_key_hash_widen");             // heterogeneous replacement requires a coherent Mixed conversion
+    emitter.instruction("b.ne __rt_array_set_mixed_key_hash_widen");            // heterogeneous replacement requires a coherent Mixed conversion
     emitter.instruction("stp x1, x2, [sp, #56]");                               // save the raw payload that will replace the boxed input
     emitter.instruction("str x0, [sp, #72]");                                   // save the matching runtime value tag
     emitter.instruction("cmp x0, #1");                                          // strings carry a refcounted payload when heap-backed
-    emitter.instruction("b.eq __rt_array_set_mixed_key_hash_retain_raw");        // retain the raw string payload before releasing its Mixed owner
+    emitter.instruction("b.eq __rt_array_set_mixed_key_hash_retain_raw");       // retain the raw string payload before releasing its Mixed owner
     emitter.instruction("cmp x0, #4");                                          // tags below indexed-array are unowned scalars
-    emitter.instruction("b.lo __rt_array_set_mixed_key_hash_raw_ready");         // scalar payloads need no ownership transfer
+    emitter.instruction("b.lo __rt_array_set_mixed_key_hash_raw_ready");        // scalar payloads need no ownership transfer
     emitter.instruction("cmp x0, #7");                                          // indexed arrays, hashes, objects, and Mixed are refcounted
-    emitter.instruction("b.le __rt_array_set_mixed_key_hash_retain_raw");        // retain container-shaped payloads
+    emitter.instruction("b.le __rt_array_set_mixed_key_hash_retain_raw");       // retain container-shaped payloads
     emitter.instruction("cmp x0, #10");                                         // callable descriptors are refcounted runtime values
-    emitter.instruction("b.eq __rt_array_set_mixed_key_hash_retain_raw");        // retain callable descriptor storage
+    emitter.instruction("b.eq __rt_array_set_mixed_key_hash_retain_raw");       // retain callable descriptor storage
     emitter.instruction("cmp x0, #11");                                         // reference cells also own managed runtime storage
-    emitter.instruction("b.ne __rt_array_set_mixed_key_hash_raw_ready");         // other tags are scalar or externally managed
+    emitter.instruction("b.ne __rt_array_set_mixed_key_hash_raw_ready");        // other tags are scalar or externally managed
     emitter.label("__rt_array_set_mixed_key_hash_retain_raw");
     emitter.instruction("mov x0, x1");                                          // pass the raw payload pointer to the generic heap retain helper
     emitter.instruction("bl __rt_incref");                                      // create the ownership slot consumed by hash_set
@@ -214,7 +211,7 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("ldp x3, x4, [sp, #56]");                               // load the raw replacement payload words
     emitter.instruction("ldr x5, [sp, #72]");                                   // load the preserved homogeneous value tag
     emitter.instruction("bl __rt_hash_set");                                    // replace the entry without changing the caller-visible hash representation
-    emitter.instruction("b __rt_array_set_mixed_key_done");                     // finish after the representation-preserving write
+    emitter.instruction("b __rt_array_set_mixed_key_hash_return");              // retain the in-place hash as the owned replacement result
     emitter.label("__rt_array_set_mixed_key_hash_widen");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the typed hash that must widen to Mixed entries
     emitter.instruction("bl __rt_hash_to_mixed");                               // coherently box every existing entry before inserting a different type
@@ -227,6 +224,10 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("mov x4, #0");                                          // boxed Mixed hash payloads leave the high value word empty
     emitter.instruction("mov x5, #7");                                          // value_type 7 marks the slot as a boxed Mixed pointer
     emitter.instruction("bl __rt_hash_set");                                    // insert the entry into the hash and return it
+    emitter.label("__rt_array_set_mixed_key_hash_return");
+    abi::emit_push_reg(emitter, "x0");
+    emitter.instruction("bl __rt_incref");                                      // create the owned result reference after mutating the borrowed hash in place
+    abi::emit_pop_reg(emitter, "x0");
 
     emitter.label("__rt_array_set_mixed_key_done");
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
@@ -302,6 +303,9 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the target index as the indexed-set index argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the consumed boxed Mixed value
     emitter.instruction("call __rt_array_set_mixed");                           // store the value into packed indexed storage and return the array
+    abi::emit_push_reg(emitter, "rax");
+    emitter.instruction("call __rt_incref");                                    // create the owned result reference that replaces the borrowed indexed source
+    abi::emit_pop_reg(emitter, "rax");
     emitter.instruction("jmp __rt_array_set_mixed_key_done");                   // finish after an indexed write
 
     // -- indexed destination + out-of-range int key: promote to hash then set --
@@ -334,8 +338,6 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the promoted merged hash pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the temporary hash for release
     emitter.instruction("call __rt_decref_hash");                               // release the empty temporary hash after the union copy
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed array this promotion abandons
-    emitter.instruction("call __rt_decref_array");                              // release the reference the lowering acquired: hash_union only BORROWED it
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the promoted merged hash for Mixed-box conversion
     emitter.instruction("call __rt_hash_to_mixed");                             // box union-copied scalar slots as Mixed cells so foreach readback is correct
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the Mixed-boxed promoted hash pointer (ensure_unique may reallocate)
@@ -412,7 +414,7 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // load the raw replacement high payload word
     emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // load the preserved homogeneous value tag
     emitter.instruction("call __rt_hash_set");                                  // replace the entry without changing the caller-visible hash representation
-    emitter.instruction("jmp __rt_array_set_mixed_key_done");                   // finish after the representation-preserving write
+    emitter.instruction("jmp __rt_array_set_mixed_key_hash_return");            // retain the in-place hash as the owned replacement result
     emitter.label("__rt_array_set_mixed_key_hash_widen");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the typed hash that must widen to Mixed entries
     emitter.instruction("call __rt_hash_to_mixed");                             // coherently box every existing entry before inserting a different type
@@ -425,6 +427,10 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r8, r8");                                          // boxed Mixed hash payloads leave the high value word empty
     emitter.instruction("mov r9, 7");                                           // value_type 7 marks the slot as a boxed Mixed pointer
     emitter.instruction("call __rt_hash_set");                                  // insert the entry into the hash and return it
+    emitter.label("__rt_array_set_mixed_key_hash_return");
+    abi::emit_push_reg(emitter, "rax");
+    emitter.instruction("call __rt_incref");                                    // create the owned result reference after mutating the borrowed hash in place
+    abi::emit_pop_reg(emitter, "rax");
 
     emitter.label("__rt_array_set_mixed_key_done");
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer

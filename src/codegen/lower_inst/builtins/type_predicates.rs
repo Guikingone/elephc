@@ -8,6 +8,7 @@
 //! - Uses boxed Mixed tags and interface metadata consistently across supported targets.
 
 use super::*;
+use crate::codegen_support::callable_descriptor;
 
 /// Lowers the reusable EIR PHP type predicate through target-aware value inspection.
 pub(crate) fn lower_type_predicate(
@@ -305,12 +306,91 @@ pub(crate) fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
         PhpType::Array(_) | PhpType::AssocArray { .. } => emit_static_bool(ctx, true),
+        PhpType::Callable => emit_callable_array_predicate(ctx, value)?,
         PhpType::Mixed | PhpType::Union(_) => {
-            predicates::emit_mixed_tag_membership(ctx, value, &[4, 5])?;
+            emit_mixed_array_predicate(ctx, value)?;
         }
         _ => emit_static_bool(ctx, false),
     }
     store_if_result(ctx, inst)
+}
+
+/// Checks boxed gradual values for indexed/hash arrays or a callable descriptor explicitly marked
+/// as originating from PHP callable-array syntax.
+fn emit_mixed_array_predicate(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let true_label = ctx.next_label("is_array_mixed_true");
+    let callable_label = ctx.next_label("is_array_mixed_callable");
+    let done_label = ctx.next_label("is_array_mixed_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // indexed array runtime tag
+            ctx.emitter.instruction(&format!("b.eq {}", true_label));
+            ctx.emitter.instruction("cmp x0, #5");                              // associative array runtime tag
+            ctx.emitter.instruction(&format!("b.eq {}", true_label));
+            ctx.emitter.instruction("cmp x0, #10");                             // callable descriptor runtime tag
+            ctx.emitter.instruction(&format!("b.eq {}", callable_label));
+            ctx.emitter.instruction("mov x0, #0");                              // all other gradual values are not arrays
+            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.label(&callable_label);
+            ctx.emitter.instruction("ldr x9, [x1]");                            // load the callable descriptor source-shape kind
+            ctx.emitter.instruction(&format!(
+                "cmp x9, #{}",
+                callable_descriptor::CALLABLE_DESC_KIND_ARRAY
+            ));
+            ctx.emitter.instruction("cset x0, eq");
+            ctx.emitter.instruction(&format!("b {}", done_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // indexed array runtime tag
+            ctx.emitter.instruction(&format!("je {}", true_label));
+            ctx.emitter.instruction("cmp rax, 5");                              // associative array runtime tag
+            ctx.emitter.instruction(&format!("je {}", true_label));
+            ctx.emitter.instruction("cmp rax, 10");                             // callable descriptor runtime tag
+            ctx.emitter.instruction(&format!("je {}", callable_label));
+            ctx.emitter.instruction("xor eax, eax");                            // all other gradual values are not arrays
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.label(&callable_label);
+            ctx.emitter.instruction("cmp QWORD PTR [rdi], 5");                  // compare the descriptor source-shape kind
+            ctx.emitter.instruction("sete al");
+            ctx.emitter.instruction("movzx rax, al");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+        }
+    }
+    ctx.emitter.label(&true_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Checks whether a compact callable descriptor originated from PHP's two-element callable-array
+/// syntax rather than a closure, function string, or first-class callable.
+fn emit_callable_array_predicate(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    let descriptor_reg = abi::int_result_reg(ctx.emitter);
+    let kind_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, kind_reg, descriptor_reg, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!(
+                "cmp {}, #{}",
+                kind_reg,
+                callable_descriptor::CALLABLE_DESC_KIND_ARRAY
+            ));
+            ctx.emitter.instruction("cset x0, eq");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!(
+                "cmp {}, {}",
+                kind_reg,
+                callable_descriptor::CALLABLE_DESC_KIND_ARRAY
+            ));
+            ctx.emitter.instruction("sete al");
+            ctx.emitter.instruction("movzx rax, al");
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `is_object()`: true for statically-known objects and closures, or boxed values whose

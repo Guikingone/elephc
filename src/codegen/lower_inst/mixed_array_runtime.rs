@@ -38,6 +38,15 @@ pub(super) fn lower_mixed_array_runtime_get(
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
     let warn_on_missing = expect_operand(inst, 2)?;
+    if !for_write && value_is_const_int(ctx, key, 0)? {
+        return lower_mixed_callable_receiver_or_array_get(
+            ctx,
+            inst,
+            receiver,
+            key,
+            warn_on_missing,
+        );
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             hashes::materialize_hash_key_aarch64(ctx, key)?;
@@ -60,6 +69,106 @@ pub(super) fn lower_mixed_array_runtime_get(
     );
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
+}
+
+/// Reads index zero from a boxed callable-array descriptor, otherwise delegates to the ordinary
+/// boxed array/hash reader. This preserves object identity for APIs returning callable arrays.
+fn lower_mixed_callable_receiver_or_array_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    receiver: ValueId,
+    key: ValueId,
+    warn_on_missing: ValueId,
+) -> Result<()> {
+    let callable_label = ctx.next_label("mixed_callable_array_receiver");
+    let native_label = ctx.next_label("mixed_callable_array_native");
+    let done_label = ctx.next_label("mixed_callable_array_done");
+    let descriptor_reg = abi::nested_call_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(receiver, "x0")?;
+            ctx.emitter.instruction(&format!("cbz x0, {}", native_label));
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect the boxed runtime tag
+            ctx.emitter.instruction("cmp x9, #10");                            // callable descriptor tag
+            ctx.emitter.instruction(&format!("b.ne {}", native_label));
+            ctx.emitter.instruction("ldr x9, [x0, #8]");                       // load the callable descriptor payload
+            ctx.emitter.instruction("ldr x10, [x9]");                          // inspect the descriptor source-shape kind
+            ctx.emitter.instruction(&format!(
+                "cmp x10, #{}",
+                callable_descriptor::CALLABLE_DESC_KIND_ARRAY
+            ));
+            ctx.emitter.instruction(&format!("b.eq {}", callable_label));
+            ctx.emitter.instruction(&format!("b {}", native_label));
+            ctx.emitter.label(&callable_label);
+            ctx.emitter
+                .instruction(&format!("mov {}, x9", descriptor_reg));
+            abi::emit_load_from_address(
+                ctx.emitter,
+                "x0",
+                descriptor_reg,
+                callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET,
+            );
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(receiver, "rax")?;
+            ctx.emitter.instruction("test rax, rax");                          // null Mixed cells use the ordinary reader
+            ctx.emitter.instruction(&format!("je {}", native_label));
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 10");                // callable descriptor tag
+            ctx.emitter.instruction(&format!("jne {}", native_label));
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax + 8]");            // load the callable descriptor payload
+            ctx.emitter.instruction(&format!(
+                "cmp QWORD PTR [r10], {}",
+                callable_descriptor::CALLABLE_DESC_KIND_ARRAY
+            ));
+            ctx.emitter.instruction(&format!("je {}", callable_label));
+            ctx.emitter.instruction(&format!("jmp {}", native_label));
+            ctx.emitter.label(&callable_label);
+            ctx.emitter
+                .instruction(&format!("mov {}, r10", descriptor_reg));
+            abi::emit_load_from_address(
+                ctx.emitter,
+                "rax",
+                descriptor_reg,
+                callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET,
+            );
+        }
+    }
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&native_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            hashes::materialize_hash_key_aarch64(ctx, key)?;
+            ctx.load_value_to_reg(warn_on_missing, "x3")?;
+            ctx.load_value_to_reg(receiver, "x0")?;
+        }
+        Arch::X86_64 => {
+            hashes::materialize_hash_key_x86_64(ctx, key)?;
+            ctx.load_value_to_reg(warn_on_missing, "rcx")?;
+            ctx.load_value_to_reg(receiver, "rdi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_get");
+    ctx.emitter.label(&done_label);
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+    store_if_result(ctx, inst)
+}
+
+/// Returns whether one EIR operand is the requested integer literal.
+fn value_is_const_int(ctx: &FunctionContext<'_>, value: ValueId, expected: i64) -> Result<bool> {
+    let value = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value.def else {
+        return Ok(false);
+    };
+    let inst = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    Ok(inst.op == Op::ConstI64 && inst.immediate == Some(Immediate::I64(expected)))
 }
 
 /// Lowers typed fetch-for-write parent reads of nested array writes (issue #555).

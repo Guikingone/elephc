@@ -2,7 +2,7 @@
 title: "preg_grep() — internals"
 description: "Compiler internals for preg_grep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 321
+  order: 334
 ---
 
 ## `preg_grep()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_grep.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_grep.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:543](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L543) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_grep(string $pattern, array $array, int $flags = 0): array
+function preg_grep(string $pattern, mixed $array, int $flags = 0): array
 ```
 
 ## What the type checker enforces

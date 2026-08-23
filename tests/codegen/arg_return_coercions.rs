@@ -296,6 +296,10 @@ function firstValue(array $values): mixed {
     foreach ($values as $value) { return $value; }
     return null;
 }
+function firstKey(array $values): mixed {
+    foreach ($values as $key => $value) { return $key; }
+    return null;
+}
 final class ArrayReader {
     public function first(array $values): mixed {
         foreach ($values as $value) { return $value; }
@@ -305,6 +309,14 @@ final class ArrayReader {
         foreach ($values as $value) { return $value; }
         return null;
     }
+    public function firstKey(array $values): mixed {
+        foreach ($values as $key => $value) { return $key; }
+        return null;
+    }
+    public static function firstStaticKey(array $values): mixed {
+        foreach ($values as $key => $value) { return $key; }
+        return null;
+    }
 }
 $assoc = ['left' => 1];
 $indexed = [2, 3];
@@ -312,11 +324,14 @@ $reader = new ArrayReader();
 echo firstValue($assoc), firstValue($indexed), '|';
 echo $reader->first($assoc), $reader->first($indexed), '|';
 echo ArrayReader::firstStatic($assoc), ArrayReader::firstStatic($indexed), '|';
-echo $assoc['left'], $indexed[0];
+echo $assoc['left'], $indexed[0], '|';
+echo firstKey($assoc), '|';
+echo $reader->firstKey($assoc), '|';
+echo ArrayReader::firstStaticKey($assoc);
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "12|12|12|12");
+    assert_eq!(out.stdout, "12|12|12|12|left|left|left");
 }
 
 /// Verifies boxed indexed and associative arrays satisfy a generic array return contract while

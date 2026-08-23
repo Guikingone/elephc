@@ -31,6 +31,7 @@ pub(crate) const CALLABLE_DESC_KIND_OBJECT_INVOKE: u64 =
 pub(crate) const CALLABLE_DESC_KIND_FUNCTION: u64 = CallableDescriptorShape::Function as u64;
 pub(crate) const CALLABLE_DESC_KIND_BUILTIN: u64 = CallableDescriptorShape::Builtin as u64;
 pub(crate) const CALLABLE_DESC_KIND_EXTERN: u64 = CallableDescriptorShape::Extern as u64;
+pub(crate) const CALLABLE_DESC_KIND_ARRAY: u64 = CallableDescriptorShape::Array as u64;
 pub(crate) const CALLABLE_DESC_KIND_STATIC_METHOD: u64 =
     CallableDescriptorShape::StaticMethod as u64;
 pub(crate) const CALLABLE_DESC_KIND_INSTANCE_METHOD: u64 =

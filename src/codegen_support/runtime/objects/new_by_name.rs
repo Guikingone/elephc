@@ -112,6 +112,26 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("b __rt_nbn_zero");                                     // continue zeroing
 
     emitter.label("__rt_nbn_done");
+    // -- restore typed-uninitialized markers after zeroing the selected layout --
+    emitter.instruction("ldr x12, [sp, #32]");                                  // reload the matched class id for marker-table lookup
+    abi::emit_symbol_address(emitter, "x9", "_class_uninit_prop_counts");
+    emitter.instruction("ldr x10, [x9, x12, lsl #3]");                          // load the number of typed-uninitialized slots
+    emitter.instruction("cbz x10, __rt_nbn_no_uninit_markers");                 // a class without such slots needs no marker stores
+    abi::emit_symbol_address(emitter, "x9", "_class_uninit_prop_offset_ptrs");
+    emitter.instruction("ldr x9, [x9, x12, lsl #3]");                           // load the physical-offset table for this class
+    emitter.instruction("movz x11, #0xfffd");                                   // materialize the typed-uninitialized sentinel low bits
+    emitter.instruction("movk x11, #0xffff, lsl #16");                          // materialize the typed-uninitialized sentinel bits 16..31
+    emitter.instruction("movk x11, #0xffff, lsl #32");                          // materialize the typed-uninitialized sentinel bits 32..47
+    emitter.instruction("movk x11, #0x7fff, lsl #48");                          // materialize the typed-uninitialized sentinel high bits
+    emitter.instruction("mov x13, #0");                                         // start at the first marker offset
+    emitter.label("__rt_nbn_uninit_marker_loop");
+    emitter.instruction("cmp x13, x10");                                        // have all typed-uninitialized slots been marked?
+    emitter.instruction("b.ge __rt_nbn_no_uninit_markers");                     // continue once every marker is in place
+    emitter.instruction("ldr x14, [x9, x13, lsl #3]");                          // load one property high-word offset
+    emitter.instruction("str x11, [x0, x14]");                                  // stamp the slot as PHP-typed but uninitialized
+    emitter.instruction("add x13, x13, #1");                                    // advance to the next marker offset
+    emitter.instruction("b __rt_nbn_uninit_marker_loop");                       // continue marking this object's typed slots
+    emitter.label("__rt_nbn_no_uninit_markers");
     // -- run the per-class property-default thunk, if this class has one --
     emitter.instruction("ldr x12, [sp, #32]");                                  // reload the matched class_id
     abi::emit_symbol_address(emitter, "x10", "_class_propinit_ptrs");
@@ -213,6 +233,24 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_nbn_zero_x86");                               // continue zeroing
 
     emitter.label("__rt_nbn_done_x86");
+    // -- restore typed-uninitialized markers after zeroing the selected layout --
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the matched class id for marker-table lookup
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_class_uninit_prop_counts", 0);  // load the dense marker-count table base
+    emitter.instruction("mov r9, QWORD PTR [r8 + rcx*8]");                      // load the number of typed-uninitialized slots
+    emitter.instruction("test r9, r9");                                         // does this class need any marker stores?
+    emitter.instruction("jz __rt_nbn_no_uninit_markers_x86");                   // skip marker initialization when every slot has a default
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_class_uninit_prop_offset_ptrs", 0);    // load the dense marker-offset pointer table base
+    emitter.instruction("mov r8, QWORD PTR [r8 + rcx*8]");                      // load this class's physical-offset table
+    emitter.instruction("mov r11, 0x7ffffffffffffffd");                         // materialize the typed-uninitialized sentinel word
+    emitter.instruction("xor r10d, r10d");                                      // start at the first marker offset
+    emitter.label("__rt_nbn_uninit_marker_loop_x86");
+    emitter.instruction("cmp r10, r9");                                         // have all typed-uninitialized slots been marked?
+    emitter.instruction("jge __rt_nbn_no_uninit_markers_x86");                  // continue once every marker is in place
+    emitter.instruction("mov rdx, QWORD PTR [r8 + r10*8]");                     // load one property high-word offset
+    emitter.instruction("mov QWORD PTR [rax + rdx], r11");                      // stamp the slot as PHP-typed but uninitialized
+    emitter.instruction("add r10, 1");                                          // advance to the next marker offset
+    emitter.instruction("jmp __rt_nbn_uninit_marker_loop_x86");                 // continue marking this object's typed slots
+    emitter.label("__rt_nbn_no_uninit_markers_x86");
     // -- run the per-class property-default thunk, if this class has one --
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the matched class_id
     abi::emit_symbol_address(emitter, "r10", "_class_propinit_ptrs"); // property-init thunk table base

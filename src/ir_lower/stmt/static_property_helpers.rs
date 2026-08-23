@@ -40,7 +40,7 @@ pub(super) fn load_static_property_as(
 }
 
 /// Stores a static property value through a high-level EIR write.
-pub(super) fn store_static_property(
+pub(in crate::ir_lower) fn store_static_property(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     property: &str,

@@ -182,27 +182,37 @@ pub(super) fn lower_dynamic_scoped_constant(
         return receiver_value;
     }
     let receiver_type = ctx.builder.value_php_type(receiver_value.value);
-    let class_name = singular_object_class(&receiver_type)
+    if let Some(class_name) = singular_object_class(&receiver_type)
         .and_then(|(class_name, _)| normalized_class_name(class_name))
-        .or_else(|| {
-            super::callable_resolution::instance_callable_object_class(ctx, receiver)
-        })
-        .unwrap_or_else(|| {
-            panic!(
-                "dynamic class constant receiver lost its checked object type: {receiver_type:?} at {:?}",
-                receiver.span
-            )
-        });
-    let runtime_class_id = ctx.emit_value(
-        Op::ObjectClassId,
-        vec![receiver_value.value],
-        None,
-        PhpType::Int,
-        Op::ObjectClassId.default_effects(),
-        Some(receiver.span),
-    );
-    crate::ir_lower::ownership::release_if_owned(ctx, receiver_value, Some(receiver.span));
-    lower_runtime_class_scoped_constant(ctx, &class_name, runtime_class_id, name, expr)
+        .or_else(|| super::callable_resolution::instance_callable_object_class(ctx, receiver))
+    {
+        let runtime_class_id = ctx.emit_value(
+            Op::ObjectClassId,
+            vec![receiver_value.value],
+            None,
+            PhpType::Int,
+            Op::ObjectClassId.default_effects(),
+            Some(receiver.span),
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, receiver_value, Some(receiver.span));
+        return lower_runtime_class_scoped_constant(ctx, &class_name, runtime_class_id, name, expr);
+    }
+    if matches!(receiver_type.codegen_repr(), PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
+        let runtime_class_id = ctx.emit_value(
+            Op::ClassNameToId,
+            vec![receiver_value.value],
+            None,
+            PhpType::Int,
+            Op::ClassNameToId.default_effects(),
+            Some(receiver.span),
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, receiver_value, Some(receiver.span));
+        return lower_runtime_named_class_scoped_constant(ctx, runtime_class_id, name, expr);
+    }
+    panic!(
+        "dynamic class constant receiver lost its checked object or class-string type: {receiver_type:?} at {:?}",
+        receiver.span
+    )
 }
 
 /// Returns the class name to use for a scoped constant lookup.
@@ -297,6 +307,72 @@ fn lower_runtime_class_scoped_constant(
     }
     ctx.builder.position_at_end(merge);
     let _ = split_initialized;
+    take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Dispatches a class constant through a runtime class id resolved from a class-string.
+fn lower_runtime_named_class_scoped_constant(
+    ctx: &mut LoweringContext<'_, '_>,
+    runtime_class_id: LoweredValue,
+    name: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let result_type = fallback_expr_type(expr);
+    let candidates = ctx
+        .classes
+        .iter()
+        .filter_map(|(class_name, class_info)| {
+            ctx.scoped_constant_value(class_name, name)
+                .map(|value| (class_name.clone(), class_info.class_id, value))
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return lower_scoped_constant_fallback(ctx, "dynamic", name, expr);
+    }
+
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let merge = ctx.builder.create_named_block("dynamic_const.merge", Vec::new());
+    let mut branch_labels = Vec::new();
+    for (_class_name, class_id, value) in candidates {
+        let block = ctx.builder.create_named_block("dynamic_const.branch", Vec::new());
+        branch_labels.push((block, class_id, value));
+        let class_id_value = ctx.emit_value(
+            Op::ConstI64,
+            Vec::new(),
+            Some(Immediate::I64(class_id as i64)),
+            PhpType::Int,
+            Op::ConstI64.default_effects(),
+            Some(expr.span),
+        );
+        let matches_class = ctx.emit_value(
+            Op::ICmp,
+            vec![runtime_class_id.value, class_id_value.value],
+            Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
+            PhpType::Bool,
+            Op::ICmp.default_effects(),
+            Some(expr.span),
+        );
+        let next = ctx.builder.create_named_block("dynamic_const.next", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: matches_class.value,
+            then_target: block,
+            then_args: Vec::new(),
+            else_target: next,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(next);
+    }
+    let fallback = lower_scoped_constant_fallback(ctx, "dynamic", name, expr);
+    store_value_into_temp(ctx, &temp_name, result_type.clone(), fallback, expr.span);
+    branch_to(ctx, merge);
+    for (block, _class_id, value) in branch_labels {
+        ctx.builder.position_at_end(block);
+        ctx.restore_initialized_slots(split_initialized.clone());
+        store_expr_into_temp(ctx, &temp_name, result_type.clone(), &value, expr.span);
+        branch_to(ctx, merge);
+    }
+    ctx.builder.position_at_end(merge);
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 

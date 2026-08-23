@@ -1266,6 +1266,14 @@ fn materialize_hash_mixed_value_aarch64(
         ctx.emitter.instruction("mov x4, xzr");                                 // boxed Mixed hash values do not use the high payload word
         return Ok(());
     }
+    if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable)
+        && matches!(value_ty, PhpType::Array(_))
+    {
+        box_hash_value_for_mixed_storage(ctx, value, value_ty)?;
+        ctx.emitter.instruction("mov x3, x0");                                  // preserve an indexed-or-promoted array's runtime shape in a boxed Mixed entry
+        ctx.emitter.instruction("mov x4, xzr");                                 // boxed array entries do not use a high payload word
+        return Ok(());
+    }
     if storage_value_ty == &PhpType::Mixed && value_ty == &PhpType::Iterable {
         box_hash_value_for_mixed_storage(ctx, value, value_ty)?;
         ctx.emitter.instruction("mov x3, x0");                                  // pass the boxed iterable Mixed cell as the hash value low word
@@ -1295,6 +1303,14 @@ fn materialize_hash_mixed_value_x86_64(
         retain_hash_refcounted_value_if_borrowed(ctx, value, value_ty)?;
         ctx.emitter.instruction("mov rcx, rax");                                // pass the retained boxed Mixed pointer as the hash value low word
         ctx.emitter.instruction("xor r8, r8");                                  // boxed Mixed hash values do not use the high payload word
+        return Ok(());
+    }
+    if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable)
+        && matches!(value_ty, PhpType::Array(_))
+    {
+        box_hash_value_for_mixed_storage(ctx, value, value_ty)?;
+        ctx.emitter.instruction("mov rcx, rax");                                // preserve an indexed-or-promoted array's runtime shape in a boxed Mixed entry
+        ctx.emitter.instruction("xor r8, r8");                                  // boxed array entries do not use a high payload word
         return Ok(());
     }
     if storage_value_ty == &PhpType::Mixed && value_ty == &PhpType::Iterable {
@@ -1332,7 +1348,7 @@ fn box_hash_value_for_mixed_storage(
 /// Returns the runtime value tag to store for one hash-set payload.
 fn hash_set_value_tag(value_ty: &PhpType, storage_value_ty: &PhpType) -> i64 {
     if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable) {
-        if value_ty.codegen_repr() == PhpType::TaggedScalar {
+        if matches!(value_ty.codegen_repr(), PhpType::TaggedScalar | PhpType::Array(_)) {
             return crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64;
         }
         crate::codegen::runtime_value_tag(&value_ty.codegen_repr()) as i64

@@ -2,7 +2,7 @@
 title: "filter_var()"
 description: "Filters a variable with a specified filter."
 sidebar:
-  order: 312
+  order: 325
 ---
 
 ## filter_var()
@@ -26,12 +26,6 @@ Filters a variable with a specified filter.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

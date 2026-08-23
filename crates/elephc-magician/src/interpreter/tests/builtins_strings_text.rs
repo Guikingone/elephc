@@ -149,6 +149,29 @@ return function_exists("strstr");"#,
     assert_eq!(values.output, "@example.com:hel:F:hello:bcabc:a:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval `strrchr()` returns the final first-needle-byte suffix or PHP false.
+#[test]
+fn execute_program_dispatches_strrchr_builtin() {
+    let program = parse_fragment(
+        br#"echo strrchr("a.b.c", "."); echo ":";
+echo strrchr(haystack: "abcabc", needle: "bc"); echo ":";
+echo strrchr("abc", "z") === false ? "F" : "bad"; echo ":";
+echo strrchr("abc", "") === false ? "E" : "bad"; echo ":";
+echo call_user_func("strrchr", "abcabc", "bc"); echo ":";
+echo call_user_func_array("strrchr", ["haystack" => "a.b.c", "needle" => "."]); echo ":";
+return function_exists("strrchr");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, ".c:bc:F:E:bc:.c:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval prefix/suffix string search builtins use byte-string semantics.
 #[test]
 fn execute_program_dispatches_string_boundary_builtins() {

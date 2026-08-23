@@ -73,6 +73,23 @@ pub(super) fn emit_full_reflection_object(
     )
 }
 
+/// Emits a ReflectionObject materializer containing only source-location metadata.
+pub(super) fn emit_source_file_reflection_object(
+    ctx: &mut FunctionContext<'_>,
+    reflected_name: &str,
+) -> Result<()> {
+    let metadata = reflection_source_file_class_metadata_for_name(ctx, reflected_name)?;
+    emit_reflection_materializer(
+        ctx,
+        ReflectionMaterializerKey::SourceFileClass {
+            owner: ReflectionOwnerKind::Object,
+            name: reflected_name.to_string(),
+        },
+        "ReflectionObject",
+        &metadata,
+    )
+}
+
 /// Emits a shallow nested `ReflectionClass` materializer for one resolved class-like name.
 pub(super) fn emit_shallow_reflection_class_object(
     ctx: &mut FunctionContext<'_>,
@@ -150,9 +167,10 @@ fn reflection_literal_operands(
 ) -> Result<Option<Vec<ReflectionLiteralOperand>>> {
     let mut operands = Vec::with_capacity(inst.operands.len());
     for value in &inst.operands {
+        let value = reflection_literal_source(ctx, *value)?;
         let value_ref = ctx
             .function
-            .value(*value)
+            .value(value)
             .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
         let ValueDef::Instruction {
             inst: defining_inst,

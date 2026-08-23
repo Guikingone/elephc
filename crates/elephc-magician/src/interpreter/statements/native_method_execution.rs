@@ -198,8 +198,22 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
     let signature_owner = bridge_scope.unwrap_or(class_name);
     let signature = context.native_method_signature(signature_owner, method_name);
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
-    let bound_args =
-        bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values)?;
+    let bound_args = bind_native_callable_bound_args_with_mode(
+        signature,
+        evaluated_args,
+        by_ref_mode,
+        context,
+        values,
+    )
+    .map_err(|status| {
+        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            eprintln!(
+                "[elephc-eval-trace] phase=native_method_error stage=bind class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
+                context.current_class_scope(),
+            );
+        }
+        status
+    })?;
     let result = if let Some(scope) = bridge_scope {
         eval_native_method_call_with_scope(
             scope,
@@ -215,7 +229,24 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
     };
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
     match (result, writeback) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
+        (Err(status), _) => {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=native_method_error stage=invoke class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
+                    context.current_class_scope(),
+                );
+            }
+            Err(status)
+        }
+        (_, Err(status)) => {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=native_method_error stage=writeback class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
+                    context.current_class_scope(),
+                );
+            }
+            Err(status)
+        }
         (Ok(result), Ok(())) => eval_declared_native_return_value(
             return_type.as_ref(),
             Some(signature_owner),
@@ -223,7 +254,16 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
             result,
             context,
             values,
-        ),
+        )
+        .map_err(|status| {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=native_method_error stage=return_value class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
+                    context.current_class_scope(),
+                );
+            }
+            status
+        }),
     }
 }
 

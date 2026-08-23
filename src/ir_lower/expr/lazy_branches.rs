@@ -86,17 +86,14 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
 }
 
 /// Probes a declared property before reading it so `??` treats an uninitialized slot as null.
-fn lower_initialized_property_null_coalesce_probe(
+pub(super) fn lower_initialized_property_null_coalesce_probe(
     ctx: &mut LoweringContext<'_, '_>,
     value: &Expr,
 ) -> Option<LoweredValue> {
     let ExprKind::PropertyAccess { object, property } = &value.kind else {
         return None;
     };
-    if !matches!(
-        materialized_expr_type_for_merge(ctx, object).codegen_repr(),
-        PhpType::Object(_)
-    ) {
+    if !property_probe_receiver_uses_native_object_storage(ctx, object) {
         return None;
     }
     if !matches!(
@@ -171,6 +168,32 @@ fn lower_initialized_property_null_coalesce_probe(
         read_reachable,
     ));
     Some(take_owned_temp(ctx, &temp_name, value.span))
+}
+
+/// Returns whether a property receiver is stored as one concrete native object pointer.
+fn property_probe_receiver_uses_native_object_storage(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+) -> bool {
+    let ty = match &object.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        ExprKind::This => ctx.local_type("this"),
+        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.to_string()),
+        ExprKind::NewDynamicObject { fallback_class, .. } => {
+            PhpType::Object(fallback_class.to_string())
+        }
+        ExprKind::FunctionCall { name, .. } => {
+            let Some(signature) = ctx.functions.get(name.as_str()) else {
+                return false;
+            };
+            signature.return_type.clone()
+        }
+        _ => return false,
+    };
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Object(class_name) if !class_name.trim_start_matches('\\').is_empty()
+    )
 }
 
 /// Evaluates the receiver of a statically missing concrete-class property and

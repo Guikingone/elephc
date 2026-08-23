@@ -18,6 +18,17 @@ pub(super) fn lower_property_array_push(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    let initialize_uninitialized = is_concrete_object_receiver(ctx, object.value);
+    if let Some(property_ty) = generic_object_array_property_type(ctx, object.value, property) {
+        initialize_uninitialized_array_property_for_write(
+            ctx,
+            object.value,
+            property,
+            &property_ty,
+            initialize_uninitialized,
+            span,
+        );
+    }
     let generic_receiver = is_generic_object_receiver(ctx, object.value);
     if let Some(property_ty) =
         generic_object_array_property_type(ctx, object.value, property).filter(is_indexed_array_type)
@@ -205,6 +216,17 @@ pub(super) fn lower_property_array_assign(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    let initialize_uninitialized = is_concrete_object_receiver(ctx, object.value);
+    if let Some(property_ty) = generic_object_array_property_type(ctx, object.value, property) {
+        initialize_uninitialized_array_property_for_write(
+            ctx,
+            object.value,
+            property,
+            &property_ty,
+            initialize_uninitialized,
+            span,
+        );
+    }
     let generic_receiver = is_generic_object_receiver(ctx, object.value);
     if let Some(property_ty) =
         generic_object_array_property_type(ctx, object.value, property).filter(is_indexed_array_type)
@@ -488,6 +510,68 @@ fn lower_generic_object_mixed_property_array_write(
     );
 }
 
+/// Autovivifies an uninitialized declared array property before mutating one of its elements.
+fn initialize_uninitialized_array_property_for_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    property_ty: &PhpType,
+    initialize_uninitialized: bool,
+    span: Span,
+) {
+    if !initialize_uninitialized {
+        return;
+    }
+    let op = match property_ty.codegen_repr() {
+        PhpType::Array(_) => Op::ArrayNew,
+        PhpType::AssocArray { .. } => Op::HashNew,
+        _ => return,
+    };
+    let data = ctx.intern_string(property);
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![object],
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(span),
+    );
+    let initialize = ctx
+        .builder
+        .create_named_block("property_array.initialize", Vec::new());
+    let ready = ctx
+        .builder
+        .create_named_block("property_array.ready", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: ready,
+        then_args: Vec::new(),
+        else_target: initialize,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(initialize);
+    let empty = ctx.emit_value(
+        op,
+        Vec::new(),
+        Some(Immediate::Capacity(0)),
+        property_ty.clone(),
+        op.default_effects(),
+        Some(span),
+    );
+    ctx.emit_void(
+        Op::PropSet,
+        vec![object, empty.value],
+        Some(Immediate::Data(data)),
+        Op::PropSet.default_effects(),
+        Some(span),
+    );
+    release_property_assignment_source_after_retaining_store(ctx, property_ty, empty, span);
+    branch_to(ctx, ready);
+
+    ctx.builder.position_at_end(ready);
+}
+
 /// Returns whether an EIR receiver carries PHP's bare `object` pseudo-type.
 fn is_generic_object_receiver(
     ctx: &LoweringContext<'_, '_>,
@@ -496,6 +580,17 @@ fn is_generic_object_receiver(
     matches!(
         ctx.builder.value_php_type(object),
         PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty()
+    )
+}
+
+/// Returns whether the receiver names one concrete class with native property slots.
+fn is_concrete_object_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+) -> bool {
+    matches!(
+        ctx.builder.value_php_type(object).codegen_repr(),
+        PhpType::Object(class_name) if !class_name.trim_start_matches('\\').is_empty()
     )
 }
 

@@ -19,7 +19,9 @@ pub(super) fn method_signature(
     let key = php_symbol_key(method);
     if let Some((class_name, _)) = singular_object_class(&object_ty) {
         let normalized = class_name.trim_start_matches('\\');
-        return class_method_signature(ctx, normalized, &key).cloned();
+        return class_method_signature(ctx, normalized, &key)
+            .cloned()
+            .or_else(|| narrowed_runtime_method_signature(ctx, normalized, &key));
     }
     if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
         if ctx.has_eval_barrier() {
@@ -28,6 +30,40 @@ pub(super) fn method_signature(
         return common_dynamic_method_signature(ctx, &key);
     }
     None
+}
+
+/// Returns a shared concrete-subtype signature when a nominal base lacks the requested method.
+///
+/// PHP permits a runtime instance of a descendant to expose a method absent from the static base
+/// type. The checker accepts that path through the same closed-world subtype set; preserving one
+/// common signature here lets EIR materialize omitted default arguments before codegen performs
+/// the class-id dispatch.
+fn narrowed_runtime_method_signature(
+    ctx: &LoweringContext<'_, '_>,
+    receiver_name: &str,
+    method_key: &str,
+) -> Option<FunctionSig> {
+    let receiver_is_interface = ctx.interfaces.contains_key(receiver_name);
+    let mut signature = None;
+    for (class_name, class_info) in ctx.classes {
+        let compatible = if receiver_is_interface {
+            class_implements_interface_for_ir(ctx, class_name, receiver_name)
+        } else {
+            class_extends_class(ctx, class_name, receiver_name)
+        };
+        if !compatible {
+            continue;
+        }
+        let Some(candidate) = class_info.methods.get(method_key).cloned() else {
+            continue;
+        };
+        match &signature {
+            Some(current) if current != &candidate => return None,
+            Some(_) => {}
+            None => signature = Some(candidate),
+        }
+    }
+    signature
 }
 
 /// Promotes the writable destination used by PDOStatement binding methods to a durable Mixed cell.

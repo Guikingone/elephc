@@ -20,6 +20,7 @@
 //!   colliding keys, numeric-string keys, nested arrays) in both spellings of the integer arm.
 
 use crate::parser::ast::Program;
+use crate::optimize::reachability::PreludeInventory;
 
 /// Reserved function name used for gradual `array_merge()` calls.
 pub(crate) const GRADUAL_ARRAY_MERGE_NAME: &str = "__elephc_array_merge_gradual";
@@ -148,13 +149,14 @@ function __elephc_array_merge_gradual_only_spread(mixed $arrays): array {
 /// The reference test is the PHP name rather than the helper's, because the decision to route a
 /// call here is made from inferred operand types during EIR lowering — long after injection.
 /// `crate::filter_var_prelude` is injected on the same principle.
-pub fn inject_if_used(program: Program) -> Program {
+pub fn inject_if_used(program: Program, inventory: &mut PreludeInventory) -> Program {
     if !crate::ast_usage::collect(&program).references("array_merge") {
         return program;
     }
     let tokens =
         crate::lexer::tokenize(ARRAY_MERGE_PRELUDE_SRC).expect("array_merge prelude must tokenize");
     let mut combined = crate::parser::parse(&tokens).expect("array_merge prelude must parse");
+    inventory.record_program("array_merge", &combined);
     combined.extend(program);
     combined
 }

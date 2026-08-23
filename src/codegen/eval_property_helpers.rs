@@ -1200,17 +1200,17 @@ fn emit_aarch64_store_heap_property_slot(
 ) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed eval value for heap payload inspection
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the assigned heap value tag and payload pointer
-    if matches!(expected_tag, 4 | 5) {
+    if expected_tag == 4 {
         let shape_ok_label = format!("{}_array_shape_ok", slot_body_label_raw(slot, "set"));
-        emitter.instruction("cmp x0, #4");                                      // accept the indexed PHP array runtime shape
-        emitter.instruction(&format!("b.eq {}", shape_ok_label));               // share array property storage for indexed values
-        emitter.instruction("cmp x0, #5");                                      // accept the associative PHP array runtime shape
+        emitter.instruction("cmp x0, #4");                                      // accept indexed storage for an array-compatible property
+        emitter.instruction(&format!("b.eq {}", shape_ok_label));               // keep the indexed payload without conversion
+        emitter.instruction("cmp x0, #5");                                      // associative storage is also valid for a general array slot
         emitter.instruction(&format!("b.ne {}", fail_label));                   // reject non-array heap values
         emitter.label(&shape_ok_label);
     } else {
         abi::emit_load_int_immediate(emitter, "x10", expected_tag);
         emitter.instruction("cmp x0, x10");                                     // compare the assigned value tag with the property storage ABI
-        emitter.instruction(&format!("b.ne {}", fail_label));                   // reject heap values with an incompatible ABI shape
+        emitter.instruction(&format!("b.ne {}", fail_label));                   // let the interpreter convert dense arrays required as hashes
     }
     emitter.instruction("mov x0, x1");                                          // move the unboxed heap pointer into the retained-result register
     abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
@@ -1250,17 +1250,17 @@ fn emit_x86_64_store_heap_property_slot(
 ) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed eval value for heap payload inspection
     emitter.instruction("call __rt_mixed_unbox");                               // expose the assigned heap value tag and payload pointer
-    if matches!(expected_tag, 4 | 5) {
+    if expected_tag == 4 {
         let shape_ok_label = format!("{}_array_shape_ok", slot_body_label_raw(slot, "set"));
-        emitter.instruction("cmp rax, 4");                                      // accept the indexed PHP array runtime shape
-        emitter.instruction(&format!("je {}", shape_ok_label));                 // share array property storage for indexed values
-        emitter.instruction("cmp rax, 5");                                      // accept the associative PHP array runtime shape
+        emitter.instruction("cmp rax, 4");                                      // accept indexed storage for an array-compatible property
+        emitter.instruction(&format!("je {}", shape_ok_label));                 // keep the indexed payload without conversion
+        emitter.instruction("cmp rax, 5");                                      // associative storage is also valid for a general array slot
         emitter.instruction(&format!("jne {}", fail_label));                    // reject non-array heap values
         emitter.label(&shape_ok_label);
     } else {
         abi::emit_load_int_immediate(emitter, "r10", expected_tag);
         emitter.instruction("cmp rax, r10");                                    // compare the assigned value tag with the property storage ABI
-        emitter.instruction(&format!("jne {}", fail_label));                    // reject heap values with an incompatible ABI shape
+        emitter.instruction(&format!("jne {}", fail_label));                    // let the interpreter convert dense arrays required as hashes
     }
     emitter.instruction("mov rax, rdi");                                        // move the unboxed heap pointer into the retained-result register
     abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());

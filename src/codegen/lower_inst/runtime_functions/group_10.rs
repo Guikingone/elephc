@@ -164,8 +164,27 @@ pub(super) fn lower(
                     crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Reverse,
                 )
         }),
+        RuntimeFnId::Strcspn => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_string_span(
+                ctx,
+                inst,
+                "strcspn",
+                "__rt_strcspn",
+            )
+        }),
+        RuntimeFnId::Strspn => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_string_span(
+                ctx,
+                inst,
+                "strspn",
+                "__rt_strspn",
+            )
+        }),
         RuntimeFnId::Strstr => Some({
             crate::codegen::lower_inst::builtins::strings::lower_strstr(ctx, inst)
+        }),
+        RuntimeFnId::Strrchr => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_strrchr(ctx, inst)
         }),
         RuntimeFnId::ParseUrl => Some({
             crate::codegen::lower_inst::builtins::strings::lower_parse_url(ctx, inst)

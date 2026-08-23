@@ -154,12 +154,11 @@ pub(in crate::interpreter) fn eval_reflection_class_source_location_result(
     let Some(reflected_name) = context.eval_reflection_class_name(identity) else {
         return Ok(None);
     };
-    let (source_file, source_location) =
-        if let Some(metadata) = eval_reflection_class_like_attributes(reflected_name, context) {
-            (None, metadata.source_location)
-        } else {
-            eval_reflection_aot_class_source_metadata(reflected_name, values)?
-        };
+    let (source_file, aot_source_location) =
+        eval_reflection_aot_class_source_metadata(reflected_name, values)?;
+    let source_location = eval_reflection_class_like_attributes(reflected_name, context)
+        .and_then(|metadata| metadata.source_location)
+        .or(aot_source_location);
     eval_reflection_source_location_result(
         method_key.as_str(),
         source_file.as_deref(),
@@ -175,16 +174,14 @@ fn eval_reflection_aot_class_source_metadata(
     class_name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(Option<String>, Option<EvalSourceLocation>), EvalStatus> {
-    let Some(flags) = values.reflection_class_flags(class_name.trim_start_matches('\\'))? else {
-        return Ok((None, None));
-    };
-    let Some(source_location) = eval_reflection_aot_class_source_location_from_flags(flags) else {
-        return Ok((None, None));
-    };
-    let Some(source_file) = values.reflection_source_file()? else {
-        return Ok((None, None));
-    };
-    Ok((Some(source_file), Some(source_location)))
+    // The generated script path remains useful to `getFileName()` even when a dynamic
+    // ReflectionObject target has no class-specific source-line flags. Do not couple the file
+    // result to line metadata: consumers such as project-root discovery only require the path.
+    let source_file = values.reflection_source_file()?;
+    let source_location = values
+        .reflection_class_flags(class_name.trim_start_matches('\\'))?
+        .and_then(eval_reflection_aot_class_source_location_from_flags);
+    Ok((source_file, source_location))
 }
 
 /// Decodes AOT ReflectionClass source lines packed into high flag bits.

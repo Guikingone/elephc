@@ -2,20 +2,20 @@
 title: "setlocale()"
 description: "Sets locale information for the process."
 sidebar:
-  order: 324
+  order: 337
 ---
 
 ## setlocale()
 
 ```php
-function setlocale(int $category, string $locales, ...$rest): mixed
+function setlocale(int $category, mixed $locales, ...$rest): mixed
 ```
 
 Sets locale information for the process.
 
 **Parameters**:
 - `$category` (`int`)
-- `$locales` (`string`)
+- `$locales` (`mixed`)
 - `...$rest` — variadic: collects excess arguments into `$rest`.
 
 **Returns**: `mixed`
@@ -26,12 +26,6 @@ Sets locale information for the process.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

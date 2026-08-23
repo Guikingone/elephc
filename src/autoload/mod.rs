@@ -12,6 +12,7 @@
 //!   loaded, which `crate::opcache_prelude` bakes into the OPcache script manifest.
 
 mod alias;
+mod dynamic_contracts;
 mod index;
 mod interpret;
 mod registry;
@@ -238,7 +239,12 @@ pub fn run_collecting_included_with_defines_and_sources(
     loop {
         let mut declared = collect_declared_fqns(&program);
         seed_builtin_declared_fqns(&mut declared);
-        let reference_points = collect_reference_points(&program);
+        let mut reference_points = collect_reference_points(&program);
+        reference_points.extend(
+            dynamic_contracts::candidates(&program)
+                .into_iter()
+                .map(|name| (0, name)),
+        );
         let mut insertions: Vec<(usize, Program)> = Vec::new();
         for (stmt_idx, fqn) in reference_points {
             if declared.contains(&fqn) {
@@ -542,9 +548,9 @@ mod tests {
         );
     }
 
-    /// Verifies declaration signatures and catch clauses contribute every named type to autoload.
+    /// Verifies declaration binding dependencies autoload while callable signature types stay lazy.
     #[test]
-    fn reference_points_include_named_declaration_types() {
+    fn reference_points_defer_named_callable_signature_types() {
         let tokens = crate::lexer::tokenize(
             r#"<?php
 namespace Fixtures;
@@ -570,9 +576,21 @@ enum Choice implements EnumContract {
             .map(|(_, name)| name)
             .collect::<HashSet<_>>();
         let expected = [
-            "Fixtures\\PropertyType",
             "Fixtures\\PrimaryTrait",
             "Fixtures\\SecondaryTrait",
+            "Fixtures\\CaughtOne",
+            "Fixtures\\CaughtTwo",
+            "Fixtures\\EnumContract",
+            "Fixtures\\EnumTrait",
+        ];
+        for name in expected {
+            assert!(
+                references.contains(name),
+                "missing autoload reference {name}; collected {references:?}"
+            );
+        }
+        for name in [
+            "Fixtures\\PropertyType",
             "Fixtures\\MethodParam",
             "Fixtures\\MethodVariadic",
             "Fixtures\\MethodReturn",
@@ -582,17 +600,12 @@ enum Choice implements EnumContract {
             "Fixtures\\ClosureParam",
             "Fixtures\\ClosureVariadic",
             "Fixtures\\ClosureReturn",
-            "Fixtures\\CaughtOne",
-            "Fixtures\\CaughtTwo",
-            "Fixtures\\EnumContract",
-            "Fixtures\\EnumTrait",
             "Fixtures\\EnumMethodParam",
             "Fixtures\\EnumMethodReturn",
-        ];
-        for name in expected {
+        ] {
             assert!(
-                references.contains(name),
-                "missing autoload reference {name}; collected {references:?}"
+                !references.contains(name),
+                "signature type unexpectedly triggered autoload: {name}; collected {references:?}"
             );
         }
     }

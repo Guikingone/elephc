@@ -347,7 +347,8 @@ pub fn execute_context_method_call_outcome(
     args: Vec<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
-    match eval_method_call_result(object, method, args, context, values) {
+    let evaluated_args = eval_bridge_positional_args(args, values)?;
+    match eval_method_call_result_with_evaluated_args(object, method, evaluated_args, context, values) {
         Ok(result) => Ok(EvalOutcome::Value(result)),
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()
@@ -365,14 +366,7 @@ pub fn execute_context_static_method_call_outcome(
     args: Vec<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
-    let evaluated_args = args
-        .into_iter()
-        .map(|value| EvaluatedCallArg {
-            name: None,
-            value,
-            ref_target: None,
-        })
-        .collect();
+    let evaluated_args = eval_bridge_positional_args(args, values)?;
     match eval_static_method_call_result(class_name, method, evaluated_args, context, values) {
         Ok(result) => Ok(EvalOutcome::Value(result)),
         Err(EvalStatus::UncaughtThrowable) => context
@@ -381,6 +375,23 @@ pub fn execute_context_static_method_call_outcome(
             .ok_or(EvalStatus::UncaughtThrowable),
         Err(status) => Err(status),
     }
+}
+
+/// Decodes native bridge reference markers into positional eval call arguments.
+fn eval_bridge_positional_args(
+    args: Vec<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+    args.into_iter()
+        .map(|value| {
+            let (value, ref_target) = eval_invoker_ref_arg_value_and_target(value, None, values)?;
+            Ok(EvaluatedCallArg {
+                name: None,
+                value,
+                ref_target,
+            })
+        })
+        .collect()
 }
 
 /// Resolves object class-name builtins against eval dynamic-object metadata first.

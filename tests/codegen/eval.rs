@@ -7501,11 +7501,11 @@ echo in_array("crc32c", $algos) ? "crc" : "bad";
 $call = call_user_func("hash_algos");
 echo ":" . $call[18];
 $spread = call_user_func_array("hash_algos", []);
-echo ":" . $spread[27] . ":";
+echo ":" . $spread[27] . ":" . $spread[28] . ":";
 echo function_exists("hash_algos") ? "exists" : "missing";');
 "#,
     );
-    assert_eq!(out, "28:md2:sha256:crc:whirlpool:joaat:exists");
+    assert_eq!(out, "29:md2:sha256:crc:whirlpool:joaat:xxh128:exists");
 }
 
 /// Verifies eval one-shot hash digest builtins use the crypto bridge.
@@ -11957,6 +11957,107 @@ echo (new EvalMethodArrayArgBox())->run();
 "#,
     );
     assert_eq!(out, "3:2");
+}
+
+/// Verifies eval preserves associative arrays across AOT method return and argument boundaries.
+#[test]
+fn test_eval_fragment_bridges_associative_array_method_values() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMethodHashArrayBridgeBox {
+    private function items(): array {
+        return ['answer' => 42, 'other' => 7];
+    }
+
+    public function countItems(array $items): int {
+        return count($items);
+    }
+
+    public static function countItemsStatic(array $items): int {
+        return count($items);
+    }
+
+    public function run(): string {
+        return eval('$items = $this->items(); return $this->countItems($items) . ":" . self::countItemsStatic($items) . ":" . $items["answer"];');
+    }
+}
+
+echo (new EvalMethodHashArrayBridgeBox())->run();
+"#,
+    );
+    assert_eq!(out, "2:2:42");
+}
+
+/// Verifies eval can pass a private AOT kernel-parameter map into an array-typed method.
+#[test]
+fn test_eval_fragment_passes_private_kernel_parameter_map_to_aot_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalKernelParameterBag {
+    private array $parameters = [];
+
+    public function add(array $parameters): void {
+        foreach ($parameters as $name => $value) {
+            $this->parameters[$name] = $value;
+        }
+    }
+
+    public function has(string $name): bool {
+        return array_key_exists($name, $this->parameters);
+    }
+}
+
+class EvalKernelParameterBagChild extends EvalKernelParameterBag {}
+
+class EvalKernelParameterSource {
+    private array $bundles = [];
+    private string $environment = 'dev';
+    private bool $debug = false;
+
+    private function getAllowedEnvs(): array {
+        return ['prod', 'dev', 'test'];
+    }
+
+    private function getLogDir(): mixed {
+        return null;
+    }
+
+    private function getOptionalParameters(): mixed {
+        $directory = $this->getLogDir();
+
+        return null !== $directory ? ['kernel.logs_dir' => $directory] : [];
+    }
+
+    private function getBaseKernelParameters(): array {
+        $bundles = [];
+        $bundlesMetadata = [];
+        $knownEnvs = array_flip($this->getAllowedEnvs());
+
+        return [
+            'kernel.debug' => $this->debug,
+            'kernel.bundles' => $bundles,
+            'kernel.bundles_metadata' => $bundlesMetadata,
+            '.container.known_envs' => array_keys($knownEnvs),
+        ] + $this->getOptionalParameters();
+    }
+
+    private function getKernelParameters(): array {
+        $parameters = $this->getBaseKernelParameters();
+        $parameters['kernel.environment'] = $this->environment;
+        $parameters['kernel.charset'] = 'UTF-8';
+
+        return $parameters;
+    }
+
+    public function run(): bool {
+        return eval('$bag = new EvalKernelParameterBagChild(); $bag->add($this->getKernelParameters()); return $bag->has("kernel.debug");');
+    }
+}
+
+var_dump((new EvalKernelParameterSource())->run());
+"#,
+    );
+    assert_eq!(out, "bool(true)\n");
 }
 
 /// Verifies eval fragments can pass iterable arguments to AOT methods and constructors.

@@ -70,8 +70,8 @@ pub(crate) use printf::{lower_printf, lower_sprintf, lower_vprintf, lower_vsprin
 pub(crate) use replace_wrap::{lower_str_pad, lower_string_replace, lower_wordwrap};
 pub(crate) use scalar::{lower_chr, lower_number_format, lower_ord};
 pub(crate) use search::{
-    lower_str_contains, lower_str_repeat, lower_string_position, lower_strstr, lower_substr,
-    lower_substr_replace,
+    lower_str_contains, lower_str_repeat, lower_string_position, lower_string_span, lower_strstr,
+    lower_strrchr, lower_substr, lower_substr_replace,
 };
 pub(crate) use simple::{
     lower_binary_string_runtime, lower_grapheme_strrev, lower_html_escape, lower_lcfirst,

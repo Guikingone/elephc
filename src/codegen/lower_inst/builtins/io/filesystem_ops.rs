@@ -189,7 +189,62 @@ pub(crate) fn lower_tempnam(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 
 /// Lowers `scandir(path)` through the target-aware runtime directory listing helper.
 pub(crate) fn lower_scandir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_array(ctx, inst, "scandir", "__rt_scandir")
+    super::super::ensure_arg_count_between(inst, "scandir", 1, 3)?;
+    let path = expect_operand(inst, 0)?;
+    if let Some(order) = inst.operands.get(1).copied() {
+        require_int(
+            ctx.load_value_to_result(order)?.codegen_repr(),
+            "scandir sorting_order",
+        )?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    }
+    let order_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    load_string_to_result(ctx, path, "scandir")?;
+    abi::emit_call_label(ctx.emitter, "__rt_scandir");
+    abi::emit_pop_reg(ctx.emitter, order_reg);
+
+    let sort_ascending = ctx.next_label("scandir_sort_ascending");
+    let sort_descending = ctx.next_label("scandir_sort_descending");
+    let done = ctx.next_label("scandir_sort_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #2", order_reg));         // SCANDIR_SORT_NONE preserves the directory stream order
+            ctx.emitter.instruction(&format!("b.eq {}", done));                // skip sorting for PHP's no-sort mode
+            ctx.emitter.instruction(&format!("cbz {}, {}", order_reg, sort_ascending)); // zero selects ascending lexical order
+            ctx.emitter.instruction(&format!("b {}", sort_descending));        // every other integer selects descending order like php-src
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, 2", order_reg));          // SCANDIR_SORT_NONE preserves the directory stream order
+            ctx.emitter.instruction(&format!("je {}", done));                  // skip sorting for PHP's no-sort mode
+            ctx.emitter.instruction(&format!("test {}, {}", order_reg, order_reg)); // zero selects ascending lexical order
+            ctx.emitter.instruction(&format!("jz {}", sort_ascending));
+            ctx.emitter.instruction(&format!("jmp {}", sort_descending));      // every other integer selects descending order like php-src
+        }
+    }
+
+    ctx.emitter.label(&sort_ascending);
+    emit_scandir_string_sort(ctx, "__rt_sort_str");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&sort_descending);
+    emit_scandir_string_sort(ctx, "__rt_rsort_str");
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Sorts the current scandir string array in place while preserving its pointer as the builtin
+/// result across the void string-sort runtime helper.
+fn emit_scandir_string_sort(ctx: &mut FunctionContext<'_>, runtime_label: &str) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if arg_reg != result_reg {
+        ctx.emitter
+            .instruction(&format!("mov {}, {}", arg_reg, result_reg));
+    }
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
 }
 
 /// Lowers `glob(pattern, flags?)` through the target-aware runtime glob expansion helper.

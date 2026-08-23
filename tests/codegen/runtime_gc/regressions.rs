@@ -873,6 +873,128 @@ echo $receiver->acceptsArray(values());
     );
 }
 
+/// Verifies a boxed associative array retains string keys when crossing a typed array boundary.
+#[test]
+fn test_mixed_receiver_preserves_associative_array_for_typed_method_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class Receiver {
+    public function environment(array $context): string {
+        return $context['APP_ENV'];
+    }
+}
+function receiver(): mixed { return new Receiver(); }
+function context(): mixed { return ['APP_ENV' => 'dev']; }
+echo receiver()->environment(context());
+"#,
+    );
+    assert_eq!(out, "dev");
+}
+
+/// Verifies runtime callable unpacking preserves a boxed associative array argument.
+#[test]
+fn test_runtime_callable_spread_preserves_associative_array_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function environment(array $context): string {
+    return $context['APP_ENV'];
+}
+class ParserState {
+    private array $values = [];
+
+    public function arguments(): mixed {
+        $path = __DIR__.'/runtime-context.env';
+        file_put_contents($path, 'APP_ENV=dev');
+        $line = file_get_contents($path);
+        $this->values['APP_ENV'] = substr($line, 8);
+        return [$this->values];
+    }
+}
+$callable = 'environment';
+$parser = new ParserState();
+$arguments = function () use ($parser) {
+    return $parser->arguments();
+};
+echo $callable(...$arguments());
+"#,
+    );
+    assert_eq!(out, "dev");
+}
+
+/// Verifies nested associative bundle-style definitions remain iterable after gradual widening.
+#[test]
+fn test_mixed_nested_associative_array_iteration_preserves_hash_layout() {
+    let out = compile_and_run(
+        r#"<?php
+function definitions(): mixed { return ['Bundle' => ['all' => true]]; }
+foreach (definitions() as $class => $envs) {
+    echo $class, ':', $envs['all'] ? 'yes' : 'no';
+}
+"#,
+    );
+    assert_eq!(out, "Bundle:yes");
+}
+
+/// Verifies nested associative maps survive array-by-reference resolution and later iteration.
+#[test]
+fn test_nested_associative_array_by_ref_resolution_preserves_hash_layout() {
+    let out = compile_and_run(
+        r#"<?php
+function resolve(string $class, array $envs, array $bundles, array &$resolved): void {
+    $resolved[$class] = $envs;
+}
+$bundles = ['Bundle' => ['all' => true]];
+$resolved = [];
+foreach ($bundles as $class => $envs) {
+    resolve($class, $envs, $bundles, $resolved);
+}
+foreach ($resolved as $class => $envs) {
+    echo $class, ':', $envs['all'] ? 'yes' : 'no';
+}
+"#,
+    );
+    assert_eq!(out, "Bundle:yes");
+}
+
+/// Verifies repeated by-reference method calls retain a map promoted from an empty array.
+///
+/// The first call writes a string key, promoting the caller's indexed storage to
+/// an associative map. A runtime include enables the dynamic bridge around the
+/// native calls; the second call must still receive the live promoted map.
+#[test]
+fn test_repeated_by_ref_method_calls_preserve_promoted_associative_map() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+class Registry {
+    public function register(string $name, array &$registered): void {
+        if (isset($registered[$name])) {
+            return;
+        }
+
+        $registered[$name] = true;
+    }
+}
+
+$path = __DIR__.'/bridge.php';
+require $path;
+$registered = [];
+$registry = new Registry();
+foreach (['first', 'second'] as $name) {
+    $registry->register($name, $registered);
+}
+echo $registered['first'] && $registered['second'] ? 'ok' : 'missing';
+"#,
+            ),
+            ("bridge.php", "<?php\nreturn true;\n"),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Regression test: a loop pushing scalars into a property array repeatedly
 /// exercises the boxing + push path; each iteration must balance its refcount or
 /// the leak compounds. Asserts heap is clean after 20 iterations.

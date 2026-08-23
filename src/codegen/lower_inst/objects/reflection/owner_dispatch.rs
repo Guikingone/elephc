@@ -8,7 +8,10 @@
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
 
 use super::*;
+use std::collections::HashSet;
+
 use crate::codegen::lower_inst::current_method_class;
+use crate::ir::Terminator;
 use crate::names::label_fragment;
 
 /// Returns true for reflection owner classes that need metadata-aware construction.
@@ -63,8 +66,15 @@ fn lower_reflection_object_by_runtime_class(
     let Some(source) = inst.operands.first().copied() else {
         return Ok(false);
     };
-    let PhpType::Object(mut static_type) = ctx.value_php_type(source)?.codegen_repr() else {
-        return Ok(false);
+    let (mut static_type, boxed_source) = match ctx.value_php_type(source)?.codegen_repr() {
+        PhpType::Object(static_type) => (static_type, false),
+        PhpType::Mixed | PhpType::Union(_) => {
+            let Some(lexical_class) = current_method_class(ctx).ok() else {
+                return Ok(false);
+            };
+            (lexical_class.to_string(), true)
+        }
+        _ => return Ok(false),
     };
     if static_type.is_empty() || static_type.eq_ignore_ascii_case("object") {
         let Some(lexical_class) = current_method_class(ctx).ok() else {
@@ -104,7 +114,14 @@ fn lower_reflection_object_by_runtime_class(
     ctx.load_value_to_reg(source, &result_reg)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [x0]");                            // load the reflected object's concrete class id
+            if boxed_source {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+                ctx.emitter.instruction("cmp x0, #6");                          // ReflectionObject requires a boxed object payload
+                ctx.emitter.instruction(&format!("b.ne {}", miss_label));
+                ctx.emitter.instruction("ldr x9, [x1]");                        // load the reflected object's concrete class id
+            } else {
+                ctx.emitter.instruction("ldr x9, [x0]");                        // load the reflected object's concrete class id
+            }
             for ((_, class_id), label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "x10", *class_id as i64);
                 ctx.emitter.instruction("cmp x9, x10");                         // compare this reflected-class candidate id
@@ -112,7 +129,14 @@ fn lower_reflection_object_by_runtime_class(
             }
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // load the reflected object's concrete class id
+            if boxed_source {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+                ctx.emitter.instruction("cmp rax, 6");                          // ReflectionObject requires a boxed object payload
+                ctx.emitter.instruction(&format!("jne {}", miss_label));
+                ctx.emitter.instruction("mov r11, QWORD PTR [rdi]");            // load the reflected object's concrete class id
+            } else {
+                ctx.emitter.instruction("mov r11, QWORD PTR [rax]");            // load the reflected object's concrete class id
+            }
             for ((_, class_id), label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "r10", *class_id as i64);
                 ctx.emitter.instruction("cmp r11, r10");                        // compare this reflected-class candidate id
@@ -122,9 +146,14 @@ fn lower_reflection_object_by_runtime_class(
     }
     abi::emit_jump(ctx.emitter, &miss_label);
 
+    let source_metadata_only = reflection_object_uses_only_source_metadata(ctx, inst);
     for ((class_name, _), label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        emit_full_reflection_object(ctx, class_name)?;
+        if source_metadata_only {
+            emit_source_file_reflection_object(ctx, class_name)?;
+        } else {
+            emit_full_reflection_object(ctx, class_name)?;
+        }
         abi::emit_jump(ctx.emitter, &done_label);
     }
     ctx.emitter.label(&miss_label);
@@ -134,12 +163,233 @@ fn lower_reflection_object_by_runtime_class(
     Ok(true)
 }
 
+/// Returns whether a reflection object only flows into source-location and name queries.
+///
+/// The source metadata materializer preserves every observable field consumed by
+/// `getFileName()` and `name` while avoiding eager construction of method, property, and constant
+/// reflection graphs. Any escape, control-flow transfer, unrecognized alias, or other member
+/// access conservatively selects the full materializer instead.
+fn reflection_object_uses_only_source_metadata(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> bool {
+    let Some(result) = inst.result else {
+        return false;
+    };
+    let mut object_aliases = HashSet::from([result]);
+    collect_transparent_aliases(ctx, &mut object_aliases);
+
+    let mut slots = HashSet::new();
+    let mut saw_direct_source_metadata = false;
+    for instruction in &ctx.function.instructions {
+        if !instruction
+            .operands
+            .iter()
+            .any(|operand| object_aliases.contains(operand))
+        {
+            continue;
+        }
+        match instruction.op {
+            Op::StoreLocal => match instruction.immediate {
+                Some(Immediate::LocalSlot(slot)) => {
+                    slots.insert(slot);
+                }
+                _ => return false,
+            },
+            Op::MethodCall
+                if instruction
+                    .operands
+                    .first()
+                    .is_some_and(|receiver| object_aliases.contains(receiver))
+                    && reflection_member_name(ctx, instruction)
+                        .is_some_and(|method| method.eq_ignore_ascii_case("getFileName")) =>
+            {
+                saw_direct_source_metadata = true;
+            }
+            Op::PropGet
+                if instruction
+                    .operands
+                    .first()
+                    .is_some_and(|receiver| object_aliases.contains(receiver))
+                    && reflection_member_name(ctx, instruction)
+                        .is_some_and(|property| property.eq_ignore_ascii_case("name")) =>
+            {
+                saw_direct_source_metadata = true;
+            }
+            Op::Acquire | Op::Borrow | Op::Move | Op::Release | Op::ReleaseUnlessAliases => {}
+            _ => return false,
+        }
+    }
+    if saw_direct_source_metadata {
+        return !ctx
+            .function
+            .blocks
+            .iter()
+            .filter_map(|block| block.terminator.as_ref())
+            .any(|terminator| terminator_uses_alias(terminator, &object_aliases));
+    }
+    let Some(slot) = (slots.len() == 1).then(|| *slots.iter().next().unwrap()) else {
+        return false;
+    };
+
+    let mut local_aliases = ctx
+        .function
+        .instructions
+        .iter()
+        .filter_map(|instruction| {
+            (instruction.op == Op::LoadLocal
+                && instruction.immediate == Some(Immediate::LocalSlot(slot)))
+            .then_some(instruction.result)
+            .flatten()
+        })
+        .collect::<HashSet<_>>();
+    if local_aliases.is_empty() {
+        return false;
+    }
+    collect_transparent_aliases(ctx, &mut local_aliases);
+
+    let mut saw_source_metadata = false;
+    for instruction in &ctx.function.instructions {
+        if !instruction
+            .operands
+            .iter()
+            .any(|operand| local_aliases.contains(operand))
+        {
+            continue;
+        }
+        if instruction.op == Op::MethodCall
+            && instruction
+                .operands
+                .first()
+                .is_some_and(|receiver| local_aliases.contains(receiver))
+            && reflection_member_name(ctx, instruction)
+                .is_some_and(|method| method.eq_ignore_ascii_case("getFileName"))
+        {
+            saw_source_metadata = true;
+            continue;
+        }
+        if instruction.op == Op::PropGet
+            && instruction
+                .operands
+                .first()
+                .is_some_and(|receiver| local_aliases.contains(receiver))
+            && reflection_member_name(ctx, instruction)
+                .is_some_and(|property| property.eq_ignore_ascii_case("name"))
+        {
+            saw_source_metadata = true;
+            continue;
+        }
+        if matches!(instruction.op, Op::Acquire | Op::Borrow | Op::Move | Op::Release) {
+            continue;
+        }
+        return false;
+    }
+
+    saw_source_metadata
+        && !ctx
+            .function
+            .blocks
+            .iter()
+            .filter_map(|block| block.terminator.as_ref())
+            .any(|terminator| terminator_uses_alias(terminator, &local_aliases))
+}
+
+/// Extends `aliases` through SSA ownership-preserving forwarding instructions.
+fn collect_transparent_aliases(ctx: &FunctionContext<'_>, aliases: &mut HashSet<ValueId>) {
+    loop {
+        let mut changed = false;
+        for instruction in &ctx.function.instructions {
+            if !matches!(instruction.op, Op::Acquire | Op::Borrow | Op::Move)
+                || instruction.operands.len() != 1
+                || !aliases.contains(&instruction.operands[0])
+            {
+                continue;
+            }
+            if let Some(result) = instruction.result {
+                changed |= aliases.insert(result);
+            }
+        }
+        if !changed {
+            return;
+        }
+    }
+}
+
+/// Returns the source-level property or method name attached to an EIR member instruction.
+fn reflection_member_name<'a>(
+    ctx: &'a FunctionContext<'_>,
+    instruction: &Instruction,
+) -> Option<&'a str> {
+    let Some(Immediate::Data(data)) = instruction.immediate else {
+        return None;
+    };
+    ctx.module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .map(String::as_str)
+}
+
+/// Returns whether a control-flow terminator consumes any alias from `aliases`.
+fn terminator_uses_alias(terminator: &Terminator, aliases: &HashSet<ValueId>) -> bool {
+    let contains = |value: &ValueId| aliases.contains(value);
+    match terminator {
+        Terminator::Br { args, .. } => args.iter().any(contains),
+        Terminator::CondBr {
+            cond,
+            then_args,
+            else_args,
+            ..
+        } => contains(cond) || then_args.iter().any(contains) || else_args.iter().any(contains),
+        Terminator::Switch {
+            scrutinee,
+            cases,
+            default_args,
+            ..
+        } => {
+            contains(scrutinee)
+                || cases.iter().any(|case| case.args.iter().any(contains))
+                || default_args.iter().any(contains)
+        }
+        Terminator::Return { value } => value.as_ref().is_some_and(contains),
+        Terminator::Throw { value } => contains(value),
+        Terminator::GeneratorSuspend {
+            key,
+            value,
+            resume_args,
+            ..
+        } => {
+            key.as_ref().is_some_and(contains)
+                || value.as_ref().is_some_and(contains)
+                || resume_args.iter().any(contains)
+        }
+        Terminator::Fatal { .. } | Terminator::Unreachable => false,
+    }
+}
+
 /// Returns whether a constructor argument needs runtime Reflection metadata lookup.
 pub(super) fn reflection_owner_requires_runtime_metadata(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<bool> {
     for operand in &inst.operands {
+        let literal_source = reflection_literal_source(ctx, *operand)?;
+        if literal_source != *operand {
+            let source_value = ctx.function.value(literal_source).ok_or_else(|| {
+                CodegenIrError::missing_entry("value", literal_source.as_raw())
+            })?;
+            if let ValueDef::Instruction { inst: source_inst, .. } = source_value.def {
+                let source_inst = ctx.function.instruction(source_inst).ok_or_else(|| {
+                    CodegenIrError::missing_entry("instruction", source_inst.as_raw())
+                })?;
+                if matches!(
+                    source_inst.op,
+                    Op::ConstStr | Op::ConstClassName | Op::ConstI64
+                ) {
+                    continue;
+                }
+            }
+        }
         let ty = ctx.value_php_type(*operand)?.codegen_repr();
         if matches!(ty, PhpType::Callable | PhpType::Object(_)) {
             return Ok(true);

@@ -333,7 +333,7 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_mixed_method("getStaticProperties", "__static_properties"),
             builtin_reflection_class_get_static_property_value_method(),
             builtin_reflection_class_set_static_property_value_method(),
-            builtin_reflection_class_array_method(
+            builtin_reflection_class_filtered_array_method(
                 "getReflectionConstants",
                 "__reflection_constants",
                 object_array_type("ReflectionClassConstant"),

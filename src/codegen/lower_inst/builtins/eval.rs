@@ -302,8 +302,6 @@ use calls::*;
 #[allow(unused_imports)]
 use scope_access::*;
 #[allow(unused_imports)]
-use dynamic_calls::*;
-#[allow(unused_imports)]
 use introspection::*;
 #[allow(unused_imports)]
 use symbol_queries::*;
@@ -352,6 +350,7 @@ pub(super) use dynamic_calls::{
     lower_eval_native_frame_static_property_set, lower_eval_object_new,
     lower_eval_object_new_dynamic_fallback, lower_eval_static_method_call,
 };
+pub(in crate::codegen::lower_inst) use dynamic_calls::lower_eval_owned_method_call;
 pub(super) use native_object_construction::lower_eval_native_object_new;
 pub(super) use introspection::{
     lower_eval_callable_call_array, lower_eval_class_relation, lower_eval_is_callable,

@@ -109,8 +109,13 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                 | Op::EvalStaticMethodCall => {
                     features.eval_bridge = true;
                 }
-                Op::ExprCall | Op::CallableDescriptorInvoke => {
+                Op::ExprCall => {
                     features.descriptor_invoker = true;
+                }
+                Op::CallableDescriptorInvoke => {
+                    features.descriptor_invoker = true;
+                    features.phar_archive |=
+                        callable_descriptor_invoke_can_publish_phar(function, inst);
                 }
                 Op::PdoAdapterAddr => {
                     features.pdo_udf = true;
@@ -128,6 +133,22 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
         }
     }
     features
+}
+
+/// Returns whether a descriptor invocation may select a string-named PHAR-aware file builtin.
+fn callable_descriptor_invoke_can_publish_phar(
+    function: &Function,
+    inst: &crate::ir::Instruction,
+) -> bool {
+    inst.operands
+        .first()
+        .and_then(|callable| function.value(*callable))
+        .is_some_and(|value| {
+            matches!(
+                value.php_type.codegen_repr(),
+                PhpType::Str | PhpType::Mixed | PhpType::Union(_)
+            )
+        })
 }
 
 /// Returns true when a Reflection owner constructor depends on runtime-only metadata.

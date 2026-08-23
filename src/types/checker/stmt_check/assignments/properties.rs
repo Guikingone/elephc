@@ -494,7 +494,23 @@ fn check_object_property_write(
                     &expected_ty,
                     val_ty,
                 );
-            if !accepts_stringable_object && !defers_nominal_object_check {
+            // A gradual value reaching a declared array property is PHP's RUNTIME check, not a
+            // static one: `private array $options` accepts any array whatever its key shape, and
+            // throws otherwise. The property boundary already lowers this through `MixedToHash`,
+            // which tests the runtime tag and raises `TypeError` for a non-array, so refusing here
+            // rejected programs `php -n` runs. Gated on the lowering's own predicate so the two
+            // cannot disagree — accepting a target it does not convert would put an unconverted
+            // `Mixed` in a concrete slot.
+            let defers_gradual_array_check = matches!(
+                val_ty.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) && crate::ir_lower::gradual_coercions::boundary_coercion_narrows_gradual(
+                &expected_ty,
+            );
+            if !accepts_stringable_object
+                && !defers_nominal_object_check
+                && !defers_gradual_array_check
+            {
                 checker.require_compatible_arg_type(
                     &expected_ty,
                     val_ty,
@@ -704,7 +720,7 @@ pub(super) fn refine_object_property_type(
         && checker.current_class.as_deref().is_some_and(|current| {
             current == class_name || checker.is_subclass_of(current, class_name)
         });
-    let refined_ty = {
+    let (declaring_class, refined_ty) = {
         let Some(class_info) = checker.classes.get(class_name) else {
             return;
         };
@@ -722,13 +738,14 @@ pub(super) fn refine_object_property_type(
         ) else {
             return;
         };
-        refined_ty
+        let declaring_class = class_info
+            .property_declaring_classes
+            .get(property)
+            .cloned()
+            .unwrap_or_else(|| class_name.to_string());
+        (declaring_class, refined_ty)
     };
-    if let Some(class_info) = checker.classes.get_mut(class_name) {
-        if let Some(slot) = class_info.visible_property_index(property) {
-            class_info.properties[slot].1 = refined_ty;
-        }
-    }
+    propagate_object_property_type(checker, &declaring_class, property, refined_ty);
 }
 
 /// Validates a write to a property of a typed pointer (extern or packed class).
@@ -1084,17 +1101,43 @@ fn update_object_property_type(
     property_has_declared_type: bool,
     updated_prop_ty: PhpType,
 ) {
-    if let Some(class_info) = checker.classes.get_mut(class_name) {
-        if let Some(prop) = class_info
-            .properties
-            .iter_mut()
-            .find(|(name, _)| name == property)
+    let Some((declaring_class, current_type)) = checker.classes.get(class_name).and_then(|info| {
+        let slot = info.visible_property_index(property)?;
+        let declaring_class = info
+            .property_declaring_classes
+            .get(property)
+            .cloned()
+            .unwrap_or_else(|| class_name.to_string());
+        Some((declaring_class, info.properties.get(slot)?.1.clone()))
+    }) else {
+        return;
+    };
+    if property_has_declared_type
+        && !declared_generic_array_can_use_assoc_storage(&current_type, &updated_prop_ty)
+    {
+        return;
+    }
+    propagate_object_property_type(checker, &declaring_class, property, updated_prop_ty);
+}
+
+/// Applies one property storage representation to every class that inherits the same slot.
+fn propagate_object_property_type(
+    checker: &mut Checker,
+    declaring_class: &str,
+    property: &str,
+    updated_type: PhpType,
+) {
+    for class_info in checker.classes.values_mut() {
+        if class_info
+            .property_declaring_classes
+            .get(property)
+            .map(String::as_str)
+            != Some(declaring_class)
         {
-            if !property_has_declared_type
-                || declared_generic_array_can_use_assoc_storage(&prop.1, &updated_prop_ty)
-            {
-                prop.1 = updated_prop_ty;
-            }
+            continue;
+        }
+        if let Some(slot) = class_info.visible_property_index(property) {
+            class_info.properties[slot].1 = updated_type.clone();
         }
     }
 }

@@ -9,6 +9,26 @@
 
 use super::*;
 
+/// Returns class constant names in PHP declaration order, with a deterministic fallback for
+/// compiler-generated metadata that predates an explicit order vector.
+fn ordered_class_constant_names(info: &crate::types::ClassInfo) -> Vec<&String> {
+    let mut names = Vec::with_capacity(info.constants.len());
+    let mut seen = std::collections::HashSet::new();
+    for name in &info.constant_order {
+        if info.constants.contains_key(name) && seen.insert(name.as_str()) {
+            names.push(name);
+        }
+    }
+    let mut remaining = info
+        .constants
+        .keys()
+        .filter(|name| !seen.contains(name.as_str()))
+        .collect::<Vec<_>>();
+    remaining.sort();
+    names.extend(remaining);
+    names
+}
+
 /// Returns PHP case-insensitive method names visible to `ReflectionClass::hasMethod()`.
 pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_name: &str) -> Vec<String> {
     let mut names = Vec::new();
@@ -71,7 +91,7 @@ pub(super) fn reflection_class_constant_names(
         else {
             break;
         };
-        for constant in current_info.constants.keys() {
+        for constant in ordered_class_constant_names(current_info) {
             push_unique_constant_name(constant, &mut names, &mut seen);
         }
         for interface_name in &current_info.interfaces {
@@ -114,10 +134,11 @@ pub(super) fn reflection_class_constant_members(
         else {
             break;
         };
-        for (constant_name, value_expr) in &current_info.constants {
+        for constant_name in ordered_class_constant_names(current_info) {
             if seen.contains(constant_name) {
                 continue;
             }
+            let value_expr = &current_info.constants[constant_name];
             let value =
                 reflection_constant_value(ctx, resolved_name, Some(current_info), value_expr, 0)?;
             push_unique_constant_member(constant_name, value, &mut members, &mut seen);
@@ -262,10 +283,11 @@ pub(super) fn reflection_class_constant_reflection_members(
         else {
             break;
         };
-        for (constant_name, value_expr) in &current_info.constants {
+        for constant_name in ordered_class_constant_names(current_info) {
             if seen.contains(constant_name) {
                 continue;
             }
+            let value_expr = &current_info.constants[constant_name];
             let value =
                 reflection_constant_value(ctx, resolved_name, Some(current_info), value_expr, 0)?;
             push_unique_constant_reflection_member(
@@ -490,4 +512,3 @@ pub(super) fn push_unique_listed_constant_member(
         members.push(member);
     }
 }
-

@@ -200,6 +200,11 @@ fn crc32c(data: &[u8]) -> Vec<u8> {
     C.checksum(data).to_be_bytes().to_vec()
 }
 
+/// Computes PHP's seeded-default XXH3 128-bit digest in canonical byte order.
+fn xxh128(data: &[u8]) -> Vec<u8> {
+    xxhash_rust::xxh3::xxh3_128(data).to_be_bytes().to_vec()
+}
+
 /// Resolves a PHP hash() algorithm name to a freshly initialized `HashState`,
 /// or `None` if the algorithm is unsupported (caller maps to PHP ValueError).
 pub fn make(name: &str) -> Option<Box<dyn HashState>> {
@@ -235,6 +240,7 @@ pub fn make(name: &str) -> Option<Box<dyn HashState>> {
         "fnv164" => buf(8, fnv164),
         "fnv1a64" => buf(8, fnv1a64),
         "joaat" => buf(4, joaat),
+        "xxh128" => buf(16, xxh128),
         _ => return None,
     })
 }

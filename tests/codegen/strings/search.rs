@@ -183,6 +183,62 @@ fn test_strrpos_not_found_is_strict_false() {
     assert_eq!(out, "miss");
 }
 
+/// Verifies strrchr returns the suffix at the final match, uses only the first needle byte, and
+/// preserves PHP's false result when no match exists.
+#[test]
+fn test_strrchr_suffix_first_needle_byte_and_miss() {
+    let out = compile_and_run(
+        r#"<?php
+echo strrchr('A\\B\\C', '\\'), '|';
+echo strrchr('abc', 'bc'), '|';
+echo strrchr('abc', 'z') === false ? 'F' : 'bad';
+"#,
+    );
+    assert_eq!(out, "\\C|bc|F");
+}
+
+/// Verifies php-src byte-span semantics, bounds, naming, and namespace fallback.
+#[test]
+fn test_strcspn_and_strspn_php_src_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+namespace SpanFixture;
+
+function spanWithNullableLength(?int $length): int {
+    return strcspn("abc123", "123", 1, $length);
+}
+
+$dynamicCspn = "strcspn";
+$dynamicSpn = \strspn(...);
+
+$subject = "22222222aaaa bbb1111 cccc";
+$characters = "1234";
+
+echo STRCSPN($subject, $characters), "|",
+     strcspn($subject, $characters, 9), "|",
+     \strcspn($subject, $characters, 9, 6), "|",
+     strcspn("abc123", "123", offset: 1, length: -1), "|",
+     strcspn("abc\0def", "\0"), "|",
+     strcspn("abc", ""), "|",
+     strspn($subject, $characters), "|",
+     strspn($subject, $characters, 2), "|",
+     \STRSPN($subject, $characters, 2, 3), "|",
+     strspn(string: "abc123", characters: "abc", offset: -20, length: null), "|",
+     strspn("abc", ""), "|",
+     spanWithNullableLength(null), "|",
+     spanWithNullableLength(-1), "|",
+     $dynamicCspn("abc123", "123"), "|",
+     $dynamicSpn("abc123", "abc"), "|",
+     call_user_func_array("strcspn", ["abc123", "123", 1, 4]), "|",
+     strcspn("abc", "x", PHP_INT_MIN), "|",
+     strcspn("abc", "x", PHP_INT_MAX), "|",
+     strcspn("abc", "x", 0, PHP_INT_MIN), "|",
+     strcspn("abc", "x", 0, PHP_INT_MAX);
+"#,
+    );
+    assert_eq!(out, "0|7|6|2|3|3|8|6|3|3|0|2|2|3|3|2|3|0|0|3");
+}
+
 /// Verifies strstr returns the portion of the string starting from the first needle occurrence.
 /// Fixture: "user@example.com" split on "@" yields "@example.com".
 #[test]

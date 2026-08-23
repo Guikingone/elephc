@@ -24,6 +24,71 @@ echo in_array(null, $values, true) ? "yes" : "no";
     assert_eq!(output, "yes");
 }
 
+/// Verifies spread-only `array_merge()` retains its compiler-provided helper
+/// through declaration pruning and preserves PHP's integer-key renumbering.
+#[test]
+fn test_array_merge_spread_helper_survives_declaration_pruning() {
+    let out = compile_and_run(
+        r#"<?php
+$arrays = [[10, 11], [12], [13, 14]];
+foreach (array_merge(...$arrays) as $value) {
+    echo $value;
+}
+"#,
+    );
+
+    assert_eq!(out, "1011121314");
+}
+
+/// Verifies spread-only `array_merge()` flattens nested arrays held in a
+/// gradual associative outer value without dropping any integer-keyed entries.
+#[test]
+fn test_array_merge_spread_flattens_gradual_associative_nested_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+function preserve_as_mixed(mixed $value): mixed {
+    return $value;
+}
+
+$groups = preserve_as_mixed([0 => [10, 11], -2048 => [12]]);
+foreach (array_merge(...$groups) as $value) {
+    echo $value;
+}
+"#,
+    );
+
+    assert_eq!(out, "101112");
+}
+
+/// Verifies a typed property copied, key-sorted, and spread into `array_merge()`
+/// keeps its nested arrays visible through the gradual helper boundary.
+#[test]
+fn test_array_merge_spread_after_key_sort_of_typed_nested_array_property() {
+    let out = compile_and_run(
+        r#"<?php
+class PriorityGroups {
+    public array $groups;
+
+    public function __construct() {
+        $this->groups = [0 => [10, 11], -2048 => [12]];
+    }
+
+    public function flatten(): array {
+        $groups = $this->groups;
+        krsort($groups);
+        return array_merge(...$groups);
+    }
+}
+
+foreach ((new PriorityGroups())->flatten() as $value) {
+    echo $value;
+}
+"#,
+    );
+
+    assert_eq!(out, "101112");
+}
+
 /// Verifies `array_unique()` preserves the first associative keys for gradual Mixed values.
 #[test]
 fn test_array_unique_assoc_mixed_preserves_first_keys() {
@@ -605,4 +670,16 @@ foreach ($m as $k => $v) { echo "$k:$v "; }
 "#,
     );
     assert_eq!(out, "0:1 1:2 2:3 3:4 ");
+}
+
+/// Verifies array_merge_recursive() accepts PHP string-element indexed arrays.
+#[test]
+fn test_array_merge_recursive_string_indexed_inputs() {
+    let out = compile_and_run(
+        r#"<?php
+$merged = array_merge_recursive(['a'], ['b']);
+echo implode(',', $merged);
+"#,
+    );
+    assert_eq!(out, "a,b");
 }

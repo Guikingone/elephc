@@ -105,6 +105,33 @@ echo count($names);
     assert_eq!(out, "3");
 }
 
+/// Verifies array_column() accepts an associative outer collection of associative rows.
+#[test]
+fn test_array_column_associative_outer_collection() {
+    let out = compile_and_run(
+        r#"<?php
+$users = ['primary' => ['name' => 'Alice'], 'secondary' => ['name' => 'Bob']];
+echo implode(',', array_column($users, 'name'));
+"#,
+    );
+    assert_eq!(out, "Alice,Bob");
+}
+
+/// Verifies strict in_array() compares a gradual needle against nested indexed-array elements.
+#[test]
+fn test_in_array_strict_mixed_needle_nested_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+function contains(mixed $needle): bool {
+    return in_array($needle, [['cache.adapter.redis_tag_aware'], ['cache.adapter.valkey_tag_aware']], true);
+}
+echo contains(['cache.adapter.valkey_tag_aware']) ? 'Y' : 'N';
+echo contains(['cache.adapter.redis']) ? 'Y' : 'N';
+"#,
+    );
+    assert_eq!(out, "YN");
+}
+
 /// Exercises `array_column()` on rows containing mixed (string and int) values, then iterates both result arrays to confirm ordering and values are preserved.
 #[test]
 fn test_array_column_mixed_row_values() {

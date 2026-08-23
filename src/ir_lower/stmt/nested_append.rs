@@ -284,10 +284,11 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
     // cannot free the bucket: the read above already took a reference, so the count it drops is at
     // least two.
     //
-    // ONLY for a local base. `Op::SlotDetach` republishes the (possibly rehashed) container pointer
-    // through `source_load_local_slot`, which resolves a local slot and nothing else; on a property
-    // base the new pointer would never reach the property and it would be left stale. A property
-    // base therefore keeps the auto-vivification and stays quadratic.
+    // ONLY for an unaliased local base. `Op::SlotDetach` republishes the (possibly rehashed)
+    // container pointer through the local's raw storage. A local bound by `$ref =& $obj->$name`
+    // is semantically a property base even though its AST shape is a local: detaching through it
+    // can reinterpret a runtime-promoted hash as an indexed array before the ref-cell writeback.
+    // Such aliases keep the correct (quadratic) copy-on-write path.
     if let BaseKind::Local(name) = &group.base {
         // `SlotDetach`'s indexed fast path accepts only a raw integer offset. A runtime Mixed key
         // may normalize to a string and promote the array to hash storage; feeding the boxed cell
@@ -295,7 +296,8 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         // copy-on-write path for dynamic keys, which already dispatches through the mixed-key
         // runtime helpers.
         let can_detach_indexed_slot = !container_is_array || !key_is_dynamic;
-        if can_detach_indexed_slot
+        if !ctx.is_ref_bound_local(name)
+            && can_detach_indexed_slot
             && matches!(ctx.local_type(name), PhpType::Array(_) | PhpType::AssocArray { .. })
         {
             // Re-load the container and key: they were emitted in a predecessor block, and the

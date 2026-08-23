@@ -271,6 +271,9 @@ pub enum Op {
     ConstEnumCase,
     LoadCalledClassId,
     ObjectClassId,
+    /// Resolves a runtime class-string (or boxed mixed string) to its closed-world class id.
+    /// Returns `-1` when no class name matches.
+    ClassNameToId,
     DataAddr,
     LoadLocal,
     StoreLocal,
@@ -671,6 +674,7 @@ impl Op {
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             ObjectClassId => E::READS_HEAP,
+            ClassNameToId => E::READS_GLOBAL | E::READS_HEAP,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | FinallyEnter | FinallyExit => {
                 E::WRITES_LOCAL
@@ -926,6 +930,7 @@ impl Op {
             ConstEnumCase => "const_enum_case",
             LoadCalledClassId => "load_called_class_id",
             ObjectClassId => "object_class_id",
+            ClassNameToId => "class_name_to_id",
             DataAddr => "data_addr",
             LoadLocal => "load_local",
             StoreLocal => "store_local",

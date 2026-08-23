@@ -257,7 +257,7 @@ fn try_compile_source_to_asm_with_defines_repr(
         )
         .expect("autoload failed");
     let resolved = elephc::assert_prelude::inject_if_used(resolved);
-    let resolved = elephc::array_merge_prelude::inject_if_used(resolved);
+    let resolved = elephc::array_merge_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_reduce_prelude::inject_if_used(resolved);
     let resolved = elephc::backend_gap_prelude::inject_if_used(resolved);
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
@@ -272,12 +272,16 @@ fn try_compile_source_to_asm_with_defines_repr(
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
     let empty_roots = HashSet::new();
+    let mut forced_groups = HashSet::new();
+    if prelude_inventory.groups.contains_key("array_merge") {
+        forced_groups.insert("array_merge".to_string());
+    }
     let optimized = elephc::optimize::prune_unreachable_declarations(
         optimized,
         &mut check_result,
         elephc::optimize::reachability::PruneOptions {
             inventory: &prelude_inventory,
-            forced_groups: &empty_roots,
+            forced_groups: &forced_groups,
             exported_functions: &empty_roots,
             eval_forced: false,
         },

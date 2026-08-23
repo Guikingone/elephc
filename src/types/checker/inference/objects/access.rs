@@ -307,6 +307,12 @@ impl Checker {
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
         }
+        if self.allows_absent_runtime_class() {
+            // PHP permits a declaration to name an absent class. In a function-like body that
+            // class can remain optional until the branch constructing an instance is executed;
+            // no class schema exists yet, so preserve the access as a gradual runtime dispatch.
+            return Ok(PhpType::Mixed);
+        }
         Err(CompileError::new(
             expr.span,
             &format!("Undefined class: {}", class_name),

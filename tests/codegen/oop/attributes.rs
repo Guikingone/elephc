@@ -4035,6 +4035,32 @@ foreach ((new ReflectionClass(ConstVisibilityTarget::class))->getReflectionConst
     );
 }
 
+/// Verifies `ReflectionClass::getReflectionConstants()` applies visibility and final modifier
+/// filters, including named arguments and the zero mask.
+#[test]
+fn test_reflection_class_get_reflection_constants_filters() {
+    let out = compile_and_run(
+        r#"<?php
+class FilteredConstantsTarget {
+    private const SECRET = 1;
+    protected const LIMIT = 2;
+    final public const ANSWER = 3;
+    public const OPEN = 4;
+}
+$ref = new ReflectionClass(FilteredConstantsTarget::class);
+foreach ($ref->getReflectionConstants(ReflectionClassConstant::IS_PUBLIC | ReflectionClassConstant::IS_PROTECTED) as $constant) {
+    echo $constant->getName() . ":";
+}
+echo "|";
+foreach ($ref->getReflectionConstants(filter: ReflectionClassConstant::IS_FINAL) as $constant) {
+    echo $constant->getName() . ":";
+}
+echo "|" . count($ref->getReflectionConstants(0));
+"#,
+    );
+    assert_eq!(out, "LIMIT:ANSWER:OPEN:|ANSWER:|0");
+}
+
 /// Verifies trait constants expose final metadata through direct and listed reflection.
 #[test]
 fn test_reflection_trait_constant_final_metadata() {

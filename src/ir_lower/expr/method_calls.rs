@@ -160,6 +160,7 @@ pub(super) fn lower_method_call(
     }
     let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
+    promote_eval_bridge_method_argument_locals(ctx, object.value, sig.as_ref(), args);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     let prepared = sig
         .as_ref()
@@ -193,6 +194,39 @@ pub(super) fn lower_method_call(
     }
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
+}
+
+/// Promotes local arguments that an eval-backed mixed receiver may later mutate by reference.
+pub(super) fn promote_eval_bridge_method_argument_locals(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: ValueId,
+    signature: Option<&FunctionSig>,
+    args: &[Expr],
+) {
+    if !dynamic_method_receiver_needs_mixed_fallback(&ctx.builder.value_php_type(object))
+        || !plain_positional_call_args(args)
+    {
+        return;
+    }
+    let bridge_args = match signature {
+        Some(signature) => signature
+            .ref_params
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(index, is_ref)| is_ref.then(|| args.get(index)).flatten())
+            .collect::<Vec<_>>(),
+        None => args.iter().collect(),
+    };
+    if bridge_args.is_empty() {
+        return;
+    }
+    ctx.declare_eval_context_local();
+    for argument in bridge_args {
+        if let ExprKind::Variable(name) = &argument.kind {
+            ctx.set_local_type(name, PhpType::Mixed);
+        }
+    }
 }
 
 /// Routes a single runtime-shaped spread through the callable descriptor ABI.

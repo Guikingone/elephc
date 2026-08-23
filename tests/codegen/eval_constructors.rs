@@ -485,3 +485,35 @@ return $child->selected();');
 
     assert_eq!(out, "yes");
 }
+
+/// Verifies an eval child preserves the storage shape expected by later AOT property writes.
+#[test]
+fn test_eval_child_empty_array_property_accepts_aot_string_key_write() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalArrayShapeWriteAotParent {
+    protected array $items = [];
+
+    public function put(string $key, object $value): void {
+        $this->items[$key] = $value;
+    }
+
+    public function has(string $key): bool {
+        return isset($this->items[$key]);
+    }
+}
+
+$child = eval('class EvalArrayShapeWriteRuntimeChild extends EvalArrayShapeWriteAotParent {
+    public function __construct() {
+        $this->items = [];
+    }
+}
+
+return new EvalArrayShapeWriteRuntimeChild();');
+$child->put("service", new stdClass());
+echo $child->has("service") ? "yes" : "no";
+"#,
+    );
+
+    assert_eq!(out, "yes");
+}

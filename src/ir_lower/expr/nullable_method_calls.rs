@@ -136,6 +136,7 @@ pub(super) fn lower_method_call_with_receiver(
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let mut operands = vec![object.value];
     let sig = method_signature(ctx, object.value, dispatch_method);
+    promote_eval_bridge_method_argument_locals(ctx, object.value, sig.as_ref(), args);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     let prepared = sig
         .as_ref()

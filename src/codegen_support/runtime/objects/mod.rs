@@ -18,6 +18,7 @@ mod mixed_array_get;
 mod mixed_array_set;
 mod mixed_cell_autovivify;
 mod new_by_name;
+mod class_id_by_name;
 mod object_to_array;
 mod print_r_object;
 mod stdclass;
@@ -41,6 +42,7 @@ pub(crate) use mixed_array_get::emit_mixed_array_get;
 pub(crate) use mixed_array_set::emit_mixed_array_set;
 pub(crate) use mixed_cell_autovivify::emit_mixed_cell_autovivify_array;
 pub(crate) use new_by_name::emit_new_by_name;
+pub(crate) use class_id_by_name::emit_class_id_by_name;
 pub(crate) use object_to_array::emit_object_to_array;
 pub(crate) use stdclass::{
     emit_json_encode_stdclass, emit_mixed_property_get, emit_mixed_property_set,

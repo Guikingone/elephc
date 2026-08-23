@@ -1,6 +1,6 @@
 //! Purpose:
 //! Lowers PHP `array_column()` builtin calls for the EIR backend.
-//! Materializes an indexed array of associative rows plus a string column key
+//! Materializes indexed or associative collections of associative rows plus a string column key
 //! into the existing target-aware runtime extraction helpers.
 //!
 //! Called from:
@@ -34,7 +34,7 @@ pub(super) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instructi
     store_if_result(ctx, inst)
 }
 
-/// Returns the row value type extracted from an indexed array of associative rows.
+/// Returns the row value type extracted from an indexed or associative collection of rows.
 fn array_column_source_value_type(ty: PhpType) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(inner) => match inner.codegen_repr() {
@@ -46,6 +46,14 @@ fn array_column_source_value_type(ty: PhpType) -> Result<PhpType> {
             ))),
         },
         PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+        PhpType::AssocArray { value, .. } => match value.codegen_repr() {
+            PhpType::AssocArray { value, .. } => Ok(value.codegen_repr()),
+            PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+            other => Err(CodegenIrError::unsupported(format!(
+                "array_column row PHP type {:?}",
+                other
+            ))),
+        },
         other => Err(CodegenIrError::unsupported(format!(
             "array_column for PHP type {:?}",
             other
@@ -95,7 +103,11 @@ fn lower_array_column_call(
     source_ty: &PhpType,
     value_ty: &PhpType,
 ) -> Result<()> {
-    materialize_array_column_source(ctx, array, source_ty)?;
+    let owned_source = materialize_array_column_source(ctx, array, source_ty)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    if owned_source {
+        abi::emit_push_reg(ctx.emitter, result_reg);
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_string_value_to_regs(key, "x1", "x2")?;
@@ -105,19 +117,42 @@ fn lower_array_column_call(
         }
     }
     abi::emit_call_label(ctx.emitter, array_column_runtime_helper(value_ty));
+    if owned_source {
+        abi::emit_push_reg(ctx.emitter, result_reg);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x0, [sp, #16]");                 // recover the owned indexed values array
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");     // recover the owned indexed values array
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+        abi::emit_pop_reg(ctx.emitter, result_reg);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+    }
     Ok(())
 }
 
-/// Materializes a typed or gradual indexed-array source in the first runtime argument register.
+/// Materializes an indexed, associative, or gradual array source in the first runtime argument register.
+///
+/// Associative outer collections become an owned indexed values array because the column runtime
+/// helpers traverse indexed row storage. The caller releases that temporary after extraction.
 fn materialize_array_column_source(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     source_ty: &PhpType,
-) -> Result<()> {
+) -> Result<bool> {
     if matches!(source_ty, PhpType::Array(_)) {
         let array_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
         ctx.load_value_to_reg(array, array_reg)?;
-        return Ok(());
+        return Ok(false);
+    }
+
+    if let PhpType::AssocArray { value, .. } = source_ty {
+        ctx.load_value_to_result(array)?;
+        super::values::emit_loaded_assoc_array_values(ctx, &value.codegen_repr())?;
+        return Ok(true);
     }
 
     if !matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
@@ -160,7 +195,7 @@ fn materialize_array_column_source(
         }
         Arch::X86_64 => {}
     }
-    Ok(())
+    Ok(false)
 }
 
 /// Returns the runtime helper that matches the extracted row value representation.
@@ -186,5 +221,19 @@ mod tests {
         let value_ty = array_column_source_value_type(PhpType::Mixed)
             .expect("a gradual source should reach the runtime array guard");
         assert_eq!(value_ty, PhpType::Mixed);
+    }
+
+    /// Verifies associative outer collections retain the nested row value representation.
+    #[test]
+    fn array_column_source_accepts_associative_outer_collection() {
+        let value_ty = array_column_source_value_type(PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Str),
+            }),
+        })
+        .expect("an associative collection of associative rows should be supported");
+        assert_eq!(value_ty, PhpType::Str);
     }
 }

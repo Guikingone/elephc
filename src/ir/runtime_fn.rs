@@ -462,14 +462,17 @@ pub enum RuntimeFnId {
     StrWordCount,
     Strcasecmp,
     Strcmp,
+    Strcspn,
     Strncasecmp,
     Strncmp,
     Stripos,
     Strpos,
     Strripos,
     Strrpos,
+    Strspn,
     Strtr,
     Strstr,
+    Strrchr,
     Substr,
     SubstrCount,
     SubstrReplace,
@@ -765,6 +768,23 @@ impl RuntimeFnId {
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => {
                 set_callable_param_type(sig, 0, PhpType::Array(Box::new(PhpType::Int)));
             }
+            RuntimeFnId::Fclose
+            | RuntimeFnId::FileGetContents
+            | RuntimeFnId::Fileperms
+            | RuntimeFnId::Rmdir
+            | RuntimeFnId::Unlink => truncate_callable_params(sig, 1),
+            RuntimeFnId::Chgrp
+            | RuntimeFnId::Chmod
+            | RuntimeFnId::Chown
+            | RuntimeFnId::FilePutContents
+            | RuntimeFnId::Fopen
+            | RuntimeFnId::Lchgrp
+            | RuntimeFnId::Lchown
+            | RuntimeFnId::Link
+            | RuntimeFnId::Rename
+            | RuntimeFnId::Symlink
+            | RuntimeFnId::Tempnam => truncate_callable_params(sig, 2),
+            RuntimeFnId::Mkdir | RuntimeFnId::Touch => truncate_callable_params(sig, 3),
             RuntimeFnId::Clamp => {
                 set_callable_param_type(sig, 0, PhpType::Int);
                 set_callable_param_type(sig, 1, PhpType::Int);
@@ -911,6 +931,7 @@ impl RuntimeFnId {
             RuntimeFnId::Strcasecmp |
             RuntimeFnId::Strcmp |
             RuntimeFnId::Strstr |
+            RuntimeFnId::Strrchr |
             RuntimeFnId::Substr |
             RuntimeFnId::SubstrReplace |
             RuntimeFnId::Tan |
@@ -1158,9 +1179,29 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::Abs
+                | RuntimeFnId::Chgrp
+                | RuntimeFnId::Chmod
+                | RuntimeFnId::Chown
+                | RuntimeFnId::Fclose
+                | RuntimeFnId::FileGetContents
+                | RuntimeFnId::FilePutContents
+                | RuntimeFnId::Fileperms
+                | RuntimeFnId::Fopen
                 | RuntimeFnId::GetClass
                 | RuntimeFnId::Gettype
+                | RuntimeFnId::Lchgrp
+                | RuntimeFnId::Lchown
+                | RuntimeFnId::Link
+                | RuntimeFnId::Mkdir
+                | RuntimeFnId::Rename
+                | RuntimeFnId::Rmdir
+                | RuntimeFnId::Symlink
+                | RuntimeFnId::Tempnam
+                | RuntimeFnId::Touch
                 | RuntimeFnId::Trim
+                | RuntimeFnId::Unlink
+                | RuntimeFnId::Strcspn
+                | RuntimeFnId::Strspn
         )
     }
 
@@ -1186,6 +1227,26 @@ impl RuntimeFnId {
                 matches!(ty, PhpType::Mixed | PhpType::Object(_) | PhpType::Union(_))
             }),
             RuntimeFnId::Gettype => true,
+            RuntimeFnId::Chgrp
+            | RuntimeFnId::Chmod
+            | RuntimeFnId::Chown
+            | RuntimeFnId::Fclose
+            | RuntimeFnId::FileGetContents
+            | RuntimeFnId::FilePutContents
+            | RuntimeFnId::Fileperms
+            | RuntimeFnId::Fopen
+            | RuntimeFnId::Lchgrp
+            | RuntimeFnId::Lchown
+            | RuntimeFnId::Link
+            | RuntimeFnId::Mkdir
+            | RuntimeFnId::Rename
+            | RuntimeFnId::Rmdir
+            | RuntimeFnId::Symlink
+            | RuntimeFnId::Tempnam
+            | RuntimeFnId::Touch
+            | RuntimeFnId::Unlink
+            | RuntimeFnId::Strcspn
+            | RuntimeFnId::Strspn => source.is_none(),
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
         }
@@ -1442,6 +1503,7 @@ impl RuntimeFnId {
                 // temporary alive for the boxed result's whole lifetime, which leaked one
                 // block per iteration for `strstr($h, $cond ? "a" : "b")` in a loop.
                 | RuntimeFnId::Strstr
+                | RuntimeFnId::Strrchr
                 // `tempnam(directory, prefix)` returns the generated path that `mkstemp()`
                 // wrote into a buffer `__rt_tempnam` allocated itself, then copied out with
                 // `__rt_str_persist` — it is neither of its two argument strings. This was the
@@ -1895,14 +1957,17 @@ impl RuntimeFnId {
             RuntimeFnId::StrWordCount => "str_word_count",
             RuntimeFnId::Strcasecmp => "strcasecmp",
             RuntimeFnId::Strcmp => "strcmp",
+            RuntimeFnId::Strcspn => "strcspn",
             RuntimeFnId::Strncasecmp => "strncasecmp",
             RuntimeFnId::Strncmp => "strncmp",
             RuntimeFnId::Stripos => "stripos",
             RuntimeFnId::Strpos => "strpos",
             RuntimeFnId::Strripos => "strripos",
             RuntimeFnId::Strrpos => "strrpos",
+            RuntimeFnId::Strspn => "strspn",
             RuntimeFnId::Strtr => "strtr",
             RuntimeFnId::Strstr => "strstr",
+            RuntimeFnId::Strrchr => "strrchr",
             RuntimeFnId::Substr => "substr",
             RuntimeFnId::SubstrCount => "substr_count",
             RuntimeFnId::SubstrReplace => "substr_replace",

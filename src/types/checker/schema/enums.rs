@@ -419,6 +419,10 @@ pub(crate) fn insert_enum_metadata(
     // User-declared enum constants. Values are kept as their parsed expressions, matching the
     // class-constant representation.
     let mut constants = HashMap::new();
+    let constant_order = user_constants
+        .iter()
+        .map(|constant| constant.name.clone())
+        .collect();
     let mut constant_types = HashMap::new();
     let mut constant_visibilities = HashMap::new();
     let mut final_constants = HashSet::new();
@@ -463,6 +467,7 @@ pub(crate) fn insert_enum_metadata(
             is_readonly_class: true,
             allow_dynamic_properties: false,
             constants,
+            constant_order,
             constant_deprecations: user_constants
                 .iter()
                 .filter_map(|constant| {

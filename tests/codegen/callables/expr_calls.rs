@@ -1176,6 +1176,73 @@ echo $copy(14);
     assert_eq!(out, "42");
 }
 
+/// Verifies a callable-typed constructor parameter can copy an incoming closure descriptor.
+#[test]
+fn test_first_class_callable_from_callable_parameter_closure() {
+    let out = compile_and_run(
+        r#"<?php
+final class CallableParameterCopy {
+    private \Closure $copy;
+
+    public function __construct(callable $source) {
+        $this->copy = $source(...);
+    }
+
+    public function run(): string {
+        $copy = $this->copy;
+        return $copy();
+    }
+}
+
+$copy = new CallableParameterCopy(static fn (): string => "ready");
+echo $copy->run();
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Verifies a runtime builtin name accepts arguments forwarded from a mixed variadic parameter.
+#[test]
+fn test_dynamic_string_builtin_from_mixed_variadic_forwarding() {
+    let out = compile_and_run(
+        r#"<?php
+function invoke_runtime_builtin(string $name, mixed ...$args): mixed {
+    return $name(...$args);
+}
+
+$created = invoke_runtime_builtin("mkdir", "runtime-dir", 0777, true);
+invoke_runtime_builtin("file_put_contents", "runtime-dir/source.txt", "payload");
+$content = invoke_runtime_builtin("file_get_contents", "runtime-dir/source.txt");
+$perms = invoke_runtime_builtin("fileperms", "runtime-dir/source.txt");
+$touched = invoke_runtime_builtin("touch", "runtime-dir/source.txt");
+$chmod = invoke_runtime_builtin("chmod", "runtime-dir/source.txt", 0644);
+$renamed = invoke_runtime_builtin("rename", "runtime-dir/source.txt", "runtime-dir/renamed.txt");
+$handle = invoke_runtime_builtin("fopen", "runtime-dir/renamed.txt", "r");
+$closed = invoke_runtime_builtin("fclose", $handle);
+$unlinked = invoke_runtime_builtin("unlink", "runtime-dir/renamed.txt");
+$removed = invoke_runtime_builtin("rmdir", "runtime-dir");
+$temporary = invoke_runtime_builtin("tempnam", sys_get_temp_dir(), "elephc-callable-");
+$temporaryRemoved = invoke_runtime_builtin("unlink", $temporary);
+
+echo $created
+    && "payload" === $content
+    && is_int($perms)
+    && $touched
+    && $chmod
+    && $renamed
+    && is_resource($handle)
+    && $closed
+    && $unlinked
+    && $removed
+    && is_string($temporary)
+    && $temporaryRemoved
+    ? "ready"
+    : "bad";
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
 /// Verifies that `$this(...)` dispatches `__invoke` supplied by a runtime subclass.
 #[test]
 fn test_first_class_callable_this_uses_runtime_subclass_invoke() {

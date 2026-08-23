@@ -110,4 +110,3 @@ pub(in crate::codegen) fn direct_call_stack_pad_bytes(
 ) -> usize {
     abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, overflow_bytes)
 }
-

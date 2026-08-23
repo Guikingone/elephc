@@ -76,15 +76,7 @@ pub(super) fn lower_lazy_isset_operand(
     match &arg.kind {
         ExprKind::ArrayAccess { array, index } => {
             if array_access_expr_satisfies_array_access(ctx, array) {
-                let synthetic = Expr::new(
-                    ExprKind::MethodCall {
-                        object: array.clone(),
-                        method: "offsetExists".to_string(),
-                        args: vec![(**index).clone()],
-                    },
-                    arg.span,
-                );
-                return Some(lower_expr(ctx, &synthetic));
+                return Some(lower_array_access_offset_exists(ctx, array, index, arg));
             }
             if !array_access_expr_supports_native_isset_probe(ctx, array) {
                 return None;
@@ -103,6 +95,73 @@ pub(super) fn lower_lazy_isset_operand(
         }
         _ => None,
     }
+}
+
+/// Lowers `isset($arrayAccess[$key])`, returning false without a call for a null receiver.
+fn lower_array_access_offset_exists(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    arg: &Expr,
+) -> LoweredValue {
+    let receiver = lower_expr(ctx, array);
+    let args = vec![index.clone()];
+    if !value_is_nullable(ctx, receiver.value) {
+        return lower_method_call_with_receiver(
+            ctx,
+            receiver,
+            "offsetExists",
+            &args,
+            Op::MethodCall,
+            arg,
+        );
+    }
+
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![receiver.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(arg.span),
+    );
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let null_block = ctx
+        .builder
+        .create_named_block("isset.array_access.null", Vec::new());
+    let call_block = ctx
+        .builder
+        .create_named_block("isset.array_access.call", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("isset.array_access.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: call_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    let false_value = emit_bool_literal(ctx, false, Some(arg.span));
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, false_value, arg.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(call_block);
+    let exists = lower_method_call_with_receiver(
+        ctx,
+        receiver,
+        "offsetExists",
+        &args,
+        Op::MethodCall,
+        arg,
+    );
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, exists, arg.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, arg.span)
 }
 
 /// Lowers `empty($obj->magicProp)` with PHP's overloaded-property semantics:
@@ -249,4 +308,3 @@ pub(super) fn property_existence_magic_class(
     }
     class_method_signature(ctx, &class_name, &php_symbol_key(magic)).map(|_| class_name)
 }
-

@@ -50,6 +50,235 @@ echo attribute_count(new ReflectionClass(PlainReflectionTarget::class));
     assert_eq!(out, "0");
 }
 
+/// Verifies a runtime class-name reflection query returns filtered class attributes as an array.
+#[test]
+fn test_reflection_runtime_class_name_filtered_attributes_are_iterable() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute]
+class RequiredDependency {
+    public function __construct(public string $className) {}
+}
+
+#[RequiredDependency('base')]
+class DependentClass {}
+
+$class = DependentClass::class;
+$attributes = (new ReflectionClass($class))->getAttributes(RequiredDependency::class);
+foreach ($attributes as $attribute) {
+    echo $attribute->newInstance()->className;
+}
+"#,
+    );
+    assert_eq!(out, "base");
+}
+
+/// Verifies filtered class attributes remain iterable for runtime-declared classes.
+#[test]
+fn test_reflection_runtime_declared_class_filtered_attributes_are_iterable() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute]
+class RequiredDependency {
+    public function __construct(public string $className) {}
+}
+
+$definition = '#[RequiredDependency(\'base\')] class DependentClass {}';
+eval($definition);
+$class = 'DependentClass';
+$filter = 'RequiredDependency';
+$attributes = (new ReflectionClass($class))->getAttributes($filter);
+foreach ($attributes as $attribute) {
+    echo $attribute->newInstance()->className;
+}
+"#,
+    );
+    assert_eq!(out, "base");
+}
+
+/// Verifies runtime ReflectionClass construction gives attribute-free classes an empty array.
+#[test]
+fn test_runtime_reflection_attribute_free_class_returns_empty_array() {
+    let out = compile_and_run(
+        r#"<?php
+class PlainReflectionTarget {}
+
+$source = 'return ["PlainReflectionTarget"];';
+$classes = eval($source);
+$class = $classes[0];
+$attributes = (new ReflectionClass($class))->getAttributes();
+echo is_array($attributes) ? count($attributes) : 'not-array';
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
+/// Verifies a runtime class name preserves AOT attribute metadata and filtering.
+#[test]
+fn test_runtime_reflection_aot_attribute_filter_returns_iterable_array() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute]
+class RequiredDependency {
+    public function __construct(public string $className) {}
+}
+
+#[RequiredDependency('base')]
+class DecoratedReflectionTarget {}
+
+$source = 'return ["DecoratedReflectionTarget"];';
+$classes = eval($source);
+$attributes = (new ReflectionClass($classes[0]))->getAttributes(RequiredDependency::class);
+foreach ($attributes as $attribute) {
+    echo $attribute->newInstance()->className;
+}
+"#,
+    );
+    assert_eq!(out, "base");
+}
+
+/// Verifies runtime reflection materializes an AOT attribute `::class` argument as a string.
+#[test]
+fn test_runtime_reflection_aot_attribute_class_constant_argument_is_iterable() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute]
+class RequiredDependency {
+    public function __construct(public string $className) {}
+}
+
+class DependencyTarget {}
+
+#[RequiredDependency(DependencyTarget::class)]
+class DecoratedReflectionTarget {}
+
+$source = 'return ["DecoratedReflectionTarget"];';
+$classes = eval($source);
+$attributes = (new ReflectionClass($classes[0]))->getAttributes(RequiredDependency::class);
+foreach ($attributes as $attribute) {
+    echo $attribute->newInstance()->className;
+}
+"#,
+    );
+    assert_eq!(out, "DependencyTarget");
+}
+
+/// Verifies an AOT method preserves runtime reflection attributes from an eval-produced class name.
+#[test]
+fn test_aot_method_runtime_reflection_attribute_array_is_iterable() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute]
+class RequiredDependency {
+    public function __construct(public string $className) {}
+}
+
+#[RequiredDependency('base')]
+class DecoratedReflectionTarget {}
+
+class AttributeResolver {
+    public function resolve(string $class): string {
+        $result = '';
+        foreach ((new ReflectionClass($class))->getAttributes(RequiredDependency::class) as $attribute) {
+            $result .= $attribute->newInstance()->className;
+        }
+
+        return $result;
+    }
+}
+
+$source = 'return ["DecoratedReflectionTarget"];';
+$classes = eval($source);
+echo (new AttributeResolver())->resolve($classes[0]);
+"#,
+    );
+    assert_eq!(out, "base");
+}
+
+/// Verifies eval-to-AOT by-reference calls preserve runtime reflection attribute arrays.
+#[test]
+fn test_eval_aot_by_ref_method_runtime_reflection_attributes_are_iterable() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute]
+class RequiredDependency {
+    public function __construct(public string $className) {}
+}
+
+#[RequiredDependency('base')]
+class DecoratedReflectionTarget {}
+
+class AttributeResolver {
+    public function resolve(string $class, array &$resolved, array &$visiting = []): string {
+        foreach ((new ReflectionClass($class))->getAttributes(RequiredDependency::class) as $attribute) {
+            $resolved[$class] = true;
+            $visiting[$class] = true;
+            return $attribute->newInstance()->className;
+        }
+
+        return 'empty';
+    }
+}
+
+$source = '$resolved = []; $visiting = []; $resolver = new AttributeResolver(); echo $resolver->resolve("DecoratedReflectionTarget", $resolved, $visiting);';
+eval($source);
+"#,
+    );
+    assert_eq!(out, "base");
+}
+
+/// Verifies autoloaded attribute metadata remains iterable through an eval-produced class name.
+#[test]
+fn test_autoloaded_runtime_reflection_attribute_array_is_iterable() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "decorated.php",
+                r#"<?php
+namespace Fixture;
+
+#[\RequiredDependency('base')]
+class DecoratedTarget {}
+"#,
+            ),
+            (
+                "entry.php",
+                r#"<?php
+#[Attribute]
+class RequiredDependency {
+    public function __construct(public string $className) {}
+}
+
+class AttributeResolver {
+    public function resolve(string $class): string {
+        $result = '';
+        foreach ((new ReflectionClass($class))->getAttributes(RequiredDependency::class) as $attribute) {
+            $result .= $attribute->newInstance()->className;
+        }
+
+        return $result;
+    }
+}
+
+spl_autoload_register(function (string $class): void {
+    if ($class === 'Fixture\\DecoratedTarget') {
+        require __DIR__ . '/decorated.php';
+    }
+});
+
+$source = 'return ["Fixture\\DecoratedTarget"];';
+$classes = eval($source);
+if (class_exists($classes[0])) {
+    echo (new AttributeResolver())->resolve($classes[0]);
+}
+"#,
+            ),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "base");
+}
+
 /// Verifies public Reflection name properties share the same populated metadata as `getName()`.
 #[test]
 fn test_reflection_public_name_properties_use_populated_metadata() {
@@ -191,10 +420,27 @@ fn test_reflection_class_accepts_gradual_runtime_target() {
 class ReflectedRuntimeClassTarget {}
 $name = $argc > 0 ? ReflectedRuntimeClassTarget::class : null;
 $reflection = new ReflectionClass($name);
-echo $reflection->getName();
+echo $reflection->name, ':', $reflection->getName();
 "#,
     );
-    assert_eq!(out, "ReflectedRuntimeClassTarget");
+    assert_eq!(out, "ReflectedRuntimeClassTarget:ReflectedRuntimeClassTarget");
+}
+
+/// Verifies an eval-materialized ReflectionClass exposes the native public name property.
+#[test]
+fn test_eval_materialized_reflection_class_exposes_public_name() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalReflectedRuntimeClassTarget {}
+$inside = eval('$reflection = new ReflectionClass("EvalReflectedRuntimeClassTarget"); return $reflection->name;');
+$reflection = eval('return new ReflectionClass("EvalReflectedRuntimeClassTarget");');
+echo $inside, ':', $reflection->name, ':', $reflection->getName();
+"#,
+    );
+    assert_eq!(
+        out,
+        "EvalReflectedRuntimeClassTarget:EvalReflectedRuntimeClassTarget:EvalReflectedRuntimeClassTarget"
+    );
 }
 
 /// Verifies source-backed reflection owners expose file and declaration-line metadata.
@@ -237,6 +483,70 @@ echo is_string($file) && '' !== $file ? 'file' : 'missing';
 "#,
     );
     assert_eq!(out, "file");
+}
+
+/// Verifies a direct runtime ReflectionObject source-file query avoids eagerly
+/// materializing unrelated Reflection metadata while preserving the file result.
+#[test]
+fn test_direct_reflection_object_this_source_file_is_non_empty() {
+    let out = compile_and_run(
+        r#"<?php
+class DirectReflectionSourceBase {
+    public function sourceFile(): string|bool {
+        return (new ReflectionObject($this))->getFileName();
+    }
+}
+final class DirectReflectionSourceChild extends DirectReflectionSourceBase {}
+$file = (new DirectReflectionSourceChild())->sourceFile();
+echo is_string($file) && '' !== $file ? 'file' : 'missing';
+"#,
+    );
+    assert_eq!(out, "file");
+}
+
+/// Verifies a source-only ReflectionObject query through an interface-typed property.
+#[test]
+fn test_reflection_object_interface_property_source_file_is_non_empty() {
+    let out = compile_and_run(
+        r#"<?php
+interface ReflectionSourceProvider { public function configure(): void; }
+final class ReflectionSourceProviderImpl implements ReflectionSourceProvider {
+    public function configure(): void {}
+}
+final class ReflectionSourceConsumer {
+    public function __construct(private ReflectionSourceProvider $subject) {}
+    public function sourceFile(): string|bool {
+        return (new ReflectionObject($this->subject))->getFileName();
+    }
+}
+$file = (new ReflectionSourceConsumer(new ReflectionSourceProviderImpl()))->sourceFile();
+echo is_string($file) && '' !== $file ? 'file' : 'missing';
+"#,
+    );
+    assert_eq!(out, "file");
+}
+
+/// Verifies a local ReflectionObject may read both source metadata fields without full members.
+#[test]
+fn test_reflection_object_local_source_file_and_name_are_available() {
+    let out = compile_and_run(
+        r#"<?php
+interface ReflectionSourceMetadataProvider { public function configure(): void; }
+final class ReflectionSourceMetadataProviderImpl implements ReflectionSourceMetadataProvider {
+    public function configure(): void {}
+}
+final class ReflectionSourceMetadataConsumer {
+    public function __construct(private ReflectionSourceMetadataProvider $subject) {}
+    public function sourceMetadata(): string {
+        $reflection = new ReflectionObject($this->subject);
+        $file = $reflection->getFileName();
+        return (is_string($file) && '' !== $file ? 'file:' : 'missing:').$reflection->name;
+    }
+}
+echo (new ReflectionSourceMetadataConsumer(new ReflectionSourceMetadataProviderImpl()))->sourceMetadata();
+"#,
+    );
+    assert_eq!(out, "file:ReflectionSourceMetadataProviderImpl");
 }
 
 /// Verifies the built-in Reflection attribute-filter flag is available as a class constant.

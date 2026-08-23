@@ -342,10 +342,15 @@ pub(super) fn declared_mixed_property_candidates(
         if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
             continue;
         }
+        let backing = crate::types::checker::reflection_virtual_property_backing(
+            class_name,
+            property,
+        )
+        .unwrap_or(property);
         if !class_info
             .properties
             .iter()
-            .any(|(name, _)| name == property)
+            .any(|(name, _)| name == backing)
         {
             continue;
         }

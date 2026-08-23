@@ -8,14 +8,13 @@ sidebar:
 ## rsort()
 
 ```php
-function rsort(array $array, int $flags = 0): bool
+function rsort(array $array): bool
 ```
 
 Sorts an array in descending order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 

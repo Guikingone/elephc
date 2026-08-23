@@ -124,6 +124,7 @@ mod runtime_property_writes;
 mod named_property_writes;
 mod instanceof_entry;
 mod object_class_id;
+mod class_name_id;
 mod allocation_clone;
 mod interface_layout;
 mod property_resolution;
@@ -200,6 +201,7 @@ pub(super) use fiber_dynamic_entry::{
 pub(super) use fixed_new::lower_object_new;
 pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
 pub(super) use object_class_id::lower_object_class_id;
+pub(super) use class_name_id::lower_class_name_to_id;
 pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_prop_get, lower_prop_initialized,
 };

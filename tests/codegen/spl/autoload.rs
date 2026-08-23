@@ -61,6 +61,97 @@ fn test_psr4_dynamic_new_from_literal_array_default() {
     assert_eq!(out, "dynamic");
 }
 
+/// Verifies a guarded dynamic factory evaluates its inherited class-string method without loading
+/// unrelated implementations that merely share the factory return contract.
+#[test]
+fn test_psr4_guarded_dynamic_factory_evaluates_concrete_class_string_only() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Demo\\":"src/"}}}"#,
+            ),
+            (
+                "src/Base.php",
+                r#"<?php
+namespace Demo;
+interface Contract { public function value(): string; }
+abstract class Base {
+    public function create(): ?Contract {
+        return class_exists($class = $this->extensionClass()) ? new $class() : null;
+    }
+    protected function extensionClass(): string {
+        $name = static::class;
+        $end = strrpos($name, '\\');
+        $namespace = substr($name, 0, $end + 1);
+        $short = substr($name, $end + 1);
+        return $namespace . 'DependencyInjection\\' . preg_replace('/Bundle$/', '', $short) . 'Extension';
+    }
+}
+"#,
+            ),
+            (
+                "src/AppBundle.php",
+                "<?php\nnamespace Demo;\nclass AppBundle extends Base {}\n",
+            ),
+            (
+                "src/DependencyInjection/AppExtension.php",
+                "<?php\nnamespace Demo\\DependencyInjection;\nclass AppExtension implements \\Demo\\Contract { public function value(): string { return 'ok'; } }\n",
+            ),
+            (
+                "src/UnusedExtension.php",
+                "<?php\nnamespace Demo;\necho 'unexpected';\nclass UnusedExtension implements Contract { public function value(): string { return 'wrong'; } }\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$bundle = new Demo\\AppBundle();\necho $bundle->create()->value();\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a directly constructed factory can discover literal class strings stored in a
+/// constructor property map before a later `new $class` resolves one map entry at runtime.
+#[test]
+fn test_psr4_dynamic_new_from_constructor_class_string_map() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Demo\\":"src/"}}}"#,
+            ),
+            (
+                "src/Factory.php",
+                r#"<?php
+namespace Demo;
+class Factory {
+    private array $classes;
+    public function __construct() {
+        $this->classes = ['worker' => Worker::class];
+    }
+    public function run(): string {
+        $class = $this->classes['worker'];
+        return (new $class())->value();
+    }
+}
+"#,
+            ),
+            (
+                "src/Worker.php",
+                "<?php\nnamespace Demo;\nclass Worker { public function value(): string { return 'mapped'; } }\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho (new Demo\\Factory())->run();\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "mapped");
+}
+
 /// Verifies an assignment-expression class default seeds a later dynamic static call.
 #[test]
 fn test_psr4_dynamic_static_call_from_assignment_expression_default() {
@@ -78,6 +169,35 @@ fn test_psr4_dynamic_static_call_from_assignment_expression_default() {
                 "main.php",
                 "<?php\n$options = [];\nif (false !== $handler = ($options['handler'] ?? App\\Handler::class)) {\n    $handler::register(true);\n}\n",
             ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a class-string default assigned by a subclass reaches a dynamic static call in its
+/// parent even when autoload dependency insertion places the parent declaration first.
+#[test]
+fn test_psr4_dynamic_static_call_from_subclass_array_default_reaches_parent() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Handler.php",
+                "<?php\nnamespace App;\nclass Handler { public static function register(bool $enabled): void { echo $enabled ? 'ok' : 'bad'; } }\n",
+            ),
+            (
+                "src/BaseRuntime.php",
+                "<?php\nnamespace App;\nclass BaseRuntime { public function __construct(array $options) { $handler = $options['handler']; $handler::register(true); } }\n",
+            ),
+            (
+                "src/Runtime.php",
+                "<?php\nnamespace App;\nclass Runtime extends BaseRuntime { public function __construct(array $options = []) { $options['handler'] ??= Handler::class; parent::__construct($options); } }\n",
+            ),
+            ("main.php", "<?php\nnew App\\Runtime();\n"),
         ],
         "main.php",
     );
@@ -251,6 +371,43 @@ fn test_object_type_declarations_do_not_trigger_autoload() {
         "main.php",
     );
     assert_eq!(out, "done");
+}
+
+/// Verifies an optional class named only by a dormant closure remains a runtime concern even
+/// when the closure body accesses one of its properties.
+#[test]
+fn test_dormant_closure_property_access_on_absent_declared_class_is_gradual() {
+    let out = compile_and_run(
+        r#"<?php
+function register_optional_callback(): void {
+    $callback = static function (UnavailableExtension $extension): void {
+        echo $extension->option;
+    };
+}
+echo 'ok';
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a constructed class can retain a dormant closure whose absent nominal parameter is
+/// accessed, without requiring a static property layout for that optional class.
+#[test]
+fn test_constructed_class_dormant_closure_property_access_on_absent_class_is_gradual() {
+    let out = compile_and_run(
+        r#"<?php
+class Registrar {
+    public function register(): void {
+        $callback = static function (UnavailableExtension $extension): void {
+            echo $extension->option;
+        };
+    }
+}
+new Registrar();
+echo 'ok';
+"#,
+    );
+    assert_eq!(out, "ok");
 }
 
 /// Verifies an autoload candidate with an unavailable direct parent stays absent instead of
@@ -1223,6 +1380,38 @@ echo class_exists("App\\DynamicFlag", $autoload) ? "exists" : "missing";
         "main.php",
     );
     assert_eq!(out, "missing");
+}
+
+/// Verifies a literal eval result preserves an indexed class-string for autoload discovery.
+///
+/// The class name reaches `class_exists()` through `$classes[0]`, so the autoload walk must
+/// preserve the literal eval return shape rather than treating the dynamic lookup as opaque.
+#[test]
+fn test_class_exists_autoloads_literal_eval_class_array_element() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "library/Deferred.php",
+                "<?php\nnamespace Fixture;\nclass Deferred {}\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    if ($class === 'Fixture\\Deferred') {
+        require_once __DIR__ . '/library/Deferred.php';
+    }
+});
+
+$source = 'return ["Fixture\\Deferred"];';
+$classes = eval($source);
+echo class_exists($classes[0]) ? 'exists' : 'missing';
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "exists");
 }
 
 /// Verifies interface exists literal triggers autoload.

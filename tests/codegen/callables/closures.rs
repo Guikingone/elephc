@@ -206,6 +206,54 @@ echo invoke_closure_or_string($callback);
     assert_eq!(out, "DIRECT:PASSED");
 }
 
+/// Verifies a closure carried by a mixed loader resource remains a PHP `Closure` object.
+#[test]
+fn test_mixed_closure_instanceof_dispatches_delegating_loader() {
+    let out = compile_and_run(
+        r#"<?php
+final class ClosureLoader {
+    public function supports(mixed $resource, ?string $type = null): bool {
+        return $resource instanceof Closure;
+    }
+
+    public function load(mixed $resource, ?string $type = null): string {
+        return $resource();
+    }
+}
+
+final class Resolver {
+    public function __construct(private array $loaders) {}
+
+    public function resolve(mixed $resource, ?string $type = null): object|false {
+        foreach ($this->loaders as $loader) {
+            if ($loader->supports($resource, $type)) {
+                return $loader;
+            }
+        }
+
+        return false;
+    }
+}
+
+final class DelegatingLoader {
+    public function __construct(private Resolver $resolver) {}
+
+    public function load(mixed $resource, ?string $type = null): string {
+        if (false === $loader = $this->resolver->resolve($resource, $type)) {
+            return 'miss';
+        }
+
+        return $loader->load($resource, $type);
+    }
+}
+
+echo (new DelegatingLoader(new Resolver([new ClosureLoader()])))->load(fn (): string => 'ok');
+"#,
+    );
+
+    assert_eq!(out, "ok");
+}
+
 /// Verifies a callable selected from a gradual union is validated and invoked at runtime.
 #[test]
 fn test_gradual_union_callable_invocation() {

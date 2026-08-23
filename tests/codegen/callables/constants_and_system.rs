@@ -2247,6 +2247,25 @@ echo $args[0];
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Verifies an array-shaped callable retains PHP's indexed receiver and method elements after it
+/// crosses a generic `callable` parameter boundary.
+#[test]
+fn test_callable_parameter_array_guard_exposes_receiver_for_method_exists() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableArrayLoader {
+    public function findFile(string $class): string { return $class; }
+}
+function inspect(callable $loader): void {
+    echo is_array($loader) && method_exists($loader[0], 'findFile') ? 'yes' : 'no';
+}
+function makeLoader(): callable { return [new CallableArrayLoader(), 'findFile']; }
+inspect(makeLoader());
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
 // -- v0.8 constants --
 
 // Tests `echo "a" . PHP_EOL . "b";` outputs "a\nb" (platform newline).
@@ -2264,6 +2283,13 @@ fn test_php_eol() {
 fn test_php_os() {
     let out = compile_and_run("<?php echo PHP_OS;");
     assert_eq!(out, target().platform.php_os_name());
+}
+
+/// Verifies `PHP_OS_FAMILY` reports the target operating-system family.
+#[test]
+fn test_php_os_family() {
+    let out = compile_and_run("<?php echo PHP_OS_FAMILY;");
+    assert_eq!(out, target().platform.php_os_family());
 }
 
 // Tests `echo DIRECTORY_SEPARATOR;` outputs "/" (Unix path separator). PHP on Unix

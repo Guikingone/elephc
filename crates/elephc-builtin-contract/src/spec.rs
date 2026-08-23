@@ -53,6 +53,8 @@ pub enum BuiltinKind {
 pub enum TypeSpec {
     /// PHP `int`.
     Int,
+    /// PHP nullable `?int`.
+    NullableInt,
     /// PHP `float`.
     Float,
     /// PHP `string`.

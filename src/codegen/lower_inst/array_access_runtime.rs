@@ -27,6 +27,9 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
     if inst.operands.len() == 1 && matches!(inst.immediate, Some(Immediate::TypeName(_))) {
         return lower_gradual_union_param_guard(ctx, inst);
     }
+    if let Some(()) = try_lower_callable_array_runtime_get(ctx, inst)? {
+        return Ok(());
+    }
     if let Some(()) = try_lower_array_access_runtime_call(ctx, inst)? {
         return Ok(());
     }
@@ -162,6 +165,158 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "runtime_call from PHP type {:?} to PHP type {:?}",
         source_ty, inst.result_php_type
     )))
+}
+
+/// Lowers an indexed read from a callable proven array-shaped by control flow. Callable arrays
+/// use a compact descriptor at runtime, so index zero reconstructs the object/class receiver and
+/// index one reconstructs the method-name string as boxed Mixed values.
+fn try_lower_callable_array_runtime_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<Option<()>> {
+    if inst.result.is_none() || inst.operands.len() != 3 {
+        return Ok(None);
+    }
+    let receiver = inst.operands[0];
+    if ctx.value_php_type(receiver)?.codegen_repr() != PhpType::Callable {
+        return Ok(None);
+    }
+    let index = inst.operands[1];
+    if ctx.value_php_type(index)?.codegen_repr() != PhpType::Int {
+        return Err(CodegenIrError::unsupported(
+            "callable array access with non-integer index",
+        ));
+    }
+
+    let descriptor_reg = abi::nested_call_reg(ctx.emitter);
+    let index_reg = abi::secondary_scratch_reg(ctx.emitter);
+    ctx.load_value_to_result(receiver)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    ctx.load_value_to_result(index)?;
+    ctx.emitter.instruction(&format!(
+        "mov {}, {}",
+        index_reg,
+        abi::int_result_reg(ctx.emitter)
+    ));
+    abi::emit_pop_reg(ctx.emitter, descriptor_reg);
+
+    let receiver_label = ctx.next_label("callable_array_receiver");
+    let method_label = ctx.next_label("callable_array_method");
+    let static_receiver_label = ctx.next_label("callable_array_static_receiver");
+    let object_receiver_label = ctx.next_label("callable_array_object_receiver");
+    let null_label = ctx.next_label("callable_array_missing_index");
+    let done_label = ctx.next_label("callable_array_index_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #0", index_reg));
+            ctx.emitter.instruction(&format!("b.eq {}", receiver_label));
+            ctx.emitter.instruction(&format!("cmp {}, #1", index_reg));
+            ctx.emitter.instruction(&format!("b.eq {}", method_label));
+            ctx.emitter.instruction(&format!("b {}", null_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, 0", index_reg));
+            ctx.emitter.instruction(&format!("je {}", receiver_label));
+            ctx.emitter.instruction(&format!("cmp {}, 1", index_reg));
+            ctx.emitter.instruction(&format!("je {}", method_label));
+            ctx.emitter.instruction(&format!("jmp {}", null_label));
+        }
+    }
+
+    ctx.emitter.label(&receiver_label);
+    let invocation_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        invocation_reg,
+        descriptor_reg,
+        callable_descriptor::CALLABLE_DESC_INVOCATION_OFFSET,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr {}, [{}]", index_reg, invocation_reg));
+            ctx.emitter.instruction(&format!(
+                "cmp {}, #{}",
+                index_reg,
+                callable_descriptor::CallableDescriptorShape::InstanceMethod as u64
+            ));
+            ctx.emitter
+                .instruction(&format!("b.eq {}", object_receiver_label));
+            ctx.emitter.instruction(&format!(
+                "cmp {}, #{}",
+                index_reg,
+                callable_descriptor::CallableDescriptorShape::StaticMethod as u64
+            ));
+            ctx.emitter
+                .instruction(&format!("b.eq {}", static_receiver_label));
+            ctx.emitter.instruction(&format!("b {}", null_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{}]", index_reg, invocation_reg));
+            ctx.emitter.instruction(&format!(
+                "cmp {}, {}",
+                index_reg,
+                callable_descriptor::CallableDescriptorShape::InstanceMethod as u64
+            ));
+            ctx.emitter
+                .instruction(&format!("je {}", object_receiver_label));
+            ctx.emitter.instruction(&format!(
+                "cmp {}, {}",
+                index_reg,
+                callable_descriptor::CallableDescriptorShape::StaticMethod as u64
+            ));
+            ctx.emitter
+                .instruction(&format!("je {}", static_receiver_label));
+            ctx.emitter.instruction(&format!("jmp {}", null_label));
+        }
+    }
+
+    ctx.emitter.label(&object_receiver_label);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        descriptor_reg,
+        callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET,
+    );
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&static_receiver_label);
+    emit_callable_invocation_string(ctx, invocation_reg, 8);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&method_label);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        invocation_reg,
+        descriptor_reg,
+        callable_descriptor::CALLABLE_DESC_INVOCATION_OFFSET,
+    );
+    emit_callable_invocation_string(ctx, invocation_reg, 24);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        0x7fff_ffff_ffff_fffe,
+    );
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)?;
+    Ok(Some(()))
+}
+
+/// Loads one pointer/length string pair from a callable invocation metadata record.
+fn emit_callable_invocation_string(
+    ctx: &mut FunctionContext<'_>,
+    invocation_reg: &str,
+    offset: usize,
+) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, ptr_reg, invocation_reg, offset);
+    abi::emit_load_from_address(ctx.emitter, len_reg, invocation_reg, offset + 8);
 }
 
 /// Validates a boxed argument's active runtime tag against its declared union parameter.

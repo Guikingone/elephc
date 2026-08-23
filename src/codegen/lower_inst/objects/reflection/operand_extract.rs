@@ -57,6 +57,36 @@ pub(super) fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
     }
 }
 
+/// Peels representation-only wrappers from a Reflection constructor operand while preserving the
+/// underlying PHP value that can carry compile-time literal metadata.
+pub(super) fn reflection_literal_source(
+    ctx: &FunctionContext<'_>,
+    mut value: ValueId,
+) -> Result<ValueId> {
+    loop {
+        let value_ref = ctx
+            .function
+            .value(value)
+            .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(value);
+        };
+        let inst_ref = ctx
+            .function
+            .instruction(inst)
+            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        if !matches!(inst_ref.op, Op::MixedBox | Op::MixedClone | Op::Acquire) {
+            return Ok(value);
+        }
+        let Some(source) = inst_ref.operands.first().copied() else {
+            return Err(CodegenIrError::invalid_module(
+                "reflection representation wrapper missing source operand",
+            ));
+        };
+        value = source;
+    }
+}
+
 /// Extracts a constant string or class-name operand from an EIR value.
 pub(super) fn const_string_or_class_operand(
     ctx: &FunctionContext<'_>,
@@ -127,6 +157,7 @@ pub(super) fn const_data_operand(
     owner: &str,
     allow_class_name: bool,
 ) -> Result<String> {
+    let value = reflection_literal_source(ctx, value)?;
     let value_ref = ctx
         .function
         .value(value)
@@ -168,4 +199,3 @@ pub(super) fn const_data_operand(
         ))),
     }
 }
-

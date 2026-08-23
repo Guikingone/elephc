@@ -487,6 +487,11 @@ pub(super) fn lower_in_array_with_mode(
     )? {
         return Ok(());
     }
+    if matches!(needle_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && matches!(array_ty.codegen_repr(), PhpType::Array(element) if matches!(element.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }))
+    {
+        return lower_in_array_typed_container_with_mixed_needle(ctx, needle, array, mode);
+    }
     match supported_in_array_case(needle_ty, array_ty, mode)? {
         InArrayCase::Empty => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);

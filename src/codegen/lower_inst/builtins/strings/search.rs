@@ -65,6 +65,247 @@ pub(crate) fn lower_string_position(
     store_if_result(ctx, inst)
 }
 
+/// Lowers php-src's byte-oriented `strcspn()` and `strspn()` scanners.
+pub(crate) fn lower_string_span(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+) -> Result<()> {
+    if inst.operands.len() < 2 || inst.operands.len() > 4 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expected 2 to 4 args, got {}",
+            name,
+            inst.operands.len()
+        )));
+    }
+    let length = inst.operands.get(3).copied();
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_string_span_aarch64(ctx, inst, name, length)?,
+        Arch::X86_64 => lower_string_span_x86_64(ctx, inst, name, length)?,
+    }
+    emit_string_span_window_normalization(ctx, name);
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    store_if_result(ctx, inst)
+}
+
+/// Materializes AArch64 span arguments and their nullable-length presence bit.
+fn lower_string_span_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    length: Option<ValueId>,
+) -> Result<()> {
+    let subject = expect_operand(inst, 0)?;
+    let characters = expect_operand(inst, 1)?;
+    load_value_as_string_to_regs(ctx, subject, name, "x1", "x2")?;
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the subject while materializing the remaining arguments
+    load_value_as_string_to_regs(ctx, characters, name, "x1", "x2")?;
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the character mask while materializing the bounds
+    if let Some(offset) = inst.operands.get(2).copied() {
+        load_as_int(ctx, offset, &format!("{} offset", name))?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+    }
+    abi::emit_push_reg(ctx.emitter, "x0");
+    resolve_string_span_length_present(ctx, length)?;
+    abi::emit_push_reg(ctx.emitter, "x0");
+    resolve_string_span_length_value(ctx, length, name)?;
+    ctx.emitter.instruction("mov x6, x0");                                      // park the raw nullable length until the subject is restored
+    abi::emit_pop_reg(ctx.emitter, "x7");
+    abi::emit_pop_reg(ctx.emitter, "x5");
+    ctx.emitter.instruction("ldp x3, x4, [sp], #16");                           // restore the mask pointer and byte length
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the subject pointer and byte length
+    Ok(())
+}
+
+/// Materializes x86_64 span arguments and their nullable-length presence bit.
+fn lower_string_span_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    length: Option<ValueId>,
+) -> Result<()> {
+    let subject = expect_operand(inst, 0)?;
+    let characters = expect_operand(inst, 1)?;
+    load_value_as_string_to_regs(ctx, subject, name, "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    load_value_as_string_to_regs(ctx, characters, name, "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    if let Some(offset) = inst.operands.get(2).copied() {
+        load_as_int(ctx, offset, &format!("{} offset", name))?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
+    }
+    abi::emit_push_reg(ctx.emitter, "rax");
+    resolve_string_span_length_present(ctx, length)?;
+    abi::emit_push_reg(ctx.emitter, "rax");
+    resolve_string_span_length_value(ctx, length, name)?;
+    ctx.emitter.instruction("mov r9, rax");                                     // park the raw nullable length until the subject is restored
+    abi::emit_pop_reg(ctx.emitter, "r10");
+    abi::emit_pop_reg(ctx.emitter, "r8");
+    abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");
+    abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+    Ok(())
+}
+
+/// Resolves whether php-src should apply the nullable `$length` argument.
+fn resolve_string_span_length_present(
+    ctx: &mut FunctionContext<'_>,
+    length: Option<ValueId>,
+) -> Result<()> {
+    let reg = abi::int_result_reg(ctx.emitter);
+    if string_span_length_is_statically_absent(ctx, length)? {
+        abi::emit_load_int_immediate(ctx.emitter, reg, 0);
+        return Ok(());
+    }
+    let length = length.expect("a non-absent span length has an operand");
+    match ctx.value_php_type(length)?.codegen_repr() {
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(length)?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!(
+                        "cmp x1, #{}",
+                        crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
+                    )); // compare the nullable integer tag with PHP null
+                    ctx.emitter.instruction("cset x0, ne");                     // only an integer payload supplies an explicit length
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!(
+                        "cmp rdx, {}",
+                        crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
+                    )); // compare the nullable integer tag with PHP null
+                    ctx.emitter.instruction("setne al");                        // only an integer payload supplies an explicit length
+                    ctx.emitter.instruction("movzx rax, al");                   // widen the presence bit into the result register
+                }
+            }
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.load_value_to_result(length)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #8");                      // runtime tag 8 identifies a boxed PHP null
+                    ctx.emitter.instruction("cset x0, ne");                     // non-null gradual values supply a length
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 8");                      // runtime tag 8 identifies a boxed PHP null
+                    ctx.emitter.instruction("setne al");                        // non-null gradual values supply a length
+                    ctx.emitter.instruction("movzx rax, al");                   // widen the presence bit into the result register
+                }
+            }
+        }
+        _ => abi::emit_load_int_immediate(ctx.emitter, reg, 1),
+    }
+    Ok(())
+}
+
+/// Resolves the nullable `$length` payload, using zero only when its presence bit is false.
+fn resolve_string_span_length_value(
+    ctx: &mut FunctionContext<'_>,
+    length: Option<ValueId>,
+    name: &str,
+) -> Result<()> {
+    if string_span_length_is_statically_absent(ctx, length)? {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        return Ok(());
+    }
+    let length = length.expect("a non-absent span length has an operand");
+    if ctx.value_php_type(length)?.codegen_repr() == PhpType::TaggedScalar {
+        ctx.load_value_to_result(length)?;
+        crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+        return Ok(());
+    }
+    load_as_int(ctx, length, &format!("{} length", name))
+}
+
+/// Reports whether `$length` is omitted or statically PHP null.
+fn string_span_length_is_statically_absent(
+    ctx: &FunctionContext<'_>,
+    length: Option<ValueId>,
+) -> Result<bool> {
+    match length {
+        None => Ok(true),
+        Some(length) => Ok(matches!(
+            ctx.value_php_type(length)?.codegen_repr(),
+            PhpType::Void | PhpType::Never
+        )),
+    }
+}
+
+/// Applies php-src's saturating offset and nullable-length window rules.
+fn emit_string_span_window_normalization(ctx: &mut FunctionContext<'_>, name: &str) {
+    let offset_non_negative = ctx.next_label(&format!("{}_offset_non_negative", name));
+    let offset_done = ctx.next_label(&format!("{}_offset_done", name));
+    let length_present = ctx.next_label(&format!("{}_length_present", name));
+    let length_non_negative = ctx.next_label(&format!("{}_length_non_negative", name));
+    let length_done = ctx.next_label(&format!("{}_length_done", name));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x5, #0");                              // is the offset measured back from the subject end?
+            ctx.emitter.instruction(&format!("b.ge {}", offset_non_negative));  // non-negative offsets are already absolute
+            ctx.emitter.instruction("add x5, x2, x5");                          // resolve a negative offset against the subject length
+            ctx.emitter.instruction("cmp x5, #0");                              // did the offset underflow the subject start?
+            ctx.emitter.instruction("csel x5, xzr, x5, lt");                    // php-src clamps an underflowing offset to zero
+            ctx.emitter.instruction(&format!("b {}", offset_done));             // join the normalized offset path
+            ctx.emitter.label(&offset_non_negative);
+            ctx.emitter.instruction("cmp x5, x2");                              // does the offset pass the subject end?
+            ctx.emitter.instruction("csel x5, x2, x5, gt");                     // php-src clamps an overlong offset to the end
+            ctx.emitter.label(&offset_done);
+            ctx.emitter.instruction("add x1, x1, x5");                          // advance to the normalized scan window
+            ctx.emitter.instruction("sub x2, x2, x5");                          // compute the bytes remaining after the offset
+            ctx.emitter.instruction(&format!("cbnz x7, {}", length_present));   // only a non-null explicit length bounds the window
+            ctx.emitter.instruction("mov x6, x2");                              // omitted or null length scans to the subject end
+            ctx.emitter.instruction(&format!("b {}", length_done));             // skip explicit-length normalization
+            ctx.emitter.label(&length_present);
+            ctx.emitter.instruction("cmp x6, #0");                              // is the length measured back from the remaining end?
+            ctx.emitter.instruction(&format!("b.ge {}", length_non_negative));  // non-negative lengths are direct byte counts
+            ctx.emitter.instruction("add x6, x2, x6");                          // resolve a negative length against the remaining bytes
+            ctx.emitter.instruction("cmp x6, #0");                              // did the negative length cross before the window start?
+            ctx.emitter.instruction("csel x6, xzr, x6, lt");                    // php-src clamps an underflowing length to zero
+            ctx.emitter.instruction(&format!("b {}", length_done));             // join the resolved-length path
+            ctx.emitter.label(&length_non_negative);
+            ctx.emitter.instruction("cmp x6, x2");                              // does the requested length exceed the remaining bytes?
+            ctx.emitter.instruction("csel x6, x2, x6, gt");                     // php-src clamps an overlong length to the remainder
+            ctx.emitter.label(&length_done);
+            ctx.emitter.instruction("mov x2, x6");                              // pass only the normalized window length to the scanner
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp r8, 0");                               // is the offset measured back from the subject end?
+            ctx.emitter.instruction(&format!("jge {}", offset_non_negative));   // non-negative offsets are already absolute
+            ctx.emitter.instruction("add r8, rsi");                             // resolve a negative offset against the subject length
+            ctx.emitter.instruction("cmp r8, 0");                               // did the offset underflow the subject start?
+            ctx.emitter.instruction("mov r11, 0");                              // prepare the clamped zero offset
+            ctx.emitter.instruction("cmovl r8, r11");                           // php-src clamps an underflowing offset to zero
+            ctx.emitter.instruction(&format!("jmp {}", offset_done));           // join the normalized offset path
+            ctx.emitter.label(&offset_non_negative);
+            ctx.emitter.instruction("cmp r8, rsi");                             // does the offset pass the subject end?
+            ctx.emitter.instruction("cmovg r8, rsi");                           // php-src clamps an overlong offset to the end
+            ctx.emitter.label(&offset_done);
+            ctx.emitter.instruction("add rdi, r8");                             // advance to the normalized scan window
+            ctx.emitter.instruction("sub rsi, r8");                             // compute the bytes remaining after the offset
+            ctx.emitter.instruction("test r10, r10");                           // was a non-null explicit length supplied?
+            ctx.emitter.instruction(&format!("jnz {}", length_present));        // normalize the explicit length when present
+            ctx.emitter.instruction("mov r9, rsi");                             // omitted or null length scans to the subject end
+            ctx.emitter.instruction(&format!("jmp {}", length_done));           // skip explicit-length normalization
+            ctx.emitter.label(&length_present);
+            ctx.emitter.instruction("cmp r9, 0");                               // is the length measured back from the remaining end?
+            ctx.emitter.instruction(&format!("jge {}", length_non_negative));   // non-negative lengths are direct byte counts
+            ctx.emitter.instruction("add r9, rsi");                             // resolve a negative length against the remaining bytes
+            ctx.emitter.instruction("cmp r9, 0");                               // did the negative length cross before the window start?
+            ctx.emitter.instruction("mov r11, 0");                              // prepare the clamped zero length
+            ctx.emitter.instruction("cmovl r9, r11");                           // php-src clamps an underflowing length to zero
+            ctx.emitter.instruction(&format!("jmp {}", length_done));           // join the resolved-length path
+            ctx.emitter.label(&length_non_negative);
+            ctx.emitter.instruction("cmp r9, rsi");                             // does the requested length exceed the remaining bytes?
+            ctx.emitter.instruction("cmovg r9, rsi");                           // php-src clamps an overlong length to the remainder
+            ctx.emitter.label(&length_done);
+            ctx.emitter.instruction("mov rsi, r9");                             // pass only the normalized window length to the scanner
+        }
+    }
+}
+
 /// Returns the scratch register that carries a `strpos()`-family search's base offset.
 ///
 /// The base is the number of haystack bytes the runtime helper never sees, so it is also
@@ -569,6 +810,77 @@ pub(crate) fn lower_strstr(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         Arch::X86_64 => lower_strstr_x86_64(ctx, inst, &labels)?,
     }
     ctx.emitter.label(&labels.end);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `strrchr()` using `strrpos()` on PHP's first-needle-byte semantics.
+pub(crate) fn lower_strrchr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 2 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "strrchr expected 2 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    if inst.result.is_some() && inst.result_php_type.codegen_repr() != PhpType::Mixed {
+        return Err(CodegenIrError::invalid_module(format!(
+            "strrchr result must be Mixed (string|false), got {:?}",
+            inst.result_php_type
+        )));
+    }
+    let miss = ctx.next_label("strrchr_miss");
+    let empty = ctx.next_label("strrchr_empty");
+    let end = ctx.next_label("strrchr_end");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "strrchr", "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                // preserve haystack while loading the needle
+            load_string_arg_to_regs(ctx, inst, 1, "strrchr", "x1", "x2")?;
+            ctx.emitter.instruction(&format!("cbz x2, {empty}"));              // empty needles have no usable byte in this AOT path
+            ctx.emitter.instruction("mov x3, x1");                             // needle first-byte pointer
+            ctx.emitter.instruction("mov x4, #1");                             // PHP strrchr uses exactly the first byte
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                  // restore haystack for reverse search
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                // preserve haystack across strrpos
+            abi::emit_call_label(ctx.emitter, "__rt_strrpos");
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                  // restore haystack for suffix reconstruction
+            ctx.emitter.instruction("cmp x0, #0");
+            ctx.emitter.instruction(&format!("b.lt {miss}"));
+            ctx.emitter.instruction("add x1, x1, x0");                         // suffix begins at the final matching byte
+            ctx.emitter.instruction("sub x2, x2, x0");                         // suffix extends through haystack end
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            ctx.emitter.instruction(&format!("b {end}"));
+            ctx.emitter.label(&empty);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // discard preserved haystack when needle is empty
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "strrchr", "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_string_arg_to_regs(ctx, inst, 1, "strrchr", "rax", "rdx")?;
+            ctx.emitter.instruction("test rdx, rdx");
+            ctx.emitter.instruction(&format!("jz {empty}"));
+            ctx.emitter.instruction("mov r8, rax");                            // needle first-byte pointer
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            ctx.emitter.instruction("mov rdi, rax");
+            ctx.emitter.instruction("mov rsi, rdx");
+            ctx.emitter.instruction("mov rdx, r8");
+            ctx.emitter.instruction("mov rcx, 1");                             // PHP strrchr uses exactly the first byte
+            abi::emit_call_label(ctx.emitter, "__rt_strrpos");
+            ctx.emitter.instruction("mov r8, rax");                            // preserve signed match offset
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            ctx.emitter.instruction("cmp r8, 0");
+            ctx.emitter.instruction(&format!("jl {miss}"));
+            ctx.emitter.instruction("add rax, r8");                            // suffix begins at the final matching byte
+            ctx.emitter.instruction("sub rdx, r8");                            // suffix extends through haystack end
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            ctx.emitter.instruction(&format!("jmp {end}"));
+            ctx.emitter.label(&empty);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // discard preserved haystack when needle is empty
+        }
+    }
+    ctx.emitter.label(&miss);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    ctx.emitter.label(&end);
     store_if_result(ctx, inst)
 }
 

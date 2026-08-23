@@ -67,6 +67,7 @@ pub(super) const EVAL_HASH_ALGOS: &[&str] = &[
     "fnv164",
     "fnv1a64",
     "joaat",
+    "xxh128",
 ];
 
 /// Built-in stream wrappers reported by eval `stream_get_wrappers()`.

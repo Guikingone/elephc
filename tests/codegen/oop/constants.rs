@@ -182,6 +182,21 @@ fn test_unknown_class_constant_access_fails_at_runtime() {
     );
 }
 
+/// Verifies a runtime class-string resolves a declared class constant through the name registry.
+#[test]
+fn test_dynamic_class_string_constant_access() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicFlags {
+    const VALUE = 'dynamic';
+}
+$class = DynamicFlags::class;
+echo $class::VALUE;
+"#,
+    );
+    assert_eq!(out, "dynamic");
+}
+
 /// Verifies class constant expression can reference self constant.
 #[test]
 fn test_class_constant_expression_can_reference_self_constant() {

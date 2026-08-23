@@ -1384,6 +1384,54 @@ fn trigger_error_returns_true_and_preserves_body() {
     );
 }
 
+/// Verifies `exit()` completes only the current web request and leaves the worker available for
+/// a subsequent request, matching PHP's request-scoped termination semantics.
+#[test]
+fn exit_completes_web_request_without_killing_worker() {
+    let dir = make_test_dir("web_exit");
+    let bin = compile_web(&dir, "<?php echo 'ready'; exit(0);", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("ready"), "unexpected first response: {first:?}");
+    assert!(second.ends_with("ready"), "unexpected second response: {second:?}");
+}
+
+/// Verifies the web error-handler API exposes the current handler and restores nested handlers in
+/// the same stack order as PHP.
+#[test]
+fn get_error_handler_tracks_nested_set_and_restore() {
+    let dir = make_test_dir("geterrhandler");
+    let src = r#"<?php
+class ErrorHandlerProbe { public function handle(): bool { return true; } }
+$first = new ErrorHandlerProbe();
+$second = new ErrorHandlerProbe();
+echo get_error_handler() === null ? 'N' : 'n';
+echo set_error_handler([$first, 'handle']) === null ? 'N' : 'n';
+$current = get_error_handler();
+echo is_array($current) ? 'A' : 'a';
+$previous = set_error_handler([$second, 'handle']);
+echo is_array($previous) ? 'A' : 'a';
+restore_error_handler();
+$current = get_error_handler();
+echo is_array($current) ? 'A' : 'a';
+restore_error_handler();
+echo get_error_handler() === null ? 'N' : 'n';
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("NNAAAN"), "unexpected handler stack: {resp:?}");
+}
+
 /// Verifies a session-misuse warning reaches the worker's stderr: calling
 /// `session_start()` twice emits the real PHP "already active" notice to stderr
 /// while the HTTP body still renders. Uses stderr-to-file redirection so the

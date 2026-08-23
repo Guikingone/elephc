@@ -146,6 +146,27 @@ fn test_static_and_instance_calls_unaffected() {
     assert_eq!(out, "isT");
 }
 
+/// Verifies a descendant-only method receives its declared default when called through a base
+/// type that does not itself declare the method.
+#[test]
+fn test_subtype_only_method_call_materializes_default_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseNode {}
+class ChildNode extends BaseNode {
+    public function configure(string $name, bool $remove = false): string {
+        return $name . ($remove ? ':remove' : ':keep');
+    }
+}
+function configure_base(BaseNode $node): string {
+    return $node->configure('option');
+}
+echo configure_base(new ChildNode());
+"#,
+    );
+    assert_eq!(out, "option:keep");
+}
+
 /// Compiles and runs the checked-in `examples/dynamic-dispatch/main.php` fixture, covering
 /// dynamic instance method dispatch by name and a dynamic static call.
 #[test]

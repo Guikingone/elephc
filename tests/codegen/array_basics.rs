@@ -649,6 +649,73 @@ echo $out;
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
 
+/// Verifies a widened associative array returned through chained unions stays live for a
+/// generic-array foreach consumer after the callee has released its temporary inputs.
+#[test]
+fn test_chained_assoc_array_union_return_reaches_generic_foreach_consumer() {
+    let out = compile_and_run(
+        r#"<?php
+function kernel_parameters(?string $logDir, ?string $shareDir): array {
+    return [
+        'kernel.project_dir' => '/app',
+        'kernel.environment' => 'dev',
+        'kernel.runtime_environment' => 'runtime',
+        'kernel.runtime_mode' => 'web',
+        'kernel.runtime_mode.web' => true,
+        'kernel.runtime_mode.cli' => false,
+        'kernel.runtime_mode.worker' => 1,
+        'kernel.debug' => false,
+        'kernel.build_dir' => '/app/build',
+        'kernel.cache_dir' => '/app/cache',
+        'kernel.bundles' => [],
+        'kernel.bundles_metadata' => [],
+        'kernel.container_class' => 'Container',
+        '.kernel.config_dir' => '/app/config',
+        '.kernel.bundles_definition' => [],
+        '.container.known_envs' => ['dev'],
+        'kernel.charset' => 'UTF-8',
+    ] + (null !== $logDir ? ['kernel.logs_dir' => $logDir] : [])
+      + (null !== $shareDir ? ['kernel.share_dir' => $shareDir] : []);
+}
+
+function read_kernel_debug(array $parameters): string {
+    foreach ($parameters as $name => $value) {
+        if ('kernel.debug' === $name) {
+            return $value ? 'true' : 'false';
+        }
+    }
+
+    return 'missing';
+}
+
+echo read_kernel_debug(kernel_parameters(null, null));
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies array_merge accepts hash-backed arrays recovered from gradual static-property
+/// element reads, overwrites string keys, and renumbers integer keys like PHP.
+#[test]
+fn test_array_merge_gradual_static_property_elements() {
+    let out = compile_and_run(
+        r#"<?php
+class GradualMergeStore {
+    private static array $rows = [];
+
+    public static function run(): void {
+        self::$rows['left'] = ['name' => 'left', 7 => 'a'];
+        self::$rows['right'] = ['name' => 'right', 9 => 'b'];
+        $merged = array_merge(self::$rows['left'], self::$rows['right']);
+        echo $merged['name'] . ':' . $merged[0] . ':' . $merged[1];
+    }
+}
+GradualMergeStore::run();
+"#,
+    );
+    assert_eq!(out, "right:a:b");
+}
+
 /// Verifies array access on function call result.
 #[test]
 fn test_array_access_on_function_call_result() {

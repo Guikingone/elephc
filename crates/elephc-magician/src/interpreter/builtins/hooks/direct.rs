@@ -258,6 +258,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     StringCompare,
     /// Dispatches string position builtins.
     StringPosition,
+    /// Dispatches `strcspn(...)` and `strspn(...)`.
+    StringSpan,
     /// Dispatches string search predicate builtins.
     StringSearch,
     /// Dispatches `explode(...)` and `implode(...)`.
@@ -282,6 +284,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Strval,
     /// Dispatches `strtr(...)`.
     Strtr,
+    /// Dispatches `strrchr(...)`.
+    Strrchr,
     /// Dispatches `strstr(...)`.
     Strstr,
     /// Dispatches `substr(...)`.
@@ -497,6 +501,9 @@ impl EvalDirectHook {
                 "strrpos" => eval_builtin_strrpos(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::StringSpan => {
+                eval_builtin_string_span_named(name, args, context, scope, values)
+            }
             Self::StringSearch => match name {
                 "str_contains" => eval_builtin_str_contains(args, context, scope, values),
                 "str_ends_with" => eval_builtin_str_ends_with(args, context, scope, values),
@@ -539,6 +546,7 @@ impl EvalDirectHook {
             Self::StrRepeat => eval_builtin_str_repeat(args, context, scope, values),
             Self::Strval => eval_builtin_strval(args, context, scope, values),
             Self::Strtr => eval_builtin_strtr(args, context, scope, values),
+            Self::Strrchr => eval_builtin_strrchr(args, context, scope, values),
             Self::Strstr => eval_builtin_strstr(args, context, scope, values),
             Self::Substr => eval_builtin_substr(args, context, scope, values),
             Self::SubstrReplace => eval_builtin_substr_replace(args, context, scope, values),

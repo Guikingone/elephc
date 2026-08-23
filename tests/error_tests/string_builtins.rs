@@ -556,6 +556,24 @@ fn test_error_substr_count_wrong_args() {
     );
 }
 
+/// Verifies `strcspn()` requires its subject and character mask.
+#[test]
+fn test_error_strcspn_wrong_args() {
+    expect_error(
+        "<?php strcspn(\"abc\");",
+        "strcspn() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies `strspn()` rejects arguments beyond its optional length bound.
+#[test]
+fn test_error_strspn_too_many_args() {
+    expect_error(
+        "<?php strspn(\"abc\", \"abc\", 0, null, 1);",
+        "strspn() takes 2 to 4 arguments",
+    );
+}
+
 /// Verifies that `substr_count()` with five arguments produces the correct arity error.
 #[test]
 fn test_error_substr_count_too_many_args() {

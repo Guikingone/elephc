@@ -540,6 +540,28 @@ fn test_ref_assignment_expression_static_hash_element() {
     assert_eq!(out, "7");
 }
 
+/// A reference-vivified static hash keeps the relocated container published after growth.
+#[test]
+fn test_ref_assignment_expression_static_hash_element_growth_writeback() {
+    let out = compile_and_run(
+        "<?php
+        class C {
+            private static array $cache = [];
+            public static function remember(string $key, int $newValue): int {
+                if (null !== $value = &self::$cache[$key]) {
+                    return $value;
+                }
+                return $value = $newValue;
+            }
+        }
+        for ($i = 0; $i < 40; $i++) {
+            C::remember('key-'.$i, $i);
+        }
+        echo C::remember('key-0', -1), ':', C::remember('key-39', -1);",
+    );
+    assert_eq!(out, "0:39");
+}
+
 /// A static-property post-increment expression returns the old value and stores the increment.
 #[test]
 fn test_static_property_post_increment_expression() {
@@ -581,6 +603,66 @@ fn test_dynamic_property_reference_with_known_suffix() {
         $passes->printBefore();",
     );
     assert_eq!(out, "12");
+}
+
+/// A dynamic property reference replaces raw array storage without reading it as a Mixed marker.
+#[test]
+fn test_dynamic_property_reference_replaces_raw_element_with_array() {
+    let out = compile_and_run(
+        "<?php
+        class C {
+            private array $beforePasses = [4];
+            public function replace(string $type): void {
+                $property = $type.'Passes';
+                $passes = &$this->$property;
+                $passes[0] = [];
+                $passes[0][] = 'ready';
+            }
+            public function result(): string {
+                return $this->beforePasses[0][0];
+            }
+        }
+        $passes = new C();
+        $passes->replace('before');
+        echo $passes->result();",
+    );
+    assert_eq!(out, "ready");
+}
+
+/// A dynamic-property reference retains distinct signed integer map keys on an empty array.
+///
+/// The referenced property starts as `[]`, then receives nested appends under positive and
+/// negative priorities. These keys must promote the storage to an associative map and keep the
+/// dynamic-property reference attached to that same map.
+#[test]
+fn test_dynamic_property_reference_preserves_signed_priority_map_keys() {
+    let out = compile_and_run(
+        r#"<?php
+class PassStore {
+    private array $beforePasses = [];
+
+    public function append(string $type, int $priority, string $pass): void {
+        $property = $type.'Passes';
+        $passes = &$this->$property;
+        if (!isset($passes[$priority])) {
+            $passes[$priority] = [];
+        }
+        $passes[$priority][] = $pass;
+    }
+
+    public function values(): array {
+        return $this->beforePasses;
+    }
+}
+
+$store = new PassStore();
+$store->append('before', 200, 'first');
+$store->append('before', -32, 'second');
+$passes = $store->values();
+echo $passes[200][0].':'.$passes[-32][0];
+"#,
+    );
+    assert_eq!(out, "first:second");
 }
 
 /// A nested array append by reference retains the promoted local cell after its frame returns.

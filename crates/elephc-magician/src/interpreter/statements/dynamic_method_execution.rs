@@ -69,6 +69,15 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let qualified_method_name =
         format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let call_site = context.call_site();
+        eprintln!(
+            "[elephc-eval-trace] phase=dynamic_method_start method={qualified_method_name:?} called_class={called_class_name:?} object_identity={:?} file={:?} line={}",
+            values.object_identity(object).ok(),
+            call_site.0,
+            call_site.2,
+        );
+    }
     let static_names = static_var_names(method.body());
     context.push_function(qualified_method_name.clone());
     context.push_class_scope(class_name.to_string());
@@ -134,6 +143,15 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.pop_called_class_scope();
     context.pop_class_scope();
     context.pop_function();
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let call_site = context.call_site();
+        eprintln!(
+            "[elephc-eval-trace] phase=dynamic_method_end method={qualified_method_name:?} success={} file={:?} line={}",
+            return_result.is_ok(),
+            call_site.0,
+            call_site.2,
+        );
+    }
     return_result
 }
 

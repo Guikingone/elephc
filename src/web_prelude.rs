@@ -545,27 +545,65 @@ function error_reporting(?int $error_level = null): int {
     if ($error_level === null) { return __elephc_error_reporting_state(); }
     return __elephc_error_reporting_state($error_level, true);
 }
-# Shared request-local callable storage for user error handlers.
-function __elephc_error_handler_state(mixed $next = null, bool $replace = false): mixed {
-    static $current = null;
-    $previous = $current;
-    if ($replace) { $current = $next; }
-    return $previous;
-}
-function __elephc_error_handler_levels_state(?int $next = null, bool $replace = false): int {
-    static $current = E_ALL;
-    $previous = $current;
-    if ($replace) { $current = (int) $next; }
+# Shared request-local stack for user error handlers and their masks.
+function __elephc_error_handler_state(mixed $next = null, int $levels = E_ALL, int $operation = 0): mixed {
+    static $handlers = [];
+    static $masks = [];
+    $count = count($handlers);
+    if ($operation === 0) { return $count === 0 ? null : $handlers[$count - 1]; }
+    if ($operation === 2) { return $count === 0 ? E_ALL : $masks[$count - 1]; }
+    if ($operation === 3) {
+        if ($count !== 0) { array_pop($handlers); array_pop($masks); }
+        return true;
+    }
+    $previous = $count === 0 ? null : $handlers[$count - 1];
+    $handlers[] = $next;
+    $masks[] = $levels;
     return $previous;
 }
 function set_error_handler(mixed $callback, int $error_levels = E_ALL): mixed {
-    __elephc_error_handler_levels_state($error_levels, true);
-    return __elephc_error_handler_state($callback, true);
+    return __elephc_error_handler_state($callback, $error_levels, 1);
+}
+function get_error_handler(): mixed {
+    return __elephc_error_handler_state();
 }
 function restore_error_handler(): bool {
-    __elephc_error_handler_state(null, true);
-    __elephc_error_handler_levels_state(E_ALL, true);
-    return true;
+    return (bool) __elephc_error_handler_state(null, E_ALL, 3);
+}
+# Request-local shutdown callback registry. The reset operation runs from the request prelude
+# because static function locals otherwise survive worker reuse.
+function __elephc_shutdown_function_state(mixed $callback = null, mixed $args = [], int $operation = 0): mixed {
+    static $callbacks = [];
+    if ($operation === 1) { $callbacks[] = [$callback, $args]; return null; }
+    if ($operation === 2) {
+        while (count($callbacks) > 0) {
+            $__elephc_shutdown_entry = (array) array_shift($callbacks);
+            call_user_func_array($__elephc_shutdown_entry[0], $__elephc_shutdown_entry[1]);
+        }
+        return null;
+    }
+    if ($operation === 3) { $callbacks = []; }
+    return null;
+}
+function register_shutdown_function(callable $callback, mixed ...$args): void {
+    __elephc_shutdown_function_state($callback, $args, 1);
+}
+# Request-local exception-handler stack used by set/restore_exception_handler().
+function __elephc_exception_handler_state(mixed $next = null, int $operation = 0): mixed {
+    static $handlers = [];
+    $count = count($handlers);
+    if ($operation === 0) { return $count === 0 ? null : $handlers[$count - 1]; }
+    if ($operation === 2) { if ($count !== 0) { array_pop($handlers); } return true; }
+    if ($operation === 3) { $handlers = []; return null; }
+    $previous = $count === 0 ? null : $handlers[$count - 1];
+    $handlers[] = $next;
+    return $previous;
+}
+function set_exception_handler(mixed $callback): mixed {
+    return __elephc_exception_handler_state($callback, 1);
+}
+function restore_exception_handler(): bool {
+    return (bool) __elephc_exception_handler_state(null, 2);
 }
 # trigger_error(): web-SAPI user-error dispatch. Honors the current reporting mask,
 # invokes a registered handler when present, then falls back to STDERR rendering.
@@ -573,7 +611,7 @@ function trigger_error(string $message, int $error_level = E_USER_NOTICE): bool 
     if (($error_level & error_reporting()) === 0) { return true; }
     $__elephc_te_handler = __elephc_error_handler_state();
     if ($__elephc_te_handler !== null
-        && ($error_level & __elephc_error_handler_levels_state()) !== 0) {
+        && ($error_level & (int) __elephc_error_handler_state(null, E_ALL, 2)) !== 0) {
         return (bool) $__elephc_te_handler($error_level, $message, __FILE__, __LINE__);
     }
     $__elephc_te_prefix = 'Notice';
@@ -1867,6 +1905,8 @@ __ElephcSessionState::$shutdown = true;
 __ElephcSessionState::$snapshot = '';
 __ElephcSessionState::$snapshotValid = false;
 __ElephcSessionState::$sendCookie = false;
+__elephc_shutdown_function_state(null, [], 3);
+__elephc_exception_handler_state(null, 3);
 // session.auto_start runs only after every superglobal and the PHP-side session
 // state above have been initialized, but still before user statements.
 if (elephc_web_session_get_auto_start() === 1) { __elephc_session_start_core(0); }
@@ -1877,7 +1917,7 @@ if (elephc_web_session_get_auto_start() === 1) { __elephc_session_start_core(0);
 /// process would otherwise die and the master would respawn it, dropping the
 /// connection). The `0;` placeholder body is replaced with the real statements.
 pub(crate) const WEB_WRAP_SRC: &str =
-    "<?php try { $__elephc_wrap = 0; } catch (\\Throwable $__elephc_exc) { http_response_code(500); } finally { if (elephc_web_session_get_status() === PHP_SESSION_ACTIVE && __ElephcSessionState::$shutdown) { session_write_close(); } }";
+    "<?php try { $__elephc_wrap = 0; } catch (\\Throwable $__elephc_exc) { http_response_code(500); } finally { __elephc_shutdown_function_state(null, [], 2); if (elephc_web_session_get_status() === PHP_SESSION_ACTIVE && __ElephcSessionState::$shutdown) { session_write_close(); } }";
 
 /// Prepends the web prelude when compiling with `--web` and wraps the whole
 /// handler body in a catch-all `try`/`catch` so uncaught exceptions become a 500.

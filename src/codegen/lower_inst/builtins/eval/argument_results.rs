@@ -64,12 +64,7 @@ pub(super) fn store_eval_method_call_arg_pack(
     abi::emit_load_int_immediate(ctx.emitter, result_reg, arg_count as i64);
     abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset);
     for (index, operand) in inst.operands.iter().skip(1).enumerate() {
-        let ty = ctx.load_value_to_result(*operand)?.codegen_repr();
-        if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-            emit_box_current_value_as_mixed(ctx.emitter, &ty);
-        }
-        let result_reg = abi::int_result_reg(ctx.emitter);
-        abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset + 8 + index * 8);
+        store_eval_native_method_argument(ctx, *operand, args_offset + 8 + index * 8)?;
     }
     Ok(())
 }
@@ -84,13 +79,64 @@ pub(super) fn store_eval_static_method_call_arg_pack(
     abi::emit_load_int_immediate(ctx.emitter, result_reg, inst.operands.len() as i64);
     abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset);
     for (index, operand) in inst.operands.iter().enumerate() {
-        let ty = ctx.load_value_to_result(*operand)?.codegen_repr();
-        if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-            emit_box_current_value_as_mixed(ctx.emitter, &ty);
-        }
-        let result_reg = abi::int_result_reg(ctx.emitter);
-        abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset + 8 + index * 8);
+        store_eval_native_method_argument(ctx, *operand, args_offset + 8 + index * 8)?;
     }
+    Ok(())
+}
+
+/// Stores one dynamic method argument, retaining writable local storage for PHP references.
+fn store_eval_native_method_argument(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    offset: usize,
+) -> Result<()> {
+    let local_slot = crate::codegen::lower_inst::reference_arguments::local_slot_for_loaded_value(ctx, value);
+    if let Ok(slot) = local_slot {
+        let source_ty = ctx.local_php_type(slot)?.codegen_repr();
+        if matches!(source_ty, PhpType::TaggedScalar) {
+            return store_eval_native_method_argument_by_value(ctx, value, offset);
+        }
+        let ref_cell_reg = abi::secondary_scratch_reg(ctx.emitter);
+        let marker_tag_reg = abi::tertiary_scratch_reg(ctx.emitter);
+        let source_tag_reg = abi::symbol_scratch_reg(ctx.emitter);
+        ctx.materialize_local_storage_address(slot, ref_cell_reg)?;
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            marker_tag_reg,
+            crate::codegen::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG,
+        );
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            source_tag_reg,
+            crate::codegen::runtime_value_tag(&source_ty) as i64,
+        );
+        ctx.emitter.comment("eval_method_ref_arg");
+        crate::codegen::emit_box_runtime_payload_as_mixed(
+            ctx.emitter,
+            marker_tag_reg,
+            ref_cell_reg,
+            source_tag_reg,
+        );
+    } else {
+        return store_eval_native_method_argument_by_value(ctx, value, offset);
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, offset);
+    Ok(())
+}
+
+/// Stores a dynamic method argument by value when no stable local reference slot is available.
+fn store_eval_native_method_argument_by_value(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    offset: usize,
+) -> Result<()> {
+    let ty = ctx.load_value_to_result(value)?.codegen_repr();
+    if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        emit_box_current_value_as_mixed(ctx.emitter, &ty);
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, offset);
     Ok(())
 }
 

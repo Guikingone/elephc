@@ -75,6 +75,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     let runtime_link_requirements =
         codegen::link_requirements_for_runtime_features(runtime_features);
+    let embedded_bridges: &[&str] = if runtime_features.eval_bridge {
+        &["elephc_crypto", "elephc_phar"]
+    } else {
+        &[]
+    };
 
     // Bridge-backed `--with-<name>` values force-link their staticlib
     // (whole-archived via `forced_bridge_libs`) regardless of feature
@@ -249,6 +254,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         runtime_requirements: &runtime_link_requirements,
         managed_packages: &resolved_native,
         forced_bridges: &forced_bridge_libs,
+        embedded_bridges,
         web,
     });
 

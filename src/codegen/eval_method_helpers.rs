@@ -1961,10 +1961,10 @@ fn emit_aarch64_cast_eval_arg(
             emit_aarch64_cast_eval_object_arg(module, emitter, data, &class_name, fail_label);
         }
         PhpType::Array(_) => {
-            emit_aarch64_cast_eval_array_arg(emitter, 4, fail_label);
+            emit_aarch64_cast_eval_array_arg(emitter, 4, true, fail_label);
         }
         PhpType::AssocArray { .. } => {
-            emit_aarch64_cast_eval_array_arg(emitter, 5, fail_label);
+            emit_aarch64_cast_eval_array_arg(emitter, 5, false, fail_label);
         }
         PhpType::Iterable => {
             emit_aarch64_cast_eval_iterable_arg(module, emitter, label_prefix, fail_label);
@@ -2016,12 +2016,27 @@ fn emit_aarch64_cast_eval_object_arg(
 }
 
 /// Validates and unboxes one ARM64 array-typed eval argument for native method dispatch.
-fn emit_aarch64_cast_eval_array_arg(emitter: &mut Emitter, expected_tag: i64, fail_label: &str) {
+///
+/// A PHP `array` parameter accepts both runtime storage shapes; an internally associative
+/// parameter still requires its hash representation so its native body can use hash operations.
+fn emit_aarch64_cast_eval_array_arg(
+    emitter: &mut Emitter,
+    expected_tag: i64,
+    allow_assoc_shape: bool,
+    fail_label: &str,
+) {
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for array unboxing
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the array payload for the native method call
     abi::emit_load_int_immediate(emitter, "x9", expected_tag);
     emitter.instruction("cmp x0, x9");                                          // compare the eval payload tag with the expected array ABI
-    emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
+    if allow_assoc_shape {
+        emitter.instruction("b.eq 2f");                                         // accept the indexed representation immediately
+        emitter.instruction("cmp x0, #5");                                      // generic PHP arrays also accept associative storage
+        emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
+        emitter.label("2");
+    } else {
+        emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
+    }
     emitter.instruction("mov x0, x1");                                          // place the unboxed array pointer in the result register
 }
 
@@ -2129,10 +2144,10 @@ fn emit_x86_64_cast_eval_arg(
             emit_x86_64_cast_eval_object_arg(module, emitter, data, &class_name, fail_label);
         }
         PhpType::Array(_) => {
-            emit_x86_64_cast_eval_array_arg(emitter, 4, fail_label);
+            emit_x86_64_cast_eval_array_arg(emitter, 4, true, fail_label);
         }
         PhpType::AssocArray { .. } => {
-            emit_x86_64_cast_eval_array_arg(emitter, 5, fail_label);
+            emit_x86_64_cast_eval_array_arg(emitter, 5, false, fail_label);
         }
         PhpType::Iterable => {
             emit_x86_64_cast_eval_iterable_arg(module, emitter, label_prefix, fail_label);
@@ -2183,12 +2198,27 @@ fn emit_x86_64_cast_eval_object_arg(
 }
 
 /// Validates and unboxes one x86_64 array-typed eval argument for native method dispatch.
-fn emit_x86_64_cast_eval_array_arg(emitter: &mut Emitter, expected_tag: i64, fail_label: &str) {
+///
+/// A PHP `array` parameter accepts both runtime storage shapes; an internally associative
+/// parameter still requires its hash representation so its native body can use hash operations.
+fn emit_x86_64_cast_eval_array_arg(
+    emitter: &mut Emitter,
+    expected_tag: i64,
+    allow_assoc_shape: bool,
+    fail_label: &str,
+) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for array unboxing
     emitter.instruction("call __rt_mixed_unbox");                               // expose the array payload for the native method call
     abi::emit_load_int_immediate(emitter, "r10", expected_tag);
     emitter.instruction("cmp rax, r10");                                        // compare the eval payload tag with the expected array ABI
-    emitter.instruction(&format!("jne {}", fail_label));                        // reject array payloads with an incompatible ABI shape
+    if allow_assoc_shape {
+        emitter.instruction("je 2f");                                           // accept the indexed representation immediately
+        emitter.instruction("cmp rax, 5");                                      // generic PHP arrays also accept associative storage
+        emitter.instruction(&format!("jne {}", fail_label));                    // reject values that are not either PHP array representation
+        emitter.label("2");
+    } else {
+        emitter.instruction(&format!("jne {}", fail_label));                    // reject array payloads with an incompatible ABI shape
+    }
     emitter.instruction("mov rax, rdi");                                        // place the unboxed array pointer in the result register
 }
 

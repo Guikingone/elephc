@@ -48,6 +48,7 @@ use flags::*;
 use formatting::*;
 use function_construction::*;
 use function_metadata::*;
+pub(in crate::interpreter) use invocation::eval_reflection_with_declaring_class_scope;
 use invocation::*;
 pub(in crate::interpreter) use member_api::*;
 pub(in crate::interpreter) use member_construction::*;

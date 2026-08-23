@@ -51,6 +51,8 @@ fn crypto_one_shot_known_vectors() {
         "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532"
     );
     assert_eq!(hash_hex("ripemd160", b"abc").unwrap(), "8eb208f7e05d987a9b044a8e98c6b087f15a0bfc");
+    assert_eq!(hash_hex("xxh128", b"").unwrap(), "99aa06d3014798d86001c324468d497f");
+    assert_eq!(hash_hex("xxh128", b"abc").unwrap(), "06b05ab6733a618578af5f94892f3950");
 }
 
 /// Verifies known-answer digests (PHP 8.4 golden values for "abc") for every
@@ -156,6 +158,7 @@ fn all_algorithms_produce_correct_digest_length() {
         ("whirlpool", 64),
         ("crc32", 4), ("crc32b", 4), ("crc32c", 4), ("adler32", 4),
         ("fnv132", 4), ("fnv1a32", 4), ("fnv164", 8), ("fnv1a64", 8), ("joaat", 4),
+        ("xxh128", 16),
     ];
     for (algo, len) in cases {
         let hex = hash_hex(algo, b"the quick brown fox")

@@ -35,6 +35,8 @@
 //!   stack cells are safe receivers.
 //! - A null/sentinel receiver cell is initialized in place before nested writes,
 //!   keeping the autovivified container attached to the original local/slot.
+//! - Typed hash entries are promoted into boxed slots before nested writes so
+//!   copy-on-write updates remain attached to the parent hash.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -279,7 +281,7 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=value_lo, x2=value_hi, x3=value_tag
     emitter.instruction("cbz x0, __rt_mixed_array_gfw_assoc_create");           // missing keys autovivify a fresh element
     emitter.instruction("cmp x3, #7");                                          // is the entry already a boxed Mixed cell?
-    emitter.instruction("b.ne __rt_mixed_array_gfw_assoc_box");                 // typed entries keep the plain reader's detached-box behavior
+    emitter.instruction("b.ne __rt_mixed_array_gfw_assoc_box");                 // typed entries are promoted into writable boxed parent slots
     emitter.instruction("cbz x1, __rt_mixed_array_gfw_assoc_create");           // defensive: boxed entries without a cell are treated as missing
     emitter.instruction("ldr x9, [x1]");                                        // load the stored cell's payload tag
     emitter.instruction("cmp x9, #8");                                          // does the entry hold a boxed Mixed(null)?
@@ -289,8 +291,23 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_array_gfw_return");                       // existing elements are returned as-is (set decides compatibility)
     emitter.label("__rt_mixed_array_gfw_assoc_box");
     emitter.instruction("mov x0, x3");                                          // x0 = value_tag for mixed_from_value (x1/x2 hold the payload)
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the typed entry into a detached Mixed cell (read-path parity)
-    emitter.instruction("b __rt_mixed_array_gfw_return");                       // the following set drops writes through detached boxes
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the typed entry before replacing its parent hash slot
+    emitter.instruction("str x0, [sp, #32]");                                   // save the new boxed child across the parent hash update
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the receiver cell after child boxing
+    emitter.instruction("ldr x0, [x9, #8]");                                    // reload the current parent hash pointer
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the normalized key low word
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the normalized key high word
+    emitter.instruction("ldr x3, [sp, #32]");                                   // transfer the boxed child into the hash entry
+    emitter.instruction("mov x4, xzr");                                         // boxed Mixed hash values do not use a high payload word
+    emitter.instruction("mov x5, #7");                                          // retag the parent entry as a boxed Mixed value
+    emitter.instruction("bl __rt_hash_set");                                    // replace the typed slot and release its former raw owner
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the receiver cell after possible hash relocation
+    emitter.instruction("str x0, [x9, #8]");                                   // publish the relocated hash back into the receiver cell
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the stored boxed child for the caller result
+    abi::emit_push_reg(emitter, "x0");
+    emitter.instruction("bl __rt_incref");                                      // retain the child so caller and parent each own one reference
+    abi::emit_pop_reg(emitter, "x0");
+    emitter.instruction("b __rt_mixed_array_gfw_return");                       // nested writes now mutate the parent-owned cell
     emitter.label("__rt_mixed_array_gfw_assoc_create");
     emitter.instruction("bl __rt_mixed_new_empty_array_cell");                  // allocate the autovivified empty-array cell
     emitter.instruction("str x0, [sp, #32]");                                   // save the fresh child cell across the hash insertion
@@ -561,7 +578,7 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // was the key found?
     emitter.instruction("je __rt_mixed_array_gfw_assoc_create");                // missing keys autovivify a fresh element
     emitter.instruction("cmp rcx, 7");                                          // is the entry already a boxed Mixed cell?
-    emitter.instruction("jne __rt_mixed_array_gfw_assoc_box");                  // typed entries keep the plain reader's detached-box behavior
+    emitter.instruction("jne __rt_mixed_array_gfw_assoc_box");                  // typed entries are promoted into writable boxed parent slots
     emitter.instruction("test rdi, rdi");                                       // defensive: boxed entries without a cell are treated as missing
     emitter.instruction("je __rt_mixed_array_gfw_assoc_create");                // branch to the autovivify path
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the stored cell's payload tag
@@ -574,8 +591,23 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // existing elements are returned as-is (set decides compatibility)
     emitter.label("__rt_mixed_array_gfw_assoc_box");
     emitter.instruction("mov rax, rcx");                                        // rax = value_tag for mixed_from_value (rdi/rsi hold the payload)
-    emitter.instruction("call __rt_mixed_from_value");                          // box the typed entry into a detached Mixed cell (read-path parity)
-    emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // the following set drops writes through detached boxes
+    emitter.instruction("call __rt_mixed_from_value");                          // box the typed entry before replacing its parent hash slot
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the new boxed child across the parent hash update
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the receiver cell after child boxing
+    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // reload the current parent hash pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the normalized key low word
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the normalized key high word
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // transfer the boxed child into the hash entry
+    emitter.instruction("xor r8, r8");                                          // boxed Mixed hash values do not use a high payload word
+    emitter.instruction("mov r9, 7");                                           // retag the parent entry as a boxed Mixed value
+    emitter.instruction("call __rt_hash_set");                                  // replace the typed slot and release its former raw owner
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the receiver cell after possible hash relocation
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the relocated hash back into the receiver cell
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the stored boxed child for the caller result
+    abi::emit_push_reg(emitter, "rax");
+    emitter.instruction("call __rt_incref");                                    // retain the child so caller and parent each own one reference
+    abi::emit_pop_reg(emitter, "rax");
+    emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // nested writes now mutate the parent-owned cell
     emitter.label("__rt_mixed_array_gfw_assoc_create");
     emitter.instruction("call __rt_mixed_new_empty_array_cell");                // allocate the autovivified empty-array cell
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the fresh child cell across the hash insertion

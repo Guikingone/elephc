@@ -167,18 +167,12 @@ pub(super) fn pop_eval_context_class_scope(ctx: &mut FunctionContext<'_>, pushed
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
 }
 
-/// Returns the lexical class encoded in the current EIR method name.
+/// Returns the lexical class encoded in the current EIR callable name.
 pub(super) fn current_eval_method_class<'a>(ctx: &'a FunctionContext<'_>) -> Option<&'a str> {
     ctx.function
-        .flags
-        .is_method
-        .then(|| {
-            ctx.function
-                .name
-                .rsplit_once("::")
-                .map(|(class_name, _)| class_name)
-        })
-        .flatten()
+        .name
+        .rsplit_once("::")
+        .map(|(class_name, _)| class_name)
 }
 
 /// Materializes the runtime called-class name for eval `static::` resolution.

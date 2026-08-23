@@ -717,6 +717,7 @@ dependencies = [
  "sha3",
  "subtle",
  "whirlpool",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -3955,6 +3956,12 @@ dependencies = [
  "libc",
  "rustix 1.1.4",
 ]
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aee1b19627c7c60102ab80d3a9cbe18de90bfe03bfa6c3715447681f0e8c8af6"
 
 [[package]]
 name = "yoke"

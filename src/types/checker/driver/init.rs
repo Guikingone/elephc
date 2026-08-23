@@ -45,9 +45,17 @@ impl Checker {
     ///
     /// # Returns
     /// A `Checker` instance ready for the program to be loaded into.
-    pub(super) fn new(target_platform: Platform) -> Self {
+    pub(crate) fn new(target_platform: Platform) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
+        constants.insert("PHP_OS_FAMILY".to_string(), PhpType::Str);
+        for name in [
+            "SCANDIR_SORT_ASCENDING",
+            "SCANDIR_SORT_DESCENDING",
+            "SCANDIR_SORT_NONE",
+        ] {
+            constants.insert(name.to_string(), PhpType::Int);
+        }
         // The PHP version surface. Only the TYPES are declared here — the values are baked per
         // compilation from `--php-version` / `--web` by `codegen::prescan::collect_constants`,
         // exactly as `PHP_OS`'s value is baked from the target platform.

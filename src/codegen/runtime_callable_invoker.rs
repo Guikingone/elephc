@@ -18,6 +18,7 @@
 use crate::codegen::callable_descriptor;
 use crate::codegen::callable_invoker_args::{
     emit_branch_if_mixed_arg_tag, emit_call_user_func_array_invalid_mixed_args_abort,
+    emit_clone_assoc_array_for_invoker_with_value_type,
     emit_clone_indexed_array_for_invoker_with_runtime_tag, ARRAY_GLOBAL_REF_CELL_TAG,
     ARRAY_LOCAL_REF_CELL_TAG, INVOKER_ARG_REF_CELL_TAG,
 };
@@ -1221,6 +1222,9 @@ fn push_loaded_indexed_array_value_arg(
     }
 
     let special_label = ctx.next_label("invoker_ref_value");
+    let indexed_array_label = ctx.next_label("invoker_mixed_array_indexed");
+    let associative_array_label = ctx.next_label("invoker_mixed_array_associative");
+    let normalized_array_label = ctx.next_label("invoker_mixed_array_normalized");
     let done_label = ctx.next_label("invoker_value_done");
     let result_reg = abi::int_result_reg(emitter);
     let tag_reg = abi::secondary_scratch_reg(emitter);
@@ -1235,11 +1239,37 @@ fn push_loaded_indexed_array_value_arg(
     }) {
         abi::emit_call_label(emitter, "__rt_mixed_unbox");
         match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction("mov x0, x1"),                 // pass the borrowed indexed-array payload to the normalizing clone helper
-            Arch::X86_64 => emitter.instruction("mov rax, rdi"),                // pass the borrowed indexed-array payload to the normalizing clone helper
+            Arch::AArch64 => {
+                emitter.instruction("cmp x0, #4");                              // tag 4 is indexed PHP array storage
+                emitter.instruction(&format!("b.eq {}", indexed_array_label));
+                emitter.instruction("cmp x0, #5");                              // tag 5 is associative PHP array storage
+                emitter.instruction(&format!("b.eq {}", associative_array_label));
+            }
+            Arch::X86_64 => {
+                emitter.instruction("cmp rax, 4");                              // tag 4 is indexed PHP array storage
+                emitter.instruction(&format!("je {}", indexed_array_label));
+                emitter.instruction("cmp rax, 5");                              // tag 5 is associative PHP array storage
+                emitter.instruction(&format!("je {}", associative_array_label));
+            }
+        }
+        emit_call_user_func_array_invalid_mixed_args_abort(emitter, data);
+
+        emitter.label(&indexed_array_label);
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction("mov x0, x1"),                 // pass the borrowed indexed payload to its clone helper
+            Arch::X86_64 => emitter.instruction("mov rax, rdi"),                // pass the borrowed indexed payload to its clone helper
         }
         let result_reg = abi::int_result_reg(emitter).to_string();
         emit_clone_indexed_array_for_invoker_with_runtime_tag(&result_reg, emitter);
+        abi::emit_jump(emitter, &normalized_array_label);
+
+        emitter.label(&associative_array_label);
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction("mov x0, x1"),                 // pass the borrowed hash payload to its clone helper
+            Arch::X86_64 => emitter.instruction("mov rax, rdi"),                // pass the borrowed hash payload to its clone helper
+        }
+        emit_clone_assoc_array_for_invoker_with_value_type(&result_reg, &PhpType::Mixed, emitter);
+        emitter.label(&normalized_array_label);
         if let Some(offset) = array_cleanup_offset {
             abi::store_at_offset(emitter, &result_reg, offset);
         }

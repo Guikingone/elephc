@@ -1119,6 +1119,10 @@ fn cleanup_tracked_codegen_type(ty: &PhpType) -> bool {
 }
 
 /// Returns true when loading a local into an SSA result leaves the same owner in the result.
+///
+/// A declared bare PHP `array` can be physically backed by associative storage. Return lowering
+/// deliberately retypes that pointer to the generic contract without rebuilding it, so this
+/// transfer must retain the owner through the epilogue just like same-representation arrays.
 fn local_load_transfers_stored_owner(local_ty: &PhpType, result_ty: &PhpType) -> bool {
     if !cleanup_tracked_codegen_type(local_ty) {
         return false;
@@ -1130,6 +1134,7 @@ fn local_load_transfers_stored_owner(local_ty: &PhpType, result_ty: &PhpType) ->
         (local_ty, result_ty),
         (PhpType::Array(_), PhpType::Array(_))
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+            | (PhpType::AssocArray { .. }, PhpType::Array(_))
             | (PhpType::Object(_), PhpType::Object(_))
     )
 }

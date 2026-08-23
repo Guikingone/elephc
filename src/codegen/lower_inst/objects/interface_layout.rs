@@ -104,8 +104,13 @@ pub(super) fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> V
         .filter_map(|(index, (property, _))| {
             let is_owned_reference = class_info.owned_reference_properties.contains(property)
                 && class_info.property_slot_is_reference(index, property);
-            let starts_uninitialized = class_info.property_slot_is_declared(index, property)
-                && class_info.defaults.get(index).is_some_and(|default| default.is_none())
+            // Every physical slot without a schema default is PHP-uninitialized. Do not key
+            // this on the name-level declared-property set: inherited private slots can be
+            // intentionally absent from that visible map while still needing their own marker.
+            let starts_uninitialized = class_info
+                .defaults
+                .get(index)
+                .is_some_and(|default| default.is_none())
                 && !is_owned_reference;
             if starts_uninitialized {
                 Some(8 + index * 16 + 8)

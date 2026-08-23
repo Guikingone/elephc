@@ -380,7 +380,7 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
 }
 
 /// Converts a descriptor-invoker ref marker into an eval-visible value and writeback target.
-fn eval_invoker_ref_arg_value_and_target(
+pub(in crate::interpreter) fn eval_invoker_ref_arg_value_and_target(
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
     values: &mut impl RuntimeValueOps,

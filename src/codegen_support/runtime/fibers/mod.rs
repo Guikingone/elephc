@@ -100,5 +100,20 @@ pub(crate) const FIBER_STATE_SUSPENDED: i32 = 2;
 pub(crate) const FIBER_STATE_TERMINATED: i32 = 3;
 
 // ── Default per-fiber stack size ─────────────────────────────────────
-/// Default usable stack size in bytes for a newly constructed Fiber (256 KiB; excludes the guard page).
-pub(crate) const FIBER_DEFAULT_STACK_SIZE: i32 = 256 * 1024;
+/// Default usable stack size in bytes for a newly constructed Fiber.
+///
+/// PHP uses a 2 MiB C stack on 64-bit targets (`4096 * 512`); matching that
+/// baseline also leaves room for bridge calls made from generator bodies.
+/// The guard page is allocated separately.
+pub(crate) const FIBER_DEFAULT_STACK_SIZE: i32 = 2 * 1024 * 1024;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Locks the 64-bit PHP-compatible default used by both Fiber and Generator stacks.
+    #[test]
+    fn default_stack_matches_the_php_64_bit_baseline() {
+        assert_eq!(FIBER_DEFAULT_STACK_SIZE, 4096 * 512);
+    }
+}

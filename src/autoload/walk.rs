@@ -85,7 +85,15 @@ fn collect_declared_in_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
 /// Collect all class reference points in the program, returning (statement index, FQN) pairs.
 pub(super) fn collect_reference_points(program: &Program) -> Vec<(usize, String)> {
     let mut out = Vec::new();
-    let mut dynamic_class_defaults = HashMap::new();
+    // Autoload dependency insertion can place a parent declaration before the subclass that
+    // supplies a class-string option consumed by the parent. Seed the flow facts from the whole
+    // program so discovery does not depend on declaration order; the ordered pass below still
+    // applies definite top-level overwrites at their observable reference points.
+    let mut seed = ReferenceSet::new(&HashMap::new());
+    for stmt in program {
+        collect_refs_stmt(stmt, &mut seed);
+    }
+    let mut dynamic_class_defaults = seed.dynamic_class_defaults;
     for (stmt_idx, stmt) in program.iter().enumerate() {
         let mut refs = HashSet::new();
         collect_refs_with_definite_flow(stmt, &mut dynamic_class_defaults, &mut refs);
@@ -116,7 +124,6 @@ fn collect_refs_with_definite_flow(
             let local_names = refs.names;
             *defaults = refs.dynamic_class_defaults;
             names.extend(local_names);
-            update_dynamic_class_defaults(stmt, defaults);
         }
     }
 }
@@ -162,8 +169,15 @@ fn update_dynamic_class_target_default(
     value: &Expr,
     defaults: &mut HashMap<DynamicClassTarget, HashSet<String>>,
 ) {
+    if let Some(value) = literal_eval_return_value(value, defaults) {
+        update_dynamic_class_target_default(target, &value, defaults);
+        return;
+    }
+    if update_dynamic_class_array_defaults(&target, value, defaults) {
+        return;
+    }
     let mut candidates = HashSet::new();
-    collect_possible_class_strings(value, &mut candidates);
+    collect_possible_class_strings(value, defaults, &mut candidates);
     let preserves_previous = matches!(
         &value.kind,
         ExprKind::NullCoalesce { value: current, .. }
@@ -178,8 +192,100 @@ fn update_dynamic_class_target_default(
     }
 }
 
-/// Collects literal class strings that a deterministic assignment expression can produce.
-fn collect_possible_class_strings(expr: &Expr, out: &mut HashSet<String>) {
+/// Records per-key class-string defaults when a stable target receives a literal array.
+///
+/// A class name commonly crosses a dynamic boundary as `$classes[0]`. Recording only the
+/// outer `$classes` local would lose that fact before `new $classes[0]` or
+/// `class_exists($classes[0])` reaches the autoload walk.
+fn update_dynamic_class_array_defaults(
+    target: &DynamicClassTarget,
+    value: &Expr,
+    defaults: &mut HashMap<DynamicClassTarget, HashSet<String>>,
+) -> bool {
+    let entries = match &value.kind {
+        ExprKind::ArrayLiteral(items) => items
+            .iter()
+            .enumerate()
+            .map(|(index, value)| (DynamicClassIndex::Int(index as i64), value))
+            .collect::<Vec<_>>(),
+        ExprKind::ArrayLiteralAssoc(items) => items
+            .iter()
+            .filter_map(|(key, value)| Some((dynamic_class_index(key)?, value)))
+            .collect::<Vec<_>>(),
+        _ => return false,
+    };
+    defaults.remove(target);
+    for (index, value) in entries {
+        update_dynamic_class_target_default(
+            DynamicClassTarget::ArrayAccess {
+                array: Box::new(target.clone()),
+                index,
+            },
+            value,
+            defaults,
+        );
+    }
+    true
+}
+
+/// Extracts the direct return expression from a statically known `eval` source.
+///
+/// This intentionally recognizes only an eval fragment consisting of one value return. More
+/// involved runtime code remains opaque, while this shape safely preserves the same class-string
+/// flow facts as a literal RHS without executing source during compilation.
+fn literal_eval_return_value(
+    expr: &Expr,
+    defaults: &HashMap<DynamicClassTarget, HashSet<String>>,
+) -> Option<Expr> {
+    let ExprKind::FunctionCall { name, args } = &expr.kind else {
+        return None;
+    };
+    if name.as_canonical().trim_start_matches('\\') != "eval" || args.len() != 1 {
+        return None;
+    }
+    let sources = literal_eval_source_candidates(&args[0], defaults);
+    for source in sources {
+        let source = format!("<?php\n{source}");
+        let Ok(tokens) = crate::lexer::tokenize(&source) else {
+            continue;
+        };
+        let Ok(program) = crate::parser::parse(&tokens) else {
+            continue;
+        };
+        let [Stmt {
+            kind: StmtKind::Return(Some(value)),
+            ..
+        }] = program.as_slice()
+        else {
+            continue;
+        };
+        return Some(value.clone());
+    }
+    None
+}
+
+/// Returns literal eval-source candidates flowing through a stable class-string local.
+fn literal_eval_source_candidates(
+    expr: &Expr,
+    defaults: &HashMap<DynamicClassTarget, HashSet<String>>,
+) -> Vec<String> {
+    match &expr.kind {
+        ExprKind::StringLiteral(source) => vec![source.clone()],
+        ExprKind::Variable(_) | ExprKind::ArrayAccess { .. } => dynamic_class_target(expr)
+            .and_then(|target| defaults.get(&target))
+            .map(|sources| sources.iter().cloned().collect())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// Collects class strings that a deterministic expression can produce from literals or tracked
+/// stable l-values.
+fn collect_possible_class_strings(
+    expr: &Expr,
+    defaults: &HashMap<DynamicClassTarget, HashSet<String>>,
+    out: &mut HashSet<String>,
+) {
     match &expr.kind {
         ExprKind::StringLiteral(name) => {
             let name = name.trim_start_matches('\\');
@@ -196,18 +302,25 @@ fn collect_possible_class_strings(expr: &Expr, out: &mut HashSet<String>) {
                 out.insert(canonical.to_string());
             }
         }
+        ExprKind::Variable(_) | ExprKind::ArrayAccess { .. } => {
+            if let Some(target) = dynamic_class_target(expr) {
+                if let Some(candidates) = defaults.get(&target) {
+                    out.extend(candidates.iter().cloned());
+                }
+            }
+        }
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
-            collect_possible_class_strings(value, out);
-            collect_possible_class_strings(default, out);
+            collect_possible_class_strings(value, defaults, out);
+            collect_possible_class_strings(default, defaults, out);
         }
         ExprKind::Ternary {
             then_expr,
             else_expr,
             ..
         } => {
-            collect_possible_class_strings(then_expr, out);
-            collect_possible_class_strings(else_expr, out);
+            collect_possible_class_strings(then_expr, defaults, out);
+            collect_possible_class_strings(else_expr, defaults, out);
         }
         _ => {}
     }
@@ -307,7 +420,7 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet) {
             }
         }
         StmtKind::EnumDecl {
-            backing_type,
+            backing_type: _,
             cases,
             implements,
             trait_uses,
@@ -315,9 +428,6 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet) {
             constants,
             ..
         } => {
-            if let Some(ty) = backing_type {
-                collect_type_expr(ty, out);
-            }
             for interface in implements {
                 push_name(interface, out);
             }
@@ -534,10 +644,7 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet) {
         }
         StmtKind::ArrayPush { value, .. } => collect_refs_expr(value, out),
         StmtKind::ListUnpack { value, .. } => collect_refs_expr(value, out),
-        StmtKind::TypedAssign { type_expr, value, .. } => {
-            collect_type_expr(type_expr, out);
-            collect_refs_expr(value, out);
-        }
+        StmtKind::TypedAssign { value, .. } => collect_refs_expr(value, out),
         StmtKind::Throw(e) => collect_refs_expr(e, out),
         StmtKind::Synthetic(stmts) => {
             for s in stmts {
@@ -546,6 +653,7 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet) {
         }
         _ => {}
     }
+    update_dynamic_class_defaults(stmt, &mut out.dynamic_class_defaults);
 }
 
 /// Collect class references from a catch clause.
@@ -578,9 +686,6 @@ fn collect_method(method: &ClassMethod, out: &mut ReferenceSet) {
 /// Collect class references from a class property declaration.
 fn collect_property(prop: &ClassProperty, out: &mut ReferenceSet) {
     collect_attribute_groups(&prop.attributes, out);
-    if let Some(ty) = &prop.type_expr {
-        collect_type_expr(ty, out);
-    }
     if let Some(d) = &prop.default {
         collect_refs_expr(d, out);
     }
@@ -589,32 +694,24 @@ fn collect_property(prop: &ClassProperty, out: &mut ReferenceSet) {
 /// Collect class references from a class constant declaration.
 fn collect_class_const(constant: &ClassConst, out: &mut ReferenceSet) {
     collect_attribute_groups(&constant.attributes, out);
-    if let Some(ty) = &constant.type_expr {
-        collect_type_expr(ty, out);
-    }
     collect_refs_expr(&constant.value, out);
 }
 
-/// Collects named parameter, variadic, and return types plus parameter default expressions.
+/// Collects parameter default expressions without treating declaration type names as autoload demands.
+///
+/// PHP defers resolving named types in function-like signatures until an operation needs their
+/// metadata. Loading a type merely because it occurs in a callback annotation would execute
+/// optional autoload sources and change the program's observable top-level behavior.
 fn collect_callable_signature(
     params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
-    variadic_type: Option<&TypeExpr>,
-    return_type: Option<&TypeExpr>,
+    _variadic_type: Option<&TypeExpr>,
+    _return_type: Option<&TypeExpr>,
     out: &mut ReferenceSet,
 ) {
-    for (_, ty, default, _) in params {
-        if let Some(ty) = ty {
-            collect_type_expr(ty, out);
-        }
+    for (_, _, default, _) in params {
         if let Some(default) = default {
             collect_refs_expr(default, out);
         }
-    }
-    if let Some(ty) = variadic_type {
-        collect_type_expr(ty, out);
-    }
-    if let Some(ty) = return_type {
-        collect_type_expr(ty, out);
     }
 }
 
@@ -864,6 +961,15 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet) {
                     };
                     if triggers_autoload {
                         push_literal_fqn(args.first(), out);
+                        if args
+                            .first()
+                            .is_some_and(|arg| !matches!(arg.kind, ExprKind::StringLiteral(_)))
+                        {
+                            collect_dynamic_class_target_candidates(
+                                args.first().expect("checked above"),
+                                out,
+                            );
+                        }
                     }
                 }
                 _ => {}

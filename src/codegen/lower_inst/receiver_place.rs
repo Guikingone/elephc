@@ -105,20 +105,22 @@ impl ReceiverPlace {
         }
     }
 
-    /// Publishes the receiver back using the PHP type EIR recorded for the receiver value.
+    /// Publishes a mutated container without consuming its SSA owner.
     ///
-    /// The convenience form for the mutating builtins whose receiver keeps its declared container
-    /// type across the call, which is all of them: a copy-on-write split or a growth changes the
-    /// address, never the element representation.
+    /// A copy-on-write helper can return a relocated array/hash while the current SSA value still
+    /// owns the reference that the call-cleanup path will release. Storing through the dedicated
+    /// container path retains a Mixed local's replacement instead of transferring that owner and
+    /// leaving the later cleanup with a dangling raw pointer.
     pub(super) fn store_back_value(
         &self,
         ctx: &mut FunctionContext<'_>,
         value: ValueId,
     ) -> Result<()> {
-        if matches!(self, Self::Opaque) {
-            return Ok(());
+        match self {
+            Self::Opaque => Ok(()),
+            Self::Local(slot) | Self::RefCell(slot) => {
+                ctx.store_mutated_container_to_local(*slot, value)
+            }
         }
-        let value_ty = ctx.value_php_type(value)?;
-        self.store_back(ctx, value, &value_ty)
     }
 }

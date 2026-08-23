@@ -81,6 +81,57 @@ echo $c->make()->add(3, 4);
     assert_eq!(out, "7");
 }
 
+/// Verifies a boxed-Mixed object argument is checked and unboxed after dynamic receiver dispatch.
+///
+/// The receiver's runtime class selects `Consumer::accept()`, whose declared
+/// parameter uses the raw object ABI. The argument remains Mixed until that
+/// selection, so the candidate-specific call path must validate and expose its
+/// object payload instead of passing the Mixed cell as an object pointer.
+#[test]
+fn test_mixed_receiver_unboxes_object_argument_for_typed_method_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class Dependency {
+    public function label(): string { return 'ok'; }
+}
+class Consumer {
+    public function accept(Dependency $dependency): string { return $dependency->label(); }
+}
+function receiver(): mixed { return new Consumer(); }
+function dependency(): mixed { return new Dependency(); }
+echo receiver()->accept(dependency());
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a dynamic receiver preserves PHP's nominal object parameter TypeError.
+///
+/// Candidate dispatch cannot validate its argument in IR because the receiver
+/// class is only selected at runtime. Its concrete candidate path must reject a
+/// boxed non-object before exposing an invalid payload through the object ABI.
+#[test]
+fn test_mixed_receiver_rejects_non_object_for_typed_method_parameter() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Dependency {}
+class Consumer {
+    public function accept(Dependency $dependency): void {}
+}
+function receiver(): mixed { return new Consumer(); }
+function invalidDependency(): mixed { return 'not an object'; }
+receiver()->accept(invalidDependency());
+"#,
+    );
+    assert!(!out.success);
+    assert!(
+        out.stderr
+            .contains("Argument must be of type Dependency, string given"),
+        "unexpected stderr: {}",
+        out.stderr
+    );
+}
+
 /// A same-name dynamic candidate with a nullable-int parameter must not reject a string branch.
 #[test]
 fn test_mixed_method_dispatch_with_string_and_nullable_int_candidates() {

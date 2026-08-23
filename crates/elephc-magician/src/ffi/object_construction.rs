@@ -18,7 +18,7 @@ use super::util::{abi_name_to_string, clear_result, write_outcome};
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
 use crate::context::native_frame_called_class_override_context;
 use crate::errors::EvalStatus;
-use crate::interpreter;
+use crate::interpreter::{self, RuntimeValueOps};
 use crate::runtime_hooks::ElephcRuntimeOps;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 use std::slice;
@@ -71,10 +71,12 @@ pub unsafe extern "C" fn __elephc_eval_try_new_object(
 /// Calls a method on a value that may be an eval-created object.
 ///
 /// # Safety
-/// `ctx` must be a valid eval context handle. `object` must point at a boxed
+/// `ctx` may be null when the boxed object belongs to a dynamic class; in that
+/// case its registered owner context is used. `object` must point at a boxed
 /// runtime cell. `method_ptr` must be readable for `method_len` bytes when
 /// `method_len > 0`. `arg_pack` points at a native-word count followed by that
-/// many runtime-cell pointers, and `out` may be null.
+/// many runtime-cell pointers, and `out` may be null. A null `ctx` with an AOT
+/// object returns -1 so generated code can use its native dispatch fallback.
 #[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_method_call(
@@ -341,8 +343,9 @@ unsafe fn eval_native_frame_static_method_call_inner(
 /// Runs the dynamic method-call ABI body after installing a panic boundary.
 ///
 /// # Safety
-/// Mirrors `__elephc_eval_method_call`; callers must provide a valid context,
-/// boxed object cell, readable method-name bytes, and a readable argument pack.
+/// Mirrors `__elephc_eval_method_call`; callers must provide a boxed object
+/// cell, readable method-name bytes, and a readable argument pack. A null
+/// context resolves through dynamic-object ownership or returns the miss sentinel.
 #[cfg(not(test))]
 unsafe fn eval_method_call_inner(
     ctx: *mut ElephcEvalContext,
@@ -352,18 +355,32 @@ unsafe fn eval_method_call_inner(
     arg_pack: *const usize,
     out: *mut ElephcEvalResult,
 ) -> i32 {
-    let Some(context) = ctx.as_mut() else {
+    if object.is_null() || arg_pack.is_null() {
         return EvalStatus::RuntimeFatal.code();
+    }
+    let object = RuntimeCellHandle::from_raw(object);
+    let Ok(method) = abi_name_to_string(method_ptr, method_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let context = if let Some(context) = ctx.as_mut() {
+        context
+    } else {
+        let mut values = ElephcRuntimeOps::with_context(std::ptr::null());
+        let Ok(identity) = values.object_identity(object) else {
+            return -1;
+        };
+        let owner = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity);
+        let Some(owner) = owner else {
+            return -1;
+        };
+        let Some(context) = owner.as_mut() else {
+            return -1;
+        };
+        context
     };
     if context.abi_version() != ABI_VERSION {
         return EvalStatus::AbiMismatch.code();
     }
-    if object.is_null() || arg_pack.is_null() {
-        return EvalStatus::RuntimeFatal.code();
-    }
-    let Ok(method) = abi_name_to_string(method_ptr, method_len) else {
-        return EvalStatus::RuntimeFatal.code();
-    };
     let arg_count = *arg_pack;
     let arg_ptrs = arg_pack.add(1) as *const *mut RuntimeCell;
     let args = if arg_count == 0 {
@@ -376,14 +393,36 @@ unsafe fn eval_method_call_inner(
     };
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let call_site = context.call_site();
+        eprintln!(
+            "[elephc-eval-trace] phase=method_call_start method={method:?} class_scope={:?} called_class_scope={:?} file={:?} line={}",
+            context.current_class_scope(),
+            context.current_called_class_scope(),
+            call_site.0,
+            call_site.2,
+        );
+    }
     match interpreter::execute_context_method_call_outcome(
         context,
-        RuntimeCellHandle::from_raw(object),
+        object,
         &method,
         args,
         &mut values,
     ) {
         Ok(outcome) => write_outcome(outcome, out).code(),
-        Err(status) => status.code(),
+        Err(status) => {
+            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                let call_site = context.call_site();
+                eprintln!(
+                    "[elephc-eval-trace] phase=method_call_error method={method:?} status={status:?} class_scope={:?} called_class_scope={:?} file={:?} line={}",
+                    context.current_class_scope(),
+                    context.current_called_class_scope(),
+                    call_site.0,
+                    call_site.2,
+                );
+            }
+            status.code()
+        }
     }
 }

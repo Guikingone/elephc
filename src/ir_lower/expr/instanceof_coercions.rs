@@ -65,6 +65,16 @@ pub(in crate::ir_lower) fn statically_known_instanceof_result(
         return None;
     }
     let target = instanceof_target_name(ctx, name.as_str());
+    if target
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("Closure")
+    {
+        // `Closure` is a PHP intrinsic represented by a callable descriptor rather than a
+        // normal entry in the AOT class metadata registry. The backend has a dedicated tag-10
+        // check, so it must see this expression even when no type declaration referenced
+        // `Closure` while building the registry.
+        return None;
+    }
     let known = ctx.classes.contains_key(&target)
         || ctx.interfaces.contains_key(&target)
         || ctx.enums.contains_key(&target);

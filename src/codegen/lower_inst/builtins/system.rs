@@ -707,6 +707,22 @@ pub(crate) fn lower_usleep(
 /// Lowers `exit(status?)` and `die(status?)` by terminating the current process.
 pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "exit", 0, 1)?;
+    if ctx.web {
+        // A web worker invokes the compiled top level once per HTTP request. PHP `exit` ends
+        // that request, not the prefork worker: flush captured output and return to
+        // `elephc_web_run` so it can construct the response and serve the next request.
+        if let Some(status) = inst.operands.first().copied() {
+            let status_ty = ctx.load_value_to_result(status)?;
+            if matches!(status_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            } else {
+                require_integer_like(status_ty, "exit status")?;
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
+        crate::codegen::frame::emit_web_handler_epilogue(ctx);
+        return Ok(());
+    }
     let Some(status) = inst.operands.first().copied() else {
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());

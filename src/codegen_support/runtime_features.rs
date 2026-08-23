@@ -137,7 +137,11 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
         requirements.push(LinkRequirement::NativePackage("pcre2"));
     }
     if features.phar_archive {
-        requirements.push(LinkRequirement::Bridge("elephc_phar"));
+        if !features.eval_bridge {
+            // Magician already embeds the PHAR implementation. Adding the standalone
+            // archive beside it duplicates the exported C ABI symbols on macOS.
+            requirements.push(LinkRequirement::Bridge("elephc_phar"));
+        }
         requirements.push(LinkRequirement::SystemLibrary("z".to_string()));
         requirements.push(LinkRequirement::SystemLibrary("bz2".to_string()));
     }
@@ -1278,6 +1282,24 @@ mod tests {
                 ..RuntimeFeatures::none()
             }),
             vec![
+                LinkRequirement::Bridge("elephc_magician"),
+                LinkRequirement::Bridge("elephc_bcmath")
+            ]
+        );
+    }
+
+    /// Verifies Magician supplies PHAR symbols while retaining their system libraries.
+    #[test]
+    fn test_eval_phar_runtime_features_omit_standalone_phar_bridge() {
+        assert_eq!(
+            link_requirements_for_runtime_features(RuntimeFeatures {
+                phar_archive: true,
+                eval_bridge: true,
+                ..RuntimeFeatures::none()
+            }),
+            vec![
+                LinkRequirement::SystemLibrary("z".to_string()),
+                LinkRequirement::SystemLibrary("bz2".to_string()),
                 LinkRequirement::Bridge("elephc_magician"),
                 LinkRequirement::Bridge("elephc_bcmath")
             ]

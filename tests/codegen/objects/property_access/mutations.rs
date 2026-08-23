@@ -151,6 +151,57 @@ echo get_class($box->resolve()), ':', get_class($box->resolve());
     assert_eq!(out, "NULL\nstdClass:stdClass");
 }
 
+/// Verifies null-coalescing element assignment autovivifies an uninitialized typed array property.
+#[test]
+fn test_null_coalesce_element_initializes_uninitialized_typed_array_property() {
+    let out = compile_and_run(
+        r#"<?php
+class LazyTypedArrayProperty {
+    private array $items;
+    private array $direct;
+    private array $list;
+    private int $created = 0;
+
+    private function create(): stdClass {
+        ++$this->created;
+        return new stdClass();
+    }
+
+    public function has(string $key): bool {
+        return isset($this->items[$key]);
+    }
+
+    public function resolve(string $key): object {
+        return $this->items[$key] ??= $this->create();
+    }
+
+    public function created(): int {
+        return $this->created;
+    }
+
+    public function writeDirect(string $key, object $value): int {
+        $this->direct[$key] = $value;
+        $this->direct[] = $value;
+        return count($this->direct);
+    }
+
+    public function append(object $value): int {
+        $this->list[] = $value;
+        return count($this->list);
+    }
+}
+
+$box = new LazyTypedArrayProperty();
+var_dump($box->has("service"));
+$first = $box->resolve("service");
+$second = $box->resolve("service");
+echo get_class($first), ":", $first === $second ? "same" : "different", ":", $box->created(), ":",
+     $box->writeDirect("named", new stdClass()), ":", $box->append(new stdClass());
+"#,
+    );
+    assert_eq!(out, "bool(false)\nstdClass:same:1:2:1");
+}
+
 /// Verifies `??=` keeps working when a nullable object parameter uses the gradual receiver path.
 #[test]
 fn test_null_coalesce_assignment_on_nullable_object_receiver() {
@@ -585,6 +636,38 @@ echo $r->headers["Host"];
 "#,
     );
     assert_eq!(out, "example.com");
+}
+
+/// Verifies a string-key-refined property uses hash storage even before its first keyed write.
+#[test]
+fn test_empty_array_property_default_iterates_before_first_string_key_write() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    private array $items = [];
+
+    public function set(string $key, mixed $value): void {
+        $this->items[$key] = $value;
+    }
+
+    public function sizeByIteration(): int {
+        $size = 0;
+        foreach ($this->items as $value) {
+            $size++;
+        }
+        return $size;
+    }
+}
+
+class ChildRegistry extends Registry {}
+
+$registry = new ChildRegistry();
+echo $registry->sizeByIteration();
+$registry->set('item', 1);
+echo ':', $registry->sizeByIteration();
+"#,
+    );
+    assert_eq!(out, "0:1");
 }
 
 /// Exercises `+=` and `*=` compound assignment on a `public $value` property,

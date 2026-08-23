@@ -2,7 +2,7 @@
 title: "headers_sent()"
 description: "Reports whether output has already committed response headers."
 sidebar:
-  order: 316
+  order: 329
 ---
 
 ## headers_sent()
@@ -25,12 +25,6 @@ Reports whether output has already committed response headers.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -98,9 +98,26 @@ fn main() {
     match cli::parse_args(&args) {
         cli::Command::Compile(config) => {
             emit_ini_override_warnings(&config);
-            pipeline::compile(config);
+            run_compile_with_stack(config);
         }
         cli::Command::Native(command) => run_native(command),
+    }
+}
+
+/// Runs one compilation on a dedicated stack sized for deep PHP source graphs.
+///
+/// The operating-system main thread has a small fixed stack on macOS. Frontend
+/// traversals legitimately recurse through deeply nested declarations and include
+/// graphs, so the compiler owns a bounded 64 MiB worker stack for every compile.
+fn run_compile_with_stack(config: cli::CliConfig) {
+    const COMPILE_STACK_BYTES: usize = 64 * 1024 * 1024;
+    let worker = std::thread::Builder::new()
+        .name("elephc-compile".to_string())
+        .stack_size(COMPILE_STACK_BYTES)
+        .spawn(move || pipeline::compile(config))
+        .expect("failed to create compiler worker thread");
+    if let Err(payload) = worker.join() {
+        std::panic::resume_unwind(payload);
     }
 }
 

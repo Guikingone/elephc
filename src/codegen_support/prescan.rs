@@ -58,6 +58,20 @@ pub(crate) fn collect_constants(
             PhpType::Str,
         ),
     );
+    constants.insert(
+        "PHP_OS_FAMILY".to_string(),
+        (
+            ExprKind::StringLiteral(target_platform.php_os_family().to_string()),
+            PhpType::Str,
+        ),
+    );
+    for (name, value) in [
+        ("SCANDIR_SORT_ASCENDING", 0),
+        ("SCANDIR_SORT_DESCENDING", 1),
+        ("SCANDIR_SORT_NONE", 2),
+    ] {
+        constants.insert(name.to_string(), (ExprKind::IntLiteral(value), PhpType::Int));
+    }
     let php_version = crate::codegen_support::compile_php_version();
     constants.insert(
         "PHP_VERSION".to_string(),

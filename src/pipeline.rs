@@ -152,7 +152,7 @@ pub(crate) fn compile(config: CliConfig) {
     }
 
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
-    let forced_groups: HashSet<String> = [
+    let mut forced_groups: HashSet<String> = [
         (with_crates.contains("pdo"), "pdo"),
         (with_crates.contains("tz"), "tz"),
         (with_crates.contains("image"), "image"),
@@ -387,7 +387,10 @@ pub(crate) fn compile(config: CliConfig) {
     crate::progress::phase("compat-preludes");
     let phase_started = Instant::now();
     let ast = crate::assert_prelude::inject_if_used(ast);
-    let ast = crate::array_merge_prelude::inject_if_used(ast);
+    let ast = crate::array_merge_prelude::inject_if_used(ast, &mut prelude_inventory);
+    if prelude_inventory.groups.contains_key("array_merge") {
+        forced_groups.insert("array_merge".to_string());
+    }
     let ast = crate::array_reduce_prelude::inject_if_used(ast);
     let ast = crate::filter_var_prelude::inject_if_used(ast);
     let ast = crate::backend_gap_prelude::inject_if_used(ast);

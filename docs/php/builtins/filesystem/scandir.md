@@ -8,13 +8,15 @@ sidebar:
 ## scandir()
 
 ```php
-function scandir(string $directory): array
+function scandir(string $directory, int $sorting_order = 0, mixed $context = null): array
 ```
 
 Lists files and directories inside the specified path.
 
 **Parameters**:
 - `$directory` (`string`)
+- `$sorting_order` (`int`), default `0`, optional
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `array`
 

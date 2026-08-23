@@ -153,6 +153,7 @@ pub(super) fn reflection_class_metadata_for_name(
             member_flags: ReflectionMemberFlags::default(),
         });
     }
+
     if let Some(interface_name) = resolve_reflection_interface(ctx, &reflected_class) {
         let method_names = reflection_interface_method_names(ctx, interface_name);
         let property_names = reflection_interface_property_names(ctx, interface_name);
@@ -312,6 +313,19 @@ pub(super) fn reflection_shallow_class_metadata_for_name(
         reflection_legacy_shallow_class_metadata_for_name(ctx, reflected_class)?,
         "direct shallow Reflection metadata diverged for {reflected_class}"
     );
+    Ok(metadata)
+}
+
+/// Resolves only the declaration identity needed for a source-file ReflectionObject query.
+pub(super) fn reflection_source_file_class_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    reflected_class: &str,
+) -> Result<ReflectionOwnerMetadata> {
+    let Some((class_name, _)) = resolve_reflection_class(ctx, reflected_class) else {
+        return Ok(empty_reflection_metadata());
+    };
+    let mut metadata = empty_reflection_metadata();
+    metadata.reflected_name = Some(class_name.to_string());
     Ok(metadata)
 }
 

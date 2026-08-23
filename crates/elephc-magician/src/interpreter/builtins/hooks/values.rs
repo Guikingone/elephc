@@ -263,6 +263,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     StringCompare,
     /// Dispatches string position builtins.
     StringPosition,
+    /// Dispatches `strcspn(...)` and `strspn(...)`.
+    StringSpan,
     /// Dispatches string search predicate builtins.
     StringSearch,
     /// Dispatches `explode(...)` and `implode(...)`.
@@ -287,6 +289,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Strval,
     /// Dispatches `strtr(...)`.
     Strtr,
+    /// Dispatches `strrchr(...)`.
+    Strrchr,
     /// Dispatches `strstr(...)`.
     Strstr,
     /// Dispatches `substr(...)`.
@@ -588,6 +592,7 @@ impl EvalValuesHook {
                     _ => Err(EvalStatus::RuntimeFatal),
                 }
             }
+            Self::StringSpan => eval_string_span_named_result(name, evaluated_args, values),
             Self::StringSearch => two_args(evaluated_args, values, |haystack, needle, values| {
                 match name {
                     "str_contains" => eval_str_contains_result(haystack, needle, values),
@@ -681,6 +686,7 @@ impl EvalValuesHook {
                 [subject, from, to] => eval_strtr_result(*subject, *from, Some(*to), values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::Strrchr => two_args(evaluated_args, values, eval_strrchr_result),
             Self::Strstr => match evaluated_args {
                 [haystack, needle] => eval_strstr_result(*haystack, *needle, false, values),
                 [haystack, needle, before_needle] => {

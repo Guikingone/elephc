@@ -224,6 +224,38 @@ var_dump($s instanceof Stringable);
     assert_eq!(out, "[hi]bool(true)\n");
 }
 
+/// Verifies Stringable interface receivers dispatch casts, interpolation, and echo dynamically.
+#[test]
+fn test_stringable_subinterface_receiver_string_contexts() {
+    let out = compile_and_run(
+        r#"<?php
+interface RuntimeResourceLabel extends Stringable {
+    public function __toString(): string;
+}
+
+final class RuntimeResourceA implements RuntimeResourceLabel {
+    public function __toString(): string { return "A"; }
+}
+
+final class RuntimeResourceB implements RuntimeResourceLabel {
+    public function __toString(): string { return "B"; }
+}
+
+function formatResource(RuntimeResourceLabel $resource): string {
+    return "$resource:" . (string) $resource;
+}
+
+function echoResource(RuntimeResourceLabel $resource): void {
+    echo $resource;
+}
+
+echo formatResource(new RuntimeResourceA()), "|";
+echoResource(new RuntimeResourceB());
+"#,
+    );
+    assert_eq!(out, "A:A|B");
+}
+
 /// Verifies a class with `__toString()` implicitly satisfies `Stringable`
 /// (no explicit `implements Stringable` needed).
 #[test]
@@ -383,6 +415,10 @@ fn test_nullable_array_access_property_subscript_write() {
 class NullableStorageHolder {
     private ?SplObjectStorage $storage = null;
 
+    public function contains(object $key): bool {
+        return isset($this->storage[$key]);
+    }
+
     public function store(object $key): string {
         $this->storage ??= new SplObjectStorage();
         $this->storage[$key] = "stored";
@@ -390,10 +426,14 @@ class NullableStorageHolder {
     }
 }
 
-echo (new NullableStorageHolder())->store(new stdClass());
+$holder = new NullableStorageHolder();
+$key = new stdClass();
+var_dump($holder->contains($key));
+echo $holder->store($key), ":";
+var_dump($holder->contains($key));
 "#,
     );
-    assert_eq!(out, "stored");
+    assert_eq!(out, "bool(false)\nstored:bool(true)\n");
 }
 
 /// Verifies subscript assignment expressions (`$b["k"] = 5`), compound assignment
