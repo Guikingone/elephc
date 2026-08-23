@@ -305,11 +305,21 @@ pub(crate) struct Checker {
     /// which absorbs every later assignment, so the retype hook and the "cannot reassign" error
     /// never fire for it. Per-body, like every other field in [`SavedLocalBindingScope`].
     pub mixed_storage_locals: HashSet<String>,
-    /// Every statement-form assignment to a mixed-storage local, as span -> local NAME, so EIR
-    /// lowering can declare the slot boxed BEFORE the first store instead of inferring it from
-    /// the first stored value. Cumulative across bodies, and keyed like the other two decision
-    /// maps — see `CheckResult::local_bind_kill_sites` for why the name is half the key.
-    pub mixed_storage_store_sites: HashMap<Span, String>,
+    /// Every statement-form assignment to a mixed-storage local, as span -> the SET of local names
+    /// boxed at that position, so EIR lowering can declare the slot boxed BEFORE the first store
+    /// instead of inferring it from the first stored value. Cumulative across bodies, and keyed
+    /// like the other two decision maps — see `CheckResult::local_bind_kill_sites` for why the
+    /// name is half the key.
+    ///
+    /// The value is a SET rather than one name because a `Span` carries no file identity: two
+    /// different locals in two different files can be assigned at the same (line, column), and
+    /// both may be marked. A single-name value made the second body's insert EVICT the first's,
+    /// with no retirement (the retire loop only matches a decision carrying the same name), so the
+    /// evicted name left `CheckResult::mixed_storage_local_names` while the checker still typed the
+    /// local `Mixed` — the compiler then PANICKED (`strlen cannot lower checked operand type Int`)
+    /// on valid PHP. Same-name collisions are still ambiguous and still rejected; see
+    /// `retired_mixed_storage_store_sites`.
+    pub mixed_storage_store_sites: HashMap<Span, HashSet<String>>,
     /// Every `(span, name)` key `run_mixed_storage_scan` ever REMOVED from
     /// `mixed_storage_store_sites`, kept for the checker's whole lifetime.
     ///

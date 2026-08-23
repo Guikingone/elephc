@@ -888,6 +888,34 @@ fn test_different_name_same_position_across_files_still_compiles() {
     assert_eq!(out, "a1|5");
 }
 
+/// Two DIFFERENT marked names at one shared position keep BOTH of their mixed-storage decisions.
+///
+/// `main.php` marks `$a` with store sites at lines 5 and 7, column 1; `lib.php`'s function marks
+/// `$b` at the very same positions. The decision map used to be keyed by `Span` ALONE, so the
+/// second body's inserts silently EVICTED the first body's — with no retirement, because the
+/// retire loop only matches a recorded decision that carries the same NAME. The evicted name then
+/// left `mixed_storage_local_names()` while the checker still typed the local `Mixed`, and
+/// lowering never boxed its slot: the compiler PANICKED with
+/// `strlen cannot lower checked operand type Int` on valid PHP (an unconditional `panic!`, so
+/// release builds died too). Keying the map by `(span, name)` lets both decisions coexist.
+#[test]
+fn test_two_marked_names_at_one_shared_position_both_compile() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\n\nif ($argc > 1) {\n$a = 42;\n} else {\n$a = \"hello\";\n}\necho strlen($a), \"|\";\n",
+            ),
+            (
+                "lib.php",
+                "<?php\nfunction f($n) {\n\nif ($n > 1) {\n$b = 42;\n} else {\n$b = \"world\";\n}\necho strlen($b), \"|\";\n}\nf($argc);\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "5|5|");
+}
+
 /// A retype inside an array-representation fixed point region: the statement that retypes is
 /// also the statement that could convert an array local's storage.
 ///

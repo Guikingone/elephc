@@ -120,16 +120,22 @@ pub struct CheckResult {
     #[allow(dead_code)]
     pub local_retype_sites: HashMap<Span, String>,
     /// Every statement-form assignment to a local the checker's syntactic pre-scan marked as
-    /// whole-frame boxed `Mixed` storage (a branch-divergently assigned local), as span -> local
-    /// NAME, so EIR lowering declares the slot boxed before the FIRST store instead of inferring
-    /// it from the first stored value.
+    /// whole-frame boxed `Mixed` storage (a branch-divergently assigned local), as span -> the SET
+    /// of local NAMES boxed at that position, so EIR lowering declares the slot boxed before the
+    /// FIRST store instead of inferring it from the first stored value.
     ///
     /// Keyed like the other two decision maps and for the same reason — see
     /// `local_bind_kill_sites` — and checked by `checker::binding_decision_ambiguity` against the
     /// same statement-form-assignment tally the retype decisions use, because both roles name
     /// exactly that node kind.
-    #[allow(dead_code)]
-    pub mixed_storage_store_sites: HashMap<Span, String>,
+    ///
+    /// The value is a SET because two DIFFERENT locals can be marked at the same (line, column) in
+    /// two different files, and a `Span` cannot tell them apart. With one name per span the later
+    /// body's decision evicted the earlier one silently — the evicted local dropped out of
+    /// [`CheckResult::mixed_storage_local_names`] while the checker still typed it `Mixed`, and the
+    /// compiler panicked (`strlen cannot lower checked operand type Int`) on valid PHP. Same-NAME
+    /// collisions remain genuinely ambiguous and are still rejected by the ambiguity pass.
+    pub mixed_storage_store_sites: HashMap<Span, HashSet<String>>,
 }
 
 impl CheckResult {
@@ -168,7 +174,11 @@ impl CheckResult {
     /// program-wide union rather than per-body: the AST passes have no body identity to key on,
     /// and over-approximating only costs constant propagation on a name some other body boxed.
     pub fn mixed_storage_local_names(&self) -> HashSet<String> {
-        self.mixed_storage_store_sites.values().cloned().collect()
+        self.mixed_storage_store_sites
+            .values()
+            .flatten()
+            .cloned()
+            .collect()
     }
 }
 

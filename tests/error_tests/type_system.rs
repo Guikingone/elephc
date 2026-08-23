@@ -1686,7 +1686,9 @@ fn test_mixed_storage_store_sites_are_recorded_once() {
         result
             .mixed_storage_store_sites
             .iter()
-            .all(|(span, name)| span.identifies_a_node() && name == "a"),
+            .all(|(span, names)| {
+                span.identifies_a_node() && names.len() == 1 && names.contains("a")
+            }),
         "recorded store sites must name a node AND the local they box: {:?}",
         result.mixed_storage_store_sites
     );

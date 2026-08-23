@@ -212,11 +212,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// `bind_kill_sites` so both travel together; consumed by the retype lowering.
     pub retype_sites: &'m HashMap<Span, String>,
     /// Spans of the statement-form assignments to a local the CHECKER marked as branch-divergently
-    /// assigned (`CheckResult::mixed_storage_store_sites`), each mapped to the local it boxes. At
-    /// one of these spans `lower_assign` declares the slot `PhpType::Mixed` BEFORE the store and
-    /// stores at `Mixed`, so both dynamic outcomes live in one boxed slot. The third of the
-    /// checker's local-binding decision maps, keyed and consulted exactly like the other two.
-    pub mixed_storage_store_sites: &'m HashMap<Span, String>,
+    /// assigned (`CheckResult::mixed_storage_store_sites`), each mapped to the SET of locals boxed
+    /// at that position. At one of these spans `lower_assign` declares the slot `PhpType::Mixed`
+    /// BEFORE the store and stores at `Mixed`, so both dynamic outcomes live in one boxed slot.
+    /// The third of the checker's local-binding decision maps, keyed and consulted exactly like the
+    /// other two — the value is a set because a `Span` names no file, so two different marked
+    /// locals can share one position.
+    pub mixed_storage_store_sites: &'m HashMap<Span, HashSet<String>>,
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
@@ -298,7 +300,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         string_incdec_locals: &'m HashSet<(String, String)>,
         bind_kill_sites: &'m HashMap<Span, String>,
         retype_sites: &'m HashMap<Span, String>,
-        mixed_storage_store_sites: &'m HashMap<Span, String>,
+        mixed_storage_store_sites: &'m HashMap<Span, HashSet<String>>,
         loop_storage_scope: String,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         top_level_env: TypeEnv,
@@ -2102,7 +2104,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && self
                 .mixed_storage_store_sites
                 .get(&span)
-                .is_some_and(|boxed| boxed == name)
+                .is_some_and(|boxed| boxed.contains(name))
     }
 
     /// Clears an owned hidden temp after its value has been loaded into SSA.

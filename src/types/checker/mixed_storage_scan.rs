@@ -112,7 +112,10 @@ impl Checker {
         //
         // Qualified by NAME as well as span, because a `Span` has no file identity: the same
         // (line, column) in an included file is an EQUAL span, and this walk must not drop the
-        // decision recorded for that unrelated assignment.
+        // decision recorded for that unrelated assignment. The map's value is a SET of names for
+        // exactly that reason, so removing this body's name leaves any other body's name at the
+        // same position untouched (before that, the insert of a second name silently evicted the
+        // first and the compiler panicked on valid PHP — see the field's own documentation).
         //
         // The name is not enough on its own, though: the same NAME at the same POSITION in two
         // files is still one key, so this loop can drop a decision another body recorded and
@@ -122,15 +125,20 @@ impl Checker {
         // documentation for why the kill and retype maps do not need the same treatment.
         for (name, name_facts) in &facts.names {
             for site in &name_facts.assigns {
-                if self
-                    .mixed_storage_store_sites
-                    .get(&site.span)
-                    .is_some_and(|recorded| recorded == name)
-                {
-                    self.mixed_storage_store_sites.remove(&site.span);
-                    self.retired_mixed_storage_store_sites
-                        .insert((site.span, name.clone()));
+                let Some(recorded) = self.mixed_storage_store_sites.get_mut(&site.span) else {
+                    continue;
+                };
+                if !recorded.remove(name) {
+                    continue;
                 }
+                // A span whose last decision just left carries none at all: keep it out of the
+                // map so `local_binding_decision_spans` and lowering's consult never see an
+                // empty entry.
+                if recorded.is_empty() {
+                    self.mixed_storage_store_sites.remove(&site.span);
+                }
+                self.retired_mixed_storage_store_sites
+                    .insert((site.span, name.clone()));
             }
         }
 
@@ -159,7 +167,10 @@ impl Checker {
         for (span, name, message) in marks {
             self.warnings.push(CompileWarning::new(span, &message));
             for site in &facts.names[&name].assigns {
-                self.mixed_storage_store_sites.insert(site.span, name.clone());
+                self.mixed_storage_store_sites
+                    .entry(site.span)
+                    .or_default()
+                    .insert(name.clone());
             }
             self.mixed_storage_locals.insert(name);
         }

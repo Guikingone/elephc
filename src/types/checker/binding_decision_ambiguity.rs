@@ -75,7 +75,7 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
     program: &Program,
     kill_sites: &HashMap<Span, String>,
     retype_sites: &HashMap<Span, String>,
-    mixed_storage_store_sites: &HashMap<Span, String>,
+    mixed_storage_store_sites: &HashMap<Span, HashSet<String>>,
     retired_mixed_storage_store_sites: &HashSet<(Span, String)>,
 ) -> Result<(), CompileError> {
     if kill_sites.is_empty()
@@ -111,7 +111,14 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
     // sites.
     let decisions = retype_sites
         .iter()
-        .chain(mixed_storage_store_sites.iter())
+        // A mixed-storage span carries a SET of names (two different locals can be marked at the
+        // same line and column in two different files), and each name is its own decision to
+        // check against the tally.
+        .chain(
+            mixed_storage_store_sites
+                .iter()
+                .flat_map(|(span, names)| names.iter().map(move |name| (span, name))),
+        )
         // A retired mixed-storage key names the same node kind a live one does, so it is checked
         // against the same tally. A key that is both live and retired (re-decided, then recorded
         // again) is simply checked twice, with the same answer.

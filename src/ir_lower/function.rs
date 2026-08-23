@@ -1263,7 +1263,10 @@ fn lower_body_into_function(
     string_incdec_locals: &std::collections::HashSet<(String, String)>,
     bind_kill_sites: &std::collections::HashMap<Span, String>,
     retype_sites: &std::collections::HashMap<Span, String>,
-    mixed_storage_store_sites: &std::collections::HashMap<Span, String>,
+    mixed_storage_store_sites: &std::collections::HashMap<
+        Span,
+        std::collections::HashSet<String>,
+    >,
     loop_storage_scope: String,
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     current_class: Option<String>,
