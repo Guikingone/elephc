@@ -314,7 +314,16 @@ impl Checker {
                         let ExprKind::Variable(var) = &arg.kind else {
                             continue;
                         };
-                        if env.contains_key(var) && self.local_binding_is_killable(var) {
+                        // A top-level name some other body declares `global` is NOT killable
+                        // however eligible it otherwise looks: `global $a;` in a function binds
+                        // the very cell this slot holds, so dropping the name here leaves the
+                        // rest of the program reaching storage the environment no longer knows.
+                        // Lowering refuses to abandon the same slots, from the same collected
+                        // set — see `Checker::top_level_binding_is_program_global`.
+                        if env.contains_key(var)
+                            && self.local_binding_is_killable(var)
+                            && !self.top_level_binding_is_program_global(var)
+                        {
                             env.remove(var);
                             self.local_binding_depth.remove(var);
                             self.clear_local_binding_metadata(var);

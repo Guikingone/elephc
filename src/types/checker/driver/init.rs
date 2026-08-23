@@ -179,6 +179,10 @@ impl Checker {
             top_level_env: HashMap::new(),
             active_ref_params: HashSet::new(),
             active_globals: HashSet::new(),
+            // Filled by `check_types_impl` from the whole program before the first walk; an empty
+            // set here just means "no `global` declaration is known", which is the safe default
+            // for the handful of tests that build a `Checker` directly.
+            program_global_names: HashSet::new(),
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),
             eval_barrier_active: false,

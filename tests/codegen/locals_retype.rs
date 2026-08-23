@@ -888,6 +888,32 @@ fn test_different_name_same_position_across_files_still_compiles() {
     assert_eq!(out, "a1|5");
 }
 
+/// `unset` must not end a TOP-LEVEL binding whose storage another body reaches with `global`.
+///
+/// PHP 8.4 prints `5`: the `unset` drops `$GLOBALS['a']`, `w()`'s `global $a` recreates it and
+/// stores 5, and the top-level `echo` reads it back. `Checker::active_globals` is per-body and
+/// EMPTY at top level, so the kill was accepted and the `echo` became `Undefined variable: $a` —
+/// a program that compiled before this feature existed. The checker now consults the same
+/// program-wide `global` set lowering already used to refuse abandoning the slot.
+#[test]
+fn test_unset_of_a_program_wide_global_name_keeps_the_binding() {
+    let out = compile_and_run(
+        "<?php function w() { global $a; $a = 5; } $a = 1; unset($a); w(); echo $a;",
+    );
+    assert_eq!(out, "5");
+}
+
+/// Control: the RETYPE of the same program-global name keeps working, printing PHP's `5`. Lowering
+/// refuses to abandon the slot, so the site falls back to the widening path it used before retypes
+/// were lowered — which is why the veto covers the kill alone.
+#[test]
+fn test_retype_of_a_program_wide_global_name_still_runs() {
+    let out = compile_and_run(
+        "<?php function w() { global $a; $a = 5; } $a = \"x\"; $a = 2; w(); echo $a;",
+    );
+    assert_eq!(out, "5");
+}
+
 /// A marked local assigned inside a branch a type guard narrowed still lowers through its one boxed
 /// slot, and prints what PHP prints.
 ///

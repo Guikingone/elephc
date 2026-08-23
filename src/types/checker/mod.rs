@@ -170,6 +170,14 @@ pub(crate) struct Checker {
     pub active_ref_params: HashSet<String>,
     /// Names introduced via `global` declarations in the current local scope.
     pub active_globals: HashSet<String>,
+    /// Names ANY function-like body in the program declares `global`, collected once before the
+    /// first walk from `crate::global_decls` — the same walk EIR lowering uses for
+    /// `all_global_var_names`.
+    ///
+    /// `active_globals` cannot answer this question: it is per-body, and it is EMPTY at top level,
+    /// which is exactly where a `global $a;` elsewhere aliases the top-level local's storage. See
+    /// [`Checker::top_level_binding_is_program_global`].
+    pub program_global_names: HashSet<String>,
     /// Names introduced via `static` declarations in the current local scope.
     pub active_statics: HashSet<String>,
     /// Names bound as `foreach` loop keys in the current function/closure scope.
@@ -398,6 +406,30 @@ impl Checker {
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
             && !self.typed_local_names.contains(name)
+    }
+
+    /// True when `name` is a TOP-LEVEL binding whose storage some other body reaches through a
+    /// `global` declaration.
+    ///
+    /// `global $x;` inside a function binds `$x` to the program-global cell that the top level
+    /// writes through its own slot, so ending the top-level binding of `$x` strands a name the
+    /// rest of the program still uses: `function w() { global $a; $a = 5; } $a = 1; unset($a);
+    /// w(); echo $a;` prints `5` in PHP and compiled before this feature existed, but the `unset`
+    /// removed `$a` from the environment and the `echo` became `Undefined variable: $a`.
+    ///
+    /// Scoped to the top-level body on purpose, mirroring lowering's `in_main &&
+    /// all_global_var_names.contains(name)` gate (`LoweringContext::uses_global_storage`) and
+    /// reading the SAME collected set. A same-named local inside a function body is that frame's
+    /// own storage — no `global` alias reaches it — so vetoing it would only cost the feature
+    /// coverage it is entitled to.
+    ///
+    /// Consulted by the `unset` KILL alone, not by the straight-line retype. The kill REMOVES the
+    /// name from the environment, which is the part that strands it; a retype leaves the name
+    /// bound, and lowering already refuses to abandon the slot for exactly these names, so that
+    /// site degrades to the pre-feature widening path and prints PHP's answer (measured). Vetoing
+    /// it too would turn a working program into a compile error.
+    pub(crate) fn top_level_binding_is_program_global(&self, name: &str) -> bool {
+        self.null_probe_scope_is_top_level && self.program_global_names.contains(name)
     }
 
     /// Enters a fresh local-binding eligibility scope for one function/method/closure/top-level

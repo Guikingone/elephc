@@ -1318,6 +1318,73 @@ fn test_global_local_not_killable() {
     expect_error("<?php $g = 1; function f() { global $g; unset($g); $g = \"x\"; } f();", "cannot reassign");
 }
 
+/// A name ANY function-like body in the program declares `global` is never killable, wherever the
+/// `unset` is written.
+///
+/// `Checker::active_globals` is per-body: at top level it is empty, so the top-level `unset($a)`
+/// below was accepted as a kill even though `w()`'s `global $a` binds the very same program-global
+/// storage. Measured on HEAD, the program was rejected with `Undefined variable: $a` (it compiled
+/// before this feature existed); PHP 8.4 prints `5`. The lowering already refuses to abandon the
+/// slot — it consults the same program-wide `global` set — so the two halves now share one
+/// collector and cannot drift.
+#[test]
+fn test_program_wide_global_name_not_killable() {
+    expect_no_error("<?php function w() { global $a; $a = 5; } $a = 1; unset($a); w(); echo $a;");
+    let result =
+        check_source_full("<?php function w() { global $a; $a = 5; } $a = 1; unset($a); w(); echo $a;")
+            .expect("a program-wide global name must still type-check after an unset");
+    assert!(
+        result.local_bind_kill_sites.is_empty(),
+        "a name some body declares `global` must record no kill site: {:?}",
+        result.local_bind_kill_sites
+    );
+}
+
+/// Control for the test above: the SAME shape with no `global` declaration anywhere still kills,
+/// so the veto is about the `global` and not about a checker that stopped killing at top level.
+#[test]
+fn test_unset_of_a_non_global_name_still_kills() {
+    let result = check_source_full("<?php function w() { $a = 5; } $a = 1; unset($a); w(); echo \"ok\";")
+        .expect("an ordinary local kill must type-check");
+    assert_eq!(
+        result.local_bind_kill_sites.len(),
+        1,
+        "a name no body declares `global` must still record its kill site: {:?}",
+        result.local_bind_kill_sites
+    );
+}
+
+/// The RETYPE is deliberately NOT vetoed by the same rule, because it does not need to be: it
+/// leaves the name BOUND, and lowering already refuses to abandon a top-level slot that program
+/// storage backs (`uses_global_storage`), so the site degrades to the pre-feature widening path and
+/// prints PHP's answer. Measured: this compiles today, warns once, and prints `5` — exactly PHP.
+/// Extending the veto to it would turn a working program into a compile error.
+#[test]
+fn test_program_wide_global_name_stays_retypable() {
+    expect_no_error("<?php function w() { global $a; $a = 5; } $a = \"x\"; $a = 2; w(); echo $a;");
+    expect_warning(
+        "<?php function w() { global $a; $a = 5; } $a = \"x\"; $a = 2; w(); echo $a;",
+        "changes type from string to int",
+    );
+}
+
+/// The veto is scoped to the TOP-LEVEL body, mirroring lowering's `in_main && all_global_var_names`
+/// gate. A same-named local inside a FUNCTION body is that frame's own storage — nothing reaches it
+/// by the `global` alias — so it stays killable even when another body declares the name `global`.
+#[test]
+fn test_a_function_local_sharing_a_global_name_stays_killable() {
+    let result = check_source_full(
+        "<?php function w() { global $a; $a = 5; } function f() { $a = 1; unset($a); $a = \"s\"; echo $a; } f();",
+    )
+    .expect("a function-local kill must type-check");
+    assert_eq!(
+        result.local_bind_kill_sites.len(),
+        1,
+        "a function's own local must stay killable: {:?}",
+        result.local_bind_kill_sites
+    );
+}
+
 /// By-ref closure captures are never killable.
 #[test]
 fn test_by_ref_capture_not_killable() {

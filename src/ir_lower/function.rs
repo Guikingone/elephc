@@ -125,97 +125,13 @@ fn web_gated_global_env(global_env: &TypeEnv, web: bool) -> TypeEnv {
 }
 
 /// Collects PHP variable names that any function-like body declares with `global`.
+///
+/// Shared with the CHECKER (`crate::global_decls`), which vetoes ending a top-level binding of one
+/// of these names for the same reason lowering refuses to abandon its slot: `global $x;` in some
+/// other body reaches the very storage the top-level name uses. One walk keeps the two sides — and
+/// the walk's blind spots — identical.
 fn collect_global_var_names(statements: &[Stmt]) -> std::collections::HashSet<String> {
-    let mut names = std::collections::HashSet::new();
-    collect_global_var_names_in_body(statements, &mut names);
-    names
-}
-
-/// Recursively scans statement bodies for `global` declarations.
-fn collect_global_var_names_in_body(
-    statements: &[Stmt],
-    names: &mut std::collections::HashSet<String>,
-) {
-    for stmt in statements {
-        match &stmt.kind {
-            crate::parser::ast::StmtKind::Global { vars } => {
-                names.extend(vars.iter().cloned());
-            }
-            crate::parser::ast::StmtKind::If {
-                then_body,
-                elseif_clauses,
-                else_body,
-                ..
-            } => {
-                collect_global_var_names_in_body(then_body, names);
-                for (_, body) in elseif_clauses {
-                    collect_global_var_names_in_body(body, names);
-                }
-                if let Some(body) = else_body {
-                    collect_global_var_names_in_body(body, names);
-                }
-            }
-            crate::parser::ast::StmtKind::IfDef {
-                then_body,
-                else_body,
-                ..
-            } => {
-                collect_global_var_names_in_body(then_body, names);
-                if let Some(body) = else_body {
-                    collect_global_var_names_in_body(body, names);
-                }
-            }
-            crate::parser::ast::StmtKind::While { body, .. }
-            | crate::parser::ast::StmtKind::DoWhile { body, .. }
-            | crate::parser::ast::StmtKind::Foreach { body, .. }
-            | crate::parser::ast::StmtKind::FunctionDecl { body, .. }
-            | crate::parser::ast::StmtKind::NamespaceBlock { body, .. }
-            | crate::parser::ast::StmtKind::IncludeOnceGuard { body, .. }
-            | crate::parser::ast::StmtKind::Synthetic(body) => {
-                collect_global_var_names_in_body(body, names);
-            }
-            crate::parser::ast::StmtKind::For {
-                init, update, body, ..
-            } => {
-                if let Some(init) = init {
-                    collect_global_var_names_in_body(std::slice::from_ref(init.as_ref()), names);
-                }
-                if let Some(update) = update {
-                    collect_global_var_names_in_body(std::slice::from_ref(update.as_ref()), names);
-                }
-                collect_global_var_names_in_body(body, names);
-            }
-            crate::parser::ast::StmtKind::Switch { cases, default, .. } => {
-                for (_, body) in cases {
-                    collect_global_var_names_in_body(body, names);
-                }
-                if let Some(body) = default {
-                    collect_global_var_names_in_body(body, names);
-                }
-            }
-            crate::parser::ast::StmtKind::Try {
-                try_body,
-                catches,
-                finally_body,
-            } => {
-                collect_global_var_names_in_body(try_body, names);
-                for catch in catches {
-                    collect_global_var_names_in_body(&catch.body, names);
-                }
-                if let Some(body) = finally_body {
-                    collect_global_var_names_in_body(body, names);
-                }
-            }
-            crate::parser::ast::StmtKind::ClassDecl { methods, .. }
-            | crate::parser::ast::StmtKind::InterfaceDecl { methods, .. }
-            | crate::parser::ast::StmtKind::TraitDecl { methods, .. } => {
-                for method in methods {
-                    collect_global_var_names_in_body(&method.body, names);
-                }
-            }
-            _ => {}
-        }
-    }
+    crate::global_decls::collect_global_var_names(statements)
 }
 
 /// Lowers one user-defined function declaration into an EIR function.

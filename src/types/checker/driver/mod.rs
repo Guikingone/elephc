@@ -85,6 +85,11 @@ pub(super) fn check_types_impl(
 ) -> Result<(Checker, TypeEnv), CompileError> {
     let mut checker = Checker::new(target_platform);
     checker.strict_locals = options.strict_locals;
+    // Program-wide and computed once, BEFORE any body is walked: the top-level `unset` that has to
+    // consult it can sit textually above the `function w() { global $a; }` that makes the name
+    // program-global. Shared with EIR lowering's `all_global_var_names` so the two sides cannot
+    // drift — see `crate::global_decls`.
+    checker.program_global_names = crate::global_decls::collect_global_var_names(program);
     let mut errors = Vec::new();
 
     errors.extend(validate_yield_contexts(program));
