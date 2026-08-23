@@ -120,23 +120,135 @@ fn test_unset_then_retype_array_to_string_leaves_a_clean_heap() {
 
 /// A `string`-typed READ above the kill still answers correctly.
 ///
-/// It also LEAKS one 48-byte block per executed read, which this fixture deliberately does not
-/// assert on. Ending a binding nulls the slot through the ordinary overwrite path at
-/// `PhpType::Void`, which widens the slot to `Mixed`; a slot's storage type is a whole-FRAME
-/// property, so every load lowered ABOVE the kill — `strlen($a)` here — keeps its `Str` IR type
-/// against boxed storage and becomes a detach nothing releases.
-///
-/// Nulling at the slot's OWN type removes the leak but is NOT a valid fix: the null is an `I64`
-/// in the int result register, while a two-word `Str` slot is written from the STRING register
-/// pair, so the store writes stale registers instead of clearing the slot and the frame epilogue
-/// then frees the live pointer left behind. Measured:
-/// `$q = "a" . $n; $r = $q; $q = 1; return $r . "|" . $q;` returned four NUL bytes. Widening to
-/// `Mixed` is what makes the null actually land in the slot, so the leak is the price of that and
-/// belongs to its own fix in the ownership model. See `release_and_abandon_local_binding`.
+/// Ending a binding leaves the abandoned slot at its OWN storage type and zeroes it in place
+/// (`Op::ZeroLocalSlot`), so a `Str` load lowered ABOVE the kill still reads `Str` storage. When
+/// the kill nulled through the ordinary overwrite path at `PhpType::Void` instead, the slot
+/// widened to `Mixed` frame-wide and every such read became an unreleased
+/// `__rt_mixed_cast_string` detach — one leaked block per EXECUTED read.
 #[test]
 fn test_string_read_above_a_kill_still_answers_correctly() {
     let out = compile_and_run("<?php $a = \"n\" . $argc; $b = strlen($a); unset($a); $a = 5; echo $b, $a;");
     assert_eq!(out, "25");
+}
+
+/// Every `string` read ABOVE a retype is leak-free, however many of them execute.
+///
+/// The leak this pins was LINEAR in executed reads: three reads left three detached copies of
+/// the string behind (`live_blocks=3`), because the abandon widened the slot to `Mixed` while
+/// each read kept its `Str` IR type.
+#[test]
+fn test_string_reads_above_a_retype_leave_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function probe(int $n): int {
+    $a = "x" . $n;
+    $t = strlen($a) + strlen($a) + strlen($a);
+    $a = 5;
+    return $t + $a;
+}
+echo probe($argc);"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "11");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The same for the `unset` kill, which is where the widening arrived.
+#[test]
+fn test_string_reads_above_a_kill_leave_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function probe(int $n): int {
+    $a = "x" . $n;
+    $t = strlen($a) + strlen($a) + strlen($a);
+    unset($a);
+    $a = 5;
+    return $t + $a;
+}
+echo probe($argc);"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "11");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A LOOP of reads above a retype finishes instead of exhausting the heap.
+///
+/// One leaked copy per executed read makes the leak unbounded in a loop: this shape printed
+/// `Fatal error: heap memory exhausted` where PHP prints the sum.
+#[test]
+fn test_a_loop_of_string_reads_above_a_retype_finishes() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function probe(int $n): int {
+    $a = "x" . $n;
+    $t = 0;
+    for ($i = 0; $i < 200000; $i++) { $t += strlen($a); }
+    $a = 5;
+    return $t + $a;
+}
+echo probe($argc);"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "400005");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The same loop shape at TOP LEVEL, where the frame is `main`'s.
+#[test]
+fn test_a_loop_of_string_reads_above_a_top_level_retype_finishes() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = "x" . $argc;
+$t = 0;
+for ($i = 0; $i < 200000; $i++) { $t += strlen($a); }
+$a = 5;
+echo $t + $a;"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "400005");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A 100KB string read above a retype leaks no COPY of it.
+///
+/// The leaked block was a full detached duplicate, not a 48-byte box: this shape leaked
+/// 131,088 bytes on top of the string itself.
+#[test]
+fn test_a_large_string_read_above_a_retype_leaks_no_copy() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function probe(int $n): int {
+    $a = str_repeat("x", 40000 + $n);
+    $t = strlen($a);
+    $a = 5;
+    return $t + $a;
+}
+echo probe($argc);"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "40006");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
 }
 
 /// The copy taken out of a local BEFORE it is retyped stays valid afterwards.
@@ -173,6 +285,54 @@ function probe(int $n): string {
 echo probe($argc);"#,
     );
     assert_eq!(out, "a1|1");
+}
+
+/// Killing a by-value PARAMETER binding does not over-release the caller's value.
+///
+/// The abandon releases the slot's occupant, so the frame has to OWN that occupant — which for a
+/// parameter means the prologue's retain, and the prologue emits it only for a parameter slot the
+/// frame writes. When the abandon stopped writing the slot through `StoreLocal`, that retain
+/// disappeared while the release stayed: the caller's box was freed early, the allocator handed
+/// the block straight back for the returned string, and the caller's own free poisoned it
+/// (`grown3` came back as `\xa5` bytes under heap debug).
+#[test]
+fn test_kill_of_a_by_value_parameter_does_not_over_release_the_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function probe($a, int $n): string {
+    unset($a);
+    $a = "grown" . $n;
+    return $a;
+}
+echo probe(1, $argc);"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "grown1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The same for the retype form, whose abandon is the same operation.
+#[test]
+fn test_retype_of_a_by_value_parameter_does_not_over_release_the_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function probe($a, int $n): string {
+    $a = "grown" . $n;
+    return $a;
+}
+echo probe([1, 2], $argc);"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "grown1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
 }
 
 /// The same kill/rebind inside a function body, where the frame is torn down on return.

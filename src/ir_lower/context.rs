@@ -1888,17 +1888,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// (`local_binding_slot_is_abandonable`) is about STORAGE, not eligibility — it refuses the
     /// storage shapes where "the name's slot" is not the value's home at all.
     ///
-    /// The old value is released by the ordinary `store_local` path below, which then leaves PHP
-    /// null in the abandoned slot. That is load-bearing: the frame epilogue still emits cleanup
-    /// for every slot whose storage type is refcounted, including the abandoned one, so leaving
-    /// the released pointer in place would be a double free.
+    /// The old value is released and the slot is left cleared either way. That is load-bearing:
+    /// the frame epilogue still emits cleanup for every slot whose storage type is refcounted,
+    /// including the abandoned one, so leaving the released pointer in place would be a double
+    /// free.
     ///
-    /// The abandoning form goes through `release_and_abandon_local_binding`, shared with the
-    /// retype re-bind; see there for why both forms null at `Void`, which is a REGISTER-shape
-    /// requirement (a `Str` slot is written from the string register pair, so a null materialized
-    /// as an `I64` never reaches it and the stale pointer is freed twice) rather than a
-    /// refcounting one, and for what the resulting slot widening costs (a boxed-detach leak on
-    /// reads above the kill).
+    /// The two forms clear the slot differently, and only the NON-abandoning one can use the
+    /// ordinary null store. There the name still resolves to the slot, so the store's widening to
+    /// `Mixed` is what a later `isset`/`??` read needs in order to see PHP null. The abandoning
+    /// form must NOT widen — every load already lowered above it would keep its narrower IR type
+    /// against boxed storage and leak a detached copy per executed read — so it goes through
+    /// `release_and_abandon_local_binding`, which zeroes the slot at its own storage type instead.
     pub(crate) fn unset_local(
         &mut self,
         name: &str,
@@ -1911,7 +1911,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }) && self.local_binding_slot_is_abandonable(name);
         if !self.is_ref_bound_local(name) {
             if abandons_binding {
-                return self.release_and_abandon_local_binding(name, null, span);
+                self.release_and_abandon_local_binding(name, span);
+                return null;
             }
             return self.store_local(name, null, PhpType::Void, span);
         }
@@ -2001,54 +2002,72 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.foreach_int_key_locals.remove(name);
     }
 
-    /// Ends a local binding: releases the value the old slot owns, leaves PHP null behind, and
-    /// drops the name-to-slot mapping.
+    /// Ends a local binding: releases the value the old slot owns, ZEROES the slot at its own
+    /// storage type, and drops the name-to-slot mapping.
     ///
     /// The single mechanism behind BOTH ways a binding can end — an `unset` the checker recorded
-    /// in `bind_kill_sites`, and an incompatible reassignment it recorded in `retype_sites`. The
-    /// release and the null-store are the ordinary `store_local` overwrite path, which is what
-    /// makes the release use the same load/release pair (and the same null tolerance) every other
-    /// overwrite uses; the null it leaves behind is load-bearing, because the frame epilogue still
-    /// emits cleanup for every slot whose storage type is refcounted, the abandoned one included.
+    /// in `bind_kill_sites`, and an incompatible reassignment it recorded in `retype_sites`.
     ///
-    /// The store is at `PhpType::Void`, and that is load-bearing rather than incidental. A slot's
-    /// storage type is a whole-FRAME property, so storing `Void` WIDENS the slot (`Str` joined
-    /// with `Void` is `Mixed`) — and only a widened slot actually RECEIVES this null.
+    /// The slot's storage type is NEVER touched here, and that is the whole design. A slot's
+    /// storage type is a whole-FRAME property, so the obvious implementation — a `store_local` of
+    /// null at `PhpType::Void` — widened the slot (`Str` joined with `Void` is `Mixed`), and every
+    /// load the body had ALREADY lowered above this point kept its `Str` IR type against what was
+    /// now boxed storage. Each such read became an unreleased `__rt_mixed_cast_string` detach: one
+    /// leaked copy of the string per EXECUTED read, so
+    /// `$a = "x" . $n; for (…200000…) { strlen($a); } $a = 5;` died with
+    /// `Fatal error: heap memory exhausted` where PHP prints the sum.
     ///
-    /// `null` is materialized as an `I64`, so it lands in the int result register. A `Mixed` /
-    /// `TaggedScalar` slot is written from that same register, so it gets a real null. A `Str`
-    /// slot is two words written from the STRING result register pair instead — `(x1, x2)` on
-    /// aarch64 against `x0` for the int, entirely disjoint — and nothing coerces an `Int`/`Void`
-    /// source into that pair (`coerce_current_result_for_target_store` only handles a
-    /// `TaggedScalar` target). Storing at the slot's own `Str` type therefore writes two STALE
-    /// registers over the slot instead of clearing it, leaving a live pointer behind that the
-    /// frame epilogue's unconditional `__rt_heap_free_safe`
-    /// (`codegen::frame::emit_main_string_cleanup`) then frees — a buffer another local still
-    /// owns. Measured, when this stored at the slot's own type:
-    /// `$q = "a" . $n; $r = $q; $q = 1; return $r . "|" . $q;` returned four NUL bytes, with
-    /// allocations and frees still balanced because the freed block was a genuinely live one.
+    /// Nor can the null simply be stored at the slot's OWN type. `null` is materialized as an
+    /// `I64`, so it lands in the int result register; a `Str` slot is two words written from the
+    /// STRING result register pair instead — `(x1, x2)` on aarch64 against `x0` for the int,
+    /// entirely disjoint — and nothing coerces an `Int`/`Void` source into that pair
+    /// (`coerce_current_result_for_target_store` only handles a `TaggedScalar` target). That store
+    /// wrote two STALE registers over the slot instead of clearing it, leaving a live pointer the
+    /// frame epilogue's `__rt_heap_free_safe` then freed — a buffer another local still owned.
+    /// Measured: `$q = "a" . $n; $r = $q; $q = 1; return $r . "|" . $q;` returned four NUL bytes,
+    /// with allocations and frees still balanced because the freed block was a genuinely live one.
+    /// (`$r = $q` does take its own copy — `acquire` on a `Str` lowers to `__rt_str_persist`, which
+    /// duplicates every source except a `CONCAT_TEMP_HEAP_KIND` block — so the fault really was the
+    /// uncleared slot, not a missing copy.)
     ///
-    /// Note what the mechanism is NOT: `$r = $q` does take its own copy. `acquire` on a `Str`
-    /// lowers to `__rt_str_persist`, which DUPLICATES every source except a block tagged
-    /// `CONCAT_TEMP_HEAP_KIND` (that one is retagged in place). Probed both ways — a concat
-    /// source and a `str_repeat` source fail identically, and `… $r = $q; $q = 1; return $r;`
-    /// with no later read is correct — so the copy is real and the fault is the uncleared slot.
+    /// `Op::ZeroLocalSlot` is what closes that gap: it writes literal zeros over the slot's words
+    /// at the slot's own storage type, so no register-shape coercion is involved and no widening is
+    /// needed to make the clear land. Clearing the slot stays load-bearing — the frame epilogue
+    /// still emits cleanup for every slot whose storage type is refcounted, the abandoned one
+    /// included — and zero is precisely the state both prologues already leave cleanup-tracked
+    /// slots in, so that cleanup walks past it.
     ///
-    /// The widening has a known cost: every load of this slot the body already lowered keeps its
-    /// `Str` IR type against what is now boxed storage, so each read ABOVE this point becomes a
-    /// detach out of a boxed cell that nothing releases — one leaked 48-byte block per executed
-    /// read (`$a = "n" . $argc; $b = strlen($a); unset($a); $a = 5;`). That leak predates the
-    /// retype path (it arrived with the `unset` kill) and belongs to the ownership model, not
-    /// here: trading it for a use-after-free is not a fix.
-    fn release_and_abandon_local_binding(
-        &mut self,
-        name: &str,
-        null: LoweredValue,
-        span: Option<Span>,
-    ) -> LoweredValue {
-        let result = self.store_local(name, null, PhpType::Void, span);
+    /// The release ordering and the name-keyed facts are the ones `store_local`'s overwrite path
+    /// uses, replicated here because there is no value to store: the previous occupant is released
+    /// when the slot is live on this path (definitely initialized, or reachable through a loop
+    /// back-edge), and the per-name lowering facts that describe the dead binding are cleared.
+    fn release_and_abandon_local_binding(&mut self, name: &str, span: Option<Span>) {
+        let Some(slot) = self.local_slots.get(name).copied() else {
+            return;
+        };
+        self.clear_static_callable_local(name);
+        self.clear_reflection_class_local(name);
+        self.clear_reflection_function_local(name);
+        self.clear_reflection_property_local(name);
+        self.clear_reflection_method_local(name);
+        self.clear_reflection_arg_array_local(name);
+        self.clear_fiber_start_sig(name);
+        self.reset_array_pointer_cursor(name);
+        // The same liveness test `store_local` applies before overwriting a slot: release the
+        // occupant when this path definitely wrote it, and also when a loop back-edge can carry a
+        // previous iteration's value into a slot straight-line flow has not initialized yet.
+        if self.initialized_slots.contains(&slot) || !self.loop_stack.is_empty() {
+            self.release_stored_local_value_before_overwrite(name, slot, span);
+        }
+        self.emit_void(
+            Op::ZeroLocalSlot,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::ZeroLocalSlot.default_effects(),
+            span,
+        );
+        self.initialized_slots.insert(slot);
         self.abandon_local_binding(name);
-        result
     }
 
     /// Abandons `name`'s binding at a checker-recorded RETYPE site, so the assignment's own store
@@ -2069,11 +2088,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if !self.local_binding_slot_is_abandonable(name) {
             return;
         }
-        let null = LoweredValue {
-            value: self.builder.emit_const_null(),
-            ir_type: IrType::I64,
-        };
-        self.release_and_abandon_local_binding(name, null, span);
+        self.release_and_abandon_local_binding(name, span);
     }
 
     /// Returns whether the checker recorded a binding RETYPE of `name` at this assignment's span.
