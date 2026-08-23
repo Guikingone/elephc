@@ -91,7 +91,7 @@ The first assignment determines a variable's type. After that, reassignment is o
 | `Int` | `Int` | Yes |
 | `Int` | `Float` | Yes (numeric types are interchangeable) |
 | `Int` | `Bool` | Yes (numeric/bool interchangeable) |
-| `Int` | `Str` | **No** — compile error |
+| `Int` | `Str` | **No** for a declared type — compile error. For an untyped LOCAL the default is a warning plus a fresh re-binding, and `--strict-locals` makes it the error (see [Local retyping and strict locals mode](#local-retyping-and-strict-locals-mode)) |
 | `False` | `Bool` | Yes (literal `false` is a subtype of `bool`) |
 | `Void` | anything | Yes (null can become any type) |
 | anything | `Void` | Yes (any variable can become null) |
@@ -122,7 +122,7 @@ Shapes 1 and 2 — the ones that END a binding — are additionally gated by `Ch
    $a changes type from int to string; the previous value is discarded (compile with --strict-locals to make this an error)
    ```
    Only STATEMENT-form assignments are eligible; an expression-form assignment (`$b = ($a = "s");`) keeps the hard error, because its result has no single well-defined type to hand the enclosing expression.
-3. **Branch-divergent assignment (boxed `Mixed` storage).** `run_mixed_storage_scan` runs a purely SYNTACTIC pre-scan of a body BEFORE it is type-checked, looking for a local whose statement-form assignments cannot all merge — the shape of `if (…) { $a = 0; } else { $a = "ciao"; }`, a single-branch retype of an outer binding, or a heterogeneous loop-carried local. A marked name binds `PhpType::Mixed` at its FIRST store, so every later assignment merges trivially and neither the retype hook nor the hard error ever fires for it; EIR lowering gives the name boxed frame storage for the whole body — every later read dispatches on the boxed value instead of using a plain register/stack slot. One warning is pushed per marked name:
+3. **Branch-divergent assignment (boxed `Mixed` storage).** `run_mixed_storage_scan` runs a purely SYNTACTIC pre-scan of a body BEFORE it is type-checked, looking for a local whose statement-form assignments cannot all merge — the shape of `if (…) { $a = 0; } else { $a = "ciao"; }`, a single-branch retype of an outer binding, or a heterogeneous loop-carried local. A marked name binds `PhpType::Mixed` on EVERY assignment path, not just at its first store: `merge_local_assignment_type` consults the mark before it looks at the environment at all, so neither the retype hook nor the hard error ever fires for it. Re-asserting the mark at each store is what makes it dominate flow NARROWING — a guarded branch writes the narrowed type straight into the shared environment, and a first-store-only consult let `if (…) { $a = 1; } else { $a = "s"; } if (is_int($a)) { $a = "z"; }` reach the merge bound `int` and fail with the hard error in both modes. EIR lowering gives the name boxed frame storage for the whole body — every later read dispatches on the boxed value instead of using a plain register/stack slot. One warning is pushed per marked name:
    ```text
    $a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)
    ```

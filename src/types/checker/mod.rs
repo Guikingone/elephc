@@ -455,26 +455,6 @@ impl Checker {
             && !self.typed_local_names.contains(name)
     }
 
-    /// True when `name` is a TOP-LEVEL binding whose storage some other body reaches through a
-    /// `global` declaration.
-    ///
-    /// `global $x;` inside a function binds `$x` to the program-global cell that the top level
-    /// writes through its own slot, so ending the top-level binding of `$x` strands a name the
-    /// rest of the program still uses: `function w() { global $a; $a = 5; } $a = 1; unset($a);
-    /// w(); echo $a;` prints `5` in PHP and compiled before this feature existed, but the `unset`
-    /// removed `$a` from the environment and the `echo` became `Undefined variable: $a`.
-    ///
-    /// Scoped to the top-level body on purpose, mirroring lowering's `in_main &&
-    /// all_global_var_names.contains(name)` gate (`LoweringContext::uses_global_storage`) and
-    /// reading the SAME collected set. A same-named local inside a function body is that frame's
-    /// own storage — no `global` alias reaches it — so vetoing it would only cost the feature
-    /// coverage it is entitled to.
-    ///
-    /// Consulted by the `unset` KILL alone, not by the straight-line retype. The kill REMOVES the
-    /// name from the environment, which is the part that strands it; a retype leaves the name
-    /// bound, and lowering already refuses to abandon the slot for exactly these names, so that
-    /// site degrades to the pre-feature widening path and prints PHP's answer (measured). Vetoing
-    /// it too would turn a working program into a compile error.
     /// True when `name` is bound in a body's INCOMING environment by seeding rather than by
     /// anything the body does, and the storage behind it is not this frame's.
     ///
@@ -501,6 +481,26 @@ impl Checker {
         self.statement_position_expr == Some(expr as *const Expr as usize)
     }
 
+    /// True when `name` is a TOP-LEVEL binding whose storage some other body reaches through a
+    /// `global` declaration.
+    ///
+    /// `global $x;` inside a function binds `$x` to the program-global cell that the top level
+    /// writes through its own slot, so ending the top-level binding of `$x` strands a name the
+    /// rest of the program still uses: `function w() { global $a; $a = 5; } $a = 1; unset($a);
+    /// w(); echo $a;` prints `5` in PHP and compiled before this feature existed, but the `unset`
+    /// removed `$a` from the environment and the `echo` became `Undefined variable: $a`.
+    ///
+    /// Scoped to the top-level body on purpose, mirroring lowering's `in_main &&
+    /// all_global_var_names.contains(name)` gate (`LoweringContext::uses_global_storage`) and
+    /// reading the SAME collected set (`crate::global_decls::collect_global_var_names`). A
+    /// same-named local inside a function body is that frame's own storage — no `global` alias
+    /// reaches it — so vetoing it would only cost the feature coverage it is entitled to.
+    ///
+    /// Consulted by the `unset` KILL alone, not by the straight-line retype. The kill REMOVES the
+    /// name from the environment, which is the part that strands it; a retype leaves the name
+    /// bound, and lowering already refuses to abandon the slot for exactly these names, so that
+    /// site degrades to the pre-feature widening path and prints PHP's answer (measured). Vetoing
+    /// it too would turn a working program into a compile error.
     pub(crate) fn top_level_binding_is_program_global(&self, name: &str) -> bool {
         self.null_probe_scope_is_top_level && self.program_global_names.contains(name)
     }

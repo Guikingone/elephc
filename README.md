@@ -530,7 +530,7 @@ The static type system tracks these runtime shapes at compile time:
 
 The checker also carries the internal `False` subtype and the two-word `TaggedScalar` codegen shape used by the default tagged null representation.
 
-A variable's type is set at first assignment. Compatible types (int/float/bool/null) can be reassigned between each other. An untyped local may also change type outright — `unset()` then reassign, a straight-line reassignment, or a branch-divergent assignment (boxed as `Mixed` storage) — and by default this is a warning rather than an error; `--strict-locals` makes it an error again. A typed local, a type-hinted parameter, or a class property always stays strict. See [`--strict-locals`](docs/compiling/cli-reference.md#strict-locals-mode).
+A variable's type is set at first assignment. Compatible types (int/float/bool/null) can be reassigned between each other. An untyped local may also change type outright, in three shapes. `unset()` then reassign ENDS the binding — the name is unbound afterwards and the next assignment binds it fresh at any type, with no diagnostic in either mode. A straight-line reassignment and a branch-divergent assignment (boxed as `Mixed` storage) are a warning rather than an error by default, and `--strict-locals` makes those two an error again. A typed local, a type-hinted parameter, or a class property always stays strict. See [`--strict-locals`](docs/compiling/cli-reference.md#strict-locals-mode).
 
 ## Error messages
 
