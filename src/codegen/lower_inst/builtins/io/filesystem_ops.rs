@@ -117,6 +117,8 @@ pub(crate) fn lower_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
                                    "_uww_name_copy", "copy".len())));
     let result = if copy_source_needs_the_lowering(ctx, inst)? {
         emit_copy_from_lowered_source(ctx, inst)
+    } else if copy_source_is_a_run_time_path(ctx, inst)? {
+        emit_copy_with_dynamic_filter_source(ctx, inst)
     } else {
         lower_binary_path_call_with_context(ctx, inst, "copy", "__rt_copy")
     };
@@ -148,6 +150,89 @@ fn copy_source_needs_the_lowering(
         || literal.starts_with("compress.bzip2://")
         || literal.starts_with("phar://")
         || literal.starts_with("zip://"))
+}
+
+/// Whether `copy()`'s source is a path only the RUN TIME can spell.
+///
+/// A literal is resolved by `copy_source_needs_the_lowering` above; anything else may still turn
+/// out to be a `php://filter/...` URL once the program runs, and the runtime cannot open one.
+fn copy_source_is_a_run_time_path(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<bool> {
+    let Some(source) = inst.operands.first().copied() else {
+        return Ok(false);
+    };
+    Ok(optional_const_string_operand(ctx, source)?.is_none())
+}
+
+/// Emits `copy()` for a source spelled at RUN TIME, giving a `php://filter/...` URL the read
+/// `fopen()` performs and leaving every other path to `__rt_copy`.
+///
+///     $src = 'php://filter/read=string.rot13/resource=' . $raw;
+///     copy($src, $dst);
+///
+/// `__rt_copy` reads through `__rt_file_get_contents`, whose runtime half is a `stat` and an
+/// `open(2)`: it reaches every REGISTERED wrapper, and knows nothing of php's own filter scheme,
+/// which only the lowering resolves. So the very URL that `fopen()` and `file_get_contents()`
+/// both open answered `Failed to open stream` here — measured, with the URL written as a literal
+/// working and the same string assembled at run time failing.
+///
+/// Only the FILTER route is emitted, not the whole dynamic reader `file_get_contents()` uses:
+/// its compress arm pulls zlib into the link of every program that calls `copy()`, and its
+/// remaining arms answered a copy with a crash. A URL that names no filter falls through to
+/// `__rt_copy` with the path untouched, which is what it always did.
+fn emit_copy_with_dynamic_filter_source(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let source = expect_operand(inst, 0)?;
+    let destination = expect_operand(inst, 1)?;
+    let done_all = ctx.next_label("copy_dynamic_done");
+    load_string_to_result(ctx, source, "copy")?;
+    let filtered = super::emit_dynamic_php_filter_read_route(
+        ctx,
+        "_diag_open_failed_copy_prefix",
+        "Warning: copy(",
+        "copy",
+    )?;
+    // The fall-through is every other path: the ordinary copy, unchanged.
+    lower_binary_path_call_with_context(ctx, inst, "copy", "__rt_copy")?;
+    abi::emit_jump(ctx.emitter, &done_all);
+    let failed = format!("{}_failed", filtered);
+    ctx.emitter.label(&filtered);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {}", failed));            // a failed open writes nothing
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // the bytes, across the path load
+            load_string_to_result(ctx, destination, "copy")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x3", "x4");                    // the data pair the writer reads
+            ctx.emitter.instruction("mov x5, xzr");                             // no FILE_APPEND for this caller
+            abi::emit_call_label(ctx.emitter, "__rt_file_put_contents");
+            ctx.emitter.instruction("cmp x0, #0");
+            ctx.emitter.instruction("cset x0, ge");                             // a zero-byte write copied an empty file
+            abi::emit_jump(ctx.emitter, &done_all);
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("mov x0, #0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // a failed open writes nothing
+            ctx.emitter.instruction(&format!("jz {}", failed));
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // the bytes, across the path load
+            load_string_to_result(ctx, destination, "copy")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");                  // the data pair the writer reads
+            ctx.emitter.instruction("xor ecx, ecx");                            // no FILE_APPEND for this caller
+            abi::emit_call_label(ctx.emitter, "__rt_file_put_contents");
+            ctx.emitter.instruction("cmp rax, 0");
+            ctx.emitter.instruction("setge al");                                // a zero-byte write copied an empty file
+            ctx.emitter.instruction("movzx rax, al");
+            abi::emit_jump(ctx.emitter, &done_all);
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("xor eax, eax");
+        }
+    }
+    ctx.emitter.label(&done_all);
+    store_if_result(ctx, inst)
 }
 
 /// Emits `copy()` as the wrapper-aware read followed by the write `__rt_copy` already performs.
