@@ -41,7 +41,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
     // -- null-terminate path and call unlink --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.syscall(10);
 
     // -- return success/failure --
@@ -80,7 +80,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #24]");                                   // save the recursive flag across __rt_cstr
 
     // -- null-terminate the path into our own scratch buffer --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.instruction("str x0, [sp, #32]");                                   // save the buffer base for both routes
     emitter.instruction("ldr x4, [sp, #24]");                                   // reload the recursive flag
     emitter.instruction("cbz x4, __rt_mkdir_leaf");                             // not recursive: create only the named directory
@@ -139,7 +139,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
     // -- null-terminate path and call rmdir --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.syscall(137);
 
     // -- return success/failure --
@@ -198,12 +198,12 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save 'to' path ptr and len on stack
 
     // -- null-terminate source path using primary buffer --
-    emitter.instruction("bl __rt_cstr");                                        // convert 'from' to C string in _cstr_buf
+    emitter.instruction("bl __rt_path_cstr");                                   // convert 'from' to C string in _cstr_buf
     emitter.instruction("str x0, [sp, #0]");                                    // save source cstr pointer
 
     // -- null-terminate destination path using secondary buffer --
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload 'to' path ptr and len
-    emitter.instruction("bl __rt_cstr2");                                       // convert 'to' to C string in _cstr_buf2
+    emitter.instruction("bl __rt_path_cstr2");                                  // convert 'to' to C string in _cstr_buf2
     emitter.instruction("str x0, [sp, #8]");                                    // save destination cstr pointer
 
     // -- call rename syscall --
@@ -251,7 +251,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     // comparing the paths: a hard link and a symlink to the source are refused too, and `./x` is
     // refused for `x`. It answers false, says nothing, and leaves the file alone. A destination
     // that does not exist yet cannot be stat'ed, which is what lets an ordinary copy through.
-    emitter.instruction("bl __rt_cstr");                                        // the source path as a C string
+    emitter.instruction("bl __rt_path_cstr");                                   // the source path as a C string
     emitter.instruction(&format!("add x1, sp, #{}", src_stat));                 // fill the source stat buffer
     emitter.syscall(338);
     emitter.instruction("cbnz x0, __rt_copy_not_same_file");                    // no source to stat: the read below reports it
@@ -271,7 +271,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.instruction("b __rt_copy_return");
     emitter.label("__rt_copy_source_not_dir");
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // the destination path
-    emitter.instruction("bl __rt_cstr");
+    emitter.instruction("bl __rt_path_cstr");
     emitter.instruction(&format!("add x1, sp, #{}", dst_stat));                 // fill the destination stat buffer
     emitter.syscall(338);
     emitter.instruction("cbnz x0, __rt_copy_not_same_file");                    // nothing there yet: an ordinary copy
@@ -350,7 +350,7 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: chdir ---");
     emitter.label_global("__rt_chdir");
-    emit_single_path_libc_bool_helper(emitter, "chdir", None);
+    emit_single_path_libc_bool_helper_with(emitter, "chdir", None, PathUrls::Verbatim);
 
     emitter.blank();
     emitter.comment("--- runtime: rename ---");
@@ -362,11 +362,11 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve aligned stack space for the saved destination and source C-string pointers
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the destination elephc path pointer while converting the source path
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the destination elephc path length while converting the source path
-    emitter.instruction("call __rt_cstr");                                      // convert the source elephc path in rax/rdx into a null-terminated C string
+    emitter.instruction("call __rt_path_cstr");                                 // convert the source elephc path in rax/rdx into a null-terminated C string
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the source C-string pointer for the later libc rename() call
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the destination elephc path pointer before converting it to a C string
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the destination elephc path length before converting it to a C string
-    emitter.instruction("call __rt_cstr2");                                     // convert the destination elephc path into the secondary null-terminated C string buffer
+    emitter.instruction("call __rt_path_cstr2");                                // convert the destination elephc path into the secondary null-terminated C string buffer
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the destination C-string pointer for the later libc rename() call
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the source C-string pointer as the first libc rename() argument
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the destination C-string pointer as the second libc rename() argument
@@ -399,7 +399,7 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the source path length alongside it
 
     // See the AArch64 arm: php refuses to copy a file onto itself, judged by (st_dev, st_ino).
-    emitter.instruction("call __rt_cstr");                                      // the source path as a C string
+    emitter.instruction("call __rt_path_cstr");                                 // the source path as a C string
     emitter.instruction("mov rdi, rax");
     emitter.instruction(&format!("lea rsi, [rbp - {}]", src_stat));             // fill the source stat buffer
     emitter.instruction("call stat");
@@ -420,7 +420,7 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_copy_source_not_dir_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the destination path
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");
-    emitter.instruction("call __rt_cstr");
+    emitter.instruction("call __rt_path_cstr");
     emitter.instruction("mov rdi, rax");
     emitter.instruction(&format!("lea rsi, [rbp - {}]", dst_stat));             // fill the destination stat buffer
     emitter.instruction("call stat");
@@ -487,7 +487,7 @@ fn emit_mkdir_libc_helper(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve slots for the mode, the flag, the buffer base and the scan index
     emitter.instruction("mov QWORD PTR [rbp - 8], rcx");                        // save the requested mode across __rt_cstr
     emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // save the recursive flag across __rt_cstr
-    emitter.instruction("call __rt_cstr");                                      // convert the elephc path in rax/rdx into a null-terminated C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // convert the elephc path in rax/rdx into a null-terminated C string in rax
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the buffer base for both routes
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the recursive flag
     emitter.instruction("test r9, r9");                                         // was a recursive create requested?
@@ -528,9 +528,34 @@ fn emit_mkdir_libc_helper(emitter: &mut Emitter) {
 }
 
 fn emit_single_path_libc_bool_helper(emitter: &mut Emitter, symbol: &str, extra_setup: Option<&str>) {
+    emit_single_path_libc_bool_helper_with(emitter, symbol, extra_setup, PathUrls::Honoured);
+}
+
+/// Whether this helper's path may be a `file://` URL.
+///
+/// php routes most path builtins through its plain-files WRAPPER, which reads the URL; the ones
+/// that call libc directly never see it. MEASURED: `chdir("file:///tmp")` answers false in php.
+#[derive(Clone, Copy, PartialEq)]
+enum PathUrls {
+    /// The plain-files wrapper handles the path, so a `file://` URL names the file it points at.
+    Honoured,
+    /// The call goes straight to libc, so the URL is just an unusual filename.
+    Verbatim,
+}
+
+/// Same, with the URL rule spelled out.
+fn emit_single_path_libc_bool_helper_with(
+    emitter: &mut Emitter,
+    symbol: &str,
+    extra_setup: Option<&str>,
+    urls: PathUrls,
+) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the helper makes libc calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the call-aligned helper body
-    emitter.instruction("call __rt_cstr");                                      // convert the elephc path in rax/rdx into a null-terminated C string in rax
+    emitter.instruction(match urls {
+        PathUrls::Honoured => "call __rt_path_cstr",                            // a `file://` URL names the file it points at
+        PathUrls::Verbatim => "call __rt_cstr",                                 // this one php hands straight to libc
+    });                                                                         // convert the elephc path in rax/rdx into a null-terminated C string in rax
     emitter.instruction("mov rdi, rax");                                        // pass the C path pointer as the first libc argument
     if let Some(setup) = extra_setup {
         emitter.instruction(setup);                                             // populate any additional libc arguments required by this helper

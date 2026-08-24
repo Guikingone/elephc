@@ -59,7 +59,7 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #48]");                                   // hold $sorting_order across the listing
 
     // -- null-terminate path --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.instruction("str x0, [sp, #24]");                                   // hold the C path across the result-array allocation
 
     // -- create the result array FIRST so an unopenable directory still has one to return --
@@ -215,7 +215,7 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the C path, result array, and DIR* locals
     emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the C path, result array, DIR* handle, loop scratch, the failure diagnostic, and the sorting order
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // hold $sorting_order across the listing
-    emitter.instruction("call __rt_cstr");                                      // convert the elephc directory string in rax/rdx into a null-terminated C path in rax
+    emitter.instruction("call __rt_path_cstr");                                 // convert the elephc directory string in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the C directory path pointer across the result-array allocation and opendir() call
     emitter.instruction("mov rdi, 128");                                        // request an initial result-array capacity of 128 directory entry names
     emitter.instruction("mov rsi, 16");                                         // request 16-byte payload slots because scandir() returns string ptr/len pairs

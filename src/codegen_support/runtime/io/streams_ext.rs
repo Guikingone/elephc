@@ -83,7 +83,7 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction(&format!("str xzr, [sp, #{}]", total_off));             // total bytes copied = 0
 
     // -- open(path, O_RDONLY) --
-    emitter.instruction("bl __rt_cstr");                                        // path → null-terminated C string in x0
+    emitter.instruction("bl __rt_path_cstr");                                   // path → null-terminated C string in x0
     emitter.instruction("mov x1, #0");                                          // O_RDONLY
     emitter.instruction("mov x2, #0");                                          // mode (unused for O_RDONLY)
     emitter.syscall(5);                                                         // open(path, flags, mode)
@@ -382,7 +382,7 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish stable frame base
     emitter.instruction(&format!("sub rsp, {}", buf_size + 16));                // reserve frame for buffer + counters
-    emitter.instruction("call __rt_cstr");                                      // path → C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
     emitter.instruction("mov rdi, rax");                                        // first libc open arg
     emitter.instruction("xor esi, esi");                                        // O_RDONLY
     emitter.instruction("call open");                                           // libc open(path, O_RDONLY)

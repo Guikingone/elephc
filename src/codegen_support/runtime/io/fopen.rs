@@ -201,7 +201,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save mode ptr and len on stack
 
     // -- null-terminate the filename via __rt_cstr --
-    emitter.instruction("bl __rt_cstr");                                        // convert filename to C string, x0=cstr path
+    emitter.instruction("bl __rt_path_cstr");                                   // convert filename to C string, x0=cstr path
     emitter.instruction("str x0, [sp, #0]");                                    // save null-terminated path pointer
 
     // -- parse mode string to derive open() flags --
@@ -396,7 +396,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     // elephc's own representation. Freeing that sentinel dereferences `PHP_INT_MAX - 1`.
     abi::emit_load_int_immediate(emitter, "x12", crate::codegen_support::sentinels::NULL_SENTINEL);
     emitter.instruction("cmp x0, x12");
-    emitter.instruction("b.eq __rt_fopen_uw_context_box");                       // nothing owned yet: skip the release
+    emitter.instruction("b.eq __rt_fopen_uw_context_box");                      // nothing owned yet: skip the release
     emitter.instruction("bl __rt_mixed_free_deep");                             // release the replaced property's owned Mixed cell
     emitter.label("__rt_fopen_uw_context_box");
     emitter.instruction("ldr x1, [sp, #40]");                                   // reload the selected context handle for boxing
@@ -547,7 +547,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_fopen_uw_slot_x86");
     super::emit_load_table_cap(emitter, "r12");
-    emitter.instruction("cmp r11, r12");                                         // checked every allocated wrapper slot?
+    emitter.instruction("cmp r11, r12");                                        // checked every allocated wrapper slot?
     emitter.instruction("jge __rt_fopen_uw_done_x86");                          // no registered wrapper matched
     emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
     emitter.instruction("shl r12, 5");                                          // slot offset = index * 32
@@ -584,12 +584,12 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the elephc mode pointer while the filename string is converted to a C string
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the elephc mode length while the filename string is converted to a C string
-    emitter.instruction("call __rt_cstr");                                      // convert the elephc filename in rax/rdx into a null-terminated C path in rax
+    emitter.instruction("call __rt_path_cstr");                                 // convert the elephc filename in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the C pathname pointer for the later libc open() call
 
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the elephc mode pointer into the standard x86_64 string-result pointer register
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the elephc mode length into the standard x86_64 string-result length register
-    emitter.instruction("call __rt_cstr2");                                     // convert the elephc mode string into the secondary null-terminated C string buffer
+    emitter.instruction("call __rt_path_cstr2");                                // convert the elephc mode string into the secondary null-terminated C string buffer
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the C mode pointer for the mode-flag parser below
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // load the C mode string pointer so fopen() can inspect the first mode byte
@@ -676,7 +676,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rcx");                                             // restore the errno
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // the null-terminated path
     abi::emit_symbol_address(emitter, "rdi", "_diag_open_failed_fopen_prefix");
-    emitter.instruction("mov esi, 15");                                          // prefix length
+    emitter.instruction("mov esi, 15");                                         // prefix length
     emitter.instruction("call __rt_open_failed_warning");
     emitter.instruction("mov rax, -1");                                         // normalize all open failures to the PHP false sentinel path
     emitter.instruction("jmp __rt_fopen_return_x86");                           // skip eof-flag reset on failed opens

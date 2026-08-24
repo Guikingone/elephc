@@ -25,6 +25,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_http_response_code(emitter, features.web);
     io::emit_header(emitter, features.web);
     io::emit_cstr(emitter);
+    io::emit_path_cstr(emitter);
     io::emit_disk_space(emitter);
     io::emit_fopen(emitter);
     io::emit_fgets(emitter);

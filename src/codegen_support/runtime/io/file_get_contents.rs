@@ -55,7 +55,7 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate the filename --
-    emitter.instruction("bl __rt_cstr");                                        // convert filename to C string, x0=cstr path
+    emitter.instruction("bl __rt_path_cstr");                                   // convert filename to C string, x0=cstr path
     emitter.instruction("str x0, [sp, #0]");                                    // save null-terminated path pointer
 
     // -- call stat64 to get file size --
@@ -188,7 +188,7 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp], #16");                                   // restore the errno
     emitter.instruction("ldr x2, [sp, #0]");                                    // the null-terminated path
     abi::emit_symbol_address(emitter, "x0", "_diag_open_failed_fgc_prefix");
-    emitter.instruction("mov x1, #27");                                          // prefix length
+    emitter.instruction("mov x1, #27");                                         // prefix length
     // Prefer a name a delegating builtin published for the duration of its call. The
     // two values are loaded SEPARATELY: materializing a symbol borrows the scratch
     // register, so a length held there would not survive the pointer load.
@@ -229,7 +229,7 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the temporary path, size, fd, and heap pointer slots
     emitter.instruction(&format!("sub rsp, {}", frame_size));                   // reserve an aligned Linux stat buffer plus local spill slots for the read-path helper
 
-    emitter.instruction("call __rt_cstr");                                      // convert the elephc filename in rax/rdx into a null-terminated C path in rax
+    emitter.instruction("call __rt_path_cstr");                                 // convert the elephc filename in rax/rdx into a null-terminated C path in rax
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", path_off));   // preserve the C path pointer across the libc stat(), open(), read(), and close() calls
 
     emitter.instruction("mov rdi, rax");                                        // pass the C path pointer as the first libc stat() argument
@@ -334,7 +334,7 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rcx");                                             // restore the errno
     emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {}]", path_off));   // the null-terminated path
     abi::emit_symbol_address(emitter, "rdi", "_diag_open_failed_fgc_prefix");
-    emitter.instruction("mov esi, 27");                                          // prefix length
+    emitter.instruction("mov esi, 27");                                         // prefix length
     // See the AArch64 arm: load both values from their slots, never park one in scratch.
     abi::emit_load_symbol_to_reg(emitter, "r11", "_rt_open_diag_prefix_len", 0);
     emitter.instruction("test r11, r11");

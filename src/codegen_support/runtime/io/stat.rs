@@ -46,7 +46,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
@@ -76,7 +76,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
@@ -121,7 +121,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
@@ -162,7 +162,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
     // -- null-terminate path --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
 
     // -- call access(path, R_OK) --
     emitter.instruction("mov x1, #4");                                          // R_OK = 4 (read permission check)
@@ -194,7 +194,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
     // -- null-terminate path --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
 
     // -- call access(path, W_OK) --
     emitter.instruction("mov x1, #2");                                          // W_OK = 2 (write permission check)
@@ -226,7 +226,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
@@ -267,7 +267,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
@@ -428,7 +428,7 @@ fn emit_linux_stat_call(emitter: &mut Emitter, frame_size: usize) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the stat helper uses a local frame
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the temporary stat buffer
     emitter.instruction(&format!("sub rsp, {}", frame_size));                   // reserve stack space for the Linux stat buffer with 16-byte alignment
-    emitter.instruction("call __rt_cstr");                                      // convert the elephc string in rax/rdx into a null-terminated C path in rax
+    emitter.instruction("call __rt_path_cstr");                                 // convert the elephc string in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov rdi, rax");                                        // pass the C path pointer as the first libc stat() argument
     emitter.instruction("lea rsi, [rsp]");                                      // pass the temporary stack buffer as the destination stat struct
     emitter.instruction("call stat");                                           // fill the temporary stat buffer through libc stat()
@@ -442,7 +442,7 @@ fn emit_linux_stat_call(emitter: &mut Emitter, frame_size: usize) {
 fn emit_linux_access_check(emitter: &mut Emitter, mode: u32) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the access helper makes libc calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the call-aligned access helper
-    emitter.instruction("call __rt_cstr");                                      // convert the elephc string in rax/rdx into a null-terminated C path in rax
+    emitter.instruction("call __rt_path_cstr");                                 // convert the elephc string in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov rdi, rax");                                        // pass the C path pointer as the first syscall argument to access
     emitter.instruction(&format!("mov rsi, {}", mode));                         // pass the access-mode mask as the second libc access() argument
     emitter.instruction("call access");                                         // perform the access check through libc access()

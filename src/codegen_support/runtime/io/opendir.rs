@@ -79,7 +79,7 @@ pub fn emit_opendir(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
     // -- null-terminate the directory path --
-    emitter.instruction("bl __rt_cstr");                                        // convert the path to a C string, x0 = C string
+    emitter.instruction("bl __rt_path_cstr");                                   // convert the path to a C string, x0 = C string
 
     // -- open the directory stream --
     emitter.bl_c("opendir");
@@ -164,7 +164,7 @@ fn emit_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // reserve a spill slot for the DIR* handle
 
     // -- null-terminate the directory path --
-    emitter.instruction("call __rt_cstr");                                      // convert the path to a C string, rax = C string
+    emitter.instruction("call __rt_path_cstr");                                 // convert the path to a C string, rax = C string
 
     // -- open the directory stream --
     emitter.instruction("mov rdi, rax");                                        // C-string path argument for opendir

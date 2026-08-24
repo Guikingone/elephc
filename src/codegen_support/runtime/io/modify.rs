@@ -34,7 +34,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish new frame pointer
     emitter.instruction("str x3, [sp, #0]");                                    // preserve the mode value across the cstr call
-    emitter.instruction("bl __rt_cstr");                                        // path → null-terminated C string in x0
+    emitter.instruction("bl __rt_path_cstr");                                   // path → null-terminated C string in x0
     emitter.instruction("ldr x1, [sp, #0]");                                    // restore mode into the second libc argument
     emitter.bl_c("chmod");                                                      // libc chmod(path, mode)
     emitter.instruction("cmp x0, #0");                                          // success?
@@ -56,7 +56,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish new frame pointer
     emitter.instruction("stp x3, x4, [sp, #0]");                                // preserve uid/gid across the cstr call
-    emitter.instruction("bl __rt_cstr");                                        // path → C string in x0
+    emitter.instruction("bl __rt_path_cstr");                                   // path → C string in x0
     emitter.instruction("ldp x1, x2, [sp, #0]");                                // restore uid/gid into the libc argument registers
     emitter.bl_c("chown");                                                      // libc chown(path, uid, gid)
     emitter.instruction("cmp x0, #0");                                          // success?
@@ -78,7 +78,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish new frame pointer
     emitter.instruction("stp x3, x4, [sp, #0]");                                // preserve uid/gid across the cstr call
-    emitter.instruction("bl __rt_cstr");                                        // path → C string in x0
+    emitter.instruction("bl __rt_path_cstr");                                   // path → C string in x0
     emitter.instruction("ldp x1, x2, [sp, #0]");                                // restore uid/gid into the libc argument registers
     emitter.bl_c("lchown");                                                     // libc lchown(path, uid, gid) without following symlinks
     emitter.instruction("cmp x0, #0");                                          // success?
@@ -100,7 +100,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
     emitter.instruction("stp x3, x4, [sp, #16]");                               // preserve user-name ptr/len across path conversion
-    emitter.instruction("bl __rt_cstr");                                        // path → C string in x0
+    emitter.instruction("bl __rt_path_cstr");                                   // path → C string in x0
     emitter.instruction("str x0, [sp, #0]");                                    // save C path pointer
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload user-name ptr/len
     emitter.instruction("bl __rt_cstr2");                                       // user name → secondary C string in x0
@@ -135,7 +135,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
     emitter.instruction("stp x3, x4, [sp, #16]");                               // preserve user-name ptr/len across path conversion
-    emitter.instruction("bl __rt_cstr");                                        // path → C string in x0
+    emitter.instruction("bl __rt_path_cstr");                                   // path → C string in x0
     emitter.instruction("str x0, [sp, #0]");                                    // save C path pointer
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload user-name ptr/len
     emitter.instruction("bl __rt_cstr2");                                       // user name → secondary C string in x0
@@ -170,7 +170,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
     emitter.instruction("stp x3, x4, [sp, #16]");                               // preserve group-name ptr/len across path conversion
-    emitter.instruction("bl __rt_cstr");                                        // path → C string in x0
+    emitter.instruction("bl __rt_path_cstr");                                   // path → C string in x0
     emitter.instruction("str x0, [sp, #0]");                                    // save C path pointer
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload group-name ptr/len
     emitter.instruction("bl __rt_cstr2");                                       // group name → secondary C string in x0
@@ -205,7 +205,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
     emitter.instruction("stp x3, x4, [sp, #16]");                               // preserve group-name ptr/len across path conversion
-    emitter.instruction("bl __rt_cstr");                                        // path → C string in x0
+    emitter.instruction("bl __rt_path_cstr");                                   // path → C string in x0
     emitter.instruction("str x0, [sp, #0]");                                    // save C path pointer
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload group-name ptr/len
     emitter.instruction("bl __rt_cstr2");                                       // group name → secondary C string in x0
@@ -339,7 +339,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #8]");                                    // save mtime arg
     emitter.instruction("str x4, [sp, #16]");                                   // save atime arg
     emitter.instruction("str x5, [sp, #24]");                                   // save current-time mask
-    emitter.instruction("bl __rt_cstr");                                        // path → C string in x0
+    emitter.instruction("bl __rt_path_cstr");                                   // path → C string in x0
     emitter.instruction("str x0, [sp, #0]");                                    // save C path pointer
 
     // -- create the file if missing via open(path, O_WRONLY|O_CREAT, 0666) --

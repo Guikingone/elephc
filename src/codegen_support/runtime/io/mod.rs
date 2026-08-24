@@ -20,6 +20,7 @@ pub(crate) const MIN_WRAPPER_SCHEME_LEN: usize = 2;
 
 mod basename;
 mod cstr;
+mod file_scheme;
 mod disk_space;
 mod dirname;
 mod dirname_levels;
@@ -183,6 +184,7 @@ mod var_dump_walk;
 
 pub(crate) use basename::emit_basename;
 pub(crate) use cstr::emit_cstr;
+pub(crate) use file_scheme::emit_path_cstr;
 pub(crate) use disk_space::emit_disk_space;
 pub(crate) use dirname::emit_dirname;
 pub(crate) use dirname_levels::emit_dirname_levels;

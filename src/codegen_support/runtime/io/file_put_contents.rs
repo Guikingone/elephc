@@ -44,7 +44,7 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     emitter.instruction("str x5, [sp, #40]");                                   // hold $flags across __rt_cstr, which is a call
 
     // -- null-terminate the filename --
-    emitter.instruction("bl __rt_cstr");                                        // convert filename to C string, x0=cstr path
+    emitter.instruction("bl __rt_path_cstr");                                   // convert filename to C string, x0=cstr path
     emitter.instruction("str x0, [sp, #0]");                                    // save null-terminated path pointer
 
     // -- open file with write+create+truncate --
@@ -136,7 +136,7 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the data pointer while the filename is converted to a C string
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the data length while the filename is converted to a C string
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // hold $flags across __rt_cstr, which is a call
-    emitter.instruction("call __rt_cstr");                                      // convert the elephc filename in rax/rdx into a null-terminated C path in rax
+    emitter.instruction("call __rt_path_cstr");                                 // convert the elephc filename in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the C filename pointer for the later open() call
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the C filename pointer as the first libc open() argument

@@ -126,7 +126,7 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack frame
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));      // save frame pointer and return address
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
-    emitter.instruction("bl __rt_cstr");                                        // null-terminate the path
+    emitter.instruction("bl __rt_path_cstr");                                   // null-terminate the path
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer
     emitter.syscall(338);                                                       // stat(path, buf)
     emitter.instruction("cmp x0, #0");                                          // success?
@@ -149,7 +149,7 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack frame
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));      // save frame pointer and return address
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
-    emitter.instruction("bl __rt_cstr");                                        // null-terminate the path
+    emitter.instruction("bl __rt_path_cstr");                                   // null-terminate the path
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer
     emitter.syscall(340);                                                       // lstat(path, buf)
     emitter.instruction("cmp x0, #0");                                          // success?
@@ -279,7 +279,7 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction(&format!("sub rsp, {}", frame));                        // reserve stat buffer + hash slot
-    emitter.instruction("call __rt_cstr");                                      // path → C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
     emitter.instruction("mov rdi, rax");                                        // first libc stat() argument
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_neg));              // second libc stat() argument: stat buffer
     emitter.instruction("call stat");                                           // libc stat()
@@ -302,7 +302,7 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction(&format!("sub rsp, {}", frame));                        // reserve stat buffer + hash slot
-    emitter.instruction("call __rt_cstr");                                      // path → C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
     emitter.instruction("mov rdi, rax");                                        // first libc lstat() argument
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_neg));              // second libc lstat() argument
     emitter.instruction("call lstat");                                          // libc lstat()

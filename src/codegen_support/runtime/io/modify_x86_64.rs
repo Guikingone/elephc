@@ -37,7 +37,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish frame
     emitter.instruction("sub rsp, 16");                                         // align stack
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve mode (came in via the secondary string-argument register)
-    emitter.instruction("call __rt_cstr");                                      // path → C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
     emitter.instruction("mov rdi, rax");                                        // first libc chmod arg = C path
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // second libc chmod arg = mode
     emitter.instruction("call chmod");                                          // libc chmod(path, mode)
@@ -57,7 +57,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // align stack + spill uid/gid
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve uid
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve gid
-    emitter.instruction("call __rt_cstr");                                      // path → C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
     emitter.instruction("mov rdi, rax");                                        // first libc chown arg = path
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // second arg = uid
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // third arg = gid
@@ -78,7 +78,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // align stack + spill uid/gid
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve uid
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve gid
-    emitter.instruction("call __rt_cstr");                                      // path → C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
     emitter.instruction("mov rdi, rax");                                        // first libc lchown arg = path
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // second arg = uid
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // third arg = gid
@@ -99,7 +99,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // align stack + spill user string and path pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // preserve user-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // preserve user-name length
-    emitter.instruction("call __rt_cstr");                                      // path → C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save C path pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload user-name pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload user-name length
@@ -133,7 +133,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // align stack + spill user string and path pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // preserve user-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // preserve user-name length
-    emitter.instruction("call __rt_cstr");                                      // path → C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save C path pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload user-name pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload user-name length
@@ -167,7 +167,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // align stack + spill group string and path pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // preserve group-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // preserve group-name length
-    emitter.instruction("call __rt_cstr");                                      // path → C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save C path pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload group-name pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload group-name length
@@ -201,7 +201,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // align stack + spill group string and path pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // preserve group-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // preserve group-name length
-    emitter.instruction("call __rt_cstr");                                      // path → C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save C path pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload group-name pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload group-name length
@@ -306,7 +306,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // save mtime arg
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save atime arg
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save current-time mask
-    emitter.instruction("call __rt_cstr");                                      // path → C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save C path pointer
 
     emitter.instruction("mov rdi, rax");                                        // first arg = path
