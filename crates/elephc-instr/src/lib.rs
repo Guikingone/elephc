@@ -69,6 +69,17 @@ use std::sync::Mutex;
 /// have — a way to tell which activation is ending — the same thing the
 /// recursive-catcher case needs, so both wait on one decision rather than two
 /// patches.
+///
+/// That second case is narrower than it sounds, and the difference is measured
+/// rather than assumed. A `try` written inside a recursive function belongs to
+/// every activation of it, so the innermost live one catches — which is the
+/// occurrence the exit already resolves to, and that shape accounts exactly
+/// (`a_recursive_function_that_catches_around_its_own_call_accounts_exactly`).
+/// What stays wrong is the case where only an OUTER activation carries the try:
+/// its exit is attributed to an inner activation of the same function, and the
+/// outer one then stays open until its caller returns, absorbing the caller's
+/// remaining time. Measured on a 1000-tick fixture, the caller reported 10 ticks
+/// instead of 410. It partitions and does not wrap; it names the wrong function.
 const MAX_STACK: usize = 65_536;
 
 /// Per-function accumulators, indexed by the compiler-assigned function id.
@@ -2653,6 +2664,37 @@ mod tests {
         assert_eq!(s.fns[0].incl_allocs, 9);
         assert_eq!(s.fns[1].depth, 0);
         assert_eq!(s.fns[2].depth, 0);
+    }
+
+    /// Recursion and exceptions together, in the shape PHP produces.
+    ///
+    /// A `try` inside a recursive function belongs to every activation, so the
+    /// innermost live one catches. That is the occurrence `exit_at` resolves to,
+    /// which makes this — the common shape — exact, and worth holding onto: the
+    /// unwind accounting has been rewritten three times, and the search that
+    /// finds the catcher is the part recursion can break.
+    #[test]
+    fn a_recursive_function_that_catches_around_its_own_call_accounts_exactly() {
+        let mut s = State::default();
+        s.enter_at(0, 0, 0, 0, 0, 0); // main, 0..1000
+        s.enter_at(1, 10, 0, 0, 0, 0); // rec, outer, 10..600
+        s.enter_at(1, 20, 0, 0, 0, 0); // rec, inner, 20..500
+        s.enter_at(2, 30, 0, 0, 0, 0); // its callee, 30..40, killed by the throw
+        s.note_throw(40, 0, 0, 0, 0);
+        s.exit_at(1, 500, 0, 0, 0, 0); // the inner activation catches
+        s.exit_at(1, 600, 0, 0, 0, 0); // and the outer one returns normally
+        s.exit_at(0, 1_000, 0, 0, 0, 0);
+
+        assert!(s.stack.is_empty(), "the stack did not unwind");
+        assert_eq!(s.fns[2].excl_ns, 10, "the callee ran ten ticks before the throw");
+        assert_eq!(
+            s.fns[1].excl_ns, 580,
+            "both activations of the recursive function: 470 inner, 110 outer"
+        );
+        assert_eq!(s.fns[1].calls, 2, "two activations, one function");
+        assert_eq!(s.fns[0].excl_ns, 410, "the caller keeps what it actually ran");
+        let total: u64 = s.fns.iter().map(|a| a.excl_ns).sum();
+        assert_eq!(total, 1_000, "self time did not partition the root");
     }
 
     #[test]

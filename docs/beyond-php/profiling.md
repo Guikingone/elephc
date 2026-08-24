@@ -472,7 +472,15 @@ doing anything has something to hand over, and the ring is shared across every
 `--web` worker. The **exact** answer is the same measurement a local run gives:
 per-function calls, self and inclusive time, allocations, retained objects,
 queries and I/O wait, for one request. It exists only once a request completes,
-so `--exact` waits for the next one and says so if none arrives.
+so `--exact` waits up to thirty seconds for the next one.
+
+One exact capture runs at a time. The rendezvous the worker leaves its slice in
+is a single slot, so a second `--exact` while one is in flight is told so rather
+than taking the first one's answer away — and when nothing comes back, the reply
+says which of the three reasons it is: someone else is asking, nothing completed
+in time, or the profile was too large to hand over. An empty answer would be
+indistinguishable from a service that served no traffic, which is the one thing
+you should not have to guess about.
 
 Under `--web` those two live in different processes — the endpoint answers from
 the parent that accepts and forks, the request runs in a worker — so the slice
@@ -618,7 +626,7 @@ calls, and `load_price` reports `excl_ns` equal to its `incl_ns`.
 #### What "exact" does and does not cover
 
 The numbers are exact in the sense that every call is counted and timed rather
-than sampled. Four boundaries are worth knowing, because each one is a place
+than sampled. These boundaries are worth knowing, because each one is a place
 where a figure would otherwise be trusted further than it should be:
 
 - **Frames beyond 65,536 deep are not timed.** The shadow stack is capped so a
@@ -633,9 +641,27 @@ where a figure would otherwise be trusted further than it should be:
   function's return, which charged everything the handler did to whatever threw:
   measured on a function whose entire body is `throw`, it carried 100% of the
   self time — the eight-million-iteration loop the catch block ran. It now
-  reports ~0%, and the work sits with the catcher. Allocations made while
-  unwinding are still counted against the frames the exception passed through;
-  time, queries and I/O wait are not.
+  reports ~0%, and the work sits with the catcher. All six dimensions are
+  sampled at the throw, so what a handler allocates belongs to the handler the
+  same way its time does.
+
+  This holds through the awkward shapes too — a handler that calls something, a
+  handler that throws again, an exception raised and caught inside a call the
+  handler made. Each throw is resolved by the exit that caught it, and each frame
+  is closed at the instant of the throw that killed it.
+- **A recursion where only an outer activation catches names the wrong
+  function.** A `try` written inside a recursive function belongs to every
+  activation of it, so the innermost live one catches — that shape is exact. The
+  other one, where a single outer activation carries the `try`, is not: nothing
+  distinguishes two activations of one function to the exit hook, so the outer
+  activation stays open until its caller returns and absorbs the caller's
+  remaining time. Self times still sum to the root; they sit on the wrong row.
+- **On a machine whose counter rate is not published, a run under 100 µs reports
+  counter ticks.** The rate is derived from the run itself — elapsed ticks
+  against elapsed nanoseconds — and a run too short to divide safely gets no
+  rate. Rather than invent one, `monitor` says so: *"this run was too short to
+  measure the counter rate — the _ns columns below are raw counter ticks"*.
+  ARM machines publish the rate and never take this path.
 - **Inlined functions fold into their caller** and do not appear at all, exactly
   as with `--counters`.
 - **Shares are relative to the largest inclusive time in the capture.** When
