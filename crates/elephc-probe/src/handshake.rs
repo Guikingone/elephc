@@ -151,6 +151,79 @@ pub fn client_tag(key: &[u8], nonce_s: &[u8], nonce_c: &[u8]) -> [u8; TAG_LEN] {
     hmac_sha256(key, &message)
 }
 
+/// Derives this connection's keys from the build key and both nonces.
+///
+/// Binding to BOTH nonces is what makes the derived material specific to this
+/// connection: a recorded exchange cannot be replayed against a later one, and a
+/// relay that forwards someone else's handshake ends up with keys for a session
+/// it cannot produce plaintext for. The version string is in the input so a
+/// future change of construction cannot be confused with this one.
+///
+/// Two subkeys rather than one, because a key used both to generate a keystream
+/// and to authenticate it is one mistake away from a reused mask.
+pub fn session_keys(key: &[u8], nonce_c: &[u8], nonce_s: &[u8]) -> ([u8; TAG_LEN], [u8; TAG_LEN]) {
+    let mut message = Vec::with_capacity(23 + nonce_c.len() + nonce_s.len());
+    message.extend_from_slice(b"elephc-probe-session-v1");
+    message.extend_from_slice(nonce_c);
+    message.extend_from_slice(nonce_s);
+    let session = hmac_sha256(key, &message);
+    (hmac_sha256(&session, b"enc"), hmac_sha256(&session, b"mac"))
+}
+
+/// XORs `data` with the keystream `HMAC(k_enc, counter)`, block by block.
+///
+/// Symmetric: sealing and opening are the same operation. The counter is the
+/// only thing that varies, and the subkey is derived per connection, so no two
+/// connections share a keystream.
+fn apply_keystream(k_enc: &[u8; TAG_LEN], data: &mut [u8]) {
+    for (index, chunk) in data.chunks_mut(TAG_LEN).enumerate() {
+        let block = hmac_sha256(k_enc, &(index as u64).to_be_bytes());
+        for (byte, mask) in chunk.iter_mut().zip(block.iter()) {
+            *byte ^= mask;
+        }
+    }
+}
+
+/// Encrypts `plaintext` and returns `(ciphertext, tag)`.
+///
+/// Encrypt-then-MAC: the tag covers the ciphertext and its length, so a receiver
+/// can reject a forgery before decrypting anything, and a tampered length is
+/// caught rather than turning into a short read.
+pub fn seal(
+    k_enc: &[u8; TAG_LEN],
+    k_mac: &[u8; TAG_LEN],
+    plaintext: &[u8],
+) -> (Vec<u8>, [u8; TAG_LEN]) {
+    let mut ciphertext = plaintext.to_vec();
+    apply_keystream(k_enc, &mut ciphertext);
+    let tag = payload_tag(k_mac, &ciphertext);
+    (ciphertext, tag)
+}
+
+/// Verifies `tag` and decrypts, or `None` if the payload was not produced by a
+/// holder of these keys. Verification comes first and is constant time.
+pub fn open(
+    k_enc: &[u8; TAG_LEN],
+    k_mac: &[u8; TAG_LEN],
+    ciphertext: &[u8],
+    tag: &[u8],
+) -> Option<Vec<u8>> {
+    if !tags_equal(&payload_tag(k_mac, ciphertext), tag) {
+        return None;
+    }
+    let mut plaintext = ciphertext.to_vec();
+    apply_keystream(k_enc, &mut plaintext);
+    Some(plaintext)
+}
+
+/// The authentication tag over a framed payload: its length, then its bytes.
+fn payload_tag(k_mac: &[u8; TAG_LEN], ciphertext: &[u8]) -> [u8; TAG_LEN] {
+    let mut message = Vec::with_capacity(4 + ciphertext.len());
+    message.extend_from_slice(&(ciphertext.len() as u32).to_be_bytes());
+    message.extend_from_slice(ciphertext);
+    hmac_sha256(k_mac, &message)
+}
+
 /// Constant-time tag comparison, so a rejected handshake leaks no timing.
 pub fn tags_equal(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
@@ -165,6 +238,107 @@ pub fn tags_equal(a: &[u8], b: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A sealed profile round-trips, and does not appear on the wire.
+    ///
+    /// The second half is the one that matters: a `seal` that returned its input
+    /// would pass a round-trip test and leak exactly what this exists to hide.
+    #[test]
+    fn a_sealed_profile_round_trips_and_is_not_readable_in_transit() {
+        let key = [7u8; KEY_LEN];
+        let nonce_c = [1u8; NONCE_LEN];
+        let nonce_s = [2u8; NONCE_LEN];
+        let profile = "elephc-probe: {main};hot 42\nelephc-probe-samples: 42\n";
+
+        let (k_enc, k_mac) = session_keys(&key, &nonce_c, &nonce_s);
+        let (sealed, tag) = seal(&k_enc, &k_mac, profile.as_bytes());
+
+        assert_ne!(sealed.as_slice(), profile.as_bytes(), "the payload is in the clear");
+        assert!(
+            !sealed.windows(6).any(|w| w == b"{main}"),
+            "a recognizable fragment of the profile survived on the wire"
+        );
+        assert_eq!(
+            open(&k_enc, &k_mac, &sealed, &tag).as_deref(),
+            Some(profile.as_bytes()),
+            "the intended reader must get it back"
+        );
+    }
+
+    /// Holding the build key is not enough: the keys are bound to BOTH nonces,
+    /// so a recorded exchange cannot be replayed against a later connection.
+    #[test]
+    fn a_payload_from_another_session_does_not_open() {
+        let key = [7u8; KEY_LEN];
+        let (k_enc, k_mac) = session_keys(&key, &[1u8; NONCE_LEN], &[2u8; NONCE_LEN]);
+        let (sealed, tag) = seal(&k_enc, &k_mac, b"elephc-probe: {main} 1\n");
+
+        for (nonce_c, nonce_s) in [
+            ([9u8; NONCE_LEN], [2u8; NONCE_LEN]),
+            ([1u8; NONCE_LEN], [9u8; NONCE_LEN]),
+        ] {
+            let (other_enc, other_mac) = session_keys(&key, &nonce_c, &nonce_s);
+            assert!(
+                open(&other_enc, &other_mac, &sealed, &tag).is_none(),
+                "a different session opened this payload"
+            );
+        }
+
+        let (wrong_enc, wrong_mac) =
+            session_keys(&[8u8; KEY_LEN], &[1u8; NONCE_LEN], &[2u8; NONCE_LEN]);
+        assert!(
+            open(&wrong_enc, &wrong_mac, &sealed, &tag).is_none(),
+            "a different build key opened this payload"
+        );
+    }
+
+    /// Anything changed in flight is refused rather than decrypted into
+    /// plausible-looking garbage: the tag is checked before the keystream runs.
+    #[test]
+    fn a_tampered_payload_is_refused() {
+        let key = [7u8; KEY_LEN];
+        let (k_enc, k_mac) = session_keys(&key, &[1u8; NONCE_LEN], &[2u8; NONCE_LEN]);
+        let (sealed, tag) = seal(&k_enc, &k_mac, b"elephc-probe: {main};hot 10\n");
+
+        let mut flipped = sealed.clone();
+        flipped[0] ^= 1;
+        assert!(open(&k_enc, &k_mac, &flipped, &tag).is_none(), "a flipped byte opened");
+
+        let mut bad_tag = tag;
+        bad_tag[TAG_LEN - 1] ^= 1;
+        assert!(open(&k_enc, &k_mac, &sealed, &bad_tag).is_none(), "a flipped tag opened");
+
+        assert!(
+            open(&k_enc, &k_mac, &sealed[..sealed.len() - 1], &tag).is_none(),
+            "a truncated payload opened"
+        );
+    }
+
+    /// An empty profile is a legitimate answer — a process that has sampled
+    /// nothing yet — and must survive the frame like any other.
+    #[test]
+    fn an_empty_profile_seals_and_opens() {
+        let (k_enc, k_mac) = session_keys(&[7u8; KEY_LEN], &[1u8; NONCE_LEN], &[2u8; NONCE_LEN]);
+        let (sealed, tag) = seal(&k_enc, &k_mac, b"");
+        assert!(sealed.is_empty());
+        assert_eq!(open(&k_enc, &k_mac, &sealed, &tag).as_deref(), Some(&b""[..]));
+    }
+
+    /// The keystream must not repeat across blocks, or a payload longer than one
+    /// digest would XOR two of its parts against the same mask.
+    #[test]
+    fn the_keystream_differs_between_blocks() {
+        let (k_enc, k_mac) = session_keys(&[7u8; KEY_LEN], &[1u8; NONCE_LEN], &[2u8; NONCE_LEN]);
+        let plaintext = vec![0u8; TAG_LEN * 3];
+        let (sealed, _) = seal(&k_enc, &k_mac, &plaintext);
+        // Sealing zeroes yields the keystream itself, so the blocks are visible.
+        assert_ne!(sealed[..TAG_LEN], sealed[TAG_LEN..TAG_LEN * 2], "block 0 == block 1");
+        assert_ne!(
+            sealed[TAG_LEN..TAG_LEN * 2],
+            sealed[TAG_LEN * 2..],
+            "block 1 == block 2"
+        );
+    }
+
     use super::*;
 
     // NIST SHA-256 known-answer vectors.

@@ -288,7 +288,19 @@ pub mod wire {
                 "probe profile exceeds the size cap (buggy or hostile server?)",
             ));
         }
-        let payload = read_exact_vec(stream, len)?;
+        let ciphertext = read_exact_vec(stream, len)?;
+        let payload_tag = read_exact_vec(stream, TAG_LEN)?;
+        // The profile is encrypted under keys derived from the build key and
+        // both nonces, so proving authority is no longer enough to READ it: a
+        // passive observer holds ciphertext, and a relay that replays someone
+        // else's handshake holds keys for a session it cannot produce.
+        let (k_enc, k_mac) = handshake::session_keys(key, nonce_c, &nonce_s);
+        let payload = handshake::open(&k_enc, &k_mac, &ciphertext, &payload_tag).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "probe payload failed authentication (tampered, or not this build)",
+            )
+        })?;
         String::from_utf8(payload)
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "non-UTF-8 profile"))
     }
@@ -478,9 +490,12 @@ fn handle<S: std::io::Read + std::io::Write>(
         return Ok(());
     }
     let profile = crate::current_folded_profile().unwrap_or_default();
-    let bytes = profile.as_bytes();
+    let (k_enc, k_mac) = handshake::session_keys(&key, &nonce_c, &nonce_s);
+    let (sealed, payload_tag) = handshake::seal(&k_enc, &k_mac, profile.as_bytes());
+    let bytes = sealed.as_slice();
     stream.write_all(&(bytes.len() as u32).to_be_bytes())?;
     stream.write_all(bytes)?;
+    stream.write_all(&payload_tag)?;
     stream.flush()?;
     Ok(())
 }
@@ -784,13 +799,25 @@ mod tests {
         let nonce_s = [2u8; NONCE_LEN];
         let profile = "elephc-probe: {main};hot 10\nelephc-probe-samples: 10\n";
 
-        // Server frames: nonce_s, server_tag, then len+profile after verifying client_tag.
+        // Server frames: nonce_s, server_tag, then len + SEALED profile + tag,
+        // after verifying client_tag.
         let server_tag = handshake::server_tag(&key, &nonce_c, &nonce_s);
+        let (k_enc, k_mac) = handshake::session_keys(&key, &nonce_c, &nonce_s);
+        let (sealed, payload_tag) = handshake::seal(&k_enc, &k_mac, profile.as_bytes());
         let mut server_to_client = Vec::new();
         server_to_client.extend_from_slice(&nonce_s);
         server_to_client.extend_from_slice(&server_tag);
-        server_to_client.extend_from_slice(&(profile.len() as u32).to_be_bytes());
-        server_to_client.extend_from_slice(profile.as_bytes());
+        server_to_client.extend_from_slice(&(sealed.len() as u32).to_be_bytes());
+        server_to_client.extend_from_slice(&sealed);
+        server_to_client.extend_from_slice(&payload_tag);
+        // The frame this hands the client must not carry the profile in the
+        // clear, or the mock could drift back to plaintext and stay green.
+        assert!(
+            !server_to_client
+                .windows(profile.len())
+                .any(|w| w == profile.as_bytes()),
+            "the framed payload contains the profile verbatim"
+        );
 
         let mut duplex = MockStream {
             to_read: server_to_client,

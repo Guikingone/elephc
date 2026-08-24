@@ -83,7 +83,7 @@ Reading a running service (`monitor <address>`) needs the build key: from
 sidecar next to the socket. Client and server run a mutual HMAC handshake — no
 secret crosses the connection, a client that cannot prove the key is disconnected
 before any samples are sent, and the client rejects a server that cannot prove
-it. `https://` validates the certificate against the system roots first. Unix
+it, and the profile itself crosses sealed under keys both sides derive from the build key and the two nonces — so a relay that forwards both proofs still receives ciphertext. `https://` is for an endpoint behind a TLS terminator, where the certificate is validated against the system roots first; the probe listener itself speaks the framed protocol, not TLS. Unix
 socket paths are limited to ~104 bytes (`SUN_LEN`), so keep the socket in `/tmp`
 or `/run`. Launching a program locally needs no key at all: `monitor` hands the
 child a control channel on fd 3, and possession of that channel is the credential.

@@ -438,10 +438,26 @@ both sides so you can confirm you reached the intended deployment — and it is
 printed *after* the handshake, so it reports what was proven rather than what was
 claimed.
 
-Over `https://` the certificate is validated against the system roots before any
-of that happens: a self-signed or expired certificate stops the connection. That
-check is not ceremony — an attacker who can answer the handshake receives a
-profile, and a profile is the shape of your code and the URLs it serves.
+The profile itself is **encrypted**, whatever it travels over. Once both sides
+have proven the key, each derives the same pair of subkeys from that key and the
+two nonces they just exchanged, and the payload crosses sealed and authenticated.
+Proving authority is therefore no longer enough to *read* a capture: someone
+positioned in the middle relays two proofs and receives ciphertext, and a
+recorded exchange cannot be replayed against a later connection, because the keys
+are bound to both nonces. Verified with a relay in the path — it copied every
+byte the server sent and found no fragment of the profile in it.
+
+That is deliberately not TLS. The trust anchor here is the build key both sides
+already hold, not a certificate authority, so a diagnostic socket does not need a
+certificate to issue, rotate, or verify — and a monitored binary does not need to
+carry a TLS stack.
+
+`https://` remains for reaching an endpoint that sits **behind a TLS terminator**
+— a reverse proxy or a tunnel that speaks TLS and forwards to the probe socket.
+There the certificate is validated against the system roots first, and a
+self-signed or expired one stops the connection. Pointed straight at
+`ELEPHC_PROBE_ADDR`, `https://` will not connect: that listener speaks the framed
+protocol above, not TLS.
 
 Locally, `elephc monitor ./app` needs no key and no address. It passes the
 program a **control channel** — a socket on fd 3 — and possession of that channel
@@ -1031,15 +1047,13 @@ sampled function makes inlining visible by difference.
   of them holds the profiling credential for anything deployed world-readable
   there. The `<binary>.key` file is written `0600`, and a Unix probe socket is
   chmod `0600`, but the binary's own permissions are yours to set.
-- **The handshake authenticates; it does not encrypt.** Over `host:port` or a
-  Unix socket, someone positioned in the middle can relay both sides' proofs and
-  then read the profile that follows without ever holding the key. Nothing is
-  forged and no secret leaks, but the capture is readable. Use `https://` across
-  any network you do not control.
-- **Plaintext after the handshake.** Over a Unix socket or loopback that is
-  fine. Across a network, use `https://` — the certificate is validated against
-  the system roots, and an untrusted one stops the connection — or tunnel over
-  SSH.
+- **The seal covers the payload, not the fact of a connection.** A watcher
+  learns that something profiled the process, when, and roughly how large the
+  answer was. The answer itself is ciphertext.
+- **`https://` needs something that terminates TLS.** The probe listener speaks
+  the framed protocol, not TLS, so `https://` against `ELEPHC_PROBE_ADDR` fails;
+  put it behind a proxy or tunnel if you want transport-level protection on top
+  of the sealed payload.
 - **Unix socket paths are limited to ~104 bytes** (`SUN_LEN`). Keep the socket
   in `/tmp` or `/run`.
 - **Route names come from requests.** They are sanitized (a `;` or a newline from
