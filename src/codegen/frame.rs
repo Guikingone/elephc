@@ -1407,6 +1407,18 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
     let trace_fn = target.extern_symbol("elephc_instr_trace_begin");
     abi::emit_symbol_address(ctx.emitter, scratch, &trace_fn);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_instr_trace_fn"), 0);
+    // Fifth slot: elephc_instr_throw, called from the runtime's single throw
+    // helper. A throw is rare, so this costs nothing per call and supplies the
+    // two facts the exit hook was guessing at — that an unwind happened, and
+    // when it began.
+    let throw_fn = target.extern_symbol("elephc_instr_throw");
+    abi::emit_symbol_address(ctx.emitter, scratch, &throw_fn);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_instr_throw_fn"),
+        0,
+    );
     let request = target.extern_symbol("elephc_instr_request");
     abi::emit_symbol_address(ctx.emitter, scratch, &request);
     abi::emit_store_reg_to_symbol(

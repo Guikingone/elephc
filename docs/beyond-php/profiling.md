@@ -609,10 +609,15 @@ where a figure would otherwise be trusted further than it should be:
   beyond depth 65536 were not tracked"*. The frames that fit are unaffected.
   The cap costs nothing until it is approached — the stack grows on demand — so
   reaching it at all means the recursion is worth looking at on its own.
-- **An exception's frames are closed when the throw is observed**, not when it
-  was raised — their exit hooks never run. The error is the distance between the
-  throw and the catching function's return, and the cost stays on the frame that
-  incurred it rather than on the catcher.
+- **An exception's frames are closed at the instant of the throw.** Their own
+  exit hooks never run, so the runtime's single unwinder tells the profiler that
+  one started, and when. Without that the only moment available was the catching
+  function's return, which charged everything the handler did to whatever threw:
+  measured on a function whose entire body is `throw`, it carried 100% of the
+  self time — the eight-million-iteration loop the catch block ran. It now
+  reports ~0%, and the work sits with the catcher. Allocations made while
+  unwinding are still counted against the frames the exception passed through;
+  time, queries and I/O wait are not.
 - **Inlined functions fold into their caller** and do not appear at all, exactly
   as with `--counters`.
 - **Shares are relative to the largest inclusive time in the capture.** When

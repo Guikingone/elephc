@@ -18,6 +18,36 @@ use crate::codegen_support::{abi, emit::Emitter};
 /// then calls `longjmp` with return value 1 to resume at the nearest catch block. If no handler
 /// is registered, falls through to `__rt_throw_current_uncaught`, which writes a 32-byte fatal
 /// message to stderr and terminates the process with exit code 1.
+/// Tells the exact profiler that an exception has begun unwinding, if it is
+/// linked and this program carries the capability.
+///
+/// Emitted inside the throw helper rather than at each `throw` lowering, because
+/// the runtime raises exceptions of its own — bcmath, array value errors, enum
+/// cases, static property access, the eval callable helpers — and every one of
+/// them jumps to this helper. A hook at the lowering sites would have covered
+/// what PHP code throws and silently missed the rest, which is the worse kind of
+/// partial: the profile would be right for some exceptions and wrong for others
+/// with nothing to say which.
+///
+/// The slot is null unless `--with-monitoring` filled it, so a binary without
+/// the capability pays one load and a not-taken branch, on a path only a throw
+/// reaches.
+fn emit_instr_throw_hook(emitter: &mut Emitter) {
+    let slot = emitter.target.extern_symbol("elephc_instr_throw_fn");
+    let skip = "__rt_throw_current_no_instr";
+    if emitter.target.arch == Arch::X86_64 {
+        abi::emit_load_symbol_to_reg(emitter, "rax", &slot, 0);
+        emitter.instruction("test rax, rax");                                   // is the exact profiler linked into this binary?
+        emitter.instruction(&format!("jz {skip}"));                             // no capability: skip the hook entirely
+        emitter.instruction("call rax");                                        // record that an unwind started, and when
+    } else {
+        abi::emit_load_symbol_to_reg(emitter, "x9", &slot, 0);
+        emitter.instruction(&format!("cbz x9, {skip}"));                        // no capability: skip the hook entirely
+        emitter.instruction("blr x9");                                          // record that an unwind started, and when
+    }
+    emitter.label(skip);
+}
+
 pub fn emit_throw_current(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_throw_current_linux_x86_64(emitter);
@@ -33,6 +63,7 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address for the throw helper
     emitter.instruction("stp x19, x20, [sp, #16]");                             // preserve callee-saved registers that hold handler metadata
     emitter.instruction("add x29, sp, #32");                                    // install the throw helper's frame pointer
+    emit_instr_throw_hook(emitter);
     abi::emit_load_symbol_to_reg(emitter, "x19", "_exc_handler_top", 0);
     emitter.instruction("cbz x19, __rt_throw_current_uncaught");                // fall back to a fatal uncaught-exception path when no handler exists
     emitter.instruction("ldr x0, [x19, #8]");                                   // x0 = activation record that should survive this catch
@@ -62,6 +93,7 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the x86_64 throw helper
     emitter.instruction("push r12");                                            // preserve the active handler record pointer across helper calls
     emitter.instruction("push r13");                                            // preserve the scratch callee-saved register used for the fatal path
+    emit_instr_throw_hook(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r12", "_exc_handler_top", 0);
     emitter.instruction("test r12, r12");                                       // is there an active exception handler to receive this throw?
     emitter.instruction("jz __rt_throw_current_uncaught");                      // fall back to a fatal uncaught-exception path when no handler exists
@@ -74,4 +106,61 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_throw_current_uncaught");
     emitter.instruction("jmp __rt_report_uncaught_exception");                  // report the Throwable's class and message, then exit 255 like PHP
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    fn emitted(platform: Platform, arch: Arch) -> String {
+        let mut emitter = Emitter::new(Target::new(platform, arch));
+        emit_throw_current(&mut emitter);
+        emitter.output()
+    }
+
+    /// Every throw tells the profiler, and pays nothing when there is none.
+    ///
+    /// The call is INDIRECT through a runtime slot rather than a direct call to
+    /// `elephc_instr_throw`, so a binary without the capability links and runs
+    /// with a null slot instead of an undefined symbol.
+    #[test]
+    fn the_unwinder_notifies_the_profiler_through_a_nullable_slot() {
+        for (platform, arch) in [
+            (Platform::MacOS, Arch::AArch64),
+            (Platform::Linux, Arch::AArch64),
+            (Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emitted(platform, arch);
+            let target = Target::new(platform, arch);
+            let slot = target.extern_symbol("elephc_instr_throw_fn");
+            assert!(
+                asm.contains(&slot),
+                "{platform:?}/{arch:?} never reads the throw slot:\n{asm}"
+            );
+            let guarded = asm.contains("cbz x9,") || asm.contains("jz __rt_throw_current_no_instr");
+            assert!(guarded, "{platform:?}/{arch:?} calls the hook unguarded:\n{asm}");
+            let indirect = asm.contains("blr x9") || asm.contains("call rax");
+            assert!(indirect, "{platform:?}/{arch:?} does not call through the slot:\n{asm}");
+        }
+    }
+
+    /// The hook must come after the callee-saved registers are pushed.
+    ///
+    /// That is what makes the call safe — the return address is already stored —
+    /// and on x86_64 it is also what leaves `rsp` 16-byte aligned at the call
+    /// site, which the ABI requires and which this branch has already had to fix
+    /// once in `main`'s epilogue.
+    #[test]
+    fn the_hook_sits_after_the_registers_are_saved() {
+        let asm = emitted(Platform::Linux, Arch::X86_64);
+        let saves = asm.find("push r13").expect("x86_64 saves r13");
+        let hook = asm.find("call rax").expect("x86_64 calls the hook");
+        assert!(hook > saves, "the hook runs before the registers are saved:\n{asm}");
+
+        let asm = emitted(Platform::MacOS, Arch::AArch64);
+        let saves = asm.find("stp x19, x20").expect("aarch64 saves x19/x20");
+        let hook = asm.find("blr x9").expect("aarch64 calls the hook");
+        assert!(hook > saves, "the hook runs before the registers are saved:\n{asm}");
+    }
 }

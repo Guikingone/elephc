@@ -134,6 +134,15 @@ struct State {
     /// looking for a frame that was never pushed would resync-pop the entire
     /// stack, discarding every enclosing function's accounting.
     dropped_depth: u32,
+    /// Where an exception began unwinding, if one is in flight.
+    ///
+    /// `(depth, ticks, io, wait)` at the moment of the throw. Without it the
+    /// frames an exception unwound could only be closed when the CATCHER exits,
+    /// which charges everything the handler did to the function that threw —
+    /// measured on the audit fixture as a catcher reading 99.7% self time for
+    /// work it never did, and then the mirror of that once the closing moved
+    /// here.
+    unwinding: Option<(usize, u64, u64, u64)>,
     /// Per-call spans `(id, enter_ns, exit_ns)` recorded only when tracing is on
     /// (`ELEPHC_INSTR_TRACE`), bounded by `TRACE_CAP`. Written as a Chrome trace.
     trace: Vec<(u32, u64, u64)>,
@@ -142,6 +151,17 @@ struct State {
 }
 
 impl State {
+    /// Marks the start of an unwind, and forgets the activations it destroys.
+    ///
+    /// Dropped activations past `MAX_STACK` never run an exit, so an exception
+    /// that unwinds through them leaves the count describing frames that no
+    /// longer exist. Counting it down against exits that DO arrive is what let a
+    /// tracked frame's own exit be swallowed while the stack was still full.
+    fn note_throw(&mut self, t: u64, io: u64, w: u64) {
+        self.unwinding = Some((self.stack.len(), t, io, w));
+        self.dropped_depth = 0;
+    }
+
     fn ensure(&mut self, id: u32) {
         let idx = id as usize;
         if idx >= self.fns.len() {
@@ -202,12 +222,24 @@ impl State {
         // shorter stack means the count is stale — left behind by an exception
         // that unwound the dropped region — and is cleared rather than eating
         // the exits of frames that WERE tracked.
+        //
+        // A throw clears the count outright (see `note_throw`): the activations
+        // it unwound will never run their exits, and counting them down against
+        // exits that DO arrive is what swallowed a tracked frame's own exit
+        // while the stack was still full.
         if self.stack.len() < MAX_STACK {
             self.dropped_depth = 0;
         } else if self.dropped_depth > 0 {
             self.dropped_depth -= 1;
             return;
         }
+        // Frames above the catcher are closed at the instant the throw happened,
+        // not now: everything between the two belongs to the unwinding and the
+        // handler, not to the code that threw.
+        let (unwound_t, unwound_io, unwound_w) = match self.unwinding {
+            Some((_, at, io_at, w_at)) => (at, io_at, w_at),
+            None => (t, io, w),
+        };
         // Frames an exception unwound never ran their own exit hook. Closing
         // them HERE, at the instant the throw is observed passing them, keeps
         // their cost on them; simply discarding them left it inside the
@@ -218,8 +250,10 @@ impl State {
                 break;
             }
             let stale = self.stack.pop().expect("last() was Some");
-            self.close_frame(stale, t, a, f, io, w);
+            self.close_frame(stale, unwound_t, a, f, unwound_io, unwound_w);
         }
+        // The unwind ends where it is caught.
+        self.unwinding = None;
         let Some(frame) = self.stack.pop() else {
             return;
         };
@@ -1116,6 +1150,28 @@ pub unsafe extern "C" fn elephc_instr_init(table: *const u8, count: usize) {
     }
 }
 
+/// Records that an exception has begun unwinding, from the runtime's single
+/// throw path.
+///
+/// Rare by construction — a throw, not a call — so it buys the two facts the
+/// exit hook was guessing at for no per-call cost: that an unwind happened, and
+/// when. Everything a catch handler does between here and the catcher's own exit
+/// then stays out of the frames the exception passed through.
+///
+/// Reached from the emitted `__rt_throw_current` helper through the runtime
+/// `_elephc_instr_throw_fn` slot, which is null unless `--with-monitoring`
+/// linked and initialized this crate.
+#[no_mangle]
+pub extern "C" fn elephc_instr_throw() {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let t = now_ticks();
+    let io = IO_OPS.load(Ordering::Relaxed);
+    let w = WAIT_NS.load(Ordering::Relaxed);
+    STATE.with(|s| s.borrow_mut().note_throw(t, io, w));
+}
+
 /// Records entry to the function `id`; `allocs` / `frees` are the program's
 /// live heap counters (`_gc_allocs` / `_gc_frees`) at the call site.
 #[no_mangle]
@@ -1361,6 +1417,65 @@ fn end_slice() {
 
 #[cfg(test)]
 mod tests {
+    /// A throw out of the dropped region must not swallow a tracked frame's exit.
+    ///
+    /// Past `MAX_STACK` activations are counted, not pushed, and their exits are
+    /// reconciled by counting. An exception that unwinds out of that region and
+    /// is caught by a TRACKED frame leaves that frame's own exit arriving while
+    /// the stack is still full and the count still positive — so before the
+    /// throw hook, a real exit was swallowed and the frame never closed.
+    #[test]
+    fn a_throw_out_of_the_dropped_region_does_not_swallow_a_real_exit() {
+        let mut state = State::default();
+        for depth in 0..MAX_STACK {
+            state.enter_at((depth % 3) as u32, depth as u64, 0, 0, 0, 0);
+        }
+        for _ in 0..3 {
+            state.enter_at(7, 1_000, 0, 0, 0, 0);
+        }
+        assert_eq!(state.dropped_depth, 3, "the deeper calls should have been dropped");
+
+        // The throw destroys those activations; none of them will ever exit.
+        state.note_throw(1_500, 0, 0);
+        assert_eq!(state.dropped_depth, 0, "the unwound activations are still counted");
+
+        let catcher = state.stack.last().expect("full stack").id;
+        let before = state.stack.len();
+        state.exit_at(catcher, 2_000, 0, 0, 0, 0);
+        assert!(
+            state.stack.len() < before,
+            "the catching frame's exit was swallowed: stack still {} deep",
+            state.stack.len()
+        );
+    }
+
+    /// What a catch handler does belongs to the catcher, not to the thrower.
+    ///
+    /// The frames an exception unwound never run their own exit, so they are
+    /// closed when the catcher exits — and were closed AT that moment, which
+    /// charged them everything the handler did on the way. They are now closed
+    /// at the instant of the throw.
+    #[test]
+    fn a_catch_handler_is_not_charged_to_the_frames_it_unwound() {
+        let mut state = State::default();
+        state.enter_at(0, 0, 0, 0, 0, 0); // catcher
+        state.enter_at(1, 10, 0, 0, 0, 0); // thrower, runs 10..20
+
+        state.note_throw(20, 0, 0);
+        // The handler then works for a long time before the catcher returns.
+        state.exit_at(0, 1_020, 0, 0, 0, 0);
+
+        let thrower = state.fns[1].incl_ns;
+        assert_eq!(
+            thrower, 10,
+            "the thrower should carry its own 10 ticks, not the handler's 1000"
+        );
+        assert!(
+            state.fns[0].incl_ns >= 1_020,
+            "the catcher should carry the whole span it was on the stack for"
+        );
+    }
+
     /// Arm, offer, take — the three steps the endpoint and a worker perform,
     /// with nothing between them.
     #[test]

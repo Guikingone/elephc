@@ -277,6 +277,13 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // elephc_probe_verify_fn: verifies a signed X-Elephc-Query header against the
     // embedded build key, so turning profiling on stays a privileged act.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_verify_fn"), 8, target));
+    // elephc_instr_throw_fn: filled with elephc_instr_throw under monitoring; the
+    // single throw helper calls it so the profiler learns that an exception
+    // unwound, and when. Without it the frames an exception passed through could
+    // only be closed when the CATCHER exits, which charged the handler's work to
+    // whatever threw. Null in a binary without the capability, where the helper
+    // pays one load and a branch on a path taken only by throws.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_throw_fn"), 8, target));
     // elephc_monitor_active: 1 once this process has been asked to profile —
     // written by the probe's init, read by the exact profiler's, which runs after
     // it. One check, in one place: repeating it would consume the control
