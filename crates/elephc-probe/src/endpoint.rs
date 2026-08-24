@@ -183,11 +183,18 @@ fn register(control: std::sync::Arc<dyn Connection>) -> u64 {
     let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
     pending.push(Pending { ticket, control, spoke: false });
     while pending.len() > MAX_IN_FLIGHT {
-        // The one that has said nothing goes first, oldest among those; only if
-        // every pending peer has spoken does the oldest overall lose its place.
-        // Evicting purely by age cut off legitimate clients mid-handshake:
-        // measured under a connection flood, 20 of 60 profiles got through.
-        let victim = pending
+        // Never the entry that just arrived. It has not spoken yet only because
+        // its handler thread has not been scheduled, and preferring the least
+        // advanced peer therefore SELECTED it: eight peers that each sent one
+        // nonce and stalled made the newcomer the only silent entry, so the key
+        // holder was evicted on arrival every time — measured at 0 of 20, an
+        // attack costing eight connections and 256 bytes.
+        let older = pending.len() - 1;
+        // Among the rest: the one that has said nothing goes first, oldest among
+        // those; only if every older peer has spoken does the oldest overall lose
+        // its place. Evicting purely by age cut off legitimate clients
+        // mid-handshake — 20 of 60 under a connection flood.
+        let victim = pending[..older]
             .iter()
             .position(|p| !p.spoke)
             .unwrap_or(0);
@@ -847,6 +854,55 @@ mod tests {
         assert!(
             parked[1].was_interrupted(),
             "the oldest SILENT connection should have been the one evicted"
+        );
+
+        for _ in 0..MAX_IN_FLIGHT {
+            release.send(()).ok();
+        }
+    }
+
+    /// A connection is never evicted by its own arrival.
+    ///
+    /// Preferring the peer that has said nothing is what stops a squatter from
+    /// holding a slot — but the peer that has said nothing is ALWAYS the one
+    /// that just arrived, because its handler thread has not run yet. So peers
+    /// that each send a single nonce and stall turn the rule against the only
+    /// client it exists to protect: measured on the endpoint, eight of them
+    /// denied the key holder 20 times out of 20, for the price of 256 bytes.
+    #[test]
+    fn a_newcomer_is_not_the_victim_of_its_own_arrival() {
+        let _guard = fresh();
+        let (release, blocked) = std::sync::mpsc::channel::<()>();
+        let blocked = std::sync::Arc::new(std::sync::Mutex::new(blocked));
+        let (ran, ran_rx) = std::sync::mpsc::channel::<()>();
+
+        // Every older peer has spoken and then stalled — one nonce each.
+        let mut parked = Vec::new();
+        for _ in 0..MAX_IN_FLIGHT {
+            let conn = std::sync::Arc::new(FakeConn::default());
+            parked.push(conn.clone());
+            let blocked = blocked.clone();
+            let ran = ran.clone();
+            dispatch((), conn, move |(), gate| {
+                gate.spoke();
+                ran.send(()).ok();
+                let _ = blocked.lock().expect("held").recv();
+            });
+        }
+        for _ in 0..MAX_IN_FLIGHT {
+            ran_rx.recv_timeout(Duration::from_secs(5)).expect("handler ran");
+        }
+
+        let newcomer = std::sync::Arc::new(FakeConn::default());
+        dispatch((), newcomer.clone(), |(), _| {});
+
+        assert!(
+            !newcomer.was_interrupted(),
+            "the arriving connection evicted itself"
+        );
+        assert!(
+            parked[0].was_interrupted(),
+            "the oldest peer should have lost its place to the newcomer"
         );
 
         for _ in 0..MAX_IN_FLIGHT {
