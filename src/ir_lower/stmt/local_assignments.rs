@@ -65,11 +65,18 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     //
     // The slot is declared `Mixed` here, ahead of the store. Every write to a marked name is a
     // recorded store site — anything else disqualifies the name — so this runs at the FIRST one,
-    // and `has_local_slot` makes it idempotent for the rest. (A name the frame binds on ENTRY
-    // keeps its incoming slot: only a by-value closure capture can be both marked and pre-bound,
-    // and its slot is already `Mixed`, because a capture seeded at any narrower type makes the
-    // checker reject the divergent assignment instead of marking it.) Letting the first store
-    // mint a slot at its own value's type is what made a marked program miscompile:
+    // and `has_local_slot` makes it idempotent for the rest. (A name the frame already bound keeps
+    // that slot: the declare is skipped, not re-typed. The one marked name that can arrive already
+    // bound in the body's incoming environment is a by-value closure capture, and the pre-scan
+    // MARKS those rather than refusing them — dropping the mark strands the value the capture owns.
+    // Whether the mark also WARNS is decided by replaying the name's assignments from the capture's
+    // INCOMING type, the replay `--strict-locals` itself would run: a rejection makes the warning's
+    // advice true and pushes it, a clean merge would make that advice false and the mark stays
+    // silent. Both ways the store sites reach here, and what carries the boxed contract for such a
+    // name is the forced `Mixed` STORE type below: it re-types the local from the first recorded
+    // store onwards, so every read after that one is a boxed read, while a read BEFORE it still
+    // sees the incoming value at the type it actually arrived with.) Letting the first store mint
+    // a slot at its own value's type is what made a marked program miscompile:
     // `$a = 123456789; for (…) { $a = "s"; }` wrote a raw int into an `Int` slot that the loop
     // body then widened, and a zero-trip loop read the surviving int back through the widened
     // string view (`string(9) "123456789"`).

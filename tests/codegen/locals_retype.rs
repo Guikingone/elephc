@@ -1498,15 +1498,14 @@ q();"#,
 /// A `global $a` written inside a CLOSURE literal does NOT reach main's binding, and marking
 /// changes nothing about that.
 ///
-/// The walk EIR lowering consumes covers statement bodies only, so this declaration is invisible
-/// to it: main keeps `$a` in a frame slot instead of the shared symbol and the closure's write
-/// never reaches it — both programs print `hello|hello|` where PHP prints `hello|42|`. That is the
-/// PRE-EXISTING global-in-closure write loss (tracked upstream), deliberately preserved: the one
-/// change that closed it moved such names into `_eir_global_*` program storage, which types them
-/// `Mixed` and drove the array builtins into their pre-existing `Mixed`-array backend gaps
-/// (`test_closure_declared_global_leaves_a_top_level_array_alone` pins the repro). The checker's
-/// `unset`-kill veto reads a WIDER scope that does see this declaration, which is safe because it
-/// only ever withholds a kill.
+/// The one `collect_global_var_names` walk both sides read covers statement bodies only, so this
+/// declaration is invisible to lowering AND to the checker's `unset`-kill veto: main keeps `$a` in
+/// a frame slot instead of the shared symbol and the closure's write never reaches it — both
+/// programs print `hello|hello|` where PHP prints `hello|42|`. That is the PRE-EXISTING
+/// global-in-closure write loss (tracked upstream), deliberately preserved: the one change that
+/// closed it moved such names into `_eir_global_*` program storage, which types them `Mixed` and
+/// drove the array builtins into their pre-existing `Mixed`-array backend gaps
+/// (`test_closure_declared_global_leaves_a_top_level_array_alone` pins the repro).
 ///
 /// What this fixture asserts either way is the EQUIVALENCE: whatever the hole does, marking must
 /// not change it. If the hole is ever closed, both sides move together or this test says so.
@@ -2136,13 +2135,14 @@ fn test_eval_fragment_composes_with_strict_locals() {
 
 /// A top-level ARRAY whose name some closure declares `global` must keep working.
 ///
-/// Widening the SHARED `collect_global_var_names` walk to closure bodies moved such a name into
-/// `_eir_global_*` program storage, whose element type is `Mixed` — and the array builtins have
-/// pre-existing backend gaps for `Mixed` arrays. `implode` went SILENT (this fixture printed
-/// nothing where PHP prints `3,1,2`) and `array_sum`/`sort`/`in_array`/`array_map`/`array_keys`/
-/// `array_reverse` became hard `unsupported EIR backend feature: … for PHP type Mixed`. The
-/// lowering side therefore keeps the statement-only walk; only the CHECKER's kill veto sees the
-/// widened one.
+/// Widening `collect_global_var_names` to closure bodies moved such a name into `_eir_global_*`
+/// program storage, whose element type is `Mixed` — and the array builtins have pre-existing
+/// backend gaps for `Mixed` arrays. `implode` went SILENT (this fixture printed nothing where PHP
+/// prints `3,1,2`) and `array_sum`/`sort`/`in_array`/`array_map`/`array_keys`/`array_reverse`
+/// became hard `unsupported EIR backend feature: … for PHP type Mixed`. The walk therefore stays
+/// statement-only, and it stays ONE walk: the checker's `unset`-kill veto reads exactly the set
+/// lowering reads, so neither side can approve what the other refuses. This pin guards that shared
+/// set from the storage-class side — the name must keep its frame slot.
 #[test]
 fn test_closure_declared_global_leaves_a_top_level_array_alone() {
     let out = compile_and_run(
@@ -2163,8 +2163,10 @@ fn test_closure_declared_global_leaves_array_builtins_lowerable() {
     assert_eq!(out, "6|1,2,3|1");
 }
 
-/// The same for the ASSIGNMENT-PRELUDE reach the widened walk added: a closure literal nested in
-/// an assignment's synthesized prelude must not move a top-level array either.
+/// The same for the other nested position a widened walk would have reached, an ASSIGNMENT
+/// PRELUDE: a closure literal nested in an assignment's synthesized prelude must not move a
+/// top-level array either. Invisible to the shared statement-only walk like the plain closure
+/// body above, and for the same reason.
 #[test]
 fn test_closure_in_an_assignment_expression_leaves_a_top_level_array_alone() {
     let out = compile_and_run(

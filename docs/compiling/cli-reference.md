@@ -410,9 +410,12 @@ Beyond those shared exclusions the shapes are gated differently:
   **`require`** splices the file in with no guard, so even its top-level
   statements behave exactly like inline code.
 - The **`unset()` kill** additionally stands down at top level for any name
-  some `global` statement elsewhere in the program names: that variable's
-  storage is the program-global symbol other bodies reach, not main's frame
-  slot, so the binding is kept and `unset` is a plain typing no-op on it. The
+  some `global` statement elsewhere in the program names — in another
+  function, method, or top-level statement body, the same reach the compiler's
+  own lowering has, so a `global` written inside a closure body or an enum
+  method is not seen by either side. That variable's storage is the
+  program-global symbol other bodies reach, not main's frame slot, so the
+  binding is kept and `unset` is a plain typing no-op on it. The
   straight-line retype is unaffected there and still applies.
 - The **branch-divergent** shape has no such requirement, and could not: it
   exists precisely for the case where at least one of the two conflicting
