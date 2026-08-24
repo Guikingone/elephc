@@ -5,10 +5,12 @@
 // elephc keeps every local monomorphic, but an undeclared-type local may
 // change type in three ways. The implicit shapes (2 and 3 below) warn by
 // default and become hard errors under --strict-locals; the explicit
-// unset() kill (shape 1) is PHP-truthful in both modes. Declared types
-// (int $x = ..., typed parameters, properties) stay strict everywhere,
-// and reading a variable after a straight-line unset() is a compile
-// error — probe with isset() instead.
+// unset() kill (shape 1) is not gated by the flag and behaves identically
+// in both modes. Its unbinding follows PHP's own model, but the
+// consequence diverges: PHP warns on a later read and evaluates it as
+// null, where elephc rejects that read at compile time — probe with
+// isset() instead. Declared types (int $x = ..., typed parameters,
+// properties) stay strict everywhere.
 
 // -- 1. Explicit kill: unset() ends the binding, the next write starts fresh --
 // A scratch buffer holds a status string, is disposed of, and the same name
@@ -23,7 +25,8 @@ echo $scratch + 5, "\n";
 // $raw arrives as text (think CLI input) and is normalized in place to the
 // number it contains. The right-hand side still reads the old string
 // binding; the store re-binds $raw to a fresh int slot. Warns:
-//   $raw changes type from string to int; the previous value is discarded
+//   $raw changes type from string to int; the previous value is
+//   discarded (compile with --strict-locals to make this an error)
 $raw = "42" . $argc;
 $raw = (int)$raw;
 echo $raw + 1, "\n";
@@ -33,7 +36,8 @@ echo $raw + 1, "\n";
 // otherwise. The whole frame slot becomes boxed mixed storage, so every
 // read of $label dispatches through the box. Warns:
 //   $label is assigned incompatible types (int and string); it is compiled
-//   as boxed mixed storage
+//   as boxed mixed storage (compile with --strict-locals to make this an
+//   error)
 if ($argc > 1) {
     $label = (int)$argc;
 } else {
