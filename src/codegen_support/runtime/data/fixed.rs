@@ -753,6 +753,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _uncaught_exc_in\n_uncaught_exc_in:\n    .ascii \" in \"\n");
     out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");
     out.push_str(".globl _uncaught_exc_nl\n_uncaught_exc_nl:\n    .ascii \"\\n\"\n");
+    // php reports an exception CHAIN oldest first, and introduces every later link with a blank
+    // line and this word. The blank line belongs to the introducer, not to the block before it:
+    // the LAST block is followed by `  thrown in ...`, with no blank line at all.
+    out.push_str(".globl _uncaught_exc_next\n_uncaught_exc_next:\n    .ascii \"\\nNext \"\n");
     // Printed only when `__rt_exception_matches` walks into the "metadata never emitted"
     // sentinel, which no correct build should reach — see that helper for why it aborts there
     // instead of answering "no match".
