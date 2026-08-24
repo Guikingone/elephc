@@ -9,7 +9,10 @@
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
 use crate::codegen_support::abi;
-use crate::codegen_support::runtime::data::COPY_SOURCE_IS_DIR_MSG;
+use crate::codegen_support::runtime::data::{
+    COPY_SOURCE_IS_DIR_MSG, MKDIR_WARNING_HEAD, PATH_WARNING_MIDDLE, RMDIR_WARNING_HEAD,
+    UNLINK_WARNING_HEAD,
+};
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits all filesystem runtime helpers: `__rt_unlink`, `__rt_mkdir`, `__rt_rmdir`,
@@ -36,21 +39,37 @@ pub fn emit_fs(emitter: &mut Emitter) {
     super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
+    emitter.instruction("sub sp, sp, #32");                                     // linkage plus the path the warning names
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
     // -- null-terminate path and call unlink --
     emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
+    emitter.instruction("str x0, [sp, #16]");                                   // the path the warning below names
     emitter.syscall(10);
 
-    // -- return success/failure --
-    emitter.instruction("cmp x0, #0");                                          // check syscall result
-    emitter.instruction("cset x0, eq");                                         // x0 = 1 if unlink succeeded
+    // -- php says WHY; elephc said nothing at all --
+    // `unlink("nope.txt")` prints `Warning: unlink(nope.txt): No such file or directory` in php
+    // and printed not a byte here, so the only thing a caller could learn was `false`.
+    emitter.instruction("cmp x0, #0");                                          // zero is success on both platforms
+    emitter.instruction("b.eq __rt_unlink_ok");
+    super::path_op_warning::emit_call_aarch64(
+        emitter,
+        "_warn_unlink_head",
+        UNLINK_WARNING_HEAD.len(),
+        Some("[sp, #16]"),
+        "_warn_path_mid",
+        PATH_WARNING_MIDDLE.len(),
+    );
+    emitter.instruction("mov x0, #0");                                          // php answers false for the failure it just named
+    emitter.instruction("b __rt_unlink_done");
+    emitter.label("__rt_unlink_ok");
+    emitter.instruction("mov x0, #1");
+    emitter.label("__rt_unlink_done");
 
     // -- restore frame and return --
     emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // deallocate stack frame
+    emitter.instruction("add sp, sp, #32");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 
     // ================================================================
@@ -113,9 +132,24 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #16]");                                   // the requested mode
     emitter.syscall(136);
 
-    // -- return success/failure --
-    emitter.instruction("cmp x0, #0");                                          // check syscall result
-    emitter.instruction("cset x0, eq");                                         // x0 = 1 if mkdir succeeded
+    // -- php names no path in this one, and elephc named nothing at all --
+    // MEASURED: `Warning: mkdir(): File exists`, with the parentheses EMPTY even though a path
+    // was passed. The composer takes a null path for exactly this shape.
+    emitter.instruction("cmp x0, #0");                                          // zero is success on both platforms
+    emitter.instruction("b.eq __rt_mkdir_ok");
+    super::path_op_warning::emit_call_aarch64(
+        emitter,
+        "_warn_mkdir_head",
+        MKDIR_WARNING_HEAD.len(),
+        None,
+        "_warn_mkdir_head",
+        0,
+    );
+    emitter.instruction("mov x0, #0");                                          // php answers false for the failure it just named
+    emitter.instruction("b __rt_mkdir_done");
+    emitter.label("__rt_mkdir_ok");
+    emitter.instruction("mov x0, #1");
+    emitter.label("__rt_mkdir_done");
 
     // -- restore frame and return --
     emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
@@ -134,21 +168,35 @@ pub fn emit_fs(emitter: &mut Emitter) {
     super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
+    emitter.instruction("sub sp, sp, #32");                                     // linkage plus the path the warning names
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
     // -- null-terminate path and call rmdir --
     emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
+    emitter.instruction("str x0, [sp, #16]");                                   // the path the warning below names
     emitter.syscall(137);
 
-    // -- return success/failure --
-    emitter.instruction("cmp x0, #0");                                          // check syscall result
-    emitter.instruction("cset x0, eq");                                         // x0 = 1 if rmdir succeeded
+    // -- see `unlink()`: php says WHY, and this said nothing --
+    emitter.instruction("cmp x0, #0");                                          // zero is success on both platforms
+    emitter.instruction("b.eq __rt_rmdir_ok");
+    super::path_op_warning::emit_call_aarch64(
+        emitter,
+        "_warn_rmdir_head",
+        RMDIR_WARNING_HEAD.len(),
+        Some("[sp, #16]"),
+        "_warn_path_mid",
+        PATH_WARNING_MIDDLE.len(),
+    );
+    emitter.instruction("mov x0, #0");                                          // php answers false for the failure it just named
+    emitter.instruction("b __rt_rmdir_done");
+    emitter.label("__rt_rmdir_ok");
+    emitter.instruction("mov x0, #1");
+    emitter.label("__rt_rmdir_done");
 
     // -- restore frame and return --
     emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // deallocate stack frame
+    emitter.instruction("add sp, sp, #32");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 
     // ================================================================
@@ -211,9 +259,24 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload destination cstr path
     emitter.syscall(128);
 
-    // -- return success/failure --
-    emitter.instruction("cmp x0, #0");                                          // check syscall result
-    emitter.instruction("cset x0, eq");                                         // x0 = 1 if rename succeeded
+    // -- the only shape that names TWO paths --
+    // MEASURED: `Warning: rename(nope.txt,other.txt): No such file or directory` — comma, no
+    // space, and elephc printed nothing at all.
+    emitter.instruction("cmp x0, #0");                                          // zero is success on both platforms
+    emitter.instruction("b.eq __rt_rename_ok");
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction("neg x2, x0");                                      // Linux answers -errno
+    } else {
+        emitter.instruction("mov x2, x0");                                      // macOS answers the errno itself
+    }
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the source path
+    emitter.instruction("ldr x1, [sp, #8]");                                    // and the destination
+    emitter.instruction("bl __rt_rename_warning");
+    emitter.instruction("mov x0, #0");                                          // php answers false for the failure it just named
+    emitter.instruction("b __rt_rename_done");
+    emitter.label("__rt_rename_ok");
+    emitter.instruction("mov x0, #1");
+    emitter.label("__rt_rename_done");
 
     // -- restore frame and return --
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
@@ -331,7 +394,13 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_unlink");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
     super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
-    emit_single_path_libc_bool_helper(emitter, "unlink", None);
+    emit_single_path_libc_bool_helper_with(
+        emitter,
+        "unlink",
+        None,
+        PathUrls::Honoured,
+        Some(("_warn_unlink_head", UNLINK_WARNING_HEAD.len())),
+    );
 
     emitter.blank();
     emitter.comment("--- runtime: mkdir ---");
@@ -345,12 +414,18 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_rmdir");
     // php locates a wrapper for every path; a bare one is the plain-files wrapper.
     super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
-    emit_single_path_libc_bool_helper(emitter, "rmdir", None);
+    emit_single_path_libc_bool_helper_with(
+        emitter,
+        "rmdir",
+        None,
+        PathUrls::Honoured,
+        Some(("_warn_rmdir_head", RMDIR_WARNING_HEAD.len())),
+    );
 
     emitter.blank();
     emitter.comment("--- runtime: chdir ---");
     emitter.label_global("__rt_chdir");
-    emit_single_path_libc_bool_helper_with(emitter, "chdir", None, PathUrls::Verbatim);
+    emit_single_path_libc_bool_helper_with(emitter, "chdir", None, PathUrls::Verbatim, None);
 
     emitter.blank();
     emitter.comment("--- runtime: rename ---");
@@ -371,9 +446,25 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the source C-string pointer as the first libc rename() argument
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the destination C-string pointer as the second libc rename() argument
     emitter.instruction("call rename");                                         // rename or move the file-system path through libc rename()
+    // See the AArch64 counterpart: the only shape that names TWO paths, comma-separated.
     emitter.instruction("cmp eax, 0");                                          // a successful libc rename() call returns zero as a C int
-    emitter.instruction("sete al");                                             // convert the rename() success flag into a boolean byte
-    emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the canonical integer result register
+    emitter.instruction("je __rt_rename_ok_x86");
+    emitter.bl_c(match emitter.platform {
+        crate::codegen_support::platform::Platform::MacOS => "__error",
+        crate::codegen_support::platform::Platform::Linux => "__errno_location",
+        crate::codegen_support::platform::Platform::Windows => {
+            panic!("Windows target is not yet supported (see issue #379)")
+        }
+    });                                                                         // rax = &errno for this thread
+    emitter.instruction("movsxd rdx, DWORD PTR [rax]");                         // the reason libc recorded
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // the source path
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // and the destination
+    emitter.instruction("call __rt_rename_warning");
+    emitter.instruction("xor eax, eax");                                        // php answers false for the failure it just named
+    emitter.instruction("jmp __rt_rename_done_x86");
+    emitter.label("__rt_rename_ok_x86");
+    emitter.instruction("mov eax, 1");
+    emitter.label("__rt_rename_done_x86");
     emitter.instruction("add rsp, 32");                                         // release the aligned stack locals used by rename()
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the rename() success predicate to the caller
@@ -519,16 +610,25 @@ fn emit_mkdir_libc_helper(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // the full path
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // the requested mode
     emitter.instruction("call mkdir");                                          // create the named directory; its result is the answer
+    // See the AArch64 counterpart: php names no path here, and elephc named nothing at all.
     emitter.instruction("cmp eax, 0");                                          // libc mkdir() returns zero as a C int on success
-    emitter.instruction("sete al");                                             // convert the success code into a boolean byte
-    emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the canonical integer result register
+    emitter.instruction("je __rt_mkdir_ok_x86");
+    super::path_op_warning::emit_libc_call_x86_64(
+        emitter,
+        "_warn_mkdir_head",
+        MKDIR_WARNING_HEAD.len(),
+        None,
+        "_warn_mkdir_head",
+        0,
+    );
+    emitter.instruction("xor eax, eax");                                        // php answers false for the failure it just named
+    emitter.instruction("jmp __rt_mkdir_done_x86");
+    emitter.label("__rt_mkdir_ok_x86");
+    emitter.instruction("mov eax, 1");
+    emitter.label("__rt_mkdir_done_x86");
     emitter.instruction("add rsp, 32");                                         // release the aligned stack locals used by mkdir()
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the libc helper returns
     emitter.instruction("ret");                                                 // return the file-system success predicate to the caller
-}
-
-fn emit_single_path_libc_bool_helper(emitter: &mut Emitter, symbol: &str, extra_setup: Option<&str>) {
-    emit_single_path_libc_bool_helper_with(emitter, symbol, extra_setup, PathUrls::Honoured);
 }
 
 /// Whether this helper's path may be a `file://` URL.
@@ -549,21 +649,49 @@ fn emit_single_path_libc_bool_helper_with(
     symbol: &str,
     extra_setup: Option<&str>,
     urls: PathUrls,
+    warn: Option<(&str, usize)>,
 ) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the helper makes libc calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the call-aligned helper body
+    emitter.instruction("sub rsp, 16");                                         // a slot for the path the warning names
     emitter.instruction(match urls {
         PathUrls::Honoured => "call __rt_path_cstr",                            // a `file://` URL names the file it points at
         PathUrls::Verbatim => "call __rt_cstr",                                 // this one php hands straight to libc
     });                                                                         // convert the elephc path in rax/rdx into a null-terminated C string in rax
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // the path the warning below names
     emitter.instruction("mov rdi, rax");                                        // pass the C path pointer as the first libc argument
     if let Some(setup) = extra_setup {
         emitter.instruction(setup);                                             // populate any additional libc arguments required by this helper
     }
     emitter.instruction(&format!("call {}", symbol));                           // invoke the matching libc file-system helper on Linux x86_64
-    emitter.instruction("cmp eax, 0");                                          // libc path helpers return zero as a C int on success
-    emitter.instruction("sete al");                                             // convert the success code into a boolean byte
-    emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the canonical integer result register
+    match warn {
+        // See the AArch64 counterpart: php says WHY, and this said nothing at all.
+        Some((head, head_len)) => {
+            let ok = format!("__rt_{symbol}_ok_x86");
+            let done = format!("__rt_{symbol}_done_x86");
+            emitter.instruction("cmp eax, 0");                                  // libc answers zero on success
+            emitter.instruction(&format!("je {ok}"));
+            super::path_op_warning::emit_libc_call_x86_64(
+                emitter,
+                head,
+                head_len,
+                Some("[rbp - 8]"),
+                "_warn_path_mid",
+                PATH_WARNING_MIDDLE.len(),
+            );
+            emitter.instruction("xor eax, eax");                                // php answers false for the failure it just named
+            emitter.instruction(&format!("jmp {done}"));
+            emitter.label(&ok);
+            emitter.instruction("mov eax, 1");
+            emitter.label(&done);
+        }
+        None => {
+            emitter.instruction("cmp eax, 0");                                  // libc path helpers return zero as a C int on success
+            emitter.instruction("sete al");                                     // convert the success code into a boolean byte
+            emitter.instruction("movzx rax, al");                               // widen the boolean byte into the canonical integer result register
+        }
+    }
+    emitter.instruction("mov rsp, rbp");                                        // release the path slot
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the libc helper returns
     emitter.instruction("ret");                                                 // return the file-system success predicate to the caller
 }

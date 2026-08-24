@@ -135,8 +135,13 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");
     emitter.instruction("str x0, [sp, #0]");                                    // hold the caller's prefix across strerror
     emitter.instruction("str x1, [sp, #8]");
-    emitter.instruction("str x2, [sp, #16]");                                   // and the path
-    emitter.instruction("mov x0, x3");                                          // the errno to describe
+    emitter.instruction("str x3, [sp, #24]");                                   // the errno, across the name lookup
+    // php names what the PROGRAM wrote: `file_get_contents(file:///no/such)`, not the path that
+    // URL was reduced to. The strip publishes the URL; this is where it is spent.
+    emitter.instruction("mov x0, x2");
+    emitter.instruction("bl __rt_path_diag_name");
+    emitter.instruction("str x0, [sp, #16]");                                   // and the path
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the errno to describe
     emitter.bl_c("strerror");                                                   // x0 = static NUL-terminated reason, or 0
     emitter.instruction("mov x3, x0");                                          // the reason text
     emitter.instruction("mov x4, #0");                                          // its length, measured below
@@ -355,8 +360,12 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // hold the caller's prefix across strerror
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // and the path
-    emitter.instruction("mov rdi, rcx");                                        // the errno to describe
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // the errno, across the name lookup
+    // See the AArch64 counterpart: php names the URL the program wrote, not the path it reduced to.
+    emitter.instruction("mov rax, rdx");
+    emitter.instruction("call __rt_path_diag_name");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // and the path
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the errno to describe
     emitter.instruction("call strerror");                                       // rax = static NUL-terminated reason, or 0
     emitter.instruction("mov rcx, rax");                                        // the reason text
     emitter.instruction("xor r8d, r8d");                                        // its length, measured below

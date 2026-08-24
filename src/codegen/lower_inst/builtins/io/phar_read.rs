@@ -753,6 +753,27 @@ pub(crate) fn lower_readfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
     }
     super::super::ensure_arg_count_between(inst, "readfile", 1, 3)?;
+    // php names the function the USER called. `readfile()` reads through
+    // `__rt_file_get_contents`, and left to itself that helper names ITSELF — so a missing file
+    // reported `file_get_contents(x.txt)` where php reports `readfile(x.txt)`.
+    super::filesystem_ops::emit_open_diag_name(
+        ctx,
+        Some((
+            "_diag_open_failed_readfile_prefix",
+            "Warning: readfile(".len(),
+            "_uww_name_readfile",
+            "readfile".len(),
+        )),
+    );
+    let result = lower_readfile_named(ctx, inst);
+    // Unconditionally: the slots are global, and a name left behind would make the next
+    // `file_get_contents()` in the program call itself `readfile`.
+    super::filesystem_ops::emit_open_diag_name(ctx, None);
+    result
+}
+
+/// The body of `readfile()`, with its open-failure name already published.
+fn lower_readfile_named(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let path = expect_operand(inst, 0)?;
     // Same reason as file_get_contents(): the wrapper reads its options from the
     // published context, so a `$context` argument has to be published for this call.

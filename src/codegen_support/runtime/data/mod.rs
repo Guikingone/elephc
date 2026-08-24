@@ -448,6 +448,59 @@ pub(crate) const SCANDIR_OPEN_WARNING_HEAD: &str = "Warning: scandir(";
 /// The text between the path and the reason in [`SCANDIR_OPEN_WARNING_HEAD`]'s line.
 pub(crate) const SCANDIR_OPEN_WARNING_MIDDLE: &str = "): Failed to open directory: ";
 
+/// The wording php prints when a filesystem PATH OPERATION fails.
+///
+/// MEASURED on php 8.5.6, and the shapes do not agree with each other: `unlink()` and `rmdir()`
+/// name the path in the parentheses, `opendir()` adds a sentence of its own before the reason,
+/// and `mkdir()`, `chmod()` and `touch()` leave the parentheses EMPTY — `touch()` putting the
+/// path in the middle of a sentence instead. elephc printed none of these lines at all.
+pub(crate) const UNLINK_WARNING_HEAD: &str = "Warning: unlink(";
+
+/// See [`UNLINK_WARNING_HEAD`].
+pub(crate) const RMDIR_WARNING_HEAD: &str = "Warning: rmdir(";
+
+/// See [`UNLINK_WARNING_HEAD`]. `rename()` names BOTH paths, comma-separated, with no space.
+pub(crate) const RENAME_WARNING_HEAD: &str = "Warning: rename(";
+
+/// See [`UNLINK_WARNING_HEAD`]. The parentheses stay empty even though a path was passed.
+pub(crate) const MKDIR_WARNING_HEAD: &str = "Warning: mkdir(): ";
+
+/// See [`UNLINK_WARNING_HEAD`]. The parentheses stay empty even though a path was passed.
+pub(crate) const CHMOD_WARNING_HEAD: &str = "Warning: chmod(): ";
+
+/// See [`UNLINK_WARNING_HEAD`]. The path sits inside a sentence rather than in parentheses.
+pub(crate) const TOUCH_WARNING_HEAD: &str = "Warning: touch(): Unable to create file ";
+
+/// The text between `touch()`'s path and its reason.
+pub(crate) const TOUCH_WARNING_MIDDLE: &str = " because ";
+
+/// See [`UNLINK_WARNING_HEAD`]. `opendir()` words its failure like `scandir()`.
+pub(crate) const OPENDIR_WARNING_HEAD: &str = "Warning: opendir(";
+
+/// The text between a path and its reason in the ordinary `name(path): reason` shape.
+pub(crate) const PATH_WARNING_MIDDLE: &str = "): ";
+
+/// `touch()`'s head when the path was a `file://` URL.
+///
+/// php reaches the plain-files wrapper's METADATA hook for a URL, and that hook's diagnostic
+/// names the path in the parentheses where the direct call names nothing. MEASURED:
+/// `Warning: touch(/no/such/x.txt): Unable to create file /no/such/x.txt because No such file or
+/// directory` — the path really does appear twice.
+pub(crate) const TOUCH_URL_WARNING_HEAD: &str = "Warning: touch(";
+
+/// The text between `touch()`'s parenthesised path and the sentence that names it again.
+pub(crate) const TOUCH_URL_WARNING_MIDDLE: &str = "): Unable to create file ";
+
+/// `chmod()`'s head when the path was a `file://` URL. See [`TOUCH_URL_WARNING_HEAD`].
+pub(crate) const CHMOD_URL_WARNING_HEAD: &str = "Warning: chmod(";
+
+/// The wrapper hook's own wording, which the direct call does not use. MEASURED:
+/// `Warning: chmod(/no/such/x.txt): Operation failed: No such file or directory`.
+pub(crate) const CHMOD_URL_WARNING_MIDDLE: &str = "): Operation failed: ";
+
+/// The separator between `rename()`'s two paths — no space, measured.
+pub(crate) const RENAME_WARNING_SEPARATOR: &str = ",";
+
 /// Head of the second warning, which names the error NUMBER rather than the path.
 pub(crate) const SCANDIR_ERRNO_WARNING_HEAD: &str = "Warning: scandir(): (errno ";
 

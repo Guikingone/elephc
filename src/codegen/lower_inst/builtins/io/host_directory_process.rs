@@ -635,6 +635,28 @@ pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     let path = expect_operand(inst, 0)?;
     // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.
     super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
+    // See `readfile()`: the helper this delegates to names itself, so a missing file reported
+    // `file_get_contents(x.txt)` where php reports `file(x.txt)`.
+    super::filesystem_ops::emit_open_diag_name(
+        ctx,
+        Some((
+            "_diag_open_failed_file_prefix",
+            "Warning: file(".len(),
+            "_uww_name_file",
+            "file".len(),
+        )),
+    );
+    let result = lower_file_named(ctx, inst, path);
+    super::filesystem_ops::emit_open_diag_name(ctx, None);
+    result
+}
+
+/// The body of `file()`, with its open-failure name already published.
+fn lower_file_named(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    path: crate::ir::ValueId,
+) -> Result<()> {
     let flags = inst.operands.get(1).copied();
     // Publish `$context` for this read, like fopen()/file_get_contents()/readfile().
     let explicit_context = inst.operands.get(2).copied();

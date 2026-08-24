@@ -28,6 +28,11 @@ use super::{
     PF_WARN_HEAD, PF_WARN_LOCATE_END, PF_WARN_LOCATE_MID,
     PF_WARN_OPEN_MID, SCANDIR_ERRNO_WARNING_HEAD, SCANDIR_ERRNO_WARNING_MIDDLE,
     SCANDIR_OPEN_WARNING_HEAD, SCANDIR_OPEN_WARNING_MIDDLE, DYNAMIC_PROP_DEPRECATED_HEAD,
+    UNLINK_WARNING_HEAD, RMDIR_WARNING_HEAD, RENAME_WARNING_HEAD, MKDIR_WARNING_HEAD,
+    CHMOD_WARNING_HEAD, TOUCH_WARNING_HEAD, TOUCH_WARNING_MIDDLE, OPENDIR_WARNING_HEAD,
+    CHMOD_URL_WARNING_HEAD, CHMOD_URL_WARNING_MIDDLE, TOUCH_URL_WARNING_HEAD,
+    TOUCH_URL_WARNING_MIDDLE,
+    PATH_WARNING_MIDDLE, RENAME_WARNING_SEPARATOR,
     DYNAMIC_PROP_DEPRECATED_TAIL, FILTER_PARAM_CREATE_APPEND_HEAD, FILTER_PARAM_CREATE_PREPEND_HEAD,
     FILTER_PARAM_CREATE_TAIL, FILTER_PARAM_INVALID_APPEND_HEAD, FILTER_PARAM_INVALID_PREPEND_HEAD,
     FILTER_PARAM_INVALID_TAIL, GLOB_INVALID_FLAGS_WARNING,
@@ -303,6 +308,20 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ("_lstat_failed_tail", LSTAT_FAILED_TAIL),
         ("_filetype_unknown_head", FILETYPE_UNKNOWN_HEAD),
         ("_filetype_unknown_tail", FILETYPE_UNKNOWN_TAIL),
+        ("_warn_unlink_head", UNLINK_WARNING_HEAD),
+        ("_warn_rmdir_head", RMDIR_WARNING_HEAD),
+        ("_warn_rename_head", RENAME_WARNING_HEAD),
+        ("_warn_mkdir_head", MKDIR_WARNING_HEAD),
+        ("_warn_chmod_head", CHMOD_WARNING_HEAD),
+        ("_warn_touch_head", TOUCH_WARNING_HEAD),
+        ("_warn_touch_url_head", TOUCH_URL_WARNING_HEAD),
+        ("_warn_touch_url_mid", TOUCH_URL_WARNING_MIDDLE),
+        ("_warn_chmod_url_head", CHMOD_URL_WARNING_HEAD),
+        ("_warn_chmod_url_mid", CHMOD_URL_WARNING_MIDDLE),
+        ("_warn_touch_mid", TOUCH_WARNING_MIDDLE),
+        ("_warn_opendir_head", OPENDIR_WARNING_HEAD),
+        ("_warn_path_mid", PATH_WARNING_MIDDLE),
+        ("_warn_rename_sep", RENAME_WARNING_SEPARATOR),
         ("_scandir_open_warn_head", SCANDIR_OPEN_WARNING_HEAD),
         ("_scandir_open_warn_mid", SCANDIR_OPEN_WARNING_MIDDLE),
         ("_scandir_errno_warn_head", SCANDIR_ERRNO_WARNING_HEAD),
@@ -850,10 +869,16 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _uww_name_fgc\n_uww_name_fgc:\n    .ascii \"file_get_contents\"\n");
     out.push_str(".globl _diag_open_failed_copy_prefix\n_diag_open_failed_copy_prefix:\n    .ascii \"Warning: copy(\"\n");
     out.push_str(".globl _uww_name_copy\n_uww_name_copy:\n    .ascii \"copy\"\n");
+    out.push_str(".globl _uww_name_readfile\n_uww_name_readfile:\n    .ascii \"readfile\"\n");
+    out.push_str(".globl _uww_name_file\n_uww_name_file:\n    .ascii \"file\"\n");
     // A delegating builtin publishes the name php should print here for the duration of the
     // helpers it calls. Zero means "the helper names itself", which is every other caller.
     out.push_str(".globl _rt_open_diag_prefix\n_rt_open_diag_prefix:\n    .quad 0\n");
     out.push_str(".globl _rt_open_diag_prefix_len\n_rt_open_diag_prefix_len:\n    .quad 0\n");
+    // The `file://` strip publishes the URL it reduced here, so a diagnostic can name what
+    // the PROGRAM wrote rather than the path the syscall got. Zero means the path was not a
+    // URL, which is every other call.
+    out.push_str(".globl _rt_path_url\n_rt_path_url:\n    .quad 0\n");
     out.push_str(".globl _rt_open_diag_name\n_rt_open_diag_name:\n    .quad 0\n");
     out.push_str(".globl _rt_open_diag_name_len\n_rt_open_diag_name_len:\n    .quad 0\n");
     out.push_str(".globl _diag_csv_escape_deprecated_fgetcsv_msg\n_diag_csv_escape_deprecated_fgetcsv_msg:\n    .ascii \"Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");

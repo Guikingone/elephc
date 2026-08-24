@@ -8,7 +8,12 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::runtime::data::{
+    CHMOD_URL_WARNING_HEAD, CHMOD_URL_WARNING_MIDDLE, CHMOD_WARNING_HEAD,
+    TOUCH_URL_WARNING_HEAD, TOUCH_URL_WARNING_MIDDLE, TOUCH_WARNING_HEAD,
+    TOUCH_WARNING_MIDDLE,
+};
+use crate::codegen_support::{abi, emit::Emitter};
 
 /// Emits x86_64 Linux runtime helpers for filesystem modify operations:
 /// `__rt_chmod`, `__rt_chown`, `__rt_chown_user`, `__rt_chgrp_group`, `__rt_umask`,
@@ -35,16 +40,45 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_chmod");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish frame
-    emitter.instruction("sub rsp, 16");                                         // align stack
+    emitter.instruction("sub rsp, 32");                                         // align stack, plus the path the warning names
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve mode (came in via the secondary string-argument register)
     emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // the path the URL shape names
     emitter.instruction("mov rdi, rax");                                        // first libc chmod arg = C path
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // second libc chmod arg = mode
     emitter.instruction("call chmod");                                          // libc chmod(path, mode)
+    // See the AArch64 counterpart: php names no path for a direct call and BOTH a path and a
+    // different wording when the argument was a `file://` URL.
     emitter.instruction("cmp eax, 0");                                          // did libc chmod() return success as a C int?
-    emitter.instruction("sete al");                                             // boolean byte
-    emitter.instruction("movzx rax, al");                                       // widen to canonical integer result
-    emitter.instruction("add rsp, 16");                                         // release stack
+    emitter.instruction("je __rt_chmod_ok_x86");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_path_url", 0);
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jnz __rt_chmod_url_warn_x86");
+    super::path_op_warning::emit_libc_call_x86_64(
+        emitter,
+        "_warn_chmod_head",
+        CHMOD_WARNING_HEAD.len(),
+        None,
+        "_warn_chmod_head",
+        0,
+    );
+    emitter.instruction("jmp __rt_chmod_warned_x86");
+    emitter.label("__rt_chmod_url_warn_x86");
+    super::path_op_warning::emit_libc_call_x86_64(
+        emitter,
+        "_warn_chmod_url_head",
+        CHMOD_URL_WARNING_HEAD.len(),
+        Some("[rbp - 16]"),
+        "_warn_chmod_url_mid",
+        CHMOD_URL_WARNING_MIDDLE.len(),
+    );
+    emitter.label("__rt_chmod_warned_x86");
+    emitter.instruction("xor eax, eax");                                        // php answers false for the failure it just named
+    emitter.instruction("jmp __rt_chmod_done_x86");
+    emitter.label("__rt_chmod_ok_x86");
+    emitter.instruction("mov eax, 1");
+    emitter.label("__rt_chmod_done_x86");
+    emitter.instruction("add rsp, 32");                                         // release stack
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return predicate
 
@@ -350,9 +384,43 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdx, [rbp - 64]");                                 // pointer to timespec[0]
     emitter.instruction("mov rcx, 0");                                          // flags = 0
     emitter.instruction("call utimensat");                                      // libc utimensat()
+    // See the AArch64 counterpart: the stamp is what decides, and a URL takes the wrapper hook's
+    // shape, which names the path in the parentheses AND again in the sentence.
     emitter.instruction("cmp eax, 0");                                          // did libc utimensat() return success as a C int?
-    emitter.instruction("sete al");                                             // boolean byte
-    emitter.instruction("movzx rax, al");                                       // widen
+    emitter.instruction("je __rt_touch_ok_x86");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_path_url", 0);
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jnz __rt_touch_url_warn_x86");
+    super::path_op_warning::emit_libc_call_x86_64(
+        emitter,
+        "_warn_touch_head",
+        TOUCH_WARNING_HEAD.len(),
+        Some("[rbp - 8]"),
+        "_warn_touch_mid",
+        TOUCH_WARNING_MIDDLE.len(),
+    );
+    emitter.instruction("jmp __rt_touch_warned_x86");
+    emitter.label("__rt_touch_url_warn_x86");
+    abi::emit_symbol_address(emitter, "rdi", "_warn_touch_url_head");
+    emitter.instruction(&format!("mov rsi, {}", TOUCH_URL_WARNING_HEAD.len()));
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");
+    abi::emit_symbol_address(emitter, "rcx", "_warn_touch_url_mid");
+    emitter.instruction(&format!("mov r8, {}", TOUCH_URL_WARNING_MIDDLE.len()));
+    emitter.instruction("call __rt_path_op_fragment");                          // head, path, the sentence's opening
+    super::path_op_warning::emit_libc_call_x86_64(
+        emitter,
+        "_warn_touch_url_head",
+        0,
+        Some("[rbp - 8]"),
+        "_warn_touch_mid",
+        TOUCH_WARNING_MIDDLE.len(),
+    );
+    emitter.label("__rt_touch_warned_x86");
+    emitter.instruction("xor eax, eax");                                        // php answers false for the failure it just named
+    emitter.instruction("jmp __rt_touch_done_x86");
+    emitter.label("__rt_touch_ok_x86");
+    emitter.instruction("mov eax, 1");
+    emitter.label("__rt_touch_done_x86");
     emitter.instruction("add rsp, 80");                                         // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return predicate

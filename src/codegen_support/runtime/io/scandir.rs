@@ -61,6 +61,10 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     // -- null-terminate path --
     emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.instruction("str x0, [sp, #24]");                                   // hold the C path across the result-array allocation
+    // php names what the PROGRAM wrote: `scandir(file:///no/such)`, not the path that URL was
+    // reduced to. The strip published it; the opener below still gets the path itself.
+    emitter.instruction("bl __rt_path_diag_name");
+    emitter.instruction("str x0, [sp, #56]");                                   // the name the two warnings print
 
     // -- create the result array FIRST so an unopenable directory still has one to return --
     emitter.instruction("mov x0, #128");                                        // initial capacity of 128 elements
@@ -142,7 +146,7 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x2, #{}", SCANDIR_OPEN_WARNING_HEAD.len()));
     emitter.instruction("bl __rt_diag_warning");                                // warnings honour the @ suppression depth
     // -- the path, measured to its terminator --
-    emitter.instruction("ldr x1, [sp, #24]");                                   // the NUL-terminated C path
+    emitter.instruction("ldr x1, [sp, #56]");                                   // the name php prints, URL and all
     emitter.instruction("mov x9, #0");                                          // measured length
     emitter.label("__rt_scandir_path_scan");
     emitter.instruction("ldrb w10, [x1, x9]");                                  // load the next path byte
@@ -217,6 +221,9 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // hold $sorting_order across the listing
     emitter.instruction("call __rt_path_cstr");                                 // convert the elephc directory string in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the C directory path pointer across the result-array allocation and opendir() call
+    // See the AArch64 counterpart: php names the URL the program wrote, not the path it reduced to.
+    emitter.instruction("call __rt_path_diag_name");
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // the name the two warnings print
     emitter.instruction("mov rdi, 128");                                        // request an initial result-array capacity of 128 directory entry names
     emitter.instruction("mov rsi, 16");                                         // request 16-byte payload slots because scandir() returns string ptr/len pairs
     emitter.instruction("call __rt_array_new");                                 // allocate the destination string array that will collect the directory entry names
@@ -277,7 +284,7 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rsi, {}", SCANDIR_OPEN_WARNING_HEAD.len()));
     emitter.instruction("call __rt_diag_warning");                              // warnings honour the @ suppression depth
     // -- the path, measured to its terminator --
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the NUL-terminated C path
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // the name php prints, URL and all
     emitter.instruction("xor ecx, ecx");                                        // measured length
     emitter.label("__rt_scandir_path_scan_x");
     emitter.instruction("movzx eax, BYTE PTR [rdi + rcx]");                     // load the next path byte

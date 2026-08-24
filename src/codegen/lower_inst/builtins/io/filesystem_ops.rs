@@ -290,7 +290,7 @@ fn emit_copy_from_lowered_source(
 ///
 /// `Some((prefix symbol, prefix length, bare name symbol, bare name length))` while a delegating
 /// builtin owns the diagnostics; `None` hands them back to the helpers that raise them.
-fn emit_open_diag_name(
+pub(super) fn emit_open_diag_name(
     ctx: &mut FunctionContext<'_>,
     published: Option<(&str, usize, &str, usize)>,
 ) {

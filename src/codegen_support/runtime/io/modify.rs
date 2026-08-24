@@ -8,7 +8,12 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::runtime::data::{
+    CHMOD_URL_WARNING_HEAD, CHMOD_URL_WARNING_MIDDLE, CHMOD_WARNING_HEAD,
+    TOUCH_URL_WARNING_HEAD, TOUCH_URL_WARNING_MIDDLE, TOUCH_WARNING_HEAD,
+    TOUCH_WARNING_MIDDLE,
+};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 use super::modify_x86_64::emit_modify_linux_x86_64;
 
@@ -35,10 +40,42 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // establish new frame pointer
     emitter.instruction("str x3, [sp, #0]");                                    // preserve the mode value across the cstr call
     emitter.instruction("bl __rt_path_cstr");                                   // path → null-terminated C string in x0
+    emitter.instruction("str x0, [sp, #8]");                                    // the path the URL shape names
     emitter.instruction("ldr x1, [sp, #0]");                                    // restore mode into the second libc argument
     emitter.bl_c("chmod");                                                      // libc chmod(path, mode)
-    emitter.instruction("cmp x0, #0");                                          // success?
-    emitter.instruction("cset x0, eq");                                         // x0 = 1 if chmod succeeded
+
+    // -- php names no path in this one, and elephc named nothing at all --
+    // MEASURED: `Warning: chmod(): No such file or directory`, parentheses EMPTY.
+    emitter.instruction("cmp x0, #0");                                          // libc answers 0 on success
+    emitter.instruction("b.eq __rt_chmod_ok");
+    // A `file://` URL reaches php through the plain-files wrapper's METADATA hook, whose
+    // diagnostic names the path and words the failure differently — see the two wordings.
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_path_url", 0);
+    emitter.instruction("cbnz x10, __rt_chmod_url_warn");
+    super::path_op_warning::emit_libc_call_aarch64(
+        emitter,
+        "_warn_chmod_head",
+        CHMOD_WARNING_HEAD.len(),
+        None,
+        "_warn_chmod_head",
+        0,
+    );
+    emitter.instruction("b __rt_chmod_warned");
+    emitter.label("__rt_chmod_url_warn");
+    super::path_op_warning::emit_libc_call_aarch64(
+        emitter,
+        "_warn_chmod_url_head",
+        CHMOD_URL_WARNING_HEAD.len(),
+        Some("[sp, #8]"),
+        "_warn_chmod_url_mid",
+        CHMOD_URL_WARNING_MIDDLE.len(),
+    );
+    emitter.label("__rt_chmod_warned");
+    emitter.instruction("mov x0, #0");                                          // php answers false for the failure it just named
+    emitter.instruction("b __rt_chmod_done");
+    emitter.label("__rt_chmod_ok");
+    emitter.instruction("mov x0, #1");
+    emitter.label("__rt_chmod_done");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // deallocate frame
     emitter.instruction("ret");                                                 // return predicate
@@ -394,8 +431,47 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("add x2, sp, #32");                                     // pointer to timespec[2]
     emitter.instruction("mov x3, #0");                                          // flags = 0 (follow symlinks)
     emitter.bl_c("utimensat");                                                  // libc utimensat(AT_FDCWD, path, times, 0)
-    emitter.instruction("cmp x0, #0");                                          // success?
-    emitter.instruction("cset x0, eq");                                         // x0 = 1 if utimensat succeeded
+
+    // -- php puts the path INSIDE the sentence for this one --
+    // MEASURED: `Warning: touch(): Unable to create file /no/such/x.txt because No such file or
+    // directory`. The stamp is what decides: a file that exists but could not be OPENED is still
+    // touched successfully by php, and warning on the open would have reported those as failures.
+    emitter.instruction("cmp x0, #0");                                          // libc answers 0 on success
+    emitter.instruction("b.eq __rt_touch_ok");
+    // See `chmod()`: a URL takes the wrapper hook's shape, which names the path in the
+    // parentheses AND again in the sentence.
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_path_url", 0);
+    emitter.instruction("cbnz x10, __rt_touch_url_warn");
+    super::path_op_warning::emit_libc_call_aarch64(
+        emitter,
+        "_warn_touch_head",
+        TOUCH_WARNING_HEAD.len(),
+        Some("[sp, #0]"),
+        "_warn_touch_mid",
+        TOUCH_WARNING_MIDDLE.len(),
+    );
+    emitter.instruction("b __rt_touch_warned");
+    emitter.label("__rt_touch_url_warn");
+    abi::emit_symbol_address(emitter, "x0", "_warn_touch_url_head");
+    emitter.instruction(&format!("mov x1, #{}", TOUCH_URL_WARNING_HEAD.len()));
+    emitter.instruction("ldr x2, [sp, #0]");
+    abi::emit_symbol_address(emitter, "x3", "_warn_touch_url_mid");
+    emitter.instruction(&format!("mov x4, #{}", TOUCH_URL_WARNING_MIDDLE.len()));
+    emitter.instruction("bl __rt_path_op_fragment");                            // head, path, the sentence's opening
+    super::path_op_warning::emit_libc_call_aarch64(
+        emitter,
+        "_warn_touch_url_head",
+        0,
+        Some("[sp, #0]"),
+        "_warn_touch_mid",
+        TOUCH_WARNING_MIDDLE.len(),
+    );
+    emitter.label("__rt_touch_warned");
+    emitter.instruction("mov x0, #0");                                          // php answers false for the failure it just named
+    emitter.instruction("b __rt_touch_done");
+    emitter.label("__rt_touch_ok");
+    emitter.instruction("mov x0, #1");
+    emitter.label("__rt_touch_done");
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_off));         // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame));                    // deallocate frame
     emitter.instruction("ret");                                                 // return predicate

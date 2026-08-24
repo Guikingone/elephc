@@ -11,6 +11,9 @@
 //! - The caller adopts the returned `DIR*` into `StreamState.backend_aux`.
 //! - Native, glob, and userspace directory backends return distinct kinds.
 
+use crate::codegen_support::runtime::data::{
+    OPENDIR_WARNING_HEAD, SCANDIR_OPEN_WARNING_MIDDLE,
+};
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// opendir: open a directory stream and return its descriptor.
@@ -80,6 +83,10 @@ pub fn emit_opendir(emitter: &mut Emitter) {
 
     // -- null-terminate the directory path --
     emitter.instruction("bl __rt_path_cstr");                                   // convert the path to a C string, x0 = C string
+    emitter.instruction("str x0, [sp, #16]");                                   // the C path libc opens
+    emitter.instruction("bl __rt_path_diag_name");                              // php names the URL the program wrote
+    emitter.instruction("str x0, [sp, #24]");                                   // the path the warning below names
+    emitter.instruction("ldr x0, [sp, #16]");                                   // libc gets the path itself
 
     // -- open the directory stream --
     emitter.bl_c("opendir");
@@ -96,6 +103,16 @@ pub fn emit_opendir(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the directory descriptor
 
     emitter.label("__rt_opendir_fail");
+    // -- php says WHY, in `scandir()`'s wording, and elephc said nothing --
+    // MEASURED: `Warning: opendir(nope): Failed to open directory: No such file or directory`.
+    super::path_op_warning::emit_libc_call_aarch64(
+        emitter,
+        "_warn_opendir_head",
+        OPENDIR_WARNING_HEAD.len(),
+        Some("[sp, #24]"),
+        "_scandir_open_warn_mid",
+        SCANDIR_OPEN_WARNING_MIDDLE.len(),
+    );
     emitter.instruction("mov x0, #-1");                                         // -1 reports an opendir failure
     emitter.instruction("mov x1, #0");                                          // failed opens have no backend auxiliary owner
     emitter.instruction("mov x2, #4");                                          // retain a deterministic native backend discriminator
@@ -161,10 +178,15 @@ fn emit_opendir_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 16");                                         // reserve a spill slot for the DIR* handle
+    emitter.instruction("sub rsp, 32");                                         // the DIR* handle, and the name the warning prints
 
     // -- null-terminate the directory path --
     emitter.instruction("call __rt_path_cstr");                                 // convert the path to a C string, rax = C string
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // the C path libc opens
+    // See the AArch64 counterpart: php names the URL the program wrote.
+    emitter.instruction("call __rt_path_diag_name");
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // the name the warning below prints
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // libc gets the path itself
 
     // -- open the directory stream --
     emitter.instruction("mov rdi, rax");                                        // C-string path argument for opendir
@@ -179,15 +201,24 @@ fn emit_opendir_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // return the owning DIR* as backend auxiliary state
     emitter.instruction("mov ecx, 4");                                          // backend kind 4 identifies native directory iteration
-    emitter.instruction("add rsp, 16");                                         // release the frame
+    emitter.instruction("add rsp, 32");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the directory descriptor
 
     emitter.label("__rt_opendir_fail_x86");
+    // See the AArch64 counterpart: php says WHY, in `scandir()`'s wording.
+    super::path_op_warning::emit_libc_call_x86_64(
+        emitter,
+        "_warn_opendir_head",
+        OPENDIR_WARNING_HEAD.len(),
+        Some("[rbp - 16]"),
+        "_scandir_open_warn_mid",
+        SCANDIR_OPEN_WARNING_MIDDLE.len(),
+    );
     emitter.instruction("mov rax, -1");                                         // -1 reports an opendir failure
     emitter.instruction("xor edx, edx");                                        // failed opens have no backend auxiliary owner
     emitter.instruction("mov ecx, 4");                                          // retain a deterministic native backend discriminator
-    emitter.instruction("add rsp, 16");                                         // release the frame
+    emitter.instruction("add rsp, 32");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the failure result
 }

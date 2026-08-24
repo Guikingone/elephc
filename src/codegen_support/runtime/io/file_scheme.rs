@@ -34,7 +34,7 @@
 //! - The two entry points repeat the strip rather than share it through a flag register, for the
 //!   same reason: the flag would be a sixth live value with nowhere safe to live.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Byte length of the `file://` prefix.
 const FILE_SCHEME_LEN: i64 = 7;
@@ -59,27 +59,113 @@ pub fn emit_path_cstr(emitter: &mut Emitter) {
             emitter.blank();
             emitter.comment("--- runtime: path_cstr ---");
             emitter.label_global("__rt_path_cstr");
-            emit_strip_aarch64(emitter, "one");
-            emitter.instruction("b __rt_cstr");                                 // tail jump: __rt_cstr is a leaf
+            emit_convert_aarch64(emitter, "one", "__rt_cstr");
 
             emitter.blank();
             emitter.comment("--- runtime: path_cstr2 ---");
             emitter.label_global("__rt_path_cstr2");
-            emit_strip_aarch64(emitter, "two");
-            emitter.instruction("b __rt_cstr2");                                // tail jump: __rt_cstr2 is a leaf
+            emit_convert_aarch64(emitter, "two", "__rt_cstr2");
         }
         Arch::X86_64 => {
             emitter.blank();
             emitter.comment("--- runtime: path_cstr ---");
             emitter.label_global("__rt_path_cstr");
-            emit_strip_x86_64(emitter, "one");
-            emitter.instruction("jmp __rt_cstr");                               // tail jump: __rt_cstr is a leaf
+            emit_convert_x86_64(emitter, "one", "__rt_cstr");
 
             emitter.blank();
             emitter.comment("--- runtime: path_cstr2 ---");
             emitter.label_global("__rt_path_cstr2");
-            emit_strip_x86_64(emitter, "two");
-            emitter.instruction("jmp __rt_cstr2");                              // tail jump: __rt_cstr2 is a leaf
+            emit_convert_x86_64(emitter, "two", "__rt_cstr2");
+        }
+    }
+}
+
+/// Converts the path and answers the byte the SYSCALL should start from.
+///
+/// The WHOLE argument is copied, URL and all, and the answer points past the prefix. That keeps
+/// the buffer holding exactly what the program wrote, which is what a diagnostic has to name:
+/// php reports `file_get_contents(file:///no/such)`, not the path it reduced that to. The base is
+/// published in `_rt_path_url` for `__rt_path_diag_name` to find, and cleared when there was no
+/// URL — every other call, which is why the clear comes first.
+fn emit_convert_aarch64(emitter: &mut Emitter, tag: &str, convert: &str) {
+    let no_url = format!("__rt_path_cstr_{tag}_bare");
+    emitter.instruction("stp x29, x30, [sp, #-32]!");
+    emitter.instruction("mov x29, sp");
+    emit_strip_aarch64(emitter, tag);                                           // x3 = the prefix length, 0 when there is none
+    emitter.instruction("str x3, [sp, #16]");                                   // it has to survive the copy
+    emitter.instruction(&format!("bl {convert}"));                              // the whole argument, NUL-terminated
+    emitter.instruction("ldr x3, [sp, #16]");
+    emitter.instruction(&format!("cbz x3, {no_url}"));
+    abi::emit_store_reg_to_symbol(emitter, "x0", "_rt_path_url", 0);            // the buffer holds the URL itself
+    emitter.instruction("add x0, x0, x3");                                      // and the answer is the path it names
+    emitter.instruction("ldp x29, x30, [sp], #32");
+    emitter.instruction("ret");
+    emitter.label(&no_url);
+    // NOT x9: `emit_store_reg_to_symbol` resolves the symbol address THROUGH x9 on AArch64, so a
+    // value parked there is overwritten by the address before the store and the slot receives the
+    // address itself — which the next diagnostic then prints as bytes.
+    emitter.instruction("mov x10, #0");
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_path_url", 0);           // an ordinary path names itself
+    emitter.instruction("ldp x29, x30, [sp], #32");
+    emitter.instruction("ret");
+}
+
+/// The x86_64 counterpart.
+fn emit_convert_x86_64(emitter: &mut Emitter, tag: &str, convert: &str) {
+    let no_url = format!("__rt_path_cstr_{tag}_bare_x86");
+    emitter.instruction("push rbp");
+    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("sub rsp, 16");
+    emit_strip_x86_64(emitter, tag);                                            // rcx = the prefix length, 0 when there is none
+    emitter.instruction("mov QWORD PTR [rbp - 8], rcx");                        // it has to survive the copy
+    emitter.instruction(&format!("call {convert}"));                            // the whole argument, NUL-terminated
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");
+    emitter.instruction("test rcx, rcx");
+    emitter.instruction(&format!("jz {no_url}"));
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_rt_path_url", 0);           // the buffer holds the URL itself
+    emitter.instruction("add rax, rcx");                                        // and the answer is the path it names
+    emitter.instruction("mov rsp, rbp");
+    emitter.instruction("pop rbp");
+    emitter.instruction("ret");
+    emitter.label(&no_url);
+    emitter.instruction("xor r8d, r8d");
+    abi::emit_store_reg_to_symbol(emitter, "r8", "_rt_path_url", 0);            // an ordinary path names itself
+    emitter.instruction("mov rsp, rbp");
+    emitter.instruction("pop rbp");
+    emitter.instruction("ret");
+}
+
+/// Emits `__rt_path_diag_name(cpath) -> ptr`, the name a DIAGNOSTIC should print.
+///
+/// Answers the `file://` URL the last conversion reduced, when there was one, and the path itself
+/// otherwise. The publication is consumed: a later warning about an unrelated path must not
+/// inherit this one's URL.
+pub fn emit_path_diag_name(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: path_diag_name ---");
+            emitter.label_global("__rt_path_diag_name");
+            abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_path_url", 0);
+            emitter.instruction("cbz x10, __rt_pdn_plain");                     // no URL: the path names itself
+            emitter.instruction("mov x0, x10");                                 // php names what the program wrote
+            emitter.instruction("mov x11, #0");                                 // x9 is the symbol scratch: see `emit_convert_aarch64`
+            abi::emit_store_reg_to_symbol(emitter, "x11", "_rt_path_url", 0);   // consumed
+            emitter.label("__rt_pdn_plain");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: path_diag_name ---");
+            emitter.label_global("__rt_path_diag_name");
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_path_url", 0);
+            emitter.instruction("test r10, r10");
+            emitter.instruction("jz __rt_pdn_plain_x86");                       // no URL: the path names itself
+            emitter.instruction("mov rax, r10");                                // php names what the program wrote
+            emitter.instruction("xor r8d, r8d");
+            abi::emit_store_reg_to_symbol(emitter, "r8", "_rt_path_url", 0);    // consumed
+            emitter.label("__rt_pdn_plain_x86");
+            emitter.instruction("ret");
         }
     }
 }
@@ -88,6 +174,7 @@ pub fn emit_path_cstr(emitter: &mut Emitter) {
 fn emit_strip_aarch64(emitter: &mut Emitter, tag: &str) {
     let done = format!("__rt_path_cstr_{tag}_done");
     let take = format!("__rt_path_cstr_{tag}_take");
+    let done_taken = format!("__rt_path_cstr_{tag}_measured");
 
     emitter.instruction(&format!("cmp x2, #{FILE_SCHEME_LEN}"));
     emitter.instruction(&format!("b.lt {done}"));                               // too short to carry a scheme
@@ -128,16 +215,19 @@ fn emit_strip_aarch64(emitter: &mut Emitter, tag: &str) {
     emitter.instruction(&format!("sub x11, x11, #{LOCALHOST_LEN}"));
 
     emitter.label(&take);
-    emitter.instruction("mov x1, x10");                                         // the path the URL names
-    emitter.instruction("mov x2, x11");
+    emitter.instruction("sub x3, x10, x1");                                     // how many bytes the scheme and authority took
+    emitter.instruction(&format!("b {done_taken}"));
 
     emitter.label(&done);
+    emitter.instruction("mov x3, #0");                                          // not a URL: the whole argument is the path
+    emitter.label(&done_taken);
 }
 
 /// The x86_64 mirror: `rax` carries the pointer and `rdx` the length.
 fn emit_strip_x86_64(emitter: &mut Emitter, tag: &str) {
     let done = format!("__rt_path_cstr_{tag}_done_x86");
     let take = format!("__rt_path_cstr_{tag}_take_x86");
+    let done_taken = format!("__rt_path_cstr_{tag}_measured_x86");
 
     emitter.instruction(&format!("cmp rdx, {FILE_SCHEME_LEN}"));
     emitter.instruction(&format!("jl {done}"));                                 // too short to carry a scheme
@@ -179,10 +269,13 @@ fn emit_strip_x86_64(emitter: &mut Emitter, tag: &str) {
     emitter.instruction(&format!("sub r10, {LOCALHOST_LEN}"));
 
     emitter.label(&take);
-    emitter.instruction("mov rax, r9");                                         // the path the URL names
-    emitter.instruction("mov rdx, r10");
+    emitter.instruction("mov rcx, r9");
+    emitter.instruction("sub rcx, rax");                                        // how many bytes the scheme and authority took
+    emitter.instruction(&format!("jmp {done_taken}"));
 
     emitter.label(&done);
+    emitter.instruction("xor ecx, ecx");                                        // not a URL: the whole argument is the path
+    emitter.label(&done_taken);
 }
 
 #[cfg(test)]
@@ -215,28 +308,28 @@ mod tests {
         }
     }
 
-    /// Both arms end in a TAIL JUMP, because `__rt_cstr` is a leaf with no frame of its own.
+    /// Each entry point converts through its OWN `__rt_cstr`, and keeps the prefix length across it.
+    ///
+    /// The conversion cannot be a tail jump: the answer is the byte the SYSCALL starts from, which
+    /// is past the prefix, and only the caller of `__rt_cstr` can add that back.
     #[test]
-    fn both_arms_tail_jump_into_the_cstr_they_front() {
+    fn each_entry_point_converts_through_the_cstr_it_fronts() {
         let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
         emit_path_cstr(&mut emitter);
         let asm = emitter.output();
-        assert!(asm.contains("b __rt_cstr\n"), "must tail-jump to __rt_cstr");
-        assert!(asm.contains("b __rt_cstr2\n"), "must tail-jump to __rt_cstr2");
+        assert!(asm.contains("bl __rt_cstr\n"), "the primary buffer must be used");
+        assert!(asm.contains("bl __rt_cstr2\n"), "the second buffer must be used");
         assert!(
-            !asm.contains("bl __rt_cstr"),
-            "a call would need a link register this has not saved"
+            asm.contains("_rt_path_url"),
+            "the URL the strip reduced must be published for the diagnostics"
         );
 
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
         emit_path_cstr(&mut emitter);
         let asm = emitter.output();
-        assert!(asm.contains("jmp __rt_cstr\n"), "must tail-jump to __rt_cstr");
-        assert!(asm.contains("jmp __rt_cstr2\n"), "must tail-jump to __rt_cstr2");
-        assert!(
-            !asm.contains("call __rt_cstr"),
-            "a call would push a return address the leaf never pops"
-        );
+        assert!(asm.contains("call __rt_cstr\n"), "the primary buffer must be used");
+        assert!(asm.contains("call __rt_cstr2\n"), "the second buffer must be used");
+        assert!(asm.contains("_rt_path_url"), "the URL must be published");
     }
 
     /// The URL is reduced by moving the pointer, never by copying it.
