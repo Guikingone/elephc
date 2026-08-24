@@ -35,7 +35,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 /// Cap on live stack depth; deeper recursion stops being tracked (guarded, not
@@ -745,7 +745,7 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 pub extern "C" fn elephc_instr_request(begin: u32) {
     match begin {
         1 | 2 => {
-            if begin == 2 && !CAPTURE_ARMED.load(Ordering::Relaxed) {
+            if begin == 2 && capture_word(0).is_none_or(|a| a.load(Ordering::Acquire) == 0) {
                 return;
             }
             STATE.with(|s| s.borrow_mut().reset());
@@ -1056,6 +1056,12 @@ impl std::hash::BuildHasher for BuildIdHasher {
 /// describing a live UTF-8(-ish) byte range for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_instr_init(table: *const u8, count: usize) {
+    // Before anything else, and before any `--web` fork: a mapping established
+    // here is inherited by every worker, which is the whole point — the endpoint
+    // that asks for a slice runs in the parent, and the request that renders one
+    // runs in a child. Established even when the table is empty, since the
+    // rendezvous is not about names.
+    map_capture_region();
     if table.is_null() {
         return;
     }
@@ -1123,14 +1129,61 @@ pub extern "C" fn elephc_instr_exit(id: u32, allocs: u64, frees: u64) {
     STATE.with(|s| s.borrow_mut().exit_at(id, t, allocs, frees, io, w));
 }
 
-/// A slice someone asked to receive, rather than to read in the log.
+/// The rendezvous where an endpoint asks for a slice and a worker leaves it.
 ///
-/// `Some(None)` means armed and waiting; `Some(Some(text))` means the next dump
-/// filled it. `None` means nobody is waiting, which is the state that costs
-/// nothing: the dump checks one lock-free flag.
-static CAPTURE: Mutex<Option<Option<String>>> = Mutex::new(None);
-/// Whether anyone is waiting, so the dump path can tell without taking the lock.
-static CAPTURE_ARMED: AtomicBool = AtomicBool::new(false);
+/// Mapped MAP_SHARED at init, BEFORE any `--web` fork, for exactly the reason
+/// the sample ring is: the endpoint listener lives in the parent that accepts and
+/// forks, and the requests it wants profiled run in the children. Process-local
+/// state cannot span that, which is why the first version of this worked
+/// everywhere except the one place it was for.
+///
+/// Layout: `armed`, `filled`, `len`, then the text. Three `u32` headers and the
+/// bytes, so a reader in another process needs no allocator agreement.
+const CAPTURE_HEADER: usize = 12;
+/// One mebibyte holds a large per-function table with room to spare; a slice
+/// bigger than this is refused rather than cut, since a truncated profile is
+/// indistinguishable from a complete one.
+const CAPTURE_BYTES: usize = 1 << 20;
+/// Base address of that mapping, or 0 when it could not be established — in
+/// which case the capture is simply unavailable and the dump keeps logging.
+static CAPTURE_REGION: AtomicUsize = AtomicUsize::new(0);
+
+/// One `u32` field of the rendezvous header, addressed by index.
+fn capture_word(index: usize) -> Option<&'static AtomicU32> {
+    let base = CAPTURE_REGION.load(Ordering::Relaxed);
+    if base == 0 {
+        return None;
+    }
+    // Safety: the mapping is at least CAPTURE_HEADER bytes, established once at
+    // init and never unmapped, and `AtomicU32` has the layout of `u32`.
+    Some(unsafe { &*((base + index * 4) as *const AtomicU32) })
+}
+
+/// Maps the rendezvous. Idempotent, and silent on failure: a diagnostic that
+/// cannot allocate its scratch must not take the process down.
+fn map_capture_region() {
+    if CAPTURE_REGION.load(Ordering::Relaxed) != 0 {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    let anon = libc::MAP_ANONYMOUS;
+    #[cfg(not(target_os = "linux"))]
+    let anon = libc::MAP_ANON;
+    // Safety: an anonymous shared mapping with no fixed address.
+    let region = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            CAPTURE_BYTES,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED | anon,
+            -1,
+            0,
+        )
+    };
+    if region != libc::MAP_FAILED {
+        CAPTURE_REGION.store(region as usize, Ordering::Relaxed);
+    }
+}
 
 /// Asks for the next slice to be handed back instead of only printed.
 ///
@@ -1138,12 +1191,14 @@ static CAPTURE_ARMED: AtomicBool = AtomicBool::new(false);
 /// slice would each get half an answer. The endpoint serializes its callers.
 #[no_mangle]
 pub extern "C" fn elephc_instr_capture_arm() {
-    if let Ok(mut slot) = CAPTURE.lock() {
-        if slot.is_none() {
-            *slot = Some(None);
-        }
+    // A caller may arm before init has run in this process; mapping here as well
+    // makes the entry point self-sufficient without changing where the mapping
+    // that matters — the one inherited across the fork — is established.
+    map_capture_region();
+    if let (Some(filled), Some(armed)) = (capture_word(1), capture_word(0)) {
+        filled.store(0, Ordering::Relaxed);
+        armed.store(1, Ordering::Release);
     }
-    CAPTURE_ARMED.store(true, Ordering::Relaxed);
 }
 
 /// Takes the captured slice, if one has been rendered since arming.
@@ -1156,24 +1211,25 @@ pub extern "C" fn elephc_instr_capture_arm() {
 /// `out` must point to at least `cap` writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> usize {
-    let Ok(mut slot) = CAPTURE.lock() else {
+    let (Some(armed), Some(filled), Some(length)) =
+        (capture_word(0), capture_word(1), capture_word(2))
+    else {
         return 0;
     };
-    // Peek. The first version emptied the slot on every call, so the caller's
-    // "how long is it?" poll disarmed the capture it was waiting for and the
-    // slice could never arrive.
-    let Some(Some(text)) = slot.as_ref() else {
+    if filled.load(Ordering::Acquire) == 0 {
         return 0;
-    };
-    let len = text.len();
+    }
+    let len = length.load(Ordering::Relaxed) as usize;
+    // Peek. An earlier version consumed on every call, so the caller's "how long
+    // is it?" poll disarmed the capture it was waiting for and the slice could
+    // never arrive.
     if out.is_null() || cap < len {
-        // Report the size and keep the slice: a caller that guessed too small
-        // learns by how much rather than receiving a truncated profile.
         return len;
     }
-    std::ptr::copy_nonoverlapping(text.as_ptr(), out, len);
-    *slot = None;
-    CAPTURE_ARMED.store(false, Ordering::Relaxed);
+    let base = CAPTURE_REGION.load(Ordering::Relaxed);
+    std::ptr::copy_nonoverlapping((base + CAPTURE_HEADER) as *const u8, out, len);
+    filled.store(0, Ordering::Relaxed);
+    armed.store(0, Ordering::Relaxed);
     len
 }
 
@@ -1181,9 +1237,9 @@ pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> 
 /// diverted to nobody.
 #[no_mangle]
 pub extern "C" fn elephc_instr_capture_cancel() {
-    CAPTURE_ARMED.store(false, Ordering::Relaxed);
-    if let Ok(mut slot) = CAPTURE.lock() {
-        *slot = None;
+    if let (Some(armed), Some(filled)) = (capture_word(0), capture_word(1)) {
+        armed.store(0, Ordering::Relaxed);
+        filled.store(0, Ordering::Relaxed);
     }
 }
 
@@ -1194,19 +1250,34 @@ pub extern "C" fn elephc_instr_capture_cancel() {
 /// a log line, and printing it as well would put one request's profile in the
 /// service's log every time someone looked.
 fn offer_capture(text: &str) -> bool {
-    if !CAPTURE_ARMED.load(Ordering::Relaxed) {
-        return false;
-    }
-    let Ok(mut slot) = CAPTURE.lock() else {
+    let (Some(armed), Some(filled), Some(length)) =
+        (capture_word(0), capture_word(1), capture_word(2))
+    else {
         return false;
     };
-    match slot.as_mut() {
-        Some(waiting @ None) => {
-            *waiting = Some(text.to_string());
-            true
-        }
-        _ => false,
+    if armed.load(Ordering::Acquire) == 0 || filled.load(Ordering::Relaxed) == 1 {
+        return false;
     }
+    let bytes = text.as_bytes();
+    if bytes.len() > CAPTURE_BYTES - CAPTURE_HEADER {
+        // Too large to hand over. Reporting the true length lets the reader say
+        // so; writing what fits would produce a profile that reads as complete.
+        length.store(bytes.len() as u32, Ordering::Relaxed);
+        filled.store(1, Ordering::Release);
+        return true;
+    }
+    let base = CAPTURE_REGION.load(Ordering::Relaxed);
+    // Safety: the mapping holds CAPTURE_BYTES and the length was just checked.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            (base + CAPTURE_HEADER) as *mut u8,
+            bytes.len(),
+        );
+    }
+    length.store(bytes.len() as u32, Ordering::Relaxed);
+    filled.store(1, Ordering::Release);
+    true
 }
 
 /// Writes the exact per-function table and edge list to stderr, one line each,
@@ -1273,6 +1344,80 @@ fn end_slice() {
 
 #[cfg(test)]
 mod tests {
+    /// Arm, offer, take — the three steps the endpoint and a worker perform,
+    /// with nothing between them.
+    #[test]
+    fn a_slice_offered_while_armed_is_handed_to_the_taker() {
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        elephc_instr_capture_cancel();
+        elephc_instr_capture_arm();
+
+        let slice = "elephc-instr: hot calls=3 incl_ns=10\n";
+        assert!(super::offer_capture(slice), "an armed capture refused a slice");
+
+        // First call reports the length and keeps the slice.
+        let needed = unsafe { elephc_instr_capture_take(std::ptr::null_mut(), 0) };
+        assert_eq!(needed, slice.len(), "the taker was told the wrong length");
+
+        let mut buffer = vec![0u8; needed];
+        let written = unsafe { elephc_instr_capture_take(buffer.as_mut_ptr(), needed) };
+        assert_eq!(written, slice.len());
+        assert_eq!(String::from_utf8(buffer).unwrap(), slice);
+
+        // Consumed: a second take finds nothing, and nothing is left armed.
+        assert_eq!(unsafe { elephc_instr_capture_take(std::ptr::null_mut(), 0) }, 0);
+        assert!(!super::offer_capture("later"), "the capture stayed armed after a take");
+    }
+
+    /// A slice left by a forked child is taken by the parent.
+    ///
+    /// This is the point of mapping the rendezvous instead of keeping a static:
+    /// under `--web` the endpoint that asks lives in the parent that accepts and
+    /// forks, and the request that renders a slice runs in a worker. A test that
+    /// only exercised one process would pass on exactly the design that failed.
+    #[test]
+    fn a_slice_left_by_a_forked_child_reaches_the_parent() {
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        elephc_instr_capture_cancel();
+        map_capture_region();
+        elephc_instr_capture_arm();
+
+        let slice = "elephc-instr: forked calls=7 incl_ns=99\n";
+        // Safety: the child does nothing but write into the shared mapping and
+        // leave immediately, so it runs no destructors and takes no lock the
+        // parent holds.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            let offered = super::offer_capture(slice);
+            unsafe { libc::_exit(i32::from(!offered)) };
+        }
+
+        let mut status = 0;
+        unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert_eq!(
+            libc::WEXITSTATUS(status),
+            0,
+            "the child could not offer the slice"
+        );
+
+        let needed = unsafe { elephc_instr_capture_take(std::ptr::null_mut(), 0) };
+        assert_eq!(needed, slice.len(), "the parent saw no slice from the child");
+        let mut buffer = vec![0u8; needed];
+        let written = unsafe { elephc_instr_capture_take(buffer.as_mut_ptr(), needed) };
+        assert_eq!(written, slice.len());
+        assert_eq!(String::from_utf8(buffer).unwrap(), slice);
+    }
+
+    /// Nobody waiting means the dump keeps logging, which is the default and has
+    /// to stay free.
+    #[test]
+    fn a_slice_offered_to_nobody_is_refused() {
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        elephc_instr_capture_cancel();
+        assert!(!super::offer_capture("elephc-instr: hot calls=1\n"));
+    }
+
     /// Makes one tick worth one nanosecond, so a test that feeds synthetic
     /// timestamps reads them back unchanged.
     ///
