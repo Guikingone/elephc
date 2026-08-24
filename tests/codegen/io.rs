@@ -33,6 +33,8 @@ mod copy_dynamic_filter;
 mod null_stream_argument;
 #[path = "io/resource_id_numbering.rs"]
 mod resource_id_numbering;
+#[path = "io/directory_as_a_file.rs"]
+mod directory_as_a_file;
 #[path = "io/zlib_string_functions.rs"]
 mod zlib_string_functions;
 #[path = "io/filesystem.rs"]

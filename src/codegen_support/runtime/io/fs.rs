@@ -8,6 +8,8 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
+use crate::codegen_support::abi;
+use crate::codegen_support::runtime::data::COPY_SOURCE_IS_DIR_MSG;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits all filesystem runtime helpers: `__rt_unlink`, `__rt_mkdir`, `__rt_rmdir`,
@@ -236,6 +238,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     let dst_stat = 48 + stat_buf;
     let ino_off = emitter.platform.stat_ino_offset();
     let dev_off = emitter.platform.stat_dev_offset();
+    let mode_off = emitter.platform.stat_mode_offset();
     emitter.instruction(&format!("sub sp, sp, #{}", copy_frame));               // allocate the frame plus two stat buffers
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
@@ -252,6 +255,21 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x1, sp, #{}", src_stat));                 // fill the source stat buffer
     emitter.syscall(338);
     emitter.instruction("cbnz x0, __rt_copy_not_same_file");                    // no source to stat: the read below reports it
+    // php refuses a DIRECTORY source before it opens anything, with a sentence of its own, and
+    // never touches the destination. Without the check the read failed instead — and on macOS a
+    // failed `read(2)` answers the errno in the result register, so `EISDIR` became a 21-byte
+    // string of uninitialised heap that `copy()` wrote out and called a success.
+    emitter.instruction(&format!("ldr w9, [sp, #{}]", src_stat + mode_off));    // st_mode
+    emitter.instruction("and w9, w9, #0xF000");                                 // isolate the S_IFMT bits
+    emitter.instruction("mov w10, #0x4000");                                    // S_IFDIR
+    emitter.instruction("cmp w9, w10");
+    emitter.instruction("b.ne __rt_copy_source_not_dir");
+    abi::emit_symbol_address(emitter, "x1", "_copy_source_is_dir_msg");
+    emitter.instruction(&format!("mov x2, #{}", COPY_SOURCE_IS_DIR_MSG.len()));
+    emitter.instruction("bl __rt_diag_warning");                                // honours @ like every other php warning
+    emitter.instruction("mov x0, #0");                                          // php answers false and copies nothing
+    emitter.instruction("b __rt_copy_return");
+    emitter.label("__rt_copy_source_not_dir");
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // the destination path
     emitter.instruction("bl __rt_cstr");
     emitter.instruction(&format!("add x1, sp, #{}", dst_stat));                 // fill the destination stat buffer
@@ -373,6 +391,7 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     let dst_stat = 48 + 2 * stat_buf;
     let ino_off = emitter.platform.stat_ino_offset();
     let dev_off = emitter.platform.stat_dev_offset();
+    let mode_off = emitter.platform.stat_mode_offset();
     emitter.instruction(&format!("sub rsp, {}", copy_frame));                   // reserve the path/payload slots plus two stat buffers
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the destination elephc path pointer while the source file is read into owned storage
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the destination elephc path length while the source file is read into owned storage
@@ -386,6 +405,19 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call stat");
     emitter.instruction("test eax, eax");
     emitter.instruction("jnz __rt_copy_not_same_file_x86");                     // no source to stat: the read below reports it
+    // See the AArch64 arm: php refuses a DIRECTORY source before it opens anything.
+    emitter.instruction(&format!(
+        "mov r10d, DWORD PTR [rbp - {}]", src_stat - mode_off
+    ));                                                                         // st_mode
+    emitter.instruction("and r10d, 0xF000");                                    // isolate the S_IFMT bits
+    emitter.instruction("cmp r10d, 0x4000");                                    // S_IFDIR
+    emitter.instruction("jne __rt_copy_source_not_dir_x86");
+    abi::emit_symbol_address(emitter, "rdi", "_copy_source_is_dir_msg");
+    emitter.instruction(&format!("mov esi, {}", COPY_SOURCE_IS_DIR_MSG.len()));
+    emitter.instruction("call __rt_diag_warning");                              // honours @ like every other php warning
+    emitter.instruction("xor eax, eax");                                        // php answers false and copies nothing
+    emitter.instruction("jmp __rt_copy_return_x86");
+    emitter.label("__rt_copy_source_not_dir_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the destination path
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");
     emitter.instruction("call __rt_cstr");

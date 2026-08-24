@@ -531,6 +531,25 @@ pub(crate) const STACK_OVERFLOW_MSG: &str =
 ///
 /// The only array-meets-string case php leaves silent is a loose COMPARISON, which never converts.
 pub(crate) const ARRAY_TO_STRING_MSG: &str = "Warning: Array to string conversion\n";
+/// php's own refusal when `copy()` is handed a DIRECTORY to read.
+///
+/// php-src checks this before it opens anything, so the destination is never touched and the
+/// answer is `false`. Without the check the read failed instead — and on macOS a failed `read(2)`
+/// answers the errno in the result register, so `EISDIR` became a 21-byte string of uninitialised
+/// heap that `copy()` cheerfully wrote out and called a success.
+/// Head of php's Notice when a read fails after the file was successfully opened.
+///
+/// php names the function, the number of bytes it ASKED for — the size `stat` reported — the
+/// `errno`, and the system's own text for it. Reading a directory is how a program meets this
+/// one: `Notice: file_get_contents(): Read of 156864 bytes failed with errno=21 Is a directory`.
+pub(crate) const FGC_READ_FAILED_HEAD: &str = "Notice: file_get_contents(): Read of ";
+
+/// Middle of that Notice, between the byte count and the error number.
+pub(crate) const FGC_READ_FAILED_MID: &str = " bytes failed with errno=";
+
+/// php's own refusal when `copy()` is handed a DIRECTORY to read.
+pub(crate) const COPY_SOURCE_IS_DIR_MSG: &str =
+    "Warning: copy(): The first argument to copy() function cannot be a directory\n";
 /// Fatal error message when an array allocation request cannot be sized safely,
 /// i.e. `capacity * elem_size` does not fit in the machine word. PHP reports the
 /// same class of failure as a `ValueError` naming the offending argument

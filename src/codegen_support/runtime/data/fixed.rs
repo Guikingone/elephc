@@ -10,7 +10,7 @@
 
 use super::{
     ALLOC_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, ARRAY_TO_STRING_MSG, BUFFER_ALLOC_SIZE_MSG,
-    RANGE_SIZE_MSG,
+    COPY_SOURCE_IS_DIR_MSG, FGC_READ_FAILED_HEAD, FGC_READ_FAILED_MID, RANGE_SIZE_MSG,
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, MB_STRLEN_UNKNOWN_ENCODING_MSG,
@@ -237,6 +237,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ("_fpc_mode_w", "w"),
         ("_fpc_mode_a", "a"),
         ("_fgc_filter_fail_tail", FGC_FILTER_FAIL_TAIL),
+        ("_fgc_read_failed_head", FGC_READ_FAILED_HEAD),
+        ("_fgc_read_failed_mid", FGC_READ_FAILED_MID),
+        ("_diag_space", " "),
         ("_pf_w_head", PF_WARN_HEAD),
         ("_pf_w_locate_mid", PF_WARN_LOCATE_MID),
         ("_pf_w_locate_end", PF_WARN_LOCATE_END),
@@ -593,6 +596,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&format!(
         ".globl _array_to_string_msg\n_array_to_string_msg:\n    .ascii {:?}\n",
         ARRAY_TO_STRING_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _copy_source_is_dir_msg\n_copy_source_is_dir_msg:\n    .ascii {:?}\n",
+        COPY_SOURCE_IS_DIR_MSG
     ));
     out.push_str(".globl _match_unhandled_msg\n_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
     out.push_str(".globl _static_prop_private_access_msg\n_static_prop_private_access_msg:\n    .ascii \"Fatal error: Cannot access private static property\\n\"\n");
