@@ -21,7 +21,10 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
-use crate::codegen_support::runtime::resources::layout::STREAM_READ_FILTER_HEAD_OFFSET;
+use crate::codegen_support::runtime::resources::layout::{
+    STREAM_PENDING_LEN_OFFSET, STREAM_PENDING_POS_OFFSET, STREAM_PENDING_PTR_OFFSET,
+    STREAM_READ_FILTER_HEAD_OFFSET,
+};
 
 /// Initial reserved line capacity, in bytes. Long enough that ordinary text lines never grow,
 /// small enough that a `while (fgets($f))` loop still stays inside the shared concat scratch.
@@ -58,9 +61,9 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     //        [24]=line capacity [32]=wrapper byte scratch [40]=backend descriptor
     //        [48]=caller's length bound (0 = unbounded) [56]=read-filter chain head
     //        [64]=this iteration's destination, held across the pending-bytes probe
-    emitter.instruction("sub sp, sp, #96");                                     // allocate the frame plus the bound and destination slots
-    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #80");                                    // establish new frame pointer
+    emitter.instruction("sub sp, sp, #112");                                    // allocate the frame plus the bound and destination slots
+    emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #96");                                    // establish new frame pointer
     emitter.instruction("str x1, [sp, #48]");                                   // preserve the caller's length bound
 
     // -- save the handle and resolve the backend descriptor --
@@ -124,6 +127,73 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     // -- read loop: one byte at a time until \n or EOF --
     emitter.label("__rt_fgets_loop");
 
+    // -- the held bytes are scanned WHERE THEY LIE, and the line is taken in ONE call --
+    //
+    // The loop below advances ONE BYTE per iteration, and each of those bytes costs a call that
+    // resolves the stream state before it copies anything. That is what a line costs: `fgets()`
+    // over a 900 KB file measured 420 ms against php's 4 ms — a hundredfold, on the most ordinary
+    // way there is to read a file. Nothing about the ANSWER changes here: the same newline scan
+    // runs over the same bytes in the same order, and stops after the same one.
+    //
+    // The byte path below is untouched and still does every job this cannot: it REFILLS the
+    // holding area, grows the line window when a line outruns it, and serves a filtered stream.
+    emitter.instruction("ldr x9, [sp, #56]");                                   // the read-direction chain head
+    emitter.instruction("cbnz x9, __rt_fgets_loop_byte");                       // a filtered stream pulls through the chain
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_state");
+    emitter.instruction("cbz x0, __rt_fgets_loop_byte");                        // no state: nothing can be held
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_PENDING_PTR_OFFSET}]"));
+    emitter.instruction("cbz x9, __rt_fgets_loop_byte");                        // nothing held: the byte path refills
+    emitter.instruction(&format!("ldr x10, [x0, #{STREAM_PENDING_LEN_OFFSET}]"));
+    emitter.instruction(&format!("ldr x11, [x0, #{STREAM_PENDING_POS_OFFSET}]"));
+    emitter.instruction("subs x12, x10, x11");                                  // bytes still held
+    emitter.instruction("b.le __rt_fgets_loop_byte");                           // drained: the byte path refills
+    emitter.instruction("add x9, x9, x11");                                     // the first byte still held
+    emitter.instruction("ldr x13, [sp, #8]");                                   // the line so far
+    emitter.instruction("ldr x14, [sp, #24]");                                  // the window already reserved
+    emitter.instruction("subs x14, x14, x13");                                  // room without growing it
+    emitter.instruction("b.le __rt_fgets_loop_byte");                           // full: the byte path grows the window
+    emitter.instruction("cmp x12, x14");
+    emitter.instruction("csel x12, x14, x12, gt");                              // take at most what fits
+    emitter.instruction("ldr x14, [sp, #48]");                                  // the caller's bound (0 = unbounded)
+    emitter.instruction("cbz x14, __rt_fgets_bulk_room_ok");
+    emitter.instruction("sub x14, x14, #1");                                    // php fills `$length - 1` bytes
+    emitter.instruction("subs x14, x14, x13");                                  // room left under the bound
+    emitter.instruction("b.le __rt_fgets_done");                                // bound reached: hand back what we have
+    emitter.instruction("cmp x12, x14");
+    emitter.instruction("csel x12, x14, x12, gt");
+    emitter.label("__rt_fgets_bulk_room_ok");
+    emitter.instruction("ldr x15, [sp, #16]");                                  // the line window
+    emitter.instruction("add x15, x15, x13");                                   // where this batch lands
+    emitter.instruction("mov x16, #0");                                         // bytes taken this batch
+    emitter.label("__rt_fgets_bulk_scan");
+    emitter.instruction("cmp x16, x12");
+    emitter.instruction("b.ge __rt_fgets_bulk_copied");                         // the batch is exhausted
+    emitter.instruction("ldrb w17, [x9, x16]");                                 // one held byte
+    emitter.instruction("strb w17, [x15, x16]");                                // appended to the line
+    emitter.instruction("add x16, x16, #1");
+    emitter.instruction("cmp w17, #0x0A");                                      // php keeps the newline and stops AFTER it
+    emitter.instruction("b.ne __rt_fgets_bulk_scan");
+    emitter.label("__rt_fgets_bulk_copied");
+    emitter.instruction("cbz x16, __rt_fgets_loop_byte");                       // nothing taken after all
+    emitter.instruction("str x16, [sp, #80]");                                  // the count must survive the consume call
+    emitter.instruction("sub x17, x16, #1");
+    emitter.instruction("ldrb w17, [x9, x17]");                                 // the last byte taken
+    emitter.instruction("cmp w17, #0x0A");
+    emitter.instruction("cset x17, eq");                                        // did the line end here?
+    emitter.instruction("str x17, [sp, #88]");
+    emitter.instruction("ldr x13, [sp, #8]");
+    emitter.instruction("add x13, x13, x16");                                   // the line grew by the batch
+    emitter.instruction("str x13, [sp, #8]");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("ldr x1, [sp, #80]");                                   // and what this batch consumed
+    emitter.instruction("bl __rt_stream_pending_consume");
+    emitter.instruction("ldr x17, [sp, #88]");
+    emitter.instruction("cbnz x17, __rt_fgets_done");                           // the newline ends the line
+    emitter.instruction("b __rt_fgets_loop");
+
+    emitter.label("__rt_fgets_loop_byte");
+
     // -- stop before reading once the caller's bound is reached --
     // PHP reads at most `$length - 1` bytes, so a bound of 1 returns nothing and `fgets()`
     // reports false. Zero means the caller passed no bound.
@@ -170,6 +240,25 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #1");                                          // one held byte
     emitter.instruction("bl __rt_stream_pending_take");                         // x0 = 1 when one came back
     emitter.instruction("cbnz x0, __rt_fgets_byte_ready");                      // join the shared newline scan
+
+    // -- nothing held: fill the holding area a CHUNK at a time, the way php does --
+    //
+    // A line reader cannot ask for the bytes it wants, because it does not know how many there
+    // are until it finds the newline. So this loop asked for ONE, and paid a `read(2)` for it:
+    // 538 ms over a 900 KB file of 100 000 lines, where php takes 7 ms. Filling the stream's own
+    // holding area is what php does with every read, and it is what makes the scan above find a
+    // whole line in memory instead of a byte on a descriptor.
+    //
+    // A fill that buffers nothing — a pipe, a failed read, end of file — falls straight through
+    // to the single-byte read below, which keeps every EOF and errno answer exactly where it was.
+    emitter.instruction("ldr x0, [sp, #40]");                                   // the backend descriptor
+    emitter.instruction("bl __rt_stream_fd_is_regular");                        // S_ISREG: sockets, pipes and ttys read exactly what they are asked
+    emitter.instruction("cbz x0, __rt_fgets_read_one");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_pending_fill");                         // x0 = bytes now held
+    emitter.instruction("cbnz x0, __rt_fgets_loop");                            // the scan above takes the line out of them
+
+    emitter.label("__rt_fgets_read_one");
     emitter.instruction("ldr x1, [sp, #64]");                                   // the destination again
 
     // -- read 1 byte via syscall --
@@ -291,8 +380,8 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.label("__rt_fgets_wrapper_done");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_user_wrapper_drain_buf"); // line pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // line length
-    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #96");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #112");                                    // deallocate stack frame
     emitter.instruction("ret");                                                 // return the wrapper line (ptr/len)
 
     // -- nonblocking read miss: return accumulated bytes without EOF --
@@ -318,8 +407,8 @@ pub fn emit_fgets(emitter: &mut Emitter) {
 
     // -- restore frame and return --
     emitter.label("__rt_fgets_return");
-    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #96");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #112");                                    // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 

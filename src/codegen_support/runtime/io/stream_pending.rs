@@ -217,6 +217,195 @@ pub fn emit_stream_pending_clear(emitter: &mut Emitter) {
     }
 }
 
+/// Emits `__rt_stream_pending_consume(handle, n)`, which advances the read cursor by `n`.
+///
+/// The companion of reading the holding area IN PLACE. `__rt_stream_pending_take` copies bytes
+/// out one call at a time, and a line reader that wants to find a newline before it commits had
+/// to take ONE BYTE per call: `fgets()` over a 900 KB file spent 420 ms in this helper's frame,
+/// where php takes 4 ms. A reader can now scan the held bytes where they lie and consume the
+/// line in one call.
+///
+/// Releases the block once it is drained, exactly as `take` does — a stream that is not holding
+/// anything must not keep an allocation alive.
+pub fn emit_stream_pending_consume(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: consume retained stream bytes ---");
+            emitter.label_global("__rt_stream_pending_consume");
+            emitter.instruction("sub sp, sp, #32");
+            emitter.instruction("stp x29, x30, [sp, #16]");
+            emitter.instruction("add x29, sp, #16");
+            emitter.instruction("str x1, [sp, #0]");                            // how many bytes the caller consumed
+            emitter.instruction("bl __rt_stream_state");                        // resolve the owning stream state
+            emitter.instruction("cbz x0, __rt_spc2_done");                      // a stale handle holds nothing
+            emitter.instruction(&format!("ldr x9, [x0, #{STREAM_PENDING_PTR_OFFSET}]"));
+            emitter.instruction("cbz x9, __rt_spc2_done");                      // nothing held: nothing to advance
+            emitter.instruction("ldr x10, [sp, #0]");                           // the consumed count
+            emitter.instruction(&format!("ldr x11, [x0, #{STREAM_PENDING_POS_OFFSET}]"));
+            emitter.instruction("add x11, x11, x10");                           // advance the read cursor
+            emitter.instruction(&format!("str x11, [x0, #{STREAM_PENDING_POS_OFFSET}]"));
+            emitter.instruction(&format!("ldr x12, [x0, #{STREAM_PENDING_LEN_OFFSET}]"));
+            emitter.instruction("cmp x11, x12");
+            emitter.instruction("b.lt __rt_spc2_done");                         // more is still held
+            emitter.instruction(&format!("str xzr, [x0, #{STREAM_PENDING_PTR_OFFSET}]"));
+            emitter.instruction(&format!("str xzr, [x0, #{STREAM_PENDING_LEN_OFFSET}]"));
+            emitter.instruction(&format!("str xzr, [x0, #{STREAM_PENDING_POS_OFFSET}]"));
+            emitter.instruction("mov x0, x9");
+            emitter.instruction("bl __rt_heap_free");                           // drained: the holding area is empty again
+            emitter.label("__rt_spc2_done");
+            emitter.instruction("ldp x29, x30, [sp, #16]");
+            emitter.instruction("add sp, sp, #32");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: consume retained stream bytes ---");
+            emitter.label_global("__rt_stream_pending_consume");
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("sub rsp, 16");
+            emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                // how many bytes the caller consumed
+            emitter.instruction("call __rt_stream_state");                      // resolve the owning stream state
+            emitter.instruction("test rax, rax");
+            emitter.instruction("jz __rt_spc2_done_x86");                       // a stale handle holds nothing
+            emitter.instruction(&format!(
+                "mov r9, QWORD PTR [rax + {STREAM_PENDING_PTR_OFFSET}]"
+            ));
+            emitter.instruction("test r9, r9");
+            emitter.instruction("jz __rt_spc2_done_x86");                       // nothing held: nothing to advance
+            emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // the consumed count
+            emitter.instruction(&format!(
+                "add QWORD PTR [rax + {STREAM_PENDING_POS_OFFSET}], r10"
+            ));                                                                 // advance the read cursor
+            emitter.instruction(&format!(
+                "mov r10, QWORD PTR [rax + {STREAM_PENDING_POS_OFFSET}]"
+            ));
+            emitter.instruction(&format!(
+                "cmp r10, QWORD PTR [rax + {STREAM_PENDING_LEN_OFFSET}]"
+            ));
+            emitter.instruction("jl __rt_spc2_done_x86");                       // more is still held
+            emitter.instruction(&format!(
+                "mov QWORD PTR [rax + {STREAM_PENDING_PTR_OFFSET}], 0"
+            ));
+            emitter.instruction(&format!(
+                "mov QWORD PTR [rax + {STREAM_PENDING_LEN_OFFSET}], 0"
+            ));
+            emitter.instruction(&format!(
+                "mov QWORD PTR [rax + {STREAM_PENDING_POS_OFFSET}], 0"
+            ));
+            emitter.instruction("mov rdi, r9");
+            emitter.instruction("call __rt_heap_free");                         // drained: the holding area is empty again
+            emitter.label("__rt_spc2_done_x86");
+            emitter.instruction("mov rsp, rbp");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
+}
+
+/// Emits `__rt_stream_pending_fill(handle) -> n`, which reads ONE CHUNK onto the stream.
+///
+/// php never asks a file for the bytes a caller wanted; it asks for a whole chunk and keeps the
+/// surplus in the stream's own read buffer. `__rt_fread` already does that for a read request.
+/// A LINE reader cannot: it does not know how many bytes it wants until it finds the newline, so
+/// `fgets()` fell back to reading ONE BYTE at a time — one `read(2)` per byte. MEASURED over a
+/// 900 KB file of 100 000 lines: 538 ms, where php takes 7 ms.
+///
+/// This is the missing half — fill, with nothing taken back. The reader then finds the newline
+/// in the holding area and takes the whole line out in one go.
+///
+/// Answers 0 whenever it did not buffer anything (a non-regular backend, a failed read, end of
+/// file), so a caller can simply fall through to whatever it did before.
+///
+/// EOF is the CALLER's question, not the fill's: `__rt_fread` judges its short chunk against the
+/// CHUNK it asked for and would leave `feof()` true with 8 000 unread bytes on the stream, so a
+/// fill that produced bytes clears it again.
+pub fn emit_stream_pending_fill(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: fill the stream holding area with one chunk ---");
+            emitter.label_global("__rt_stream_pending_fill");
+            // Frame: [0]=handle [8]=chunk ptr [16]=chunk len
+            emitter.instruction("sub sp, sp, #48");
+            emitter.instruction("stp x29, x30, [sp, #32]");
+            emitter.instruction("add x29, sp, #32");
+            emitter.instruction("str x0, [sp, #0]");                            // the opaque stream handle
+            emitter.instruction("bl __rt_stream_pending_held");
+            emitter.instruction("cbnz x0, __rt_spf_done");                      // already holding: that IS the fill
+            emitter.instruction("ldr x0, [sp, #0]");
+            emitter.instruction("bl __rt_stream_chunk_size");                   // x0 = what php would ask for
+            emitter.instruction("mov x1, x0");
+            emitter.instruction("ldr x0, [sp, #0]");
+            emitter.instruction("bl __rt_fread");                               // x0 = flag, x1 = ptr, x2 = len
+            emitter.instruction("cbz x2, __rt_spf_none");                       // the source had nothing to give
+            emitter.instruction("stp x1, x2, [sp, #8]");                        // the chunk outlives the calls below
+            emitter.instruction("ldr x0, [sp, #0]");
+            emitter.instruction("ldr x1, [sp, #8]");
+            emitter.instruction("ldr x2, [sp, #16]");
+            emitter.instruction("bl __rt_stream_pending_put");                  // the WHOLE chunk belongs to the stream
+            emitter.instruction("ldr x1, [sp, #8]");
+            emitter.instruction("mov x2, #0");
+            emitter.instruction("bl __rt_concat_publish");                      // hand the scratch window back
+            emitter.instruction("ldr x0, [sp, #8]");
+            emitter.instruction("bl __rt_decref_any");                          // the copy on the stream is the one that lives
+            emitter.instruction("ldr x0, [sp, #0]");
+            emitter.instruction("mov x1, #0");
+            emitter.instruction("bl __rt_stream_eof_set");                      // bytes in hand are not end of file
+            emitter.instruction("ldr x0, [sp, #16]");                           // answer what was buffered
+            emitter.instruction("b __rt_spf_done");
+            emitter.label("__rt_spf_none");
+            emitter.instruction("mov x0, xzr");                                 // nothing buffered: the caller decides
+            emitter.label("__rt_spf_done");
+            emitter.instruction("ldp x29, x30, [sp, #32]");
+            emitter.instruction("add sp, sp, #48");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: fill the stream holding area with one chunk ---");
+            emitter.label_global("__rt_stream_pending_fill");
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("sub rsp, 32");
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // the opaque stream handle
+            emitter.instruction("call __rt_stream_pending_held");
+            emitter.instruction("test rax, rax");
+            emitter.instruction("jnz __rt_spf_done_x86");                       // already holding: that IS the fill
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+            emitter.instruction("call __rt_stream_chunk_size");                 // rax = what php would ask for
+            emitter.instruction("mov rsi, rax");
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+            emitter.instruction("call __rt_fread");                             // rax = ptr, rdx = len, rcx = flag
+            emitter.instruction("test rdx, rdx");
+            emitter.instruction("jz __rt_spf_none_x86");                        // the source had nothing to give
+            emitter.instruction("mov QWORD PTR [rbp - 16], rax");               // the chunk outlives the calls below
+            emitter.instruction("mov QWORD PTR [rbp - 24], rdx");
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");
+            emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");
+            emitter.instruction("call __rt_stream_pending_put");                // the WHOLE chunk belongs to the stream
+            emitter.instruction("mov rax, QWORD PTR [rbp - 16]");               // publish reads RAX/RDX
+            emitter.instruction("xor edx, edx");
+            emitter.instruction("call __rt_concat_publish");                    // hand the scratch window back
+            emitter.instruction("mov rax, QWORD PTR [rbp - 16]");               // decref reads RAX, not rdi
+            emitter.instruction("call __rt_decref_any");                        // the copy on the stream is the one that lives
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+            emitter.instruction("xor esi, esi");
+            emitter.instruction("call __rt_stream_eof_set");                    // bytes in hand are not end of file
+            emitter.instruction("mov rax, QWORD PTR [rbp - 24]");               // answer what was buffered
+            emitter.instruction("jmp __rt_spf_done_x86");
+            emitter.label("__rt_spf_none_x86");
+            emitter.instruction("xor eax, eax");                                // nothing buffered: the caller decides
+            emitter.label("__rt_spf_done_x86");
+            emitter.instruction("mov rsp, rbp");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
+}
+
 /// Emits `__rt_stream_pending_held(handle) -> n`, the count of bytes still in the holding area.
 ///
 /// `ftell()` probes the DESCRIPTOR, which has already moved past everything a read pulled ahead.

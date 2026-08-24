@@ -27,6 +27,8 @@ mod wrapper_read_buffer;
 mod wrapper_chunk_reads;
 #[path = "io/read_buffer.rs"]
 mod read_buffer;
+#[path = "io/line_reads.rs"]
+mod line_reads;
 #[path = "io/copy_dynamic_filter.rs"]
 mod copy_dynamic_filter;
 #[path = "io/null_stream_argument.rs"]
