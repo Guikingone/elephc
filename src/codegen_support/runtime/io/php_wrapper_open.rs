@@ -101,9 +101,17 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_pwo_tmpfile");                               // php://memory and php://temp
     emitter.instruction("cmp w11, #4");                                         // a descriptor named in the URL?
     emitter.instruction("b.eq __rt_pwo_fd_number");                             // php://fd/N
+    emitter.instruction("cmp w11, #5");                                         // php://temp, which also consumes an id
+    emitter.instruction("b.eq __rt_pwo_tmpfile_temp");
     emitter.instruction("mov x0, x11");                                         // otherwise the action IS the descriptor
     emitter.instruction("b __rt_pwo_dup");                                      // hand out a copy of it
 
+    // `php://temp` opens the same anonymous buffer as `php://memory` and, in php, registers a
+    // SECOND resource for the memory stream it wraps. The flag is published here and burnt by
+    // the caller once the stream has taken its own id, so the temp stream keeps the FIRST one.
+    emitter.label("__rt_pwo_tmpfile_temp");
+    abi::emit_load_int_immediate(emitter, "x9", 1);
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_php_temp_id_pending", 0);
     emitter.label("__rt_pwo_tmpfile");
     emitter.instruction("bl __rt_tmpfile");                                     // x0 = the temporary descriptor
     emitter.instruction("b __rt_pwo_done");                                     // it is already ours to hand out
@@ -265,12 +273,19 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_pwo_matched_x");
     emitter.instruction(&format!("movzx r11d, BYTE PTR [r9 + {RECORD_ACTION_OFFSET}]")); // what this scheme opens
     emitter.instruction("cmp r11, 3");                                          // an anonymous temporary buffer?
-    emitter.instruction("je __rt_pwo_tmpfile_x");                               // php://memory and php://temp
+    emitter.instruction("je __rt_pwo_tmpfile_x");                               // php://memory
     emitter.instruction("cmp r11, 4");                                          // a descriptor named in the URL?
     emitter.instruction("je __rt_pwo_fd_number_x");                             // php://fd/N
+    emitter.instruction("cmp r11, 5");                                          // php://temp, which also consumes an id
+    emitter.instruction("je __rt_pwo_tmpfile_temp_x");
     emitter.instruction("mov rdi, r11");                                        // otherwise the action IS the descriptor
     emitter.instruction("jmp __rt_pwo_dup_x");                                  // hand out a copy of it
 
+    // See the AArch64 counterpart: php registers a second resource for the memory stream a
+    // `php://temp` wraps, and the caller burns the id once this stream has taken its own.
+    emitter.label("__rt_pwo_tmpfile_temp_x");
+    abi::emit_load_int_immediate(emitter, "r9", 1);
+    abi::emit_store_reg_to_symbol(emitter, "r9", "_php_temp_id_pending", 0);
     emitter.label("__rt_pwo_tmpfile_x");
     emitter.instruction("call __rt_tmpfile");                                   // rax = the temporary descriptor
     emitter.instruction("jmp __rt_pwo_done_x");                                 // it is already ours to hand out

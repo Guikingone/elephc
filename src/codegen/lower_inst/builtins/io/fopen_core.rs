@@ -499,6 +499,17 @@ fn emit_dynamic_data_branch(
     Ok(())
 }
 
+/// Consumes the SECOND php resource id a `php://temp` open takes.
+///
+/// The result register holds the boxed stream and must survive, so the flag is published and the
+/// runtime helper reads it — the helper touches only its own scratch.
+fn emit_burn_php_temp_resource_id(ctx: &mut FunctionContext<'_>) {
+    let value = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, value, 1);
+    abi::emit_store_reg_to_symbol(ctx.emitter, value, "_php_temp_id_pending", 0);
+    abi::emit_call_label(ctx.emitter, "__rt_resource_id_burn_if_pending");
+}
+
 /// Opens a runtime filename that carries the `php://` prefix, falling through when it does not.
 ///
 /// The literal path resolves its wrapper at compile time; a runtime path had no such dispatch and
@@ -545,6 +556,9 @@ fn emit_dynamic_php_wrapper_branch(
         abi::emit_call_label(ctx.emitter, "__rt_fd_set_append");
     }
     box_stream_fd_or_false_result(ctx, "fopen_php_dynamic");
+    // A run-time `php://temp` published the flag inside `__rt_php_wrapper_open`; burning it here
+    // is what leaves the temp stream on the FIRST of the two ids php gives it.
+    abi::emit_call_label(ctx.emitter, "__rt_resource_id_burn_if_pending");
     emit_dynamic_php_filter_finish(ctx, "fopen");                               // the parked chain, and what php says about the names it could not resolve
     emit_record_stream_meta_after_boxed_stashed(ctx, 6);
     emit_record_stream_mode_after_boxed(ctx, expect_operand(inst, 1)?)?;
@@ -1154,6 +1168,12 @@ pub(super) fn emit_literal_fopen_result(
             abi::emit_call_label(ctx.emitter, "__rt_fd_set_append");
         }
         box_stream_fd_or_false_result(ctx, "fopen");
+        // php's `php://temp` wraps a memory stream and registers BOTH, so it consumes the id
+        // AFTER its own. Burning it here rather than inside the open is what keeps the temp
+        // stream on the FIRST id — measured, memory-temp-memory numbers `5, 6, 8`.
+        if is_php_temp_stream(path) {
+            emit_burn_php_temp_resource_id(ctx);
+        }
         emit_record_stream_meta_after_boxed_literal(ctx, 6, path);
         return Ok(());
     }

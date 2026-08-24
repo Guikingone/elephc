@@ -126,6 +126,54 @@ pub(crate) fn emit_resource_ids(emitter: &mut Emitter) {
             emit_resource_id_of_x86_64(emitter);
         }
     }
+    emit_resource_id_burn(emitter);
+}
+
+/// Emits `__rt_resource_id_burn_if_pending()`, which consumes one php resource id.
+///
+/// php's `php://temp` is a temporary-file stream WRAPPING a memory stream, and php registers
+/// BOTH — so the next id after a `php://temp` open is two higher, not one. Measured on `php -n`
+/// 8.5.6: three `php://memory` opens number `5, 6, 7`, while memory-temp-memory numbers
+/// `5, 6, 8`. Closing a stream does not give its id back on either side.
+///
+/// The burn happens AFTER the stream has taken its own id, which is why it is a separate step
+/// rather than a second allocation inside the open: the temp stream keeps the FIRST id.
+///
+/// Reads and clears `_php_temp_id_pending`, so an open that did not set it costs one load.
+fn emit_resource_id_burn(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: resource_id_burn_if_pending ---");
+            emitter.label_global("__rt_resource_id_burn_if_pending");
+            abi::emit_symbol_address(emitter, "x9", "_php_temp_id_pending");
+            emitter.instruction("ldr x10, [x9]");                               // did an open ask for the second id?
+            emitter.instruction("cbz x10, __rt_ridb_done");                     // the common case: nothing to burn
+            emitter.instruction("str xzr, [x9]");                               // one open, one burn
+            abi::emit_symbol_address(emitter, "x9", "_resource_id_next");
+            emitter.instruction("ldr x10, [x9]");
+            emitter.instruction("add x10, x10, #1");                            // the inner stream php also registers
+            emitter.instruction("str x10, [x9]");
+            emitter.label("__rt_ridb_done");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: resource_id_burn_if_pending ---");
+            emitter.label_global("__rt_resource_id_burn_if_pending");
+            abi::emit_symbol_address(emitter, "r9", "_php_temp_id_pending");
+            emitter.instruction("mov r10, QWORD PTR [r9]");                     // did an open ask for the second id?
+            emitter.instruction("test r10, r10");
+            emitter.instruction("jz __rt_ridb_done_x86");                       // the common case: nothing to burn
+            emitter.instruction("mov QWORD PTR [r9], 0");                       // one open, one burn
+            abi::emit_symbol_address(emitter, "r9", "_resource_id_next");
+            emitter.instruction("mov r10, QWORD PTR [r9]");
+            emitter.instruction("add r10, 1");                                  // the inner stream php also registers
+            emitter.instruction("mov QWORD PTR [r9], r10");
+            emitter.label("__rt_ridb_done_x86");
+            emitter.instruction("ret");
+        }
+    }
 }
 
 /// Emits the AArch64 `__rt_resource_id_mint`.

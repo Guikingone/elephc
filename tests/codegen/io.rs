@@ -31,6 +31,8 @@ mod read_buffer;
 mod copy_dynamic_filter;
 #[path = "io/null_stream_argument.rs"]
 mod null_stream_argument;
+#[path = "io/resource_id_numbering.rs"]
+mod resource_id_numbering;
 #[path = "io/zlib_string_functions.rs"]
 mod zlib_string_functions;
 #[path = "io/filesystem.rs"]

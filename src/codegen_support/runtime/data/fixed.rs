@@ -531,6 +531,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // the first stream a script opens. Seeding at 5 instead made the context consume 5
     // and shifted every user resource by one.
     out.push_str(".globl _resource_id_next\n_resource_id_next:\n    .quad 4\n");
+    // Set by an open that must consume a SECOND php resource id once its own stream has one.
+    // `php://temp` is php's only such stream: it is a temporary-file stream wrapping a memory
+    // stream, and BOTH are registered — measured, a `php://temp` opened between two
+    // `php://memory` opens leaves a hole in the numbering, `5, 6, 8`.
+    out.push_str(".globl _php_temp_id_pending\n_php_temp_id_pending:\n    .quad 0\n");
     // Gate 1 opaque resource registry. Handles contain only a generation and a
     // one-based slot index; no OS descriptor is PHP-visible.
     //
@@ -1980,7 +1985,9 @@ fn emit_php_uname_data() -> String {
 /// `fd/N` carry a suffix) or must match exactly. A zero length terminates the table.
 fn emit_php_wrapper_scheme_table() -> String {
     // (name, action, prefix-match). Actions: 0/1/2 duplicate that descriptor, 3 opens an
-    // anonymous temporary buffer, 4 parses the descriptor number out of the rest of the name.
+    // anonymous temporary buffer, 4 parses the descriptor number out of the rest of the name,
+    // 5 opens that same buffer and ALSO consumes a second php resource id — `php://temp` is a
+    // temporary-file stream wrapping a memory stream, and php registers both.
     const SCHEMES: &[(&str, u8, bool)] = &[
         ("stdin", 0, false),
         ("input", 0, false),
@@ -1988,8 +1995,8 @@ fn emit_php_wrapper_scheme_table() -> String {
         ("output", 1, false),
         ("stderr", 2, false),
         ("memory", 3, false),
-        ("temp", 3, false),
-        ("temp/", 3, true),
+        ("temp", 5, false),
+        ("temp/", 5, true),
         ("fd/", 4, true),
     ];
     let mut out = String::new();

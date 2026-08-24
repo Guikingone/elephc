@@ -1244,6 +1244,14 @@ pub(super) fn php_fd_number(text: &str) -> Option<i64> {
 
 /// Recognizes in-memory `php://` stream URLs backed by the temp-file helper.
 pub(super) fn is_php_memory_stream(path: &str) -> bool {
-    path == "php://memory" || path == "php://temp" || path.starts_with("php://temp/")
+    path == "php://memory" || is_php_temp_stream(path)
+}
+
+/// Whether a literal path names `php://temp`, with or without its `/maxmemory:N` suffix.
+///
+/// Told apart from `php://memory` for ONE reason: php's temp stream wraps a memory stream and
+/// registers both, so it consumes two resource ids where memory consumes one.
+pub(super) fn is_php_temp_stream(path: &str) -> bool {
+    path == "php://temp" || path.starts_with("php://temp/")
 }
 
