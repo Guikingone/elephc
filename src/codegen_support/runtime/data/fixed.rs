@@ -847,6 +847,13 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _diag_undefined_array_key_quote\n_diag_undefined_array_key_quote:\n    .ascii \"\\\"\"\n");
     out.push_str(".globl _diag_undefined_array_key_suffix\n_diag_undefined_array_key_suffix:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _diag_array_offset_on_null\n_diag_array_offset_on_null:\n    .ascii \"Warning: Trying to access array offset on null\\n\"\n");
+    // php names the TYPE of the value an offset was read through, and a bool by its VALUE.
+    // These are the boxed-Mixed spellings of the same warning the statically typed bases raise.
+    out.push_str(".globl _diag_array_offset_on_false\n_diag_array_offset_on_false:\n    .ascii \"Warning: Trying to access array offset on false\\n\"\n");
+    out.push_str(".globl _diag_array_offset_on_true\n_diag_array_offset_on_true:\n    .ascii \"Warning: Trying to access array offset on true\\n\"\n");
+    out.push_str(".globl _diag_array_offset_on_int\n_diag_array_offset_on_int:\n    .ascii \"Warning: Trying to access array offset on int\\n\"\n");
+    out.push_str(".globl _diag_array_offset_on_float\n_diag_array_offset_on_float:\n    .ascii \"Warning: Trying to access array offset on float\\n\"\n");
+    out.push_str(".globl _diag_array_offset_on_resource\n_diag_array_offset_on_resource:\n    .ascii \"Warning: Trying to access array offset on resource\\n\"\n");
     // -- one complete message per foreach() argument type, shared with the helper emitter --
     // `__rt_warn_foreach_non_iterable` derives every `write()` length from the same table,
     // so the bytes here and the immediates there can never drift apart.

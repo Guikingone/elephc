@@ -158,3 +158,92 @@ var_dump($s[1], $s[-1]);
     assert_eq!(out.stdout, "string(1) \"b\"\nstring(1) \"c\"\n");
     assert_eq!(out.diagnostics, "");
 }
+
+/// Verifies a BOXED scalar warns with the same word, decided at run time.
+///
+/// The receiver's type is not known while lowering here: a `mixed` parameter carries its payload
+/// tag, and php names what that tag holds. A boxed STRING and a boxed ARRAY are legal reads that
+/// answer a value, and must stay silent.
+#[test]
+fn test_a_boxed_scalar_warns_with_phps_word() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function probe(mixed $v): void
+{
+    var_dump($v[0]);
+}
+probe(false);
+probe(true);
+probe(7);
+probe(1.5);
+probe(null);
+probe("abc");
+probe([9, 8]);
+$h = fopen("php://memory", "w+");
+probe($h);
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "NULL\nNULL\nNULL\nNULL\nNULL\nstring(1) \"a\"\nint(9)\nNULL\n"
+    );
+    assert_eq!(
+        out.diagnostics,
+        "Warning: Trying to access array offset on false\n\
+         Warning: Trying to access array offset on true\n\
+         Warning: Trying to access array offset on int\n\
+         Warning: Trying to access array offset on float\n\
+         Warning: Trying to access array offset on null\n\
+         Warning: Trying to access array offset on resource\n"
+    );
+}
+
+/// Verifies a base whose type is a UNION resolved at RUN TIME warns on its scalar arm.
+///
+/// `stat()` answers `array|false`, so nothing decides the word before the program runs. The
+/// VALUE was already null here — this was a missing diagnostic, not a wrong answer — and it is
+/// the shape the auditor corpus named.
+#[test]
+fn test_a_runtime_union_warns_on_its_false_arm() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$s = @stat("no-such-file-at-all.txt");
+var_dump($s);
+var_dump($s[0]);
+var_dump($s['dev']);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nNULL\nNULL\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: Trying to access array offset on false\n\
+         Warning: Trying to access array offset on false\n"
+    );
+}
+
+/// Verifies the probes stay silent for a boxed scalar too.
+#[test]
+fn test_the_null_probes_say_nothing_about_a_boxed_scalar() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function probe(mixed $v): void
+{
+    var_dump(isset($v[0]), $v[0] ?? "dflt", empty($v[0]));
+}
+probe(false);
+probe(7);
+probe([1, 2]);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nstring(4) \"dflt\"\nbool(true)\n\
+         bool(false)\nstring(4) \"dflt\"\nbool(true)\n\
+         bool(true)\nint(1)\nbool(false)\n"
+    );
+    assert_eq!(out.diagnostics, "");
+}

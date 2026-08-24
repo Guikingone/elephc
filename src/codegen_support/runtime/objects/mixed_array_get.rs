@@ -87,7 +87,20 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_get_null_container");            // null receivers warn only for ordinary reads
     emitter.instruction("cmp x9, #1");                                          // tag = 1 (string)?
     emitter.instruction("b.eq __rt_mixed_array_get_string");                    // a string offset read, not a container lookup
-    emitter.instruction("b __rt_mixed_array_get_null");                         // any other payload → null
+    emitter.instruction("b __rt_mixed_array_get_scalar");                       // any other payload warns, then answers null
+
+    // php names the TYPE an offset was read through, and the receiver's type is only known HERE:
+    // a `stat()` that answered `false` reaches an ordinary `$s[0]`, and php warns. The value was
+    // already right — null — so this was a missing diagnostic, not a wrong answer. Quiet read
+    // contexts suppress it exactly as they suppress the null-receiver warning below.
+    emitter.label("__rt_mixed_array_get_scalar");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
+    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // `isset()` / `??` stay silent
+    emitter.instruction("ldr x10, [sp, #0]");                                   // the boxed receiver
+    emitter.instruction("ldr x0, [x10]");                                       // its tag
+    emitter.instruction("ldr x1, [x10, #8]");                                   // and its payload, which decides the bool word
+    emitter.instruction("bl __rt_warn_array_offset_on_tag");
+    emitter.instruction("b __rt_mixed_array_get_null");
 
     // -- string receiver: `$s[$i]` reads one byte and answers a 1-character string --
     // A boxed string reaching here is ordinary PHP: `$s = fgets($h); $s[0]`. Without this
@@ -440,7 +453,18 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_get_null_container");              // null receivers warn only for ordinary reads
     emitter.instruction("cmp r10, 1");                                          // tag = 1 (string)?
     emitter.instruction("je __rt_mixed_array_get_string");                      // a string offset read, not a container lookup
-    emitter.instruction("jmp __rt_mixed_array_get_null");                       // any other payload → null
+    emitter.instruction("jmp __rt_mixed_array_get_scalar");                     // any other payload warns, then answers null
+
+    // See the AArch64 counterpart: the receiver's type is only known here, and php names it.
+    emitter.label("__rt_mixed_array_get_scalar");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload whether ordinary read warnings are enabled
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jz __rt_mixed_array_get_null");                        // `isset()` / `??` stay silent
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // the boxed receiver
+    emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // its payload, which decides the bool word
+    emitter.instruction("mov rdi, QWORD PTR [r10]");                            // and its tag
+    emitter.instruction("call __rt_warn_array_offset_on_tag");
+    emitter.instruction("jmp __rt_mixed_array_get_null");
 
     // -- string receiver: `$s[$i]` reads one byte and answers a 1-character string --
     // See the AArch64 half. Silent before this case existed, because `ord(null)` is 0.
