@@ -29,6 +29,8 @@ mod wrapper_chunk_reads;
 mod read_buffer;
 #[path = "io/copy_dynamic_filter.rs"]
 mod copy_dynamic_filter;
+#[path = "io/null_stream_argument.rs"]
+mod null_stream_argument;
 #[path = "io/zlib_string_functions.rs"]
 mod zlib_string_functions;
 #[path = "io/filesystem.rs"]

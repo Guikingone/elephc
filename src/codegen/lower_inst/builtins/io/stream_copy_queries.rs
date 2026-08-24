@@ -19,7 +19,8 @@ pub(crate) fn lower_stream_copy_to_stream(
     let dest = expect_operand(inst, 1)?;
     load_open_stream_handle_to_result(ctx, source, "stream_copy_to_stream")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    load_stream_fd_to_result(ctx, dest, "stream_copy_to_stream")?;
+    // php numbers this one `Argument #2 ($to)`, not `#1`.
+    load_stream_fd_to_result_at(ctx, dest, "stream_copy_to_stream", 1)?;
     emit_stream_copy_frame_enter(ctx);
     // The PSFS code the copy consults at the end is a process-wide slot, and it lives in BSS —
     // it starts at ZERO, which IS PSFS_ERR_FATAL, and an earlier stream's dispatch would

@@ -15,7 +15,17 @@ pub(in crate::codegen::lower_inst::builtins) fn load_stream_fd_to_result(
     value: ValueId,
     function_name: &str,
 ) -> Result<()> {
-    load_stream_handle_to_result(ctx, value, function_name)?;
+    load_stream_fd_to_result_at(ctx, value, function_name, 0)
+}
+
+/// Same, for a stream parameter that is not the FIRST one.
+pub(in crate::codegen::lower_inst::builtins) fn load_stream_fd_to_result_at(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    function_name: &str,
+    param_index: usize,
+) -> Result<()> {
+    load_stream_handle_to_result_at(ctx, value, function_name, param_index)?;
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the opaque resource handle to the registry lookup helper
     }
@@ -188,6 +198,19 @@ pub(in crate::codegen::lower_inst::builtins) fn load_stream_handle_to_result(
     value: ValueId,
     function_name: &str,
 ) -> Result<()> {
+    load_stream_handle_to_result_at(ctx, value, function_name, 0)
+}
+
+/// Same, for a stream parameter that is not the FIRST one.
+///
+/// php numbers the argument and names it in the TypeError below, and `stream_copy_to_stream()`
+/// is the one builtin in this family whose second parameter is also a stream.
+pub(in crate::codegen::lower_inst::builtins) fn load_stream_handle_to_result_at(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    function_name: &str,
+    param_index: usize,
+) -> Result<()> {
     let raw_ty = ctx.raw_value_php_type(value)?;
     ctx.load_value_to_result(value)?;
     match raw_ty {
@@ -196,11 +219,36 @@ pub(in crate::codegen::lower_inst::builtins) fn load_stream_handle_to_result(
             emit_unbox_stream_or_type_error(ctx, function_name);
             Ok(())
         }
+        // A statically NULL argument is php's catchable TypeError, raised when the call runs.
+        // The checker used to refuse the program for it, so an undefined `$h` reaching
+        // `fgetc($h)` failed the whole file where php runs it and reports one error.
+        PhpType::Void => {
+            emit_null_stream_type_error(ctx, function_name, param_index);
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} stream argument PHP type {:?}",
             function_name, other
         ))),
     }
+}
+
+/// Emits php's `TypeError` for a null where a stream resource is required.
+///
+/// NEVER RETURNS: the throw leaves through `__rt_throw_current`, so the caller's own code after
+/// it is the not-taken path. Catchable, like every other argument TypeError in this family.
+fn emit_null_stream_type_error(
+    ctx: &mut FunctionContext<'_>,
+    function_name: &str,
+    param_index: usize,
+) {
+    let message = format!(
+        "{}(): Argument #{} (${}) must be of type resource, null given",
+        function_name,
+        param_index + 1,
+        parameter_name_at(function_name, param_index)
+    );
+    super::super::exceptions::emit_type_error(ctx, &message);
 }
 
 /// Emits the sentinel stamp itself, split out of `apply_resource_release_sentinel` so
@@ -388,8 +436,16 @@ pub(super) fn emit_stream_type_error(ctx: &mut FunctionContext<'_>, function_nam
 /// than duplicated in a codegen table that would drift away from the catalog. Builtins with
 /// no contract entry (internal lowering helpers) keep php's most common spelling.
 fn first_parameter_name(function_name: &str) -> &'static str {
+    parameter_name_at(function_name, 0)
+}
+
+/// Returns the name php gives one parameter of a builtin, from the shared contract.
+///
+/// The contract is the only place that knows `closedir()` calls its handle `$dir_handle` and
+/// `fgetc()` calls its own `$stream`; hard-coding either produced a message php never prints.
+fn parameter_name_at(function_name: &str, index: usize) -> &'static str {
     crate::builtins::registry::lookup(function_name)
-        .and_then(|def| def.spec.params.first())
+        .and_then(|def| def.spec.params.get(index))
         .map_or("stream", |param| param.name)
 }
 

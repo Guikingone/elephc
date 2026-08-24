@@ -29,6 +29,14 @@ pub(crate) fn ensure_stream_resource(
     env: &TypeEnv,
 ) -> Result<(), CompileError> {
     let actual = checker.infer_type(arg, env)?;
+    // php does not refuse a null here: it raises a CATCHABLE `TypeError` when the call runs,
+    // which `try { … } catch (TypeError $e)` observes and which leaves the rest of the program
+    // compiled. Refusing it made an undefined `$h` — `while (fgetc($h) !== false)` — fail the
+    // whole file, and made the `try` php programmers write around it impossible to compile.
+    // The throw is emitted where the handle is loaded, so it carries php's own wording.
+    if matches!(actual, PhpType::Void) {
+        return Ok(());
+    }
     let expected = PhpType::stream_resource();
     if stream_arg_accepts(checker, &expected, &actual) {
         Ok(())
