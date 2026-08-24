@@ -868,6 +868,13 @@ fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
             if let Some(key_var) = key_var {
                 disqualify(facts, key_var);
             }
+            // The value variable is disqualified for BOTH forms, and the by-REFERENCE form needs
+            // it: `foreach ($arr as &$v)` leaves `$v` bound to the last element's storage and
+            // lowering ref-binds its slot, so a mark would promise whole-frame boxed `Mixed` for a
+            // name whose value does not live in that slot. The checker's twin of this exclusion is
+            // the permanent `ref_aliased_locals` marking in `stmt_check::control_flow`; the two
+            // are independent, so a pre-bound `$v` with branch-divergent assignments is refused
+            // here whether or not the alias marking is consulted.
             disqualify(facts, value_var);
             if *value_by_ref {
                 // `foreach ($arr as &$v)` takes references INTO `$arr`'s elements.

@@ -150,14 +150,29 @@ impl Checker {
                 value_by_ref,
                 body,
             } => {
-                // `foreach ($arr as &$v)` takes a reference into each element, so the ITERABLE
-                // is reference-aliased for the rest of the body and its binding can no longer
-                // be killed or re-bound — releasing its storage would strand the element
-                // references. `$v` itself needs no marking: it is bound inside the loop, so the
-                // conditional-depth rule already excludes it. Recorded before the iterable is
-                // inferred so an iterable that fails to type is still treated as aliased.
+                // `foreach ($arr as &$v)` takes a reference into each element, so BOTH names it
+                // touches are reference-aliased for the rest of the body and neither binding can
+                // be killed or re-bound — releasing or abandoning that storage would strand the
+                // element references.
+                //
+                // The ITERABLE is aliased because the loop holds references into its elements.
+                // `$v` is aliased because it IS one of those references: PHP leaves it bound to
+                // the last element after the loop ends, so a post-loop `$v = "changed"` writes
+                // through into `$arr`. The conditional-depth rule does NOT cover it — a `$v`
+                // already assigned at depth 0 ABOVE the loop keeps that depth-0 binding, so
+                // `local_binding_is_killable` answered true and the permissive path re-bound a
+                // name lowering had ref-bound (`mark_ref_bound_local` in
+                // `crate::ir_lower::stmt::typed_foreach`). Lowering then refuses the re-bind and
+                // degrades to a store through the ref cell at the CELL's type, which for
+                // `int` cell + `string` value has no coercion at all: a program the strict
+                // checker rejects became one that miscompiles. Marking `$v` here is the same
+                // permanent marking a `=&` target receives, and restores the hard error.
+                //
+                // Recorded before the iterable is inferred so an iterable that fails to type is
+                // still treated as aliased.
                 if *value_by_ref {
                     self.record_reference_alias_root(array);
+                    self.ref_aliased_locals.insert(value_var.clone());
                 }
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
                 if let PhpType::Array(elem_ty) = &arr_ty {

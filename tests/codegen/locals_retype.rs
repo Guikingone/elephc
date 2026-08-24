@@ -2260,3 +2260,55 @@ fn test_marked_local_piped_into_a_known_by_value_target() {
         );
     }
 }
+
+/// A by-VALUE `foreach` copies each element into its value variable, so a pre-bound name keeps
+/// the permissive retype and the fresh slot really carries the new type at runtime.
+///
+/// The control for the by-reference exclusion added alongside it: `foreach ($arr as &$v)` marks
+/// `$v` reference-aliased and the same program is then the hard `cannot reassign` (pinned in
+/// `error_tests::type_system::test_by_ref_foreach_value_var_retype_still_errors`). Nothing is
+/// aliased here, so this shape must keep running — and the heap-debug arm is what proves the
+/// re-bind releases the array the loop left behind rather than leaking it.
+#[test]
+fn test_by_value_foreach_value_var_retypes_after_the_loop() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php $v = $argc; $arr = [1, 2, 3]; foreach ($arr as $v) { } $v = \"ciao\" . $argc; echo $v;",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ciao1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The kill half of the same control: with no alias in sight, `unset` really ends the by-value
+/// value variable's binding and the incompatible rebind gets a fresh slot.
+#[test]
+fn test_by_value_foreach_value_var_unset_then_retype() {
+    let out = compile_and_run(
+        "<?php $v = $argc; $arr = [1, 2, 3]; foreach ($arr as $v) { } unset($v); $v = \"ciao\"; echo $v;",
+    );
+    assert_eq!(out, "ciao");
+}
+
+/// The standard PHP by-reference `foreach` idiom keeps working with `$v` marked aliased.
+///
+/// `foreach (… as &$v) { … } unset($v);` is how PHP code breaks the dangling reference, and the
+/// marking makes that `unset` non-killing — it degrades to the pre-feature null store, exactly as
+/// it does for a `=&` target. The loop must still write through into `$arr`, and the frame must
+/// still come out clean.
+#[test]
+fn test_by_ref_foreach_still_writes_through_and_unsets() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php $arr = [$argc, 2, 3]; foreach ($arr as &$v) { $v = $v * 2; } unset($v); echo $arr[1], \"|\", $arr[2];",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "4|6");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

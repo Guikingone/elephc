@@ -1704,6 +1704,31 @@ fn test_by_value_foreach_iterable_stays_killable() {
     );
 }
 
+/// The by-ref foreach VALUE variable is reference-aliased too, so a name already bound at
+/// depth 0 before the loop cannot be killed by a later `unset`.
+///
+/// `foreach ($arr as &$v)` binds `$v` to each element's storage; lowering ref-binds `$v`'s slot
+/// (`mark_ref_bound_local`) and then refuses to abandon it, so a kill the checker approved would
+/// leave the checker believing the binding ended while the slot still aliases `$arr`'s element.
+/// The pre-loop binding is what makes the conditional-depth rule miss this: `$v` is at depth 0
+/// from the assignment ABOVE the loop, not from the loop.
+#[test]
+fn test_by_ref_foreach_value_var_not_killable() {
+    expect_error(
+        "<?php $v = 0; $arr = [1, 2, 3]; foreach ($arr as &$v) { } unset($v); $v = \"s\"; echo $v;",
+        "cannot reassign $v from int to string",
+    );
+}
+
+/// The by-VALUE twin: `foreach ($arr as $v)` copies each element into `$v`, no alias is created,
+/// so a pre-bound `$v` stays kill-eligible and the fresh binding is accepted.
+#[test]
+fn test_by_value_foreach_value_var_stays_killable() {
+    expect_no_error(
+        "<?php $v = 0; $arr = [1, 2, 3]; foreach ($arr as $v) { } unset($v); $v = \"s\"; echo $v;",
+    );
+}
+
 /// Permissive default: an incompatible depth-0 reassignment warns and re-binds.
 #[test]
 fn test_implicit_retype_warns_by_default() {
@@ -1767,6 +1792,65 @@ fn test_retype_after_conditional_unset_warns() {
 #[test]
 fn test_ref_aliased_retype_still_errors() {
     expect_error("<?php $a = 0; $r =& $a; $a = \"x\";", "cannot reassign");
+}
+
+/// A name used as the VALUE variable of a by-reference `foreach` is reference-aliased, so a
+/// later incompatible assignment is the hard error in permissive mode too.
+///
+/// PHP keeps writing through the reference after the loop ends — this fixture makes `$arr[2]`
+/// become `"changed"` — so the retype is not a retype at all: it is a store into the last
+/// element's storage. Lowering ref-binds `$v`'s slot, refuses to re-bind it for the retype, and
+/// degrades to `store_ref_cell_slot` at the CELL's `int` type, which has no `Str` -> `Int`
+/// coercion; the permissive re-bind therefore produced a program that miscompiles rather than
+/// one that runs. This is the pin for that regression.
+#[test]
+fn test_by_ref_foreach_value_var_retype_still_errors() {
+    expect_error(
+        "<?php $v = 0; $arr = [1, 2, 3]; foreach ($arr as &$v) { } $v = \"changed\"; echo $arr[2];",
+        "cannot reassign $v from int to string",
+    );
+}
+
+/// Control for the pin above: with a by-VALUE `foreach` nothing is aliased, so a pre-bound `$v`
+/// keeps the ordinary permissive retype — a warning in default mode, the hard error under
+/// `--strict-locals`. The by-ref fix must not cost the by-value shape its coverage.
+#[test]
+fn test_by_value_foreach_value_var_retype_still_warns() {
+    expect_warning(
+        "<?php $v = 0; $arr = [1, 2, 3]; foreach ($arr as $v) { } $v = \"s\"; echo $v;",
+        "$v changes type from int to string",
+    );
+    expect_error_strict(
+        "<?php $v = 0; $arr = [1, 2, 3]; foreach ($arr as $v) { } $v = \"s\"; echo $v;",
+        "cannot reassign $v from int to string",
+    );
+}
+
+/// Control: a by-ref `foreach` value variable the LOOP itself binds was already excluded before
+/// this fix — it is bound at conditional depth 1, so it never had a depth-0 binding to re-type —
+/// and the permanent alias marking must leave that answer unchanged in both modes.
+#[test]
+fn test_loop_bound_by_ref_foreach_value_var_retype_still_errors() {
+    expect_error(
+        "<?php $arr = [1, 2, 3]; foreach ($arr as &$v) { } $v = \"s\"; echo $v;",
+        "cannot reassign $v from int to string",
+    );
+    expect_error_strict(
+        "<?php $arr = [1, 2, 3]; foreach ($arr as &$v) { } $v = \"s\"; echo $v;",
+        "cannot reassign $v from int to string",
+    );
+}
+
+/// The mixed-storage half of the same exclusion: a `foreach` value variable — by reference or by
+/// value — is disqualified outright by `mixed_storage_scan::collect_stmt`, so a branch-divergent
+/// pair of assignments after the loop can never box a slot lowering has ref-bound. Pinned in both
+/// modes because the marking is what would otherwise make permissive mode diverge from strict.
+#[test]
+fn test_by_ref_foreach_value_var_is_never_mixed_marked() {
+    let src = "<?php $v = 0; $arr = [1, 2, 3]; foreach ($arr as &$v) { } \
+               if ($argc > 1) { $v = 1; } else { $v = \"s\"; } echo $v;";
+    expect_error(src, "cannot reassign $v from int to string");
+    expect_error_strict(src, "cannot reassign $v from int to string");
 }
 
 /// A kill site a SUPERSEDED checker pass recorded must not survive into `CheckResult`.

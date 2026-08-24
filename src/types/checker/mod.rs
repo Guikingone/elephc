@@ -277,9 +277,11 @@ pub(crate) struct Checker {
     /// releasing or abandoning its slot there is not safe.
     pub local_binding_depth: HashMap<String, u32>,
     /// Locals of the current body that a reference can reach: `=&` target or source,
-    /// by-reference closure captures (`use (&$x)`), and any plain variable passed to a
-    /// by-reference parameter. A reference can escape through a callee, so the alias is
-    /// permanent for the rest of the body.
+    /// by-reference closure captures (`use (&$x)`), any plain variable passed to a
+    /// by-reference parameter, and BOTH names a `foreach ($arr as &$v)` touches — the iterable
+    /// the loop holds references into, and the value variable that IS one of those references.
+    /// A reference can escape through a callee, so the alias is permanent for the rest of the
+    /// body.
     pub ref_aliased_locals: HashSet<String>,
     /// Names declared `static` in the current body. Their storage outlives the call, so the
     /// binding is never killable.
