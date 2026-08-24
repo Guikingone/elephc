@@ -1170,6 +1170,14 @@ impl Checker {
 
         // No statically-known signature — fall back to syntactic return-type inference
         // (matches the unknown-callable path in infer_expr_call_type).
+        //
+        // The pipe is a call, so the unknown-callee rule applies to it too: with no signature there
+        // are no `ref_params` to consult, and the piped value is the one argument such a callee
+        // would bind. Recording it through the shared helper keeps this in step with the ordinary
+        // unresolvable-callee sites and with the branch-divergent pre-scan, whose `Pipe` arm
+        // already disqualifies the same operand. The KNOWN-signature paths above need nothing:
+        // `check_pipe_known_callable_call` rejects a by-reference parameter outright per the RFC.
+        self.record_unresolved_callee_argument_aliases(&synth_args);
         match &callable.kind {
             ExprKind::Closure { body, .. } => {
                 return Ok(infer_return_type_syntactic(body));

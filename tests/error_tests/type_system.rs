@@ -1460,6 +1460,44 @@ fn test_unknown_callee_does_not_over_reach() {
     expect_no_error("<?php function h($x) { return $x; } $a = 1; h($a); $a = \"s\"; echo $a;");
 }
 
+/// The PHP 8.5 pipe is a call: `$a |> $cb` hands `$a` to `$cb` as its single argument, so an
+/// UNRESOLVABLE pipe target aliases it exactly like an unresolvable ordinary callee.
+///
+/// `$cb` is a `callable` parameter with no signature attached, so `infer_pipe_type` falls through
+/// to its syntactic return-type guess with no `ref_params` to consult — the same position the
+/// sixteen sites above are in. The branch-divergent pre-scan already disqualifies the piped value
+/// (`mixed_storage_scan`'s `Pipe` arm calls `disqualify_root` on it), so recording the alias here
+/// is what makes the two sides agree. The surface is narrow — the RFC gives the pipe no by-ref
+/// parameters and the known-signature path rejects one outright — but the conservatism must not
+/// depend on which call syntax reached the callee.
+#[test]
+fn test_unresolved_pipe_target_arg_not_killable() {
+    expect_error(
+        "<?php function g(callable $cb) { $a = 1; $r = $a |> $cb; unset($a); $a = \"s\"; echo $a, $r; }",
+        "cannot reassign",
+    );
+    expect_error(
+        "<?php function g(callable $cb) { $a = 1; $r = $a |> $cb; $a = \"s\"; echo $a, $r; }",
+        "cannot reassign",
+    );
+}
+
+/// The pipe controls: a KNOWN pipe target leaves both shapes available, and an unresolvable pipe
+/// over a DIFFERENT name leaves `$a` alone.
+///
+/// A resolved pipe signature is by-value by construction — `check_pipe_known_callable_call`
+/// rejects any `ref_params` entry with "Pipe operator does not support by-reference parameters"
+/// before it checks anything else — so the known path needs no aliasing of its own and must keep
+/// the kill and the retype it grants today.
+#[test]
+fn test_pipe_conservatism_does_not_over_reach() {
+    expect_no_error("<?php $a = 1; $r = $a |> strval(...); unset($a); $a = \"s\"; echo $a, $r;");
+    expect_no_error("<?php $a = 1; $r = $a |> strval(...); $a = \"s\"; echo $a, $r;");
+    expect_no_error(
+        "<?php function g(callable $cb) { $a = 1; $b = 2; $r = $b |> $cb; unset($a); $a = \"s\"; echo $a, $r; }",
+    );
+}
+
 /// An `unset` inside a `try`/`catch`/`finally` sits at conditional depth ≥ 1, so it never kills.
 ///
 /// `try` is a conditional group like an `if`: the block may exit through an exception before the
