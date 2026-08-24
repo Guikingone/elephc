@@ -2845,6 +2845,71 @@ fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
     }
 }
 
+/// Marking verification for a representative set of end-to-end fixtures in
+/// `codegen::locals_retype` that claim the straight-line RETYPE path (shape 2: an incompatible
+/// depth-0 reassignment) — the mirror of
+/// `test_every_lowering_fixture_takes_the_mixed_storage_path` above, for `local_retype_sites`
+/// instead of `mixed_storage_store_sites`.
+///
+/// A lowering fixture that quietly fell out of the retype marking would still compile and print
+/// the right answer for the branch the harness happens to take, so "it passes" proves nothing
+/// about the DECISION on its own. Each source below is the VERBATIM fixture text, probed with
+/// `--check` before inclusion; the assertion is that the checker really recorded a retype site
+/// for it (and, since every one of these warns, that the warning fired too).
+///
+/// One superficially similar fixture is deliberately NOT here:
+/// `codegen::locals_retype::test_string_incdec_local_retyped_to_int_still_increments_as_int`'s
+/// `$s = "a" . $argc; $s++; echo $s; $s = 5; $s++; echo $s;` was probed and neither warns nor
+/// records a retype site (even under `--strict-locals`, where it still compiles clean) — the `++`
+/// target marking (`CheckResult::string_incdec_locals`) makes the later `int` store a plain
+/// compatible merge rather than an incompatible retype, so it would itself be a vacuous entry
+/// here.
+#[test]
+fn test_every_lowering_fixture_takes_the_retype_path() {
+    for source in [
+        "<?php $a = $argc; $a = \"ciao\"; echo $a;",
+        "<?php $a = \"ciao\" . $argc; $a = 7; echo $a;",
+        "<?php $a = $argc; $a = \"n=\" . $a; echo $a;",
+        "<?php $a = 0; for ($i = 0; $i < $argc; $i++) { $a += $i; } $a = \"done\"; echo $a;",
+        "<?php $a = $argc; $f = function() use ($a) { return $a; }; $a = \"x\"; echo $f() . $a;",
+        "<?php $a = 3; $a = \"ciao\"; echo $a;",
+        "<?php $a = \"s\" . $argc; if ($argc > 1) { unset($a); } $a = 7; echo $a;",
+        "<?php $x = $argc; $x .= \"a\"; echo $x;",
+        "<?php $a = [1, $argc]; $a = \"str\" . $argc; echo $a;",
+        "<?php\nclass Box {\n    public int $v;\n    public function __construct(int $v) { $this->v = $v; }\n    public function __destruct() { echo \"bye|\"; }\n}\n$o = new Box($argc);\necho $o->v, \"|\";\n$o = \"gone\" . $argc;\necho $o;",
+        "<?php\nclass Box {\n    public int $v;\n    public function __construct(int $v) { $this->v = $v; }\n    public function __destruct() { echo \"bye|\"; }\n}\n$x = $argc;\necho $x, \"|\";\n$x = new Box($argc);\necho $x->v;",
+        "<?php\nfunction probe(int $n): string {\n    $a = $n;\n    $a = \"ciao\" . $n;\n    return $a;\n}\necho probe($argc);",
+        "<?php\nclass Box {\n    public int $v;\n    public function __construct(int $v) { $this->v = $v; }\n    public function __destruct() { echo \"bye|\"; }\n}\nfunction probe(int $n): string {\n    $o = new Box($n);\n    $arr = [1, $n];\n    echo $o->v, \"|\", $arr[1], \"|\";\n    $o = \"s\" . $n;\n    $arr = \"t\" . $n;\n    return $o . $arr;\n}\necho probe($argc);",
+        "<?php\nfunction probe($a, int $n): string {\n    $a = \"grown\" . $n;\n    return $a;\n}\necho probe([1, 2], $argc);",
+        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } echo $q; $q = 1; $q = \"s\"; echo \"|\", $q;",
+        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } echo $q; $q = 1; echo \"|\", $q;",
+        "<?php function w() { global $a; $a = 5; } $a = \"x\"; $a = 2; w(); echo $a;",
+        "<?php\n$a = [1, $argc];\n$b = $argc;\n$b = $argc > 0 ? \"yes\" : \"no\";\n$a[0] = \"s\";\necho $b, \"|\", $a[0], \"|\", $a[1];",
+        "<?php\nfunction probe(int $n): string {\n    $q = \"a\" . $n;\n    if ($n > 5) { echo \"x\"; }\n    $r = $q;\n    $q = 1;\n    return $r . \"|\" . $q;\n}\necho probe($argc);",
+    ] {
+        let result = check_source_full(source)
+            .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{}", error.message, source));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("changes type from")),
+            "fixture never reached the retype path: {}",
+            source
+        );
+        assert!(
+            !result.local_retype_sites.is_empty()
+                && result
+                    .local_retype_sites
+                    .keys()
+                    .all(|span| span.identifies_a_node()),
+            "fixture must record retype sites that name a node: {:?} for {}",
+            result.local_retype_sites,
+            source
+        );
+    }
+}
+
 /// The one `codegen::locals_retype` fixture whose ONLY marked name is a by-value capture is
 /// verified separately: its mark is SILENT, so it records store sites without warning.
 ///
