@@ -31,7 +31,14 @@ use crate::codegen_support::{abi, emit::Emitter};
 ///
 /// The slot is null unless `--with-monitoring` filled it, so a binary without
 /// the capability pays one load and a not-taken branch, on a path only a throw
-/// reaches.
+/// reaches. The counters are read after the branch, so a dormant binary does not
+/// read them at all.
+///
+/// It passes `_gc_allocs` and `_gc_frees` for the same reason the enter and exit
+/// hooks do: the frames an exception destroys are closed at the instant of the
+/// throw, and closing them at the throw's clock while using the CATCHER's
+/// allocation counters charged the function that threw for every object the
+/// handler allocated.
 fn emit_instr_throw_hook(emitter: &mut Emitter) {
     let slot = emitter.target.extern_symbol("elephc_instr_throw_fn");
     let skip = "__rt_throw_current_no_instr";
@@ -39,11 +46,17 @@ fn emit_instr_throw_hook(emitter: &mut Emitter) {
         abi::emit_load_symbol_to_reg(emitter, "rax", &slot, 0);
         emitter.instruction("test rax, rax");                                   // is the exact profiler linked into this binary?
         emitter.instruction(&format!("jz {skip}"));                             // no capability: skip the hook entirely
-        emitter.instruction("call rax");                                        // record that an unwind started, and when
+        abi::emit_load_symbol_to_reg(emitter, "rdi", "_gc_allocs", 0);          // arg 0: allocations so far, sampled at the throw
+        abi::emit_load_symbol_to_reg(emitter, "rsi", "_gc_frees", 0);           // arg 1: frees so far, sampled at the throw
+        emitter.instruction("call rax");                                        // record that an unwind started, and where the counters stood
     } else {
         abi::emit_load_symbol_to_reg(emitter, "x9", &slot, 0);
         emitter.instruction(&format!("cbz x9, {skip}"));                        // no capability: skip the hook entirely
-        emitter.instruction("blr x9");                                          // record that an unwind started, and when
+        // Both AArch64 symbol loads borrow x9, which is holding the slot.
+        emitter.instruction("mov x10, x9");                                     // keep the hook address clear of the loads below
+        abi::emit_load_symbol_to_reg(emitter, "x0", "_gc_allocs", 0);           // arg 0: allocations so far, sampled at the throw
+        abi::emit_load_symbol_to_reg(emitter, "x1", "_gc_frees", 0);            // arg 1: frees so far, sampled at the throw
+        emitter.instruction("blr x10");                                         // record that an unwind started, and where the counters stood
     }
     emitter.label(skip);
 }
@@ -140,8 +153,51 @@ mod tests {
             );
             let guarded = asm.contains("cbz x9,") || asm.contains("jz __rt_throw_current_no_instr");
             assert!(guarded, "{platform:?}/{arch:?} calls the hook unguarded:\n{asm}");
-            let indirect = asm.contains("blr x9") || asm.contains("call rax");
+            let indirect = asm.contains("blr x10") || asm.contains("call rax");
             assert!(indirect, "{platform:?}/{arch:?} does not call through the slot:\n{asm}");
+        }
+    }
+
+    /// The hook hands over the heap counters, and does not lose the slot doing it.
+    ///
+    /// Both AArch64 symbol loads use x9 as scratch, so reading the counters into
+    /// the argument registers overwrites a slot pointer left in x9. The call has
+    /// to go through a register the loads do not touch — and the loads have to
+    /// sit after the guard, so a binary without the capability still pays only
+    /// the load and the branch.
+    #[test]
+    fn the_hook_passes_the_heap_counters_without_clobbering_itself() {
+        for (platform, arch) in [
+            (Platform::MacOS, Arch::AArch64),
+            (Platform::Linux, Arch::AArch64),
+            (Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emitted(platform, arch);
+            for counter in ["_gc_allocs", "_gc_frees"] {
+                assert!(
+                    asm.contains(counter),
+                    "{platform:?}/{arch:?} never reads {counter}:\n{asm}"
+                );
+            }
+            let (guard, call) = match arch {
+                Arch::X86_64 => ("jz __rt_throw_current_no_instr", "call rax"),
+                Arch::AArch64 => ("cbz x9, __rt_throw_current_no_instr", "blr x10"),
+            };
+            let guard_at = asm.find(guard).expect("the hook is guarded");
+            let allocs_at = asm.find("_gc_allocs").expect("the hook reads _gc_allocs");
+            let call_at = asm.find(call).expect("the hook calls through the slot");
+            assert!(
+                guard_at < allocs_at,
+                "{platform:?}/{arch:?} reads the counters before the guard, so a \
+                 dormant binary pays for them:\n{asm}"
+            );
+            assert!(allocs_at < call_at, "{platform:?}/{arch:?} reads them too late:\n{asm}");
+            if arch == Arch::AArch64 {
+                assert!(
+                    asm.contains("mov x10, x9"),
+                    "{platform:?}/{arch:?} calls a slot the counter loads clobbered:\n{asm}"
+                );
+            }
         }
     }
 
@@ -160,7 +216,7 @@ mod tests {
 
         let asm = emitted(Platform::MacOS, Arch::AArch64);
         let saves = asm.find("stp x19, x20").expect("aarch64 saves x19/x20");
-        let hook = asm.find("blr x9").expect("aarch64 calls the hook");
+        let hook = asm.find("blr x10").expect("aarch64 calls the hook");
         assert!(hook > saves, "the hook runs before the registers are saved:\n{asm}");
     }
 }
