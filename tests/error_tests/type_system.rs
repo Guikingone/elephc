@@ -1397,6 +1397,41 @@ fn test_by_ref_call_arg_not_killable() {
     expect_error("<?php function f(&$x) { $x = 2; } $a = 1; f($a); unset($a); $a = \"s\";", "cannot reassign");
 }
 
+/// A BY-REF PARAMETER itself (`active_ref_params`, not an aliased caller-side local) is excluded
+/// from the kill: `unset($x)` on it is a checker no-op, exactly like the pre-feature behavior — a
+/// later read sees the still-bound param and a later incompatible assignment is the old hard
+/// error, not a fresh kill-then-rebind.
+#[test]
+fn test_by_ref_param_unset_is_not_a_kill() {
+    expect_no_error("<?php function f(&$x) { unset($x); echo $x; } $a = 1; f($a);");
+    expect_error(
+        "<?php function f(&$x) { unset($x); $x = \"s\"; } $a = 1; f($a);",
+        "cannot reassign $x from int to string",
+    );
+}
+
+/// A BY-REF PARAMETER is also excluded from the straight-line retype: reassigning it to an
+/// incompatible type stays the old hard error in permissive mode, whether the param carries an
+/// explicit type hint or only the type the call site infers.
+#[test]
+fn test_by_ref_param_retype_not_permitted() {
+    expect_error(
+        "<?php function f(int &$x) { $x = \"s\"; } $a = 1; f($a);",
+        "cannot reassign $x from int to string",
+    );
+    expect_error(
+        "<?php function f(&$x) { $x = \"s\"; } $a = 1; f($a);",
+        "cannot reassign $x from int to string",
+    );
+}
+
+/// The `$r` side of `$r =& $a` is just as excluded as the `$a` side: a direct retype of the alias
+/// TARGET, with no preceding `unset`, is the hard error too.
+#[test]
+fn test_ref_alias_target_retype_not_permitted() {
+    expect_error("<?php $a = 1; $r = &$a; $r = \"s\";", "cannot reassign $r from int to string");
+}
+
 /// A local handed to a callable whose signature the checker cannot resolve is aliased.
 ///
 /// The plan's eligibility rule disqualifies a name "passed as an argument to a by-ref parameter
