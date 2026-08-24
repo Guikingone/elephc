@@ -146,6 +146,8 @@ struct State {
     /// Frames whose children outran their own span — impossible when the
     /// accounting is right, so it is reported rather than absorbed.
     overdrawn: u64,
+    /// Throws that had to share a record with an older one at the nesting cap.
+    throws_merged: u64,
     /// Caught exceptions where which activation caught could not be determined.
     ///
     /// Only recursion produces them, and only then: the exit hook carries a
@@ -252,6 +254,14 @@ impl State {
         // from partitioning the root. It rides along to the next catcher, which
         // is where a rethrow puts it anyway.
         let depth = self.stack.len();
+        // Nothing on the stack, so there is no frame this throw destroyed and no
+        // catcher below it: a record at depth zero can never be resolved, since
+        // resolution asks for a throw deeper than the exiting frame's index and
+        // every index is at least zero. Thirty-two of them filled the table and
+        // the next real throw recycled a live record.
+        if depth == 0 {
+            return;
+        }
         let unwind = self.unwinding.get_or_insert_with(Unwind::default);
         // A throw raised while another is in flight joins it rather than
         // replacing it: the frames the first one killed died then, and only its
@@ -260,8 +270,12 @@ impl State {
             unwind.throws.push(Throw { depth, t, a, f, io, w, ..Throw::default() });
         } else if let Some(last) = unwind.throws.last_mut() {
             // Past the cap the newest throw takes over the last record and keeps
-            // what it had accumulated — precision on frames opened very late in
-            // a deeply nested unwind, against losing their cost entirely.
+            // what it had accumulated. Dropping that charge instead would stop
+            // the exclusives adding up to the root, which is the property the
+            // whole table rests on; keeping it merges two handlers' call edges
+            // onto one caller and loses the older throw's instant. Both are
+            // wrong, one silently — so the trade is made and then reported.
+            self.throws_merged = self.throws_merged.saturating_add(1);
             last.depth = depth;
             last.t = t;
             last.a = a;
@@ -580,6 +594,7 @@ impl State {
         self.dropped = 0;
         self.overdrawn = 0;
         self.ambiguous_catch = 0;
+        self.throws_merged = 0;
         self.dropped_depth = 0;
         // The stack goes with the slice, so the frame this unwind was holding a
         // charge for goes with it too. Carrying it across would hand the next
@@ -608,6 +623,13 @@ impl State {
             out.push_str(&format!(
                 "elephc-instr: note: {} calls beyond depth {} were not tracked\n",
                 self.dropped, MAX_STACK
+            ));
+        }
+        if self.throws_merged > 0 {
+            out.push_str(&format!(
+                "elephc-instr: note: {} throw(s) past {} nested unwinds shared a record \
+                 with an older one; their handlers' calls are merged onto one caller\n",
+                self.throws_merged, MAX_NESTED_THROWS
             ));
         }
         if self.ambiguous_catch > 0 {
@@ -1016,6 +1038,16 @@ pub extern "C" fn elephc_instr_trace_begin(
         None => (random_hex(16), String::new()),
     };
     let span_id = random_hex(8);
+    // Published through the environment so userland propagates it with `getenv()`
+    // and a stream context, with no new builtin and no change to the request
+    // assembly. That places one constraint on the host, and it is worth stating
+    // rather than assuming: `setenv` is not safe against a concurrent `getenv` on
+    // another thread. elephc's own `--web` is prefork — workers are processes,
+    // one request at a time, and the endpoint listener does not survive the fork
+    // — so no elephc-built service has a thread to race with, and the dormancy
+    // gate above means this does not even run unless the request is being
+    // profiled. A host that embeds this runtime alongside its own threads is
+    // outside that guarantee.
     std::env::set_var(
         "ELEPHC_TRACEPARENT",
         format!("00-{trace_id}-{span_id}-01"),
@@ -1159,18 +1191,20 @@ fn switch_on() {
     ENABLED.store(true, Ordering::Relaxed);
 }
 
-/// Turns the hooks on for this thread's subsequent calls.
-#[no_mangle]
-pub extern "C" fn elephc_instr_enable() {
-    switch_on();
-}
-
-/// Turns the hooks off. Calls still execute their prologue and epilogue, but the
-/// hook returns before reading a clock or touching the shadow stack.
-#[no_mangle]
-pub extern "C" fn elephc_instr_disable() {
-    ENABLED.store(false, Ordering::Relaxed);
-}
+// There were exported `elephc_instr_enable` and `elephc_instr_disable` symbols
+// here, and they are gone. Nothing called them: not the compiler, which wires
+// `enter`, `exit`, `dump`, `request`, `io`, `wait`, `query`, `throw` and
+// `trace_begin` and no others; not the bridges; not the tests; not the docs.
+//
+// They could not be used correctly either. `disable` only cleared the flag, so
+// the frames already on the shadow stack stayed, every exit that arrived while
+// off was dropped, and the next `enable` pushed new frames on top of the
+// corpses — measured, a function credited 50 ticks where it ran 20, with the
+// self values still summing to the root so nothing looked wrong. Making them
+// safe means closing the live stack at the toggle, which needs the allocation
+// counters the call sites pass and these have no way to read. The paths that DO
+// switch profiling on — `elephc_instr_request` and the boot check — do it where
+// the stack is empty, which is what makes them correct.
 
 /// Set when only a subset of the program's functions carry hooks.
 ///
@@ -1216,13 +1250,30 @@ fn json_escape(s: &str) -> String {
 /// `chrome://tracing`). Complete ('X') events nest by ts/dur, so the whole call
 /// tree renders as nested slices. Timestamps are microseconds from the first
 /// span. Best-effort: a write failure is reported to stderr, not fatal.
-fn write_chrome_trace(path: &str, spans: &[(u32, u64, u64)], names: &[String], dropped: u64) {
+fn write_chrome_trace(
+    path: &str,
+    spans: &[(u32, u64, u64)],
+    names: &[String],
+    dropped: u64,
+    converted: bool,
+) {
     use std::io::Write;
     let base = spans.iter().map(|s| s.1).min().unwrap_or(0);
     let name_of = |id: usize| -> String {
         names.get(id).cloned().unwrap_or_else(|| format!("#{id}"))
     };
+    // `converted` is the same question the table asks before printing `incl_ns`,
+    // and it comes from the caller so this writer is a function of what it is
+    // given. Without it a run too short to measure the counter rate wrote raw
+    // ticks into a file whose format calls them microseconds, and the note that
+    // says so went only to the text profile — a viewer had no way to know.
     let mut out = String::from("{\"traceEvents\":[");
+    if !converted {
+        out.push_str(
+            "{\"name\":\"process_name\",\"ph\":\"M\",\"pid\":1,\"tid\":1,\"args\":{\"name\":\
+             \"elephc — UNCONVERTED counter ticks, run too short to measure the rate\"}},",
+        );
+    }
     for (i, (id, enter, exit)) in spans.iter().enumerate() {
         if i > 0 {
             out.push(',');
@@ -1238,11 +1289,16 @@ fn write_chrome_trace(path: &str, spans: &[(u32, u64, u64)], names: &[String], d
     match std::fs::File::create(path) {
         Ok(mut file) => {
             let _ = file.write_all(out.as_bytes());
-            let note = if dropped > 0 {
-                format!(" ({dropped} calls dropped past the trace cap)")
-            } else {
-                String::new()
-            };
+            let mut note = String::new();
+            if dropped > 0 {
+                note.push_str(&format!(" ({dropped} calls dropped past the trace cap)"));
+            }
+            if !converted {
+                note.push_str(
+                    " — WARNING: the run was too short to measure the counter rate, so \
+                     these timestamps are raw counter ticks, not microseconds",
+                );
+            }
             let _ = writeln!(
                 std::io::stderr(),
                 "elephc-instr: wrote {} spans to {path}{note}",
@@ -1821,7 +1877,13 @@ pub extern "C" fn elephc_instr_dump() {
         if let Some(path) = TRACE_PATH.lock().ok().and_then(|g| g.clone()) {
             STATE.with(|s| {
                 let s = s.borrow();
-                write_chrome_trace(path.as_str(), &s.trace, &names, s.trace_dropped);
+                write_chrome_trace(
+                    path.as_str(),
+                    &s.trace,
+                    &names,
+                    s.trace_dropped,
+                    tick_rate().is_some(),
+                );
             });
         }
     }
@@ -2833,6 +2895,94 @@ mod tests {
         );
     }
 
+    /// A trace whose timestamps are counter ticks says so inside the file.
+    ///
+    /// The format calls them microseconds, so a viewer has no way to tell — and
+    /// the note that warns about it in the text profile does not travel with the
+    /// trace. On a 24 MHz counter a real millisecond reads as 24 µs, which is a
+    /// plausible number and a wrong one.
+    #[test]
+    fn a_trace_written_before_the_rate_is_known_declares_its_units() {
+        let dir = std::env::temp_dir().join("elephc_instr_trace_units_test.json");
+        let spans = vec![(0u32, 100u64, 24_100u64)];
+        let names = vec!["work".to_string()];
+
+        write_chrome_trace(dir.to_str().unwrap(), &spans, &names, 0, false);
+        let text = std::fs::read_to_string(&dir).expect("trace written");
+        assert!(
+            text.contains("UNCONVERTED counter ticks"),
+            "a trace in counter ticks read as one in microseconds:\n{text}"
+        );
+        assert!(
+            text.starts_with("{\"traceEvents\":[{\"name\":\"process_name\""),
+            "the marker is not where a viewer reads it:\n{text}"
+        );
+
+        // And a converted one carries no such claim.
+        write_chrome_trace(dir.to_str().unwrap(), &spans, &names, 0, true);
+        let text = std::fs::read_to_string(&dir).expect("trace written");
+        assert!(
+            !text.contains("UNCONVERTED"),
+            "a converted trace claimed its units were wrong:\n{text}"
+        );
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// A throw with nothing on the stack records nothing.
+    ///
+    /// Resolution asks for a throw deeper than the exiting frame's index, and
+    /// every index is at least zero, so a record at depth zero can never be
+    /// resolved. Thirty-two of them filled the table and left the next real
+    /// throw recycling a live record.
+    #[test]
+    fn a_throw_with_an_empty_stack_records_nothing_to_resolve() {
+        let mut s = State::default();
+        for tick in 0..64 {
+            s.note_throw(tick, 0, 0, 0, 0);
+        }
+        assert!(
+            s.unwinding.is_none(),
+            "{} unresolvable records were kept",
+            s.unwinding.as_ref().map(|u| u.throws.len()).unwrap_or(0)
+        );
+
+        // And a real throw afterwards still works.
+        s.enter_at(0, 100, 0, 0, 0, 0);
+        s.enter_at(1, 110, 0, 0, 0, 0);
+        s.note_throw(120, 0, 0, 0, 0);
+        s.exit_at(0, 200, 0, 0, 0, 0);
+        assert_eq!(s.fns[1].excl_ns, 10, "the thrower died at its throw");
+        let total: u64 = s.fns.iter().map(|a| a.excl_ns).sum();
+        assert_eq!(total, 100, "self time did not partition the root");
+    }
+
+    /// Past the nesting cap, a throw shares a record — and the report says so.
+    ///
+    /// The alternative to sharing is dropping the older throw's accumulated
+    /// charge, which would stop the exclusives adding up to the root. Both are
+    /// wrong; only one of them is wrong out loud.
+    #[test]
+    fn throws_past_the_nesting_cap_share_a_record_and_the_report_says_so() {
+        let _serial = ticks_are_nanoseconds();
+        let mut s = State::default();
+        s.enter_at(0, 0, 0, 0, 0, 0);
+        for tick in 0..(MAX_NESTED_THROWS as u64 + 4) {
+            s.enter_at(1, 10 + tick, 0, 0, 0, 0);
+            s.note_throw(20 + tick, 0, 0, 0, 0);
+        }
+        assert_eq!(
+            s.throws_merged, 4,
+            "records were recycled without the report admitting it"
+        );
+
+        s.exit_at(0, 10_000, 0, 0, 0, 0);
+        let names = ["{main}".to_string(), "f".to_string()];
+        assert!(
+            s.render(&names).contains("shared a record with an older one"),
+            "the report does not carry the note"
+        );
+    }
+
     /// An exit for a frame that was never pushed closes nothing.
     ///
     /// The resync loop stops when it finds the id, so an exit for one that is not
@@ -3232,7 +3382,7 @@ mod tests {
         let names = vec!["{main}".to_string(), "child".to_string()];
         let dir = std::env::temp_dir();
         let path = dir.join("elephc_instr_trace_test.json");
-        write_chrome_trace(path.to_str().unwrap(), &spans, &names, 0);
+        write_chrome_trace(path.to_str().unwrap(), &spans, &names, 0, true);
         let text = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         assert!(text.starts_with("{\"traceEvents\":["), "{text}");
