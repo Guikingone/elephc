@@ -15,11 +15,20 @@ AST layer.
 Today the AST optimizer is split into six passes:
 
 1. `fold_constants(program)` runs before type checking
-2. `propagate_constants(program)` runs after successful type checking
-3. `prune_constant_control_flow(program)` runs after propagation and warning collection
-4. `normalize_control_flow(program)` runs after pruning and rewrites structurally equivalent control-flow shells into simpler AST shapes
-5. `eliminate_dead_code(program)` runs after normalization and removes leftover unreachable or non-observable statements from the already-normalized AST
+2. `propagate_constants(program, mixed_storage_locals)` runs after successful type checking
+3. `prune_constant_control_flow(program, binding_decision_spans)` runs after propagation and warning collection
+4. `normalize_control_flow(program, binding_decision_spans)` runs after pruning and rewrites structurally equivalent control-flow shells into simpler AST shapes
+5. `eliminate_dead_code(program, binding_decision_spans)` runs after normalization and removes leftover unreachable or non-observable statements from the already-normalized AST
 6. `prune_unreachable_declarations(program, check_result, options)` runs after DCE and removes unreachable functions, classes, and methods while reconciling checker metadata
+
+The extra arguments from the third pass on are the checker's local-binding decisions
+(`CheckResult::local_binding_decision_spans()`). Those decisions are keyed BY SPAN and a cloned AST
+node keeps the original's span, so **no pass may duplicate a node carrying one**: it would hand a
+single checker decision to two syntactic sites. Two passes clone today, and both consult the set and
+veto themselves — DCE's tail-sinking, and the single-case `switch` rewrite reached from the prune and
+normalize phases (which otherwise materializes a `switch` default body into both branches of a
+synthesized `if`). `propagate_constants` takes the mixed-storage local NAMES for a related reason:
+it must not substitute a literal for a read of a local the checker boxed as `mixed`.
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
 

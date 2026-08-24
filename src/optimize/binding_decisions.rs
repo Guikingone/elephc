@@ -5,8 +5,9 @@
 //!
 //! Called from:
 //! - `crate::pipeline`, which installs the sets around post-typecheck optimization.
-//! - `crate::optimize::control::dce`, whose tail-sinking is the pass that would otherwise
-//!   duplicate a decision-carrying statement.
+//! - `crate::optimize::control::binding_decisions`, the walker both CLONING passes ask before
+//!   duplicating a node: `crate::optimize::control::dce`'s tail-sinking and the single-case switch
+//!   rewrite in `crate::optimize::control::switch`.
 //! - `crate::optimize::propagate`, whose constant substitution would otherwise replace a read of
 //!   a boxed local with a literal.
 //!
@@ -23,10 +24,11 @@
 //!   `$a = 42/"hello" divergently; $a = 99; echo strlen($a);` reached the checked-builtin fast path
 //!   with an `Int` operand and panicked the compiler.
 //! - Installed as scoped thread-locals, matching `with_callable_effect_analysis` and
-//!   `with_by_ref_signatures`. Both sets are empty by default. The SPAN set has an explicit
-//!   `is_empty()` fast path (`has_local_binding_decisions`) that keeps the DCE scan off the hot
-//!   path entirely; the NAME set has none — `local_has_mixed_storage` is a plain hash lookup,
-//!   which on an empty set is already the cheapest thing it could do.
+//!   `with_by_ref_signatures`. The SPAN set is installed around the prune, normalize AND dce
+//!   phases, because the cloning passes live in all three. Both sets are empty by default. The
+//!   SPAN set has an explicit `is_empty()` fast path (`has_local_binding_decisions`) that keeps
+//!   the scan off the hot path entirely; the NAME set has none — `local_has_mixed_storage` is a
+//!   plain hash lookup, which on an empty set is already the cheapest thing it could do.
 
 use std::cell::RefCell;
 use std::collections::HashSet;

@@ -104,15 +104,26 @@ pub fn propagate_constants(program: Program, mixed_storage_locals: HashSet<Strin
 }
 
 /// Normalizes control flow structures (ifs, switches, try/catch) for easier optimization.
+///
+/// `binding_decision_spans` is `CheckResult::local_binding_decision_spans()`, required for the same
+/// reason `eliminate_dead_code`'s is: this phase runs the single-case switch rewrite, which CLONES
+/// the default body into both branches of the synthesized `if`, and a caller that silently passed
+/// an empty set would let that clone hand one span-keyed checker decision to two statements.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
-pub fn normalize_control_flow(program: Program) -> Program {
-    PostTypecheckOptimizer::new(&program).normalize(program)
+pub fn normalize_control_flow(program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+    PostTypecheckOptimizer::new(&program).normalize(program, binding_decision_spans)
 }
 
 /// Prunes branches with constant conditions that cannot be reached.
+///
+/// `binding_decision_spans` is required here for the same reason as in `normalize_control_flow`:
+/// both phases run `control::prune_switch_stmt`, whose single-case rewrite clones statements.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
-pub fn prune_constant_control_flow(program: Program) -> Program {
-    PostTypecheckOptimizer::new(&program).prune(program)
+pub fn prune_constant_control_flow(
+    program: Program,
+    binding_decision_spans: HashSet<Span>,
+) -> Program {
+    PostTypecheckOptimizer::new(&program).prune(program, binding_decision_spans)
 }
 
 /// A fact the propagation environment records for a local variable.
@@ -233,23 +244,37 @@ impl PostTypecheckOptimizer {
     }
 
     /// Normalizes control flow using the shared callable-effect summary.
-    pub fn normalize(&self, program: Program) -> Program {
-        with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+    ///
+    /// Takes the same `binding_decision_spans` as `eliminate_dead_code` because this phase is the
+    /// SECOND cloning pass: `control::prune_switch_stmt` rewrites a single-case switch on a
+    /// non-scalar subject into an `if`, and the default body is materialized into BOTH branches
+    /// with its original spans. The spans let that rewrite veto itself; see
+    /// `control::switch::single_case_rewrite_would_clone_a_decision`.
+    pub fn normalize(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+        with_local_binding_decision_spans(binding_decision_spans, || {
+            with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+        })
     }
 
     /// Prunes constant control-flow branches using the shared callable-effect summary.
-    pub fn prune(&self, program: Program) -> Program {
-        with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+    ///
+    /// Installs `binding_decision_spans` for the same reason `normalize` does — the two phases run
+    /// the same `prune_block`, so the cloning switch rewrite is reachable from both.
+    pub fn prune(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+        with_local_binding_decision_spans(binding_decision_spans, || {
+            with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+        })
     }
 
     /// Eliminates dead code using the shared callable-effect summary.
     ///
     /// `binding_decision_spans` is the union of the checker's three span-keyed local-binding
     /// decision maps — `CheckResult::local_bind_kill_sites`, `local_retype_sites` and
-    /// `mixed_storage_store_sites`. DCE's tail-sinking is the one post-typecheck pass that CLONES
-    /// statements, and a clone carries the original's span — which would hand one span-keyed
-    /// checker decision to two syntactic sites. Passing the spans in lets the pass keep those
-    /// statements singular; see `control::dce::binding_decisions`.
+    /// `mixed_storage_store_sites`. A clone carries the original's span, so NO post-typecheck pass
+    /// may duplicate a node carrying one: it would hand a single checker decision to two syntactic
+    /// sites. DCE's tail-sinking is one of the two passes that clone (the single-case switch
+    /// rewrite reached from `normalize`/`prune` is the other); passing the spans in lets it keep
+    /// those statements singular. See `control::binding_decisions`.
     pub fn eliminate_dead_code(
         &self,
         program: Program,

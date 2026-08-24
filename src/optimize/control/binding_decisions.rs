@@ -1,9 +1,11 @@
 //! Purpose:
-//! Answers whether a statement list contains any node the CHECKER filed a local-binding decision
-//! against, so tail-sinking never clones one.
+//! Answers whether a statement list or an expression contains any node the CHECKER filed a
+//! local-binding decision against, so no pass that CLONES an AST node ever duplicates one.
 //!
 //! Called from:
 //! - `crate::optimize::control::dce`, as the third "must stay singular" guard on tail-sinking.
+//! - `crate::optimize::control::switch`, which vetoes the single-case switch rewrite when it
+//!   would emit a decision-carrying node in both branches of the synthesized `if`.
 //!
 //! Key details:
 //! - `CheckResult::local_bind_kill_sites` and `local_retype_sites` are keyed BY SPAN, and EIR
@@ -32,9 +34,18 @@ use crate::parser::ast::{CallableTarget, CatchClause, Expr, ExprKind, InstanceOf
 /// Returns true when any node in `stmts` carries a checker local-binding decision.
 ///
 /// Short-circuits on the overwhelmingly common case of a program the checker made no decision for,
-/// which keeps tail-sinking exactly as cheap as it was.
-pub(super) fn stmts_carry_local_binding_decision(stmts: &[Stmt]) -> bool {
+/// which keeps the callers exactly as cheap as they were.
+pub(crate) fn stmts_carry_local_binding_decision(stmts: &[Stmt]) -> bool {
     has_local_binding_decisions() && stmts.iter().any(stmt_carries_decision)
+}
+
+/// Returns true when `expr` or any node under it carries a checker local-binding decision.
+///
+/// The expression form exists for the passes that duplicate an EXPRESSION rather than a statement
+/// — the single-case switch rewrite clones the switch subject once per case pattern — and
+/// short-circuits on the same empty-set fast path.
+pub(crate) fn expr_carries_local_binding_decision(expr: &Expr) -> bool {
+    has_local_binding_decisions() && expr_carries_decision(expr)
 }
 
 /// Walks one statement. Exhaustive so a new `StmtKind` cannot default to "carries no decision".

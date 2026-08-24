@@ -277,8 +277,14 @@ fn try_compile_source_to_asm_with_defines_repr(
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized =
         elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
-    let optimized = elephc::optimize::prune_constant_control_flow(optimized);
-    let optimized = elephc::optimize::normalize_control_flow(optimized);
+    let optimized = elephc::optimize::prune_constant_control_flow(
+        optimized,
+        check_result.local_binding_decision_spans(),
+    );
+    let optimized = elephc::optimize::normalize_control_flow(
+        optimized,
+        check_result.local_binding_decision_spans(),
+    );
     let optimized = elephc::optimize::eliminate_dead_code(
         optimized,
         check_result.local_binding_decision_spans(),

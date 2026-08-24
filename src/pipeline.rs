@@ -509,19 +509,22 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("opt-post");
     let phase_started = Instant::now();
-    let ast = post_typecheck_optimizer.prune(ast);
+    // Pruning and normalization both run the single-case switch rewrite, which materializes the
+    // default body into BOTH branches of the synthesized `if` with the original's spans. The
+    // checker's local-binding decisions are keyed BY SPAN, so these phases are told which spans
+    // carry one and the rewrite vetoes itself rather than duplicating a decision.
+    let ast = post_typecheck_optimizer.prune(ast, check_result.local_binding_decision_spans());
     timings.record_since("opt-post", phase_started);
 
     crate::progress::phase("opt-norm");
     let phase_started = Instant::now();
-    let ast = post_typecheck_optimizer.normalize(ast);
+    let ast = post_typecheck_optimizer.normalize(ast, check_result.local_binding_decision_spans());
     timings.record_since("opt-norm", phase_started);
 
     crate::progress::phase("dce");
     let phase_started = Instant::now();
     // Tail-sinking clones the tail of an `if`/`switch`/`try` into every branch, and a clone keeps
-    // the original's spans. The checker's local-binding decisions are keyed BY SPAN, so the pass
-    // is told which spans carry one and keeps those statements singular.
+    // the original's spans — the same span-keyed hazard, in the other pass that clones.
     let ast = post_typecheck_optimizer
         .eliminate_dead_code(ast, check_result.local_binding_decision_spans());
     timings.record_since("dce", phase_started);

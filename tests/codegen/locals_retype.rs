@@ -2110,6 +2110,93 @@ fn test_marked_local_across_switch_arms_warns_and_is_strict_rejected() {
     );
 }
 
+/// A marked store inside the `default` arm of a single-case `switch` on a runtime subject, which
+/// is the shape the optimizer's switch rewrite would otherwise CLONE.
+///
+/// `prune_switch_stmt` turns a single-case switch on a non-scalar subject into an `if`, and
+/// `materialize_switch_execution` writes the default body into BOTH branches when the case falls
+/// through (no `break` here, so it does). A clone carries the original's span and the checker's
+/// mixed-storage store sites are keyed BY SPAN, so the rewrite would have left one decision naming
+/// two statements — after `checker::binding_decision_ambiguity` certified it names exactly one.
+/// The rewrite now vetoes itself on this shape
+/// (`optimize::control::switch::single_case_rewrite_would_clone_a_decision`), and this fixture is
+/// the end-to-end pin that the veto costs the program nothing: it still compiles with the
+/// mixed-storage warning and still prints PHP's answer.
+#[test]
+fn test_marked_local_stored_in_a_fallthrough_switch_default() {
+    const SOURCE: &str =
+        "<?php $a = 0; switch ($argc) { case 1: echo \"one|\"; default: $a = \"ciao\" . $argc; } echo $a, \"|\"; var_dump($a);";
+
+    let warnings = check_files_diagnostics(&[("main.php", SOURCE)], "main.php", false)
+        .expect("the fallthrough switch fixture must type-check");
+    assert_eq!(
+        warnings,
+        vec![
+            "$a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)".to_string(),
+        ],
+    );
+
+    let out = compile_and_run_with_heap_debug(SOURCE);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "one|ciao1|string(5) \"ciao1\"\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The veto above really fires, measured on the SAME source with the CHECKER's own spans.
+///
+/// The end-to-end fixture cannot tell a vetoed rewrite from a rewrite that never applied — both
+/// print `one|ciao1|`. This runs the optimizer over that program twice, changing nothing but the
+/// decision set: with the checker's spans installed the `switch` survives untouched, and with an
+/// empty set it collapses into the `if` whose two branches each carry a copy of the default body's
+/// store site. The second half is the anti-vacuity proof that this shape is the cloning one.
+#[test]
+fn test_the_single_case_switch_rewrite_vetoes_itself_on_a_marked_default() {
+    const SOURCE: &str =
+        "<?php $a = 0; switch ($argc) { case 1: echo \"one|\"; default: $a = \"ciao\" . $argc; } echo $a, \"|\"; var_dump($a);";
+
+    /// Runs the pipeline's post-typecheck AST phases, optionally handing them the decision spans.
+    fn optimize(with_decisions: bool) -> Vec<elephc::parser::ast::Stmt> {
+        let tokens = elephc::lexer::tokenize(SOURCE).expect("tokenize failed");
+        let ast = elephc::parser::parse(&tokens).expect("parse failed");
+        let ast = elephc::name_resolver::resolve(ast).expect("name resolve failed");
+        let ast = elephc::optimize::fold_constants(ast);
+        let check_result = elephc::types::check(&ast).expect("type check failed");
+        assert!(
+            !check_result.mixed_storage_store_sites.is_empty(),
+            "the fixture must reach the mixed-storage marking"
+        );
+        let spans = if with_decisions {
+            check_result.local_binding_decision_spans()
+        } else {
+            std::collections::HashSet::new()
+        };
+        let ast =
+            elephc::optimize::propagate_constants(ast, check_result.mixed_storage_local_names());
+        let ast = elephc::optimize::prune_constant_control_flow(ast, spans.clone());
+        elephc::optimize::normalize_control_flow(ast, spans)
+    }
+
+    let guarded = optimize(true);
+    assert!(
+        guarded
+            .iter()
+            .any(|stmt| matches!(stmt.kind, elephc::parser::ast::StmtKind::Switch { .. })),
+        "the marked switch must survive the optimizer: {guarded:#?}"
+    );
+
+    let unguarded = optimize(false);
+    assert!(
+        unguarded
+            .iter()
+            .all(|stmt| !matches!(stmt.kind, elephc::parser::ast::StmtKind::Switch { .. })),
+        "without the decision spans the switch must still be rewritten: {unguarded:#?}"
+    );
+}
+
 /// `--strict-locals` and eval-AOT compose: a literal `eval` fragment still retypes its own locals
 /// and still writes the caller's, because the fragment goes through the dynamic scope map rather
 /// than the AOT local-slot checker the flag tightens.

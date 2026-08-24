@@ -148,8 +148,13 @@ impl CheckResult {
     ///
     /// Handed to the post-typecheck optimizer. These decisions are keyed BY SPAN and EIR lowering
     /// consults them by span, so any pass that CLONES an AST node would hand one decision to two
-    /// syntactic sites — and abandoning a binding is not idempotent. DCE's tail-sinking is the one
-    /// pass that clones, and it keeps statements carrying these spans singular.
+    /// syntactic sites — and abandoning a binding is not idempotent. The invariant is therefore on
+    /// the OPTIMIZER as a whole: no pass may clone a node carrying one of these spans, and a pass
+    /// that clones must consult this set and veto itself. Two passes clone today and both are
+    /// guarded through `optimize::control::binding_decisions` — DCE's tail-sinking
+    /// (`optimize::control::dce`) and the single-case switch rewrite reached from the prune and
+    /// normalize phases (`optimize::control::switch::prune_switch_stmt`), which materializes a
+    /// `switch` default body into both branches of a synthesized `if`.
     ///
     /// The mixed-storage store sites are included even though their consumer — declaring the slot
     /// `Mixed` when the local has none yet, and storing at `Mixed` rather than at the value's own
@@ -158,7 +163,8 @@ impl CheckResult {
     /// the ambiguity check that runs in the checker counts the nodes of the ORIGINAL program: a
     /// pass that cloned one of these statements afterwards would create a second site for a key
     /// that check already cleared, and "the decision names exactly one node" is the invariant the
-    /// two halves of this feature are built on. The cost is one lost tail-sink per boxed local.
+    /// two halves of this feature are built on. The cost is one lost tail-sink per boxed local,
+    /// plus one un-rewritten single-case switch per boxed local assigned in a `default` body.
     pub fn local_binding_decision_spans(&self) -> HashSet<Span> {
         self.local_bind_kill_sites
             .keys()

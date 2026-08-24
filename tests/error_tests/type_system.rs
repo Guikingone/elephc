@@ -2769,6 +2769,7 @@ fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
         "<?php\nif ($argc > 1) { $a = 42; } else { $a = \"hello\"; }\n$a = 99;\necho str_repeat($a, 2), \"|\", strlen($a), \"|\", strtoupper($a), \"|\", gettype($a), \"|\";\nvar_dump($a);",
         "<?php\n$a = 0;\nif ($argc > 1) { $a = \"s\" . $argc; }\n$a = 5;\necho strlen($a), \"|\", strtoupper($a), \"|\";\nvar_dump($a);",
         "<?php\nfunction f(int $n) {\n    if ($n > 1) { $a = 42; } else { $a = \"hello\"; }\n    $a = 7;\n    return strlen($a) . \"|\" . strtoupper($a) . \"|\" . gettype($a);\n}\necho f($argc), \"\\n\";\nif ($argc > 1) { $c = 1; } else { $c = \"x\"; }\n$c = 3;\nswitch ($c) { case 3: echo \"three|\"; break; default: echo \"other|\"; }\necho ($c == 3 ? \"eq\" : \"ne\"), \"|\", $c + 1, \"|\";\nvar_dump($c);",
+        "<?php $a = 0; switch ($argc) { case 1: echo \"one|\"; default: $a = \"ciao\" . $argc; } echo $a, \"|\"; var_dump($a);",
     ] {
         let result = check_source_full(source)
             .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{}", error.message, source));
