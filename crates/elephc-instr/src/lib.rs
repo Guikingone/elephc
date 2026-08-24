@@ -52,6 +52,23 @@ use std::sync::Mutex;
 /// that only if something really goes 65k deep). Raising it costs nothing and
 /// removes the caveat from almost every real profile; the guard stays, because a
 /// runaway recursion must still degrade instead of growing without bound.
+///
+/// Measured, because it decides whether the drop path below is reachable at all:
+/// a compiled program recursing through a one-argument function dies of NATIVE
+/// stack exhaustion at about 51,200 frames, with and without monitoring — below
+/// this cap. So on a default 8 MB stack the process is gone before an activation
+/// is ever dropped, and the code past this check is defensive rather than a road
+/// real programs travel. It is not dead, though: a bigger `ulimit -s`, or frames
+/// smaller than this fixture's, move that ceiling.
+///
+/// That matters because the drop path has a known defect. A throw that unwinds
+/// OUT of the dropped region and is caught by a tracked frame leaves that frame's
+/// own exit arriving while the stack is still full and the dropped count still
+/// positive, so a real exit is swallowed and the frame never closes. Reproduced
+/// against this structure directly. Fixing it needs what the exit hook does not
+/// have — a way to tell which activation is ending — the same thing the
+/// recursive-catcher case needs, so both wait on one decision rather than two
+/// patches.
 const MAX_STACK: usize = 65_536;
 
 /// Per-function accumulators, indexed by the compiler-assigned function id.
