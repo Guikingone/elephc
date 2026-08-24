@@ -2285,27 +2285,48 @@ fn test_by_value_foreach_value_var_retypes_after_the_loop() {
 
 /// The kill half of the same control: with no alias in sight, `unset` really ends the by-value
 /// value variable's binding and the incompatible rebind gets a fresh slot.
+///
+/// Heap-debug is load-bearing here rather than decorative: kill-then-rebind is the one shape that
+/// RELEASES the previous occupant and then ABANDONS the slot mapping
+/// (`release_and_abandon_local_binding`), so a release the loop's last stored element never got —
+/// or one it got twice — shows up as a leak or a double free rather than as wrong output.
 #[test]
 fn test_by_value_foreach_value_var_unset_then_retype() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_heap_debug(
         "<?php $v = $argc; $arr = [1, 2, 3]; foreach ($arr as $v) { } unset($v); $v = \"ciao\"; echo $v;",
     );
-    assert_eq!(out, "ciao");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ciao");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
 }
 
 /// The standard PHP by-reference `foreach` idiom keeps working with `$v` marked aliased.
 ///
 /// `foreach (… as &$v) { … } unset($v);` is how PHP code breaks the dangling reference, and the
-/// marking makes that `unset` non-killing — it degrades to the pre-feature null store, exactly as
-/// it does for a `=&` target. The loop must still write through into `$arr`, and the frame must
-/// still come out clean.
+/// marking makes that `unset` record no kill site. That costs the idiom nothing, because a
+/// ref-bound name never took the killing path in the first place: `unset_local` routes it to its
+/// REF-CELL arm (`crate::ir_lower::context`), which unsets the slot, releases the cell owner and
+/// calls `unmark_ref_bound_local` — breaking the alias WITHOUT writing through it. (The plain null
+/// store is the other, non-ref-bound arm; the abandoning one is refused for a ref-bound name by
+/// `local_binding_slot_is_abandonable`.) So the decision the checker no longer records was never
+/// the one this shape depended on.
+///
+/// The reads after the `unset` are what prove it: `$arr[2]` still holds the doubled `6`, so
+/// nothing wrote through the broken alias, and the same-type reuse `$v = 7` still compiles and
+/// prints — matching PHP, which also leaves the name free to rebind once the reference is gone.
+/// A rebind at a DIFFERENT type is the hard error again, which is the pre-branch behavior this
+/// fix restores (pinned in `error_tests::type_system::test_by_ref_foreach_value_var_not_killable`).
 #[test]
 fn test_by_ref_foreach_still_writes_through_and_unsets() {
     let out = compile_and_run_with_heap_debug(
-        "<?php $arr = [$argc, 2, 3]; foreach ($arr as &$v) { $v = $v * 2; } unset($v); echo $arr[1], \"|\", $arr[2];",
+        "<?php $arr = [$argc, 2, 3]; foreach ($arr as &$v) { $v = $v * 2; } unset($v); $v = 7; echo $arr[1], \"|\", $arr[2], \"|\", $v;",
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "4|6");
+    assert_eq!(out.stdout, "4|6|7");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",

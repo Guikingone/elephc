@@ -369,9 +369,14 @@ compile error:
 
 All three shapes require the name to be **never reference-aliased** — no `=&`
 target or source, no `use (&$x)` capture, no by-reference parameter (including
-a variadic `&...$xs`), and no by-reference `foreach` iterable
-(`foreach ($arr as &$v)` permanently aliases `$arr`, the container being
-iterated).
+a variadic `&...$xs`), and neither name a by-reference `foreach` touches:
+`foreach ($arr as &$v)` permanently aliases **both** `$arr`, the container the
+loop holds references into, and `$v`, which *is* one of those references. PHP
+leaves `$v` bound to the last element after the loop ends, so a later
+`$v = "s"` writes straight into `$arr` — which is why `$v = 0; foreach ($arr as
+&$v) {} $v = "s";` stays a hard error in both modes instead of retyping. The
+by-VALUE form copies each element and aliases nothing, so `$arr` and `$v` both
+stay eligible there.
 
 Passing the name to a call aliases it too, whenever elephc cannot see the
 callee's parameter list. An argument bound to a declared `&$p` is the obvious
