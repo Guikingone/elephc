@@ -70,16 +70,19 @@ use std::sync::Mutex;
 /// recursive-catcher case needs, so both wait on one decision rather than two
 /// patches.
 ///
-/// That second case is narrower than it sounds, and the difference is measured
-/// rather than assumed. A `try` written inside a recursive function belongs to
-/// every activation of it, so the innermost live one catches — which is the
-/// occurrence the exit already resolves to, and that shape accounts exactly
+/// The recursive half of that is reachable at any depth and needs no cap: what
+/// the exit hook carries is a function id, so two activations of one function
+/// are indistinguishable to it. When the throw comes from a function of its own,
+/// the catcher IS the innermost activation and the resolution is right
 /// (`a_recursive_function_that_catches_around_its_own_call_accounts_exactly`).
-/// What stays wrong is the case where only an OUTER activation carries the try:
-/// its exit is attributed to an inner activation of the same function, and the
-/// outer one then stays open until its caller returns, absorbing the caller's
-/// remaining time. Measured on a 1000-tick fixture, the caller reported 10 ticks
-/// instead of 410. It partitions and does not wrap; it names the wrong function.
+/// When the recursive call itself throws — ordinary recursive descent with error
+/// recovery — it is not: the topmost frame with that id is the corpse of the
+/// thrower, and the handler's cost lands there
+/// (`a_recursive_call_that_throws_is_reported_as_an_unresolvable_catch`, where
+/// 20 of 120 ticks move onto the recursive function). A function that throws and
+/// catches within one activation leaves the identical shadow stack, so nothing
+/// over ids alone can separate the two; `ambiguous_catch` counts the times the
+/// choice had to be made and the report says so.
 const MAX_STACK: usize = 65_536;
 
 /// Per-function accumulators, indexed by the compiler-assigned function id.
@@ -143,6 +146,15 @@ struct State {
     /// Frames whose children outran their own span — impossible when the
     /// accounting is right, so it is reported rather than absorbed.
     overdrawn: u64,
+    /// Caught exceptions where which activation caught could not be determined.
+    ///
+    /// Only recursion produces them, and only then: the exit hook carries a
+    /// function id and no activation identity, so a function that threw and
+    /// caught in one activation looks exactly like one whose outer activation
+    /// caught for an inner. The two attribute the handler's work to different
+    /// rows, and the profile picks one. Counting them is what keeps the choice
+    /// from being silent.
+    ambiguous_catch: u64,
     /// Activations running right now that were never pushed, because the stack
     /// was already full. Their exits must be ignored symmetrically: an exit
     /// looking for a frame that was never pushed would resync-pop the entire
@@ -362,6 +374,21 @@ impl State {
             self.dropped_depth -= 1;
             return;
         }
+        // An exit for a frame that is not on the stack has nothing to close.
+        // The resync loop below stops only when it finds the id, so an exit for
+        // one that was never pushed — past the shadow-stack cap, or after the
+        // hooks were switched on mid-run — used to answer by popping every frame
+        // down to the bottom and discarding every enclosing function's
+        // accounting. Measured: one such exit emptied a two-frame stack.
+        let Some(index) = (match self.stack.last() {
+            // The overwhelmingly common case, and the reason the search below
+            // costs nothing in a program without exceptions.
+            Some(top) if top.id == id => Some(self.stack.len() - 1),
+            _ => self.stack.iter().rposition(|frame| frame.id == id),
+        }) else {
+            return;
+        };
+
         // Where this exit's frame sits, which is what says which throws it ends.
         //
         // A throw is caught below the depth it was raised at, so an exit at index
@@ -372,24 +399,27 @@ impl State {
         // caught inside such a call ended the outer one from the wrong place
         // entirely.
         //
-        // Walked from the top, like the resync below, so a handler's own frame
-        // is found on the first step and the catcher costs what popping down to
-        // it was going to cost anyway. Only while an exception is in flight.
-        let catcher = match &self.unwinding {
-            Some(_) => self.stack.iter().rposition(|frame| frame.id == id),
-            None => None,
-        };
+        // Which activation this is cannot always be known. When the frame the
+        // exit resolves to is the one that threw — the deepest frame at the
+        // throw — and the same function is on the stack again below it, a
+        // self-catch and an outer activation catching for an inner one produce
+        // the identical shadow stack. The choice made here (the topmost) is
+        // right for the first and wrong for the second, and either way the
+        // report now says how many times it had to make it.
+        if let Some(u) = &self.unwinding {
+            let thrower = u.throws.iter().any(|throw| throw.depth == index + 1);
+            if thrower && self.stack[..index].iter().any(|frame| frame.id == id) {
+                self.ambiguous_catch = self.ambiguous_catch.saturating_add(1);
+            }
+        }
 
         // Frames an exception unwound never ran their own exit hook. Closing
         // them HERE, at the instant the throw is observed passing them, keeps
         // their cost on them; simply discarding them left it inside the
         // catching function's own time, which then reads as the hot function
         // (measured: a catcher showing 99.7% self time for work it never did).
-        while let Some(top) = self.stack.last() {
-            if top.id == id {
-                break;
-            }
-            let stale = self.stack.pop().expect("last() was Some");
+        while self.stack.len() > index + 1 {
+            let stale = self.stack.pop().expect("the index is inside the stack");
             // Frames above the catcher are closed at the instant of the throw
             // that killed THEM — everything between that and the catcher's
             // return belongs to the unwinding and the handler, not to the code
@@ -425,7 +455,7 @@ impl State {
         // Taken only once there is a frame to hand them to: draining before the
         // pop dropped the charge whenever the resync had emptied the stack, and
         // a dropped charge is one the exclusives no longer account for anywhere.
-        if let (Some(u), Some(index)) = (self.unwinding.as_mut(), catcher) {
+        if let Some(u) = self.unwinding.as_mut() {
             let mut resolved = Vec::new();
             u.throws.retain_mut(|throw| {
                 if throw.depth > index {
@@ -549,6 +579,7 @@ impl State {
         self.edges.clear();
         self.dropped = 0;
         self.overdrawn = 0;
+        self.ambiguous_catch = 0;
         self.dropped_depth = 0;
         // The stack goes with the slice, so the frame this unwind was holding a
         // charge for goes with it too. Carrying it across would hand the next
@@ -579,6 +610,21 @@ impl State {
                 self.dropped, MAX_STACK
             ));
         }
+        if self.ambiguous_catch > 0 {
+            out.push_str(&format!(
+                "elephc-instr: note: {} exception(s) were caught inside a recursive \
+                 function; which activation caught could not be determined, so the \
+                 handler's cost may sit on the wrong activation of it\n",
+                self.ambiguous_catch
+            ));
+        }
+        if !self.stack.is_empty() {
+            out.push_str(&format!(
+                "elephc-instr: note: {} frame(s) were still open at this dump; they \
+                 carry no inclusive time and the self values do not sum to the root\n",
+                self.stack.len()
+            ));
+        }
         if self.overdrawn > 0 {
             out.push_str(&format!(
                 "elephc-instr: note: {} frames were charged more by their callees than \
@@ -590,9 +636,14 @@ impl State {
             // Before the rows, like the note above, so a reader who stops at the
             // first interesting line still learns the columns are not what they
             // are called.
+            // Named exactly: `incl_wait` and `excl_wait` come from a
+             // nanosecond counter and never pass through the conversion, so
+             // calling them ticks would be the same kind of wrong this note is
+             // here to prevent.
             out.push_str(
                 "elephc-instr: note: this run was too short to measure the counter rate — \
-                 the _ns columns below are raw counter ticks, not nanoseconds\n",
+                 incl_ns and excl_ns below are raw counter ticks, not nanoseconds \
+                 (the wait columns are unaffected)\n",
             );
         }
         if PARTIAL.load(Ordering::Relaxed) {
@@ -2526,6 +2577,11 @@ mod tests {
     /// A counter tick is not a nanosecond, and the renderer must know it.
     #[test]
     fn ticks_convert_to_nanoseconds_at_the_rate_measured() {
+        // The rate is one global and the tests run in parallel, so setting it
+        // means holding the lock — the same reason `ticks_are_nanoseconds` hands
+        // its guard back. This test set it bare, which could swap the rate under
+        // a render test mid-assertion.
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         // A 24 MHz counter — what this class of machine actually reports.
         super::TICK_HZ.store(24_000_000, super::Ordering::Relaxed);
         // One second of ticks must read as one second.
@@ -2666,13 +2722,12 @@ mod tests {
         assert_eq!(s.fns[2].depth, 0);
     }
 
-    /// Recursion and exceptions together, in the shape PHP produces.
+    /// Recursion where the throw comes from a function of its own.
     ///
-    /// A `try` inside a recursive function belongs to every activation, so the
-    /// innermost live one catches. That is the occurrence `exit_at` resolves to,
-    /// which makes this — the common shape — exact, and worth holding onto: the
-    /// unwind accounting has been rewritten three times, and the search that
-    /// finds the catcher is the part recursion can break.
+    /// The catcher is then the innermost activation of the recursive function,
+    /// which IS the occurrence `exit_at` resolves to, so this shape is exact.
+    /// It is not recursion in general — see the test below, where the recursive
+    /// call itself throws and the resolution has no way to be right.
     #[test]
     fn a_recursive_function_that_catches_around_its_own_call_accounts_exactly() {
         let mut s = State::default();
@@ -2695,6 +2750,113 @@ mod tests {
         assert_eq!(s.fns[0].excl_ns, 410, "the caller keeps what it actually ran");
         let total: u64 = s.fns.iter().map(|a| a.excl_ns).sum();
         assert_eq!(total, 1_000, "self time did not partition the root");
+    }
+
+    /// Recursion where the recursive call itself throws — and the profile says
+    /// it could not tell which activation caught.
+    ///
+    /// ```php
+    /// function f(int $n): void {
+    ///     if ($n > 0) { try { f($n - 1); } catch (\Exception $e) { recover(); } }
+    ///     else { throw new \Exception('x'); }
+    /// }
+    /// ```
+    ///
+    /// Every activation carries the `try`, and the catcher is still not the frame
+    /// the exit resolves to: the deepest activation took the `else` branch and
+    /// threw, so the topmost frame with that id is the corpse of the thrower
+    /// rather than the frame returning. A function that throws and catches within
+    /// one activation produces the identical shadow stack, so no rule over ids
+    /// alone can separate them — which is exactly what the note has to say.
+    #[test]
+    fn a_recursive_call_that_throws_is_reported_as_an_unresolvable_catch() {
+        let mut s = State::default();
+        s.enter_at(0, 0, 0, 0, 0, 0); // {main}, 0..120
+        s.enter_at(1, 10, 0, 0, 0, 0); // f(1), carries the try, 10..100
+        s.enter_at(1, 20, 0, 0, 0, 0); // f(0), throws at 30
+        s.note_throw(30, 0, 0, 0, 0);
+        s.enter_at(2, 40, 0, 0, 0, 0); // recover(), 40..70
+        s.exit_at(2, 70, 0, 0, 0, 0);
+        s.exit_at(1, 100, 0, 0, 0, 0); // f(1) returns
+        s.exit_at(0, 120, 0, 0, 0, 0);
+
+        assert!(s.stack.is_empty(), "the stack did not unwind");
+        assert_eq!(
+            s.ambiguous_catch, 1,
+            "the profile picked an activation without admitting it had to"
+        );
+        let names = ["{main}".to_string(), "f".to_string(), "recover".to_string()];
+        assert!(
+            s.render(&names).contains("which activation caught could not be determined"),
+            "the report does not carry the note"
+        );
+        // The choice costs 20 ticks here: they sit on `f` instead of `{main}`.
+        // Asserted so the day an activation identity reaches the exit hook, this
+        // test fails and says what it is worth.
+        assert_eq!(s.fns[1].excl_ns, 80, "f: 60 is the truth, 80 is what the id alone can say");
+        assert_eq!(s.fns[0].excl_ns, 10, "{{main}}: 30 is the truth");
+        let total: u64 = s.fns.iter().map(|a| a.excl_ns).sum();
+        assert_eq!(total, 120, "self time still partitions the root");
+    }
+
+    /// A dump taken while frames are still running says so.
+    ///
+    /// Inclusive time is credited when a function's depth returns to zero, so a
+    /// dump reached without the enclosing epilogues — a PHP `exit()`, a fatal
+    /// path — prints a root with `incl_ns=0` and self values that do not sum to
+    /// it. Both are true statements about a truncated capture; neither is
+    /// readable without knowing it was truncated.
+    #[test]
+    fn a_dump_with_frames_still_running_says_how_many() {
+        let _serial = ticks_are_nanoseconds();
+        let mut s = State::default();
+        s.enter_at(0, 0, 0, 0, 0, 0); // {main}, still running
+        s.enter_at(1, 10, 0, 0, 0, 0); // and its callee
+        s.exit_at(1, 40, 0, 0, 0, 0);
+
+        let names = ["{main}".to_string(), "work".to_string()];
+        let out = s.render(&names);
+        assert!(
+            out.contains("1 frame(s) were still open at this dump"),
+            "a truncated capture read as a complete one:\n{out}"
+        );
+        assert!(
+            out.contains("elephc-instr: {main} calls=1 incl_ns=0"),
+            "the root should show no inclusive time, which is what the note explains:\n{out}"
+        );
+
+        // And a complete capture says nothing of the kind.
+        s.exit_at(0, 100, 0, 0, 0, 0);
+        assert!(
+            !s.render(&names).contains("still open at this dump"),
+            "a complete capture claimed to be truncated"
+        );
+    }
+
+    /// An exit for a frame that was never pushed closes nothing.
+    ///
+    /// The resync loop stops when it finds the id, so an exit for one that is not
+    /// there walked the whole stack and closed every frame on the way. Past the
+    /// shadow-stack cap and from the exported enable/disable toggles, that is a
+    /// reachable exit — and it discarded the accounting of every enclosing
+    /// function, which is a far worse answer than doing nothing.
+    #[test]
+    fn an_exit_for_a_frame_that_was_never_pushed_leaves_the_stack_alone() {
+        let mut s = State::default();
+        s.enter_at(0, 0, 0, 0, 0, 0);
+        s.enter_at(1, 10, 0, 0, 0, 0);
+
+        s.exit_at(9, 50, 0, 0, 0, 0);
+
+        assert_eq!(s.stack.len(), 2, "an unknown exit emptied the stack");
+        assert_eq!(s.fns[0].excl_ns, 0, "an enclosing frame was closed by it");
+        assert_eq!(s.fns[1].excl_ns, 0, "an enclosing frame was closed by it");
+
+        // And the real exits still work afterwards.
+        s.exit_at(1, 60, 0, 0, 0, 0);
+        s.exit_at(0, 100, 0, 0, 0, 0);
+        assert_eq!(s.fns[1].excl_ns, 50);
+        assert_eq!(s.fns[0].excl_ns, 50);
     }
 
     #[test]

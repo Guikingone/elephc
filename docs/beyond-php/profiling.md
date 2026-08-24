@@ -649,13 +649,20 @@ where a figure would otherwise be trusted further than it should be:
   handler that throws again, an exception raised and caught inside a call the
   handler made. Each throw is resolved by the exit that caught it, and each frame
   is closed at the instant of the throw that killed it.
-- **A recursion where only an outer activation catches names the wrong
-  function.** A `try` written inside a recursive function belongs to every
-  activation of it, so the innermost live one catches — that shape is exact. The
-  other one, where a single outer activation carries the `try`, is not: nothing
-  distinguishes two activations of one function to the exit hook, so the outer
-  activation stays open until its caller returns and absorbs the caller's
-  remaining time. Self times still sum to the root; they sit on the wrong row.
+- **An exception caught inside a recursive function may be charged to the
+  wrong activation of it.** The exit hook carries a function id, not an identity
+  for the activation, so two activations of one function are the same thing to
+  it. When the recursive call is what throws — ordinary recursive descent with
+  error recovery — the topmost frame with that id is the corpse of the thrower
+  rather than the frame returning, and the handler's cost lands on it. A function
+  that throws and catches within one activation produces the identical shadow
+  stack, so no rule over ids alone separates them. `monitor` says when it
+  happened: *"3 exception(s) were caught inside a recursive function; which
+  activation caught could not be determined"*. Self times still sum to the root
+  — measured on a 120-tick fixture, 20 of them moved from the caller onto the
+  recursive function — so it is a wrong row, not a wrong total. Recursion whose
+  throw comes from a function of its own is unaffected: there the catcher is the
+  innermost activation, which is the one the hook resolves to.
 - **On a machine whose counter rate is not published, a run under 100 µs reports
   counter ticks.** The rate is derived from the run itself — elapsed ticks
   against elapsed nanoseconds — and a run too short to divide safely gets no

@@ -606,8 +606,10 @@ fn handle<S: std::io::Read + std::io::Write>(
     }) {
         return Ok(());
     }
-    // Which answer was asked for. A client that says nothing gets the sampled
-    // ring, which is what every client did before this byte existed.
+    // Which answer was asked for. A byte that is present but unrecognised gets
+    // the sampled ring, which is what every client did before this byte existed;
+    // a client that sends nothing at all fails this read and is disconnected,
+    // like any other unfinished request.
     let want = wire::read_exact_vec(&mut stream, 1)?;
     let profile = match want.first().copied() {
         Some(WANT_EXACT) => exact_answer(),
