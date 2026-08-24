@@ -332,6 +332,16 @@ impl Checker {
                         self.tolerated_null_receiver = true;
                         Ok(PhpType::Void)
                     }
+                    // A SCALAR base is not an error either: php raises `Trying to access array
+                    // offset on <type>` and answers NULL — measured on `php -n` 8.5.6 for
+                    // `false`, `true`, `int` and `float`. Refusing the program was the worst
+                    // possible answer to what is, in php, a warning about a bug the program
+                    // survives. A STRING base is excluded on purpose: `"abc"[1]` is a legal read
+                    // handled by the `PhpType::Str` arm above.
+                    PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Float => {
+                        self.tolerated_null_receiver = true;
+                        Ok(PhpType::Void)
+                    }
                     _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
                 }
             }
