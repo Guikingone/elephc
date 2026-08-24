@@ -224,7 +224,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `strval()`      | `strval($val): string`       | Convert to string              |
 | `gettype()`     | `gettype($val): string`      | Returns type name              |
 | `empty()`       | `empty($val): bool`          | Returns true if value is falsy |
-| `unset()`       | `unset($var, ...$vars): void` | Sets one or more variables to null |
+| `unset()`       | `unset($var, ...$vars): void` | Unbinds one or more variables. On an eligible local a later read is a compile error, in both modes — see [Local retyping](#local-retyping) |
 | `settype()`     | `settype($var, $type): bool` | Changes variable type in place |
 
 PHP's predicate aliases are supported and behave identically to their canonical
@@ -247,6 +247,21 @@ function describe($x): string {        // $x may be int or a Point across call s
 Narrowing is not tracked across a reassignment of the variable inside the branch.
 
 Narrowing applies to function and method parameters. A parameter whose call sites pass incompatible types (e.g. `int` at one site and a class instance at another) is inferred as a union, and the guard narrows it inside each branch. This is **not** yet supported for closure parameters: a closure invoked with incompatible argument types is rejected at compile time rather than inferred as a union.
+
+### Local retyping
+
+An **undeclared-type** local is monomorphic by default, but three shapes let it change type anyway. `unset($a)` ends the binding, and the next assignment re-binds `$a` at any type with no diagnostic. A plain straight-line reassignment (`$a = 0; $a = "ciao";`) re-binds `$a` to a fresh slot of the new type and warns. A branch-divergent assignment (`if (…) { $a = 0; } else { $a = "ciao"; }`) compiles the local as boxed `mixed` storage for the whole body and warns — a performance signal as much as a correctness one, since every read of it then goes through the box.
+
+One behaviour differs from PHP: reading a variable after `unset()` is a compile error, where PHP warns and evaluates the read as `null`. Probe the name with `isset()` (or `empty()` / `??`), which stay legal on an unbound name:
+
+```php
+$a = "x";
+unset($a);
+echo $a;                            // Undefined variable: $a — compile error
+echo isset($a) ? "set" : "unset";   // fine: prints "unset"
+```
+
+None of this touches a **declared** type: a typed local, a type-hinted parameter, and a class property stay strict in every mode. `--strict-locals` turns the two warning shapes back into hard errors; see [Strict locals mode](../compiling/cli-reference.md#strict-locals-mode) for the flag and for which names are eligible.
 
 ### Parameter type coercion
 

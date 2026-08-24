@@ -367,27 +367,26 @@ compile error:
   of a `Mixed`-storage local goes through boxed dispatch instead of a plain
   register/stack slot for the rest of the body.
 
-**Migrating.** The `unset()` kill is the one shape that can reject code that
-compiled before. Reading a variable after a straight-line `unset()` of it is now
-`Undefined variable: $a` — in BOTH modes, since the kill is not gated by
-`--strict-locals` — where the read previously saw the nulled slot. That matches
-PHP, which warns on the same read and evaluates it as `null`. The idiomatic
-probe is `isset()` (or `empty()` / `??`), all of which stay legal on an unbound
-name and answer "not set":
-
-```php
-$a = "x"; unset($a);
-echo $a;                            // Undefined variable: $a — compile error
-echo isset($a) ? "set" : "unset";   // fine: prints "unset"
-echo $a ?? "dflt";                  // fine: prints "dflt"
-```
-
 All three shapes require the name to be **never reference-aliased** — no `=&`
 target or source, no `use (&$x)` capture, no by-reference parameter (including
-a variadic `&...$xs`), no by-reference call argument, and no by-reference
-`foreach` iterable (`foreach ($arr as &$v)` permanently aliases `$arr`, the
-container being iterated, not `$v`) — and none of them applies to a `global`
-name, a `static` name, or a superglobal, whose storage the body does not own.
+a variadic `&...$xs`), and no by-reference `foreach` iterable
+(`foreach ($arr as &$v)` permanently aliases `$arr`, the container being
+iterated).
+
+Passing the name to a call aliases it too, whenever elephc cannot see the
+callee's parameter list. An argument bound to a declared `&$p` is the obvious
+case, but so is ANY plain-variable argument of a call whose callee has no
+resolvable signature: a variable function (`$f = "strlen"; $f($a);`), a
+dynamically named method (`$o->$m($a)`), a `call_user_func()` whose target is
+picked at run time, a `callable` parameter elephc could not specialize. Such a
+callee may bind the argument by reference, and the reference outlives the call,
+so the conservative answer is the only sound one. A call elephc CAN resolve
+costs the name nothing: `f($a)`, `$c->m($a)`, `call_user_func('var_dump', $a)`
+and `$a |> strval(...)` all leave a by-value argument fully eligible.
+
+None of the three applies to a name whose storage this body does not own: a name
+this body binds with `global`, a `static` name, or a superglobal or seeded name
+(`$argc`, `$argv`, and the extern C globals, seeded into the top-level scope).
 A **declared type** always stays strict in both modes: a typed local
 (`int $x = 5;`), a type-hinted parameter, and a class property never retype or
 box to `Mixed` — reassigning one incompatibly is a compile error exactly as
@@ -410,7 +409,8 @@ Beyond those shared exclusions the shapes are gated differently:
   **`require`** splices the file in with no guard, so even its top-level
   statements behave exactly like inline code.
 - The **`unset()` kill** additionally stands down at top level for any name
-  some `global` statement elsewhere in the program declares. Such a variable's
+  some OTHER body's `global` statement declares — a name main itself never
+  declares `global`, and so is not excluded outright above. Such a variable's
   storage is the program-global symbol other bodies reach, not main's frame
   slot, so the binding is kept and `unset` is a plain typing no-op on it. The
   search covers every other function, method, and top-level statement body —
@@ -426,26 +426,35 @@ Beyond those shared exclusions the shapes are gated differently:
   so what it requires instead is that every write to the name in the body be
   syntactically exact evidence: a literal, a scalar cast, or a `.` string
   concatenation. Any other write shape (`++`/`--`, a `foreach`/`list()`
-  target, a by-reference call argument, an `unset()` mention, `=&`, `global`,
-  or `static`) disqualifies the name from boxing and leaves it on today's hard
-  error, and a **parameter** is never boxed by it at all (it is already bound
+  target, an `unset()` mention, `=&`, `global`, or `static`) disqualifies the
+  name from boxing and leaves it on today's hard error. The pre-scan does SKIP
+  an assignment sitting inside a branch guarded by a **non-negated type test on
+  the name itself** (`if (is_string($a)) { $a = "x"; }`): the guard already
+  established the type the assignment writes, so it is not evidence of
+  divergence and does not mark the name.
+
+  Calls are judged more strictly here than by the two kill shapes. This pre-scan
+  runs before inference, so the only callee it can resolve is one it looks up by
+  NAME: every argument — **by value included** — of a method call, a `::` static
+  call, a `new`, a call through a closure variable or an arbitrary expression, or
+  a dynamic `new` disqualifies the local behind it, and so does any argument of a
+  plain function call whose name it cannot resolve. Only a plain call to a KNOWN
+  by-value function, and a pipe into one (`$a |> strval(...)`), leave the
+  argument boxable. So `$c->m($a)` with an ordinary `m(mixed $v)` keeps a
+  branch-divergent `$a` on the hard error, where the identical `f($a)` boxes it.
+
+  A **parameter** is never boxed by this shape at all (it is already bound
   when the body starts). A by-value closure **capture** is the one pre-bound
   shape that IS boxed — dropping its mark would strand the value the capture
   owns — though the warning is withheld where the capture's incoming type
   already absorbs every assignment, since the advice to compile with
   `--strict-locals` would be false there.
-  That same pre-scan also SKIPS an assignment sitting inside a branch guarded by
-  a **non-negated type test on the name itself** (`if (is_string($a)) { $a =
-  "x"; }`): the guard already established the type the assignment writes, so it
-  is not evidence of divergence and does not mark the name.
 
 `--strict-locals` restores the hard error for the two warning shapes above:
 
 ```text
 Type error: cannot reassign $a from int to string
 ```
-
-The `unset()` kill is unaffected, since it was never gated by the flag.
 
 `eval()`'d code — whether AOT-lowered from a literal fragment or run through
 the optional Magician interpreter bridge — reads and writes its locals through
@@ -467,6 +476,37 @@ $a = 1; unset($a); eval('$a = 5;'); echo $a;   // prints 5 — the binding survi
 $a = "old"; $a = 7; eval('echo $a;');          // Type error: cannot reassign $a
 if ($n > 1) { $b = 1; } else { $b = "z"; }     // still boxed Mixed, still a warning
 eval('echo $b;');
+```
+
+**Two statements at the same position.** elephc files each of these decisions
+against the source position of the statement that triggered it, and a position
+carries no file identity. So when two statements in the compiled program share a
+line *and* column *and* name the same variable — the same line:column in two
+different included files, or one retyping file pulled in twice with plain
+`require`, which splices its statements in again — elephc cannot tell which of
+the two it decided about. Rather than misapply the decision to one of them
+silently, it rejects the program:
+
+```text
+Cannot re-bind $a here: 2 statements in this program sit at line 2 column 1 and name $a. …
+```
+
+The message names both causes because it cannot distinguish them. Keep the two
+assignments type-compatible, or move one statement to a different line or column.
+
+**Migrating.** The `unset()` kill is the one shape that can reject code that
+compiled before. Reading a variable after a straight-line `unset()` of it is now
+`Undefined variable: $a` — in BOTH modes, since the kill is not gated by
+`--strict-locals` — where the read previously saw the nulled slot. That matches
+PHP, which warns on the same read and evaluates it as `null`. The idiomatic
+probe is `isset()` (or `empty()` / `??`), all of which stay legal on an unbound
+name and answer "not set":
+
+```php
+$a = "x"; unset($a);
+echo $a;                            // Undefined variable: $a — compile error
+echo isset($a) ? "set" : "unset";   // fine: prints "unset"
+echo $a ?? "dflt";                  // fine: prints "dflt"
 ```
 
 See [The Type Checker](../internals/the-type-checker.md#local-retyping-and-strict-locals-mode)
