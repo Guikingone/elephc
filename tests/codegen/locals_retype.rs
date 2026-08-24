@@ -617,6 +617,167 @@ echo probe($argc);"#,
 }
 
 // ---------------------------------------------------------------------------
+// The retype TYPE MATRIX: shapes beyond the int/string pair the earlier fixtures
+// cover. Probed individually before pinning (see the doc comment on each).
+// ---------------------------------------------------------------------------
+
+/// `float` and `int` are NOT an incompatible retype pair: probed via `--check`, both directions
+/// compile with no warning at all, in EITHER mode (`merged_assignment_type` puts `Int`, `Bool`,
+/// `False` and `Float` in one merge-compatible cluster, so `merge_local_assignment_type` never
+/// even reaches the "changes type" branch for them). The slot still takes the SECOND assignment's
+/// concrete representation, not a boxed union of both.
+#[test]
+fn test_float_and_int_retype_merges_without_a_warning() {
+    let float_then_int = "<?php $a = 1.5 + $argc; $a = $argc; var_dump($a);";
+    let warnings = check_files_diagnostics(&[("main.php", float_then_int)], "main.php", false)
+        .expect("float-then-int must type-check");
+    assert_eq!(warnings, Vec::<String>::new(), "no retype warning for a float-to-int merge");
+    let out = compile_and_run(float_then_int);
+    assert_eq!(out, "int(1)\n");
+
+    let int_then_float = "<?php $a = $argc; $a = 1.5 + $argc; var_dump($a);";
+    let warnings = check_files_diagnostics(&[("main.php", int_then_float)], "main.php", false)
+        .expect("int-then-float must type-check");
+    assert_eq!(warnings, Vec::<String>::new(), "no retype warning for an int-to-float merge");
+    let out = compile_and_run(int_then_float);
+    assert_eq!(out, "float(2.5)\n");
+}
+
+/// `bool` merges into the same cluster as `int`/`float`: neither direction warns, matching
+/// `test_float_and_int_retype_merges_without_a_warning` above.
+#[test]
+fn test_bool_and_int_retype_merges_without_a_warning() {
+    let int_then_bool = "<?php $a = $argc; $a = $argc > 0; var_dump($a);";
+    let warnings = check_files_diagnostics(&[("main.php", int_then_bool)], "main.php", false)
+        .expect("int-then-bool must type-check");
+    assert_eq!(warnings, Vec::<String>::new(), "no retype warning for an int-to-bool merge");
+    let out = compile_and_run(int_then_bool);
+    assert_eq!(out, "bool(true)\n");
+
+    let bool_then_int = "<?php $a = $argc > 0; $a = $argc; var_dump($a);";
+    let warnings = check_files_diagnostics(&[("main.php", bool_then_int)], "main.php", false)
+        .expect("bool-then-int must type-check");
+    assert_eq!(warnings, Vec::<String>::new(), "no retype warning for a bool-to-int merge");
+    let out = compile_and_run(bool_then_int);
+    assert_eq!(out, "int(1)\n");
+}
+
+/// A `null`-typed binding is a WIDENING merge too, not the incompatible-retype shape, in either
+/// direction and whatever the second type is — `merged_assignment_type` special-cases `Void`
+/// (a bare `null`'s inferred type) to merge into whatever the other side is, so no warning fires
+/// and the checker accepts it mode-independently (probed under `--strict-locals` too).
+///
+/// The middle case (`null` then a HEAP string) is pinned with `compile_and_run` only, on purpose:
+/// probing found it pays the same pre-existing "boxed-detach" leak described on
+/// `test_string_read_above_a_kill_still_answers_correctly` — a `null`-typed slot widens to boxed
+/// `Mixed` frame-wide the same way an abandoned slot does, so the `echo` read after it detaches an
+/// unreleased copy. That is a pre-existing leak class, not something this fixture should assert
+/// clean; only the VALUE is this test's contract.
+#[test]
+fn test_null_involved_retype_is_a_widening_merge_not_a_retype() {
+    let null_then_int = "<?php $a = null; $a = $argc; echo $a;";
+    let warnings = check_files_diagnostics(&[("main.php", null_then_int)], "main.php", false)
+        .expect("null-then-int must type-check");
+    assert_eq!(warnings, Vec::<String>::new(), "no retype warning for a null-to-int merge");
+    assert_eq!(compile_and_run(null_then_int), "1");
+
+    let null_then_string = "<?php $b = null; $b = \"s\" . $argc; echo $b;";
+    let warnings = check_files_diagnostics(&[("main.php", null_then_string)], "main.php", false)
+        .expect("null-then-string must type-check");
+    assert_eq!(warnings, Vec::<String>::new(), "no retype warning for a null-to-string merge");
+    assert_eq!(compile_and_run(null_then_string), "s1");
+
+    let int_then_null = "<?php $c = $argc; $c = null; echo is_null($c) ? \"null\" : \"not-null\";";
+    let warnings = check_files_diagnostics(&[("main.php", int_then_null)], "main.php", false)
+        .expect("int-then-null must type-check");
+    assert_eq!(warnings, Vec::<String>::new(), "no retype warning for an int-to-null merge");
+    assert_eq!(compile_and_run(int_then_null), "null");
+}
+
+/// The fresh-slot-refcounted DIRECTION of the object retype: a scalar binding retyped to an
+/// object allocates a fresh instance rather than releasing one (the mirror of
+/// `test_implicit_retype_object_to_string_leaves_a_clean_heap`, which retypes AWAY from an
+/// object). Warns like any other incompatible retype and is `--strict-locals`-rejected.
+#[test]
+fn test_scalar_to_object_retype_allocates_a_fresh_instance() {
+    const SOURCE: &str = r#"<?php
+class Box {
+    public int $v;
+    public function __construct(int $v) { $this->v = $v; }
+    public function __destruct() { echo "bye|"; }
+}
+$x = $argc;
+echo $x, "|";
+$x = new Box($argc);
+echo $x->v;"#;
+
+    let warnings = check_files_diagnostics(&[("main.php", SOURCE)], "main.php", false)
+        .expect("the scalar-to-object fixture must type-check");
+    assert_eq!(
+        warnings,
+        vec![
+            "$x changes type from int to Box; the previous value is discarded (compile with --strict-locals to make this an error)".to_string(),
+        ],
+    );
+    let error = check_files_diagnostics(&[("main.php", SOURCE)], "main.php", true)
+        .expect_err("--strict-locals must reject the scalar-to-object retype");
+    assert!(
+        error.contains("cannot reassign $x from int to Box"),
+        "expected the strict rejection, got: {error}"
+    );
+
+    let out = compile_and_run_with_heap_debug(SOURCE);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1|1bye|");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A post-unset rebind to an ARRAY: the kill path (not the retype path), so no warning — and the
+/// fresh array is owned once.
+#[test]
+fn test_unset_then_rebind_to_array_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php $x = $argc; unset($x); $x = [1, $argc]; echo $x[0], \"|\", $x[1];",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1|1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A post-unset rebind to an OBJECT: same kill path, and the fresh instance is released exactly
+/// once (the destructor fires) with no warning.
+#[test]
+fn test_unset_then_rebind_to_object_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box {
+    public int $v;
+    public function __construct(int $v) { $this->v = $v; }
+    public function __destruct() { echo "bye|"; }
+}
+$x = $argc;
+unset($x);
+$x = new Box($argc);
+echo $x->v, "|";"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1|bye|");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Tail-sinking duplicates the straight-line tail of an `if`/`switch`/`try` into
 // EVERY branch (`optimize::control::dce`, which runs AFTER type checking). The
 // copies share their spans, so one checker decision is consumed once per copy.
