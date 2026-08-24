@@ -778,6 +778,44 @@ echo $x->v, "|";"#,
 }
 
 // ---------------------------------------------------------------------------
+// `--ir-opt=off` runs of the core shapes, through the real CLI
+// (`compile_cli_file_and_run_with_flags`). The EIR optimizer never runs above
+// the checker, so these are not expected to catch a NEW class of bug — they
+// pin that the unoptimized lowering path answers the same as the optimized one
+// the fixtures above already cover.
+// ---------------------------------------------------------------------------
+
+/// The `unset` kill, unoptimized.
+#[test]
+fn test_unset_then_retype_int_to_string_with_ir_opt_off() {
+    let out = compile_cli_file_and_run_with_flags(
+        "<?php $a = $argc; unset($a); $a = \"ciao\"; echo $a;",
+        &["--ir-opt=off"],
+    );
+    assert_eq!(out, "ciao");
+}
+
+/// The straight-line retype, unoptimized.
+#[test]
+fn test_implicit_retype_int_to_string_with_ir_opt_off() {
+    let out = compile_cli_file_and_run_with_flags(
+        "<?php $a = $argc; $a = \"ciao\"; echo $a;",
+        &["--ir-opt=off"],
+    );
+    assert_eq!(out, "ciao");
+}
+
+/// The branch-divergent mixed-storage marking, unoptimized.
+#[test]
+fn test_marked_local_across_branches_with_ir_opt_off() {
+    let out = compile_cli_file_and_run_with_flags(
+        "<?php if ($argc > 5) { $a = 1; } else { $a = \"s\" . $argc; } echo $a;",
+        &["--ir-opt=off"],
+    );
+    assert_eq!(out, "s1");
+}
+
+// ---------------------------------------------------------------------------
 // Tail-sinking duplicates the straight-line tail of an `if`/`switch`/`try` into
 // EVERY branch (`optimize::control::dce`, which runs AFTER type checking). The
 // copies share their spans, so one checker decision is consumed once per copy.
