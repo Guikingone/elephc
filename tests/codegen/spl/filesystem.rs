@@ -159,7 +159,11 @@ rmdir("docs");
     );
     assert_eq!(
         out,
-        "a.txt|txt|a|docs|file|8\n0:one;1:two;\ntwo|one|1\n2:o:e\ntemp|line\n"
+        // `0:one;1:two;2:;` — THREE lines, not two. php's iteration is stream-driven: after the
+        // last `\n` the stream is not yet at end of file, so one more round answers `''`. This
+        // expectation was written from the array-backed implementation, which stopped an
+        // iteration early; measured on `php -n` 8.5.6, the very program above prints the third.
+        "a.txt|txt|a|docs|file|8\n0:one;1:two;2:;\ntwo|one|1\n2:o:e\ntemp|line\n"
     );
     let _ = fs::remove_dir_all(&dir);
 }

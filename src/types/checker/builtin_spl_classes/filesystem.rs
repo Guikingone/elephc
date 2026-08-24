@@ -896,8 +896,43 @@ fn file_object_load_lines_body(path: Expr) -> Vec<Stmt> {
             "line",
             vec![property_array_push_stmt(this_expr(), "lines", var_expr("line"))],
         ),
+        spl_file_object_trailing_line_stmt(),
         spl_file_object_csv_refresh_stmt(),
     ]
+}
+
+/// Appends the FINAL empty line php's iteration yields, when the file has one.
+///
+/// php drives the iteration from the stream, not from a line array: after the last `\n` the
+/// stream is not yet at end of file, so one more round answers `''`. `file()` reports no such
+/// element, so the array-backed model stopped an iteration early — MEASURED on `php -n` 8.5.6:
+///
+///     ""       iterates 1 time  ['']
+///     "a"      iterates 1 time  ['a']
+///     "a\n"    iterates 2 times ['a\n', '']
+///     "a\nb\n"  iterates 3 times ['a\n', 'b\n', '']
+///
+/// So the rule is: a file that is EMPTY, or whose last byte is a newline, has one more line than
+/// `file()` reports. The last stored line is tested rather than the file re-read, because these
+/// lines keep their newline — `DROP_NEW_LINE` is applied by `current()`, not by the loader.
+fn spl_file_object_trailing_line_stmt() -> Stmt {
+    let last_line = array_access(
+        file_lines_expr(),
+        binary_expr(count_expr(file_lines_expr()), BinOp::Sub, int_expr(1)),
+    );
+    if_stmt(
+        binary_expr(
+            binary_expr(count_expr(file_lines_expr()), BinOp::StrictEq, int_expr(0)),
+            BinOp::Or,
+            binary_expr(
+                function_call("substr", vec![last_line, int_expr(-1)]),
+                BinOp::StrictEq,
+                string_expr("\n"),
+            ),
+        ),
+        vec![property_array_push_stmt(this_expr(), "lines", string_expr(""))],
+        None,
+    )
 }
 
 /// Builds the SplTempFileObject constructor body.
@@ -1366,8 +1401,40 @@ fn spl_file_object_csv_build_body() -> Vec<Stmt> {
         property_assign_stmt(this_expr(), "csvBlank", empty_array_expr()),
         assign_stmt("pending", string_expr("")),
         assign_stmt("inside", bool_expr(false)),
+        // The line list carries the FINAL empty line php's plain iteration yields after a
+        // trailing newline. php's csv iteration has no such record — a four-record fixture must
+        // not answer five — and `file()` never produces an empty last element on its own, so
+        // dropping one here is unambiguous. Done in the builder rather than by ordering the
+        // load, because `setFlags(READ_CSV)` rebuilds from `lines` long after construction.
+        assign_stmt("csvLines", file_lines_expr()),
+        if_stmt(
+            binary_expr(
+                binary_expr(count_expr(var_expr("csvLines")), BinOp::Gt, int_expr(0)),
+                BinOp::And,
+                binary_expr(
+                    array_access(
+                        var_expr("csvLines"),
+                        binary_expr(count_expr(var_expr("csvLines")), BinOp::Sub, int_expr(1)),
+                    ),
+                    BinOp::StrictEq,
+                    string_expr(""),
+                ),
+            ),
+            vec![assign_stmt(
+                "csvLines",
+                function_call(
+                    "array_slice",
+                    vec![
+                        var_expr("csvLines"),
+                        int_expr(0),
+                        binary_expr(count_expr(var_expr("csvLines")), BinOp::Sub, int_expr(1)),
+                    ],
+                ),
+            )],
+            None,
+        ),
         foreach_stmt(
-            file_lines_expr(),
+            var_expr("csvLines"),
             None,
             "line",
             {
@@ -1670,6 +1737,36 @@ fn spl_file_object_valid_body() -> Vec<Stmt> {
                 file_line_number_expr(),
                 BinOp::Lt,
                 count_expr(property_access(this_expr(), "csvRecords")),
+            ))],
+            None,
+        ),
+        // `SKIP_EMPTY` drops the FINAL empty line the stream-driven iteration yields after a
+        // trailing newline: it is an empty line like any other. Measured on `php -n` 8.5.6 with
+        // `"a\n\nb\n"` and `SKIP_EMPTY | READ_AHEAD` — php answers `"a\n"`, `"\n"`, `"b\n"` and
+        // stops. The middle line stays because without `DROP_NEW_LINE` it is `"\n"`, not empty.
+        // Tested HERE rather than at load time because `setFlags()` may turn the flag on long
+        // after the lines were read.
+        if_stmt(
+            binary_expr(
+                binary_expr(
+                    flag_enabled_expr(file_object_flags_expr(), SPL_FILE_SKIP_EMPTY),
+                    BinOp::And,
+                    binary_expr(count_expr(file_lines_expr()), BinOp::Gt, int_expr(0)),
+                ),
+                BinOp::And,
+                binary_expr(
+                    array_access(
+                        file_lines_expr(),
+                        binary_expr(count_expr(file_lines_expr()), BinOp::Sub, int_expr(1)),
+                    ),
+                    BinOp::StrictEq,
+                    string_expr(""),
+                ),
+            ),
+            vec![return_stmt(binary_expr(
+                file_line_number_expr(),
+                BinOp::Lt,
+                binary_expr(count_expr(file_lines_expr()), BinOp::Sub, int_expr(1)),
             ))],
             None,
         ),
