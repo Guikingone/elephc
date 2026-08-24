@@ -141,10 +141,12 @@ call boundary. This recovery is best-effort and silently degrades to plain
 frames without the source or the dSYM.
 
 What the capability buys is **measuring** rather than sampling: exact numbers,
-six dimensions, and true edge counts instead of statistical shares. `--assert '<function>.<metric> < <value>'`
-gates the run (metrics: `calls`, `allocs`, `retained`, `queries`, `self_ms`,
-`incl_ms`, `wait_ms`, `time_pct`; `*` as the function name means the whole
-run), and any failure exits 2. Repeat the flag for several budgets. A project's
+six dimensions, and true edge counts instead of statistical shares.
+`--assert '<metric>:<function><op><value>'` gates the run — for example
+`--assert 'queries:load_price<=1'` or `--assert 'self_ms:*<250'`. Metrics are
+`calls`, `allocs`, `retained`, `queries`, `self_ms`, `incl_ms`, `wait_ms` and
+`time_pct`; the operator is one of `<=`, `>=`, `==`, `<`, `>`; `*` as the
+function name means the whole run. Any failure exits 2. Repeat the flag for several budgets. A project's
 standing budget lives in a `.elephc` file found by walking up from the source,
 so `--assert` is for one-off checks and the file is for the ones you keep; both
 are reported in the page's ✓ Checks view. `--save <file.json>` writes the exact

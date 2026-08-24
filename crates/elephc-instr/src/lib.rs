@@ -376,6 +376,11 @@ static IO_OPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(
 /// `--instrument` linked and initialized this crate.
 #[no_mangle]
 pub extern "C" fn elephc_instr_io() {
+    // Dormant means dormant. The slot is filled at init, so without this a
+    // binary nobody asked still counted every query it ran.
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     IO_OPS.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -390,8 +395,23 @@ static WAIT_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 /// `--instrument` linked and initialized this crate.
 #[no_mangle]
 pub extern "C" fn elephc_instr_wait(ns: u64) {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     WAIT_NS.fetch_add(ns, Ordering::Relaxed);
 }
+
+/// How many distinct statement shapes one slice may record.
+///
+/// The list was unbounded, and it is keyed by NORMALIZED text — literals
+/// collapsed to `?` — so a well-behaved program converges on a small set and a
+/// pathological one (statements built by string concatenation) does not. On a
+/// long-lived `--web` worker that is a leak, and the linear scan below turns
+/// quadratic. A thousand distinct shapes is far past any real schema.
+const MAX_QUERY_SHAPES: usize = 1024;
+/// Shapes refused by that cap, so the report can say so rather than imply the
+/// list is complete.
+static DROPPED_QUERY_SHAPES: AtomicU64 = AtomicU64::new(0);
 
 /// Distinct DB query texts and how many times each was executed, in first-seen
 /// order. Populated by `elephc_instr_query`, reached from the PDO bridge through
@@ -458,6 +478,11 @@ fn normalize_query(sql: &str) -> String {
 /// `_elephc_instr_query_fn` pointer slot (null unless `--instrument` linked).
 #[no_mangle]
 pub extern "C" fn elephc_instr_query(ptr: *const u8, len: usize) {
+    // Checked before the normalization below, which allocates and copies: the
+    // expensive half of this function is the half a dormant binary was paying.
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     if ptr.is_null() || len == 0 {
         return;
     }
@@ -469,8 +494,13 @@ pub extern "C" fn elephc_instr_query(ptr: *const u8, len: usize) {
     let mut q = QUERIES.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(row) = q.iter_mut().find(|(s, _)| *s == key) {
         row.1 += 1;
-    } else {
+    } else if q.len() < MAX_QUERY_SHAPES {
         q.push((key, 1));
+    } else {
+        // Past the cap the shapes stop being recorded, and the fact is. A
+        // profile that silently drops rows is worse than one that says it did:
+        // the reader would take a partial list for the whole surface.
+        DROPPED_QUERY_SHAPES.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -484,6 +514,12 @@ fn render_queries() -> String {
     let mut out = String::new();
     for (text, count) in rows {
         out.push_str(&format!("elephc-instr-query: {count} {text}\n"));
+    }
+    let dropped = DROPPED_QUERY_SHAPES.load(Ordering::Relaxed);
+    if dropped > 0 {
+        out.push_str(&format!(
+            "elephc-instr-query-dropped: {dropped} shapes past the {MAX_QUERY_SHAPES} cap\n"
+        ));
     }
     out
 }
@@ -1082,7 +1118,7 @@ pub extern "C" fn elephc_instr_dump() {
     // worker, which `--stitch` then counted as a real request: ten idle workers
     // turned one profiled request into eleven.
     if text.is_empty() {
-        STATE.with(|s| s.borrow_mut().reset());
+        end_slice();
         return;
     }
     let _ = std::io::stderr().write_all(render_trace().as_bytes());
@@ -1096,10 +1132,25 @@ pub extern "C" fn elephc_instr_dump() {
             });
         }
     }
+    end_slice();
+}
+
+/// Ends the current slice: everything that describes it, dropped together.
+///
+/// The per-thread accumulators and the process-wide query list are two places,
+/// and clearing one without the other is what let an idle worker's empty dump
+/// carry its statement shapes into the next profiled request. Callers get one
+/// function so a third exit cannot clear half.
+///
+/// `IO_OPS` and `WAIT_NS` are deliberately NOT reset: they are only ever read as
+/// deltas against a per-frame snapshot, so letting them run keeps every
+/// attribution correct across slices.
+fn end_slice() {
     STATE.with(|s| s.borrow_mut().reset());
     if let Ok(mut q) = QUERIES.lock() {
         q.clear();
     }
+    DROPPED_QUERY_SHAPES.store(0, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -1562,8 +1613,19 @@ mod tests {
         assert_eq!(normalize_query("SELECT 'a''b'"), "SELECT ?");
     }
 
+    /// Serializes the tests that flip `ENABLED`.
+    ///
+    /// They are the only two that mutate it, and they mutate it in opposite
+    /// directions: run concurrently, the dormant one suppresses the other's
+    /// recording and the failure reads as a broken assertion.
+    static ENABLED_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn instr_query_aggregates_by_shape() {
+        // Recording is gated on having been asked, so a test that does not ask
+        // measures the gate rather than the aggregation.
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let was_enabled = ENABLED.swap(true, Ordering::Relaxed);
         // Fresh isolation: this test owns the process's QUERIES if run alone;
         // assert on the delta for the two shapes it records.
         let before: std::collections::HashMap<String, u64> = QUERIES
@@ -1592,6 +1654,36 @@ mod tests {
         );
         let out = render_queries();
         assert!(out.contains("elephc-instr-query: 3 INSERT INTO t VALUES (?)"), "{out}");
+        ENABLED.store(was_enabled, Ordering::Relaxed);
+    }
+
+    /// A dormant binary records nothing, however many queries it runs.
+    ///
+    /// The slots are filled at init, so these entry points are reached on every
+    /// database call whether or not anyone asked — which is exactly why the
+    /// check has to be inside them, and why deleting it would otherwise leave
+    /// every test green.
+    #[test]
+    fn a_dormant_binary_records_no_queries_io_or_wait() {
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let was_enabled = ENABLED.swap(false, Ordering::Relaxed);
+        let io_before = IO_OPS.load(Ordering::Relaxed);
+        let wait_before = WAIT_NS.load(Ordering::Relaxed);
+        let shapes_before = QUERIES.lock().map(|q| q.len()).unwrap_or(0);
+
+        let sql = "SELECT * FROM dormant WHERE id = 42";
+        elephc_instr_query(sql.as_ptr(), sql.len());
+        elephc_instr_io();
+        elephc_instr_wait(1_000_000);
+
+        assert_eq!(IO_OPS.load(Ordering::Relaxed), io_before, "counted an I/O op");
+        assert_eq!(WAIT_NS.load(Ordering::Relaxed), wait_before, "counted wait time");
+        assert_eq!(
+            QUERIES.lock().map(|q| q.len()).unwrap_or(0),
+            shapes_before,
+            "kept a statement shape"
+        );
+        ENABLED.store(was_enabled, Ordering::Relaxed);
     }
 
     #[test]

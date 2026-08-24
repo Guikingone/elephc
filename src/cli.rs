@@ -109,8 +109,9 @@ Arguments:
 
 Subcommands:
   native <COMMAND>        Native dependency management (see `elephc native --help`)
-  monitor <PROGRAM>       Sample a compiled program into a PHP-level Speedscope
-                          profile (see `elephc monitor --help`)
+  monitor <TARGET>        Profile a program built with --with-monitoring: a .php
+                          source, a binary, or a running service's address
+                          (see `elephc monitor --help`)
 
 Modes:
   --web                   Compile as a prefork HTTP server
