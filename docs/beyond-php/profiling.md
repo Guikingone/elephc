@@ -85,7 +85,11 @@ and the binary grows 219 KB (38.1 → 38.3 MB, +0.6%).
 
 The second row is the one that decides whether you ship it everywhere, and it
 does not register: a dormant binary's cost is one flag check per call, below what
-this measurement resolves. The third row is paid only while a profile is actually
+this measurement resolves. That holds for database work too, which is worth
+saying because it did not always: the PDO bridge used to ask whether the profiler
+was *linked* — always true in a monitored binary — rather than whether anyone had
+asked, so every statement paid two clock reads and a copy of its SQL. Measured on
+a program running 8,000 statements, that was 519 ns each, and it is gone. The third row is paid only while a profile is actually
 being taken — one run, or one request carrying the header.
 
 **Do not carry the +3% to your own program.** 135,351 calls × 30 ns is 4.1 ms,

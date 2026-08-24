@@ -234,17 +234,30 @@ impl Gate {
         spoke(self.ticket);
     }
 
-    /// The peer proved the build key.
+    /// Proves authority and leaves the evictable registry as ONE step.
     ///
-    /// Returns false when the connection had already been evicted — a window
-    /// the finding named, between the tag comparing equal and this call. It is
-    /// nanoseconds wide and cannot be closed without holding the registry lock
-    /// across the handshake, so it is REPORTED instead: the handler stops rather
-    /// than writing a profile into a socket that is already shut down.
-    fn authenticated(&self) -> bool {
-        if !retire(self.ticket) {
+    /// Reporting the race was not closing it: between a tag comparing equal and
+    /// the ticket being retired, a connection arriving could still evict the
+    /// socket that had just proven itself, and the key holder got nothing. The
+    /// window was nanoseconds, which is an argument about likelihood rather than
+    /// about correctness.
+    ///
+    /// So the comparison runs while the registry is held. `verify` is an HMAC
+    /// over 64 bytes and a constant-time compare — microseconds, on a path taken
+    /// once per connection — and eviction takes the same lock, so no arrival can
+    /// interleave between proving and retiring.
+    fn authenticate(&self, verify: impl FnOnce() -> bool) -> bool {
+        let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(at) = pending.iter().position(|p| p.ticket == self.ticket) else {
+            // Already evicted before the proof completed: the socket is shut
+            // down, so there is nothing to serve into.
+            return false;
+        };
+        if !verify() {
             return false;
         }
+        pending.remove(at);
+        drop(pending);
         self.control.allow_full_timeout();
         true
     }
@@ -543,16 +556,14 @@ fn handle<S: std::io::Read + std::io::Write>(
     stream.write_all(&server_tag)?;
     stream.flush()?;
     let client_tag = wire::read_exact_vec(&mut stream, TAG_LEN)?;
-    let expected = handshake::client_tag(&key, &nonce_s, &nonce_c);
-    if !handshake::tags_equal(&client_tag, &expected) {
-        // Authority not proven: disconnect without serving anything.
-        return Ok(());
-    }
-    // Proven. The connection leaves the pending list — so nothing that connects
-    // later can evict it — and gets the full serving budget in place of the
-    // short handshake deadline. If it had already been evicted, stop here rather
-    // than serving into a socket that is shut down.
-    if !gate.authenticated() {
+    // Proving and leaving the evictable registry happen together, so a
+    // connection arriving in between cannot evict a socket that has just proven
+    // itself. Authority not proven — or already evicted before the proof
+    // finished — disconnects without serving anything.
+    if !gate.authenticate(|| {
+        let expected = handshake::client_tag(&key, &nonce_s, &nonce_c);
+        handshake::tags_equal(&client_tag, &expected)
+    }) {
         return Ok(());
     }
     // Which answer was asked for. A client that says nothing gets the sampled
@@ -670,6 +681,65 @@ mod tests {
             "dispatch waited {handed_off:?} for a handler that had not finished"
         );
         release.send(()).ok();
+    }
+
+    /// A connection evicted before its proof completes cannot then be served.
+    ///
+    /// This is the race a review re-raised after the first answer only REPORTED
+    /// it: the socket is already shut down, so proceeding would seal a profile
+    /// into a closed connection. Proving and retiring now happen under one lock,
+    /// and the outcome for a ticket that lost its place is a refusal.
+    #[test]
+    fn a_connection_evicted_before_its_proof_is_not_served() {
+        let _guard = fresh();
+        let control = std::sync::Arc::new(FakeConn::default());
+        let gate = Gate { ticket: register(control.clone()), control };
+
+        // Whatever removed it — an eviction, a cancelled handler — the ticket is
+        // gone by the time the proof lands.
+        assert!(retire(gate.ticket), "the ticket should have been pending");
+
+        let mut verified = false;
+        assert!(
+            !gate.authenticate(|| {
+                verified = true;
+                true
+            }),
+            "a connection that lost its place was served anyway"
+        );
+        assert!(
+            !verified,
+            "the proof was computed for a connection that no longer exists"
+        );
+    }
+
+    /// A pending connection that proves the key leaves the registry, so nothing
+    /// arriving afterwards can evict it mid-transfer.
+    #[test]
+    fn proving_the_key_removes_the_connection_from_the_evictable_set() {
+        let _guard = fresh();
+        let control = std::sync::Arc::new(FakeConn::default());
+        let gate = Gate { ticket: register(control.clone()), control: control.clone() };
+
+        assert!(gate.authenticate(|| true), "a pending, proven connection was refused");
+        assert!(control.was_relaxed(), "the serving budget was not granted");
+        assert!(
+            !retire(gate.ticket),
+            "the ticket was still evictable after the proof"
+        );
+    }
+
+    /// A wrong proof leaves the connection where it was, to be timed out or
+    /// evicted like any other — it must not be quietly promoted.
+    #[test]
+    fn a_failed_proof_does_not_leave_the_registry() {
+        let _guard = fresh();
+        let control = std::sync::Arc::new(FakeConn::default());
+        let gate = Gate { ticket: register(control.clone()), control: control.clone() };
+
+        assert!(!gate.authenticate(|| false), "a failed proof was accepted");
+        assert!(!control.was_relaxed(), "a failed proof got the serving budget");
+        assert!(retire(gate.ticket), "a failed proof removed the ticket anyway");
     }
 
     /// A flood of stalled handshakes must not lock out the operator with the key.
@@ -796,7 +866,7 @@ mod tests {
         let serving = std::sync::Arc::new(FakeConn::default());
 
         dispatch((), serving.clone(), move |(), gate| {
-            assert!(gate.authenticated(), "the gate should have retired the ticket");
+            assert!(gate.authenticate(|| true), "the gate should have retired the ticket");
             ready.send(()).ok();
             let _ = blocked.recv();
         });

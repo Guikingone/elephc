@@ -46,6 +46,9 @@ mod instr_io {
         static elephc_instr_io_fn: usize;
         static elephc_instr_query_fn: usize;
         static elephc_instr_wait_fn: usize;
+        /// Nonzero once this process has been asked to profile. A `.comm` word
+        /// every compiled program carries, so reading it here needs no new slot.
+        static elephc_monitor_active: u64;
     }
     type IoFn = unsafe extern "C" fn();
     type QueryFn = unsafe extern "C" fn(*const u8, usize);
@@ -60,10 +63,20 @@ mod instr_io {
         }
     }
 
-    /// Whether query-text capture is linked and initialized. Lets callers skip
-    /// the cost of recovering a statement's SQL in a non-instrument binary.
+    /// Whether this process was ever asked to profile.
+    ///
+    /// The runtime word the probe's init writes. Distinct from "the profiler is
+    /// linked", which is true of every `--with-monitoring` binary and was what
+    /// these hooks used to ask — so a dormant binary paid for a capture nobody
+    /// had requested.
+    fn asked() -> bool {
+        unsafe { std::ptr::addr_of!(elephc_monitor_active).read() != 0 }
+    }
+
+    /// Whether recovering a statement's SQL is worth doing: the capture has to
+    /// be linked AND someone has to have asked for it.
     pub fn query_active() -> bool {
-        unsafe { std::ptr::addr_of!(elephc_instr_query_fn).read() != 0 }
+        asked() && unsafe { std::ptr::addr_of!(elephc_instr_query_fn).read() != 0 }
     }
 
     /// Reports one query's SQL text to the exact profiler, if linked. The bytes
@@ -82,7 +95,9 @@ mod instr_io {
     /// clock — the measurement costs nothing in a normal binary.
     pub fn timed<T>(body: impl FnOnce() -> T) -> T {
         let addr = unsafe { std::ptr::addr_of!(elephc_instr_wait_fn).read() };
-        if addr == 0 {
+        if addr == 0 || !asked() {
+            // Not linked, or linked and dormant: either way the clock stays
+            // unread. Two `Instant` reads per statement is not "costs nothing".
             return body();
         }
         let started = std::time::Instant::now();
@@ -104,6 +119,8 @@ mod instr_io {
         static elephc_instr_query_fn: usize = 0;
         #[no_mangle]
         static elephc_instr_wait_fn: usize = 0;
+        #[no_mangle]
+        static elephc_monitor_active: u64 = 0;
     }
 }
 
