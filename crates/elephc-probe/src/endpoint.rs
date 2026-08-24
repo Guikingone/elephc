@@ -557,7 +557,12 @@ fn handle<S: std::io::Read + std::io::Write>(
     // The peer speaks the protocol, so it stops being the cheapest thing to
     // sacrifice when the table fills.
     gate.spoke();
-    let nonce_s = os_random::<NONCE_LEN>();
+    // No entropy, no session. Everything below derives from this nonce, so
+    // continuing without a real one would seal the profile under a keystream an
+    // observer could reproduce.
+    let Some(nonce_s) = os_random::<NONCE_LEN>() else {
+        return Ok(());
+    };
     let server_tag = handshake::server_tag(&key, &nonce_c, &nonce_s);
     stream.write_all(&nonce_s)?;
     stream.write_all(&server_tag)?;
@@ -590,27 +595,42 @@ fn handle<S: std::io::Read + std::io::Write>(
     Ok(())
 }
 
-/// Fills `N` bytes from the OS entropy source, falling back to a time seed if
-/// `/dev/urandom` is unavailable — the nonce only needs to be non-repeating.
-fn os_random<const N: usize>() -> [u8; N] {
+/// Fills `N` bytes from the OS entropy source, or refuses.
+///
+/// There is deliberately no fallback. This nonce goes into `session_keys`, so
+/// the keystream is a function of it: repeat the nonce and you repeat the
+/// keystream, and two profiles sealed under one keystream hand their XOR to
+/// anyone who captured both. The fallback this replaces seeded a xorshift from
+/// the wall clock — which is what a fleet of instances started together by one
+/// orchestrator has in common, in exactly the containerised environments where
+/// `/dev/urandom` goes missing in the first place.
+///
+/// The syscall is tried first because it needs no file descriptor and answers
+/// where `/dev` is not mounted, which is the case the fallback existed for.
+fn os_random<const N: usize>() -> Option<[u8; N]> {
     let mut out = [0u8; N];
-    if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
-        if file.read_exact(&mut out).is_ok() {
-            return out;
+    #[cfg(target_os = "linux")]
+    {
+        // Safety: writes at most `N` bytes into a buffer of `N`.
+        let got = unsafe {
+            libc::syscall(libc::SYS_getrandom, out.as_mut_ptr().cast::<libc::c_void>(), N, 0)
+        };
+        if got == N as libc::c_long {
+            return Some(out);
         }
     }
-    let mut state = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0x9e3779b97f4a7c15)
-        | 1;
-    for byte in out.iter_mut() {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        *byte = (state >> 24) as u8;
+    #[cfg(target_vendor = "apple")]
+    {
+        // Safety: same — `getentropy` fills exactly the length it is given, and
+        // refuses lengths above 256 rather than writing short.
+        let ok = unsafe { libc::getentropy(out.as_mut_ptr().cast::<libc::c_void>(), N) } == 0;
+        if ok {
+            return Some(out);
+        }
     }
-    out
+    let mut file = std::fs::File::open("/dev/urandom").ok()?;
+    file.read_exact(&mut out).ok()?;
+    Some(out)
 }
 
 #[cfg(test)]
