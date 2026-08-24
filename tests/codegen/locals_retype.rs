@@ -685,6 +685,36 @@ fn test_retype_below_a_try_survives_tail_sinking() {
     assert_eq!(out, "ta1|1");
 }
 
+/// A boxed-MIXED local (branch-divergent int/string) stays live across a `try` that actually
+/// throws and is caught, and reads correctly after the `catch`.
+///
+/// Nothing about unwinding is special-cased for mixed storage — the box is just a heap cell the
+/// local's slot points at, and unwinding through the `try` neither touches it nor needs to. The
+/// heap-debug run is the load-bearing half: it proves the box's ownership survives the unwind path
+/// with no leak and no double free, which stdout alone cannot show.
+#[test]
+fn test_mixed_local_survives_a_thrown_and_caught_exception() {
+    const SOURCE: &str = "<?php if ($argc > 5) { $a = 1; } else { $a = \"s\" . $argc; } try { throw new Exception(\"boom\"); } catch (Exception $e) { echo \"c|\"; } echo $a;";
+
+    let warnings = check_files_diagnostics(&[("main.php", SOURCE)], "main.php", false)
+        .expect("the mixed-through-try fixture must type-check");
+    assert_eq!(
+        warnings,
+        vec![
+            "$a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)".to_string(),
+        ],
+    );
+
+    let out = compile_and_run_with_heap_debug(SOURCE);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "c|s1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// The heap shape: the string the RE-BOUND binding allocates is owned once, however many copies
 /// of the retype the optimizer made.
 ///

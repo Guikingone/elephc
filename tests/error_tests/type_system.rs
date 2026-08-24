@@ -1617,6 +1617,22 @@ fn test_unset_inside_try_leaves_the_pre_feature_error() {
     );
 }
 
+/// A retype assignment whose RHS can THROW is no exception to the depth-0 gate.
+///
+/// The straight-line retype requires conditional depth 0 (`merge_local_assignment_type`'s sibling
+/// of `Checker::local_binding_is_killable`), and `try` raises depth for its whole body exactly
+/// like an `if` with no `else`. Probed via `--check`: `$s = "heap" . $argc; try { $s =
+/// mightThrow($argc); } catch (...) {}`, where `mightThrow` returns `int`, stays the ordinary
+/// depth-gated hard error — whether the RHS can throw changes nothing the checker looks at. This
+/// shape never reaches lowering, so it is pinned here rather than as a codegen e2e fixture.
+#[test]
+fn test_retype_inside_try_with_throwing_rhs_stays_the_depth_gated_error() {
+    expect_error(
+        "<?php function mightThrow(int $n): int { if ($n === 1) { throw new Exception(\"boom\"); } return $n; } $s = \"heap\" . $argc; try { $s = mightThrow($argc); } catch (Exception $e) {} echo $s;",
+        "cannot reassign $s from string to int",
+    );
+}
+
 /// A NAMED by-reference argument (`f(x: $a)`) aliases `$a` exactly like the positional form.
 ///
 /// `Checker::record_reference_alias_root` unwraps `ExprKind::NamedArg` on its way to the local, so
