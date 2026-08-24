@@ -415,7 +415,12 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
             }
         }
     } else {
-        (PathBuf::from(&cmd.target), None)
+        // Through the same resolver the exact path uses. `Command::new("shop")`
+        // searches PATH rather than running `./shop`, and that was fixed on one
+        // of the two spawn sites: `--live` kept failing with `No such file or
+        // directory` for a binary sitting right there, except on machines whose
+        // PATH carries an empty entry.
+        (spawnable_path(&cmd.target), None)
     };
     let mut child = match process::Command::new(&binary).spawn() {
         Ok(child) => child,
@@ -4366,6 +4371,48 @@ fn write_github_summary(display: &[(Vec<(String, Kind)>, u64)], processes: usize
 
 #[cfg(test)]
 mod tests {
+    /// A bare name that IS a local file becomes absolute, so the OS runs it
+    /// rather than searching `PATH` and reporting it missing.
+    #[test]
+    fn a_local_program_named_bare_is_resolved_before_it_is_spawned() {
+        let dir = std::env::temp_dir().join(format!("elephc_spawnable_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let name = "shop";
+        std::fs::write(dir.join(name), b"#!/bin/sh\nexit 0\n").expect("fixture");
+
+        let previous = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(&dir).expect("enter scratch");
+        let resolved = super::spawnable_path(name);
+        std::env::set_current_dir(previous).expect("restore cwd");
+
+        assert!(
+            resolved.is_absolute(),
+            "a bare local name must not be left for a PATH search: {}",
+            resolved.display()
+        );
+        assert!(resolved.ends_with(name));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A name that matches no local file is left alone, so `monitor some-tool`
+    /// can still mean a program on `PATH`.
+    #[test]
+    fn a_name_that_is_not_a_local_file_is_left_for_the_path() {
+        let resolved = super::spawnable_path("elephc-no-such-program-anywhere");
+        assert_eq!(
+            resolved,
+            std::path::PathBuf::from("elephc-no-such-program-anywhere"),
+            "a PATH lookup was turned into a local path that does not exist"
+        );
+    }
+
+    /// An absolute path is already unambiguous and must survive untouched.
+    #[test]
+    fn an_absolute_target_is_untouched() {
+        let resolved = super::spawnable_path("/usr/bin/true");
+        assert_eq!(resolved, std::path::PathBuf::from("/usr/bin/true"));
+    }
+
     use super::*;
 
     /// The refusal of an unequipped target must not sit behind a platform

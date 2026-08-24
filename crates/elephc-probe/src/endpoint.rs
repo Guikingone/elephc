@@ -485,8 +485,18 @@ fn tcp_address(spec: &str) -> Option<String> {
 /// a wildcard address is still a deployment decision, not a default: prefer
 /// 127.0.0.1 and a tunnel, or a reverse proxy.
 fn serve_tcp(addr: &str) {
-    let Ok(listener) = std::net::TcpListener::bind(addr) else {
-        return;
+    let listener = match std::net::TcpListener::bind(addr) {
+        Ok(listener) => listener,
+        Err(error) => {
+            // Say so, for the same reason the Unix path does: an operator who
+            // set ELEPHC_PROBE_ADDR and saw nothing happen had no way to tell a
+            // refused bind from a binary that ignores the variable. That fix
+            // landed on one of the two listeners and not the other — a port
+            // already in use, or one under 1024 without privileges, failed here
+            // in silence.
+            eprintln!("elephc-probe: cannot serve on {addr}: {error}");
+            return;
+        }
     };
     loop {
         match listener.accept() {
