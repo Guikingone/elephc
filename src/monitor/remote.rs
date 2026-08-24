@@ -165,6 +165,28 @@ pub(crate) fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
             return 1;
         }
         print!("{}", instrument_table(&graph));
+        // The exporters below read the sampled display, so an exact remote
+        // capture has no file to write yet. Saying so beats accepting a flag and
+        // producing nothing — a silent no-op is indistinguishable from a bug.
+        let ignored: Vec<&str> = [
+            ("--out", cmd.out.is_some()),
+            ("--pprof", cmd.pprof_out.is_some()),
+            ("--dot", cmd.dot_out.is_some()),
+            ("--html", cmd.html_out.is_some()),
+        ]
+        .iter()
+        .filter(|(_, given)| *given)
+        .map(|(name, _)| *name)
+        .collect();
+        if !ignored.is_empty() {
+            eprintln!(
+                "elephc monitor: {} not written — the exports read the sampled \
+                 capture, and `--exact` returns the per-function table only. Drop \
+                 `--exact` to export the sampled view, or profile the program \
+                 locally for an exact export.",
+                ignored.join(", ")
+            );
+        }
         return 0;
     }
     let display = folded_text_to_display(&folded);

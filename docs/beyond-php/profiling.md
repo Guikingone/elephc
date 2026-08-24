@@ -20,14 +20,23 @@ changes is what you point it at:
 |---|---|---|
 | a source | `elephc monitor shop.php` | built with `--with-monitoring`, then read |
 | a binary | `elephc monitor ./shop` | read, if it carries monitoring |
-| a running service | `elephc monitor host:9411` | read through its endpoint, over `http://` or `https://` |
+| a running service | `elephc monitor host:9411` | read through its endpoint, sampled or `--exact` |
 | a local socket | `elephc monitor /run/app.sock` | the same, on the same machine |
 
-Every one of them produces the same table, the same numbers, the same
-[Speedscope](https://www.speedscope.app) and [pprof](https://github.com/google/pprof)
-exports, and the same HTML call graph. A profile taken on a laptop and a profile
-taken on a production host differ in what the program did, not in what the
-profiler could see.
+All four measure the same way and report the same table: per-function calls,
+inclusive and self time, allocations, retained objects, queries and I/O wait.
+A profile taken on a laptop and one taken on a production host differ in what the
+program did, not in what the profiler could see.
+
+One distinction is worth knowing before you rely on it. A target this command
+LAUNCHES is measured for its whole run, and every export follows —
+[Speedscope](https://www.speedscope.app), [pprof](https://github.com/google/pprof),
+Graphviz, the HTML call graph. A service already running answers through its
+endpoint, where the default is the sampler — always available, since a timer
+fills it — and `--exact` returns the exact table of the next request that
+completes. That exact remote answer is the table itself today; the exporters read
+the sampled capture, and the command says so rather than accepting a flag and
+writing nothing.
 
 That is the point of the design, and it is worth stating plainly: profiling in
 production is normally a *different tool* answering a *smaller question* — an
@@ -89,8 +98,10 @@ this measurement resolves. That holds for database work too, which is worth
 saying because it did not always: the PDO bridge used to ask whether the profiler
 was *linked* — always true in a monitored binary — rather than whether anyone had
 asked, so every statement paid two clock reads and a copy of its SQL. Measured on
-a program running 8,000 statements, that was 519 ns each, and it is gone. The third row is paid only while a profile is actually
-being taken — one run, or one request carrying the header.
+a program running 8,000 statements, that was 519 ns each, and it is gone.
+
+The third row is paid only while a profile is actually being taken — one run, or
+one request carrying the header.
 
 **Do not carry the +3% to your own program.** 135,351 calls × 30 ns is 4.1 ms,
 which is what that percentage is; a program's own figure depends entirely on how
@@ -421,9 +432,16 @@ with the socket replaced by a listening port:
 ```bash
 ELEPHC_PROBE_ADDR=127.0.0.1:9411 ./app       # on the server
 
-elephc monitor 127.0.0.1:9411 --key app.key            # from your machine
-elephc monitor https://app.internal:9411 --key app.key # across a network
+elephc monitor 127.0.0.1:9411 --key app.key          # sampled, from your machine
+elephc monitor 127.0.0.1:9411 --key app.key --exact  # the next request, exactly
 ```
+
+The profile crosses sealed under keys both sides derive from the build key and
+the two nonces, so reaching the port is not the same as reading the answer. On a
+network you do not control, put it behind a tunnel or a TLS-terminating proxy and
+point `https://` at that — the probe listener itself speaks the framed protocol
+above, not TLS, so `https://` aimed straight at `ELEPHC_PROBE_ADDR` will not
+connect.
 
 Nothing about the binary changes between those runs: the same
 `--with-monitoring` artifact you run in CI is the one serving here.
