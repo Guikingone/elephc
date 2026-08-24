@@ -291,7 +291,6 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                         .find(|(n, _)| n.eq_ignore_ascii_case("x-elephc-query"))
                         .is_some_and(|(_, value)| probe_route::query_is_authentic(value));
                     request_state::set_request(method, uri, path, query, headers, body, meta);
-                    probe_route::trace_begin(req_traceparent.as_deref(), &probe_route);
                     probe_route::set(&probe_route);
                     // A signed header authorizes this request outright; without
                     // one, offer the request anyway — the instrumentation starts
@@ -299,7 +298,13 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     // `monitor <address> --exact` gets an answer without a second
                     // way into the request path. The offer costs a call through a
                     // slot and a flag read.
+                    //
+                    // Before the trace, not after: this call is what decides
+                    // whether this request is being profiled at all, and the
+                    // trace context is dormant until it says so. The other order
+                    // meant an idle service paid for a trace id every request.
                     probe_route::profile_request_kind(if profile_this { 1 } else { 2 });
+                    probe_route::trace_begin(req_traceparent.as_deref(), &probe_route);
                     let resp_body = run_handler(handler);
                     // Unconditional and idempotent: a request that started no
                     // slice ends none, and consecutive profiled requests stay

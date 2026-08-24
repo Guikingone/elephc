@@ -74,6 +74,34 @@ fn exact_slice() -> Option<String> {
     None
 }
 
+/// One exact capture at a time, across every connection this endpoint serves.
+///
+/// The rendezvous is a single slot in shared memory and arming it clears what is
+/// in it, so two clients asking at once take each other's answers away. The
+/// comment on the arm claimed the endpoint serialized its callers; nothing did,
+/// and authenticated connections run concurrently by design.
+static EXACT_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The exact answer, or a line saying why there is not one.
+///
+/// An empty body would be indistinguishable from a service that served no
+/// requests, which is the one thing an operator must not have to guess about.
+fn exact_answer() -> String {
+    let Ok(_turn) = EXACT_TURN.try_lock() else {
+        return "elephc-instr: note: another exact capture is in progress; \
+                only one runs at a time\n"
+            .to_string();
+    };
+    match exact_slice() {
+        Some(profile) if !profile.is_empty() => profile,
+        _ => format!(
+            "elephc-instr: note: no request completed within {}s, or its profile \
+             could not be handed over\n",
+            EXACT_WAIT.as_secs()
+        ),
+    }
+}
+
 /// Per-connection I/O timeout, so a stalled handshake ends rather than lasting
 /// forever. It BOUNDS a stall; `dispatch` is what keeps the stall off the accept
 /// thread. The timeout alone did not: a peer that connected and never sent its
@@ -582,7 +610,7 @@ fn handle<S: std::io::Read + std::io::Write>(
     // ring, which is what every client did before this byte existed.
     let want = wire::read_exact_vec(&mut stream, 1)?;
     let profile = match want.first().copied() {
-        Some(WANT_EXACT) => exact_slice().unwrap_or_default(),
+        Some(WANT_EXACT) => exact_answer(),
         _ => crate::current_folded_profile().unwrap_or_default(),
     };
     let (k_enc, k_mac) = handshake::session_keys(&key, &nonce_c, &nonce_s);
@@ -635,6 +663,41 @@ fn os_random<const N: usize>() -> Option<[u8; N]> {
 
 #[cfg(test)]
 mod tests {
+    //! The instrumentation's half of the rendezvous, stubbed so this crate's
+    //! tests link on their own. A shipped binary always has the real ones.
+
+    #[no_mangle]
+    extern "C" fn elephc_instr_capture_arm() {}
+
+    #[no_mangle]
+    extern "C" fn elephc_instr_capture_take(_out: *mut u8, _cap: usize) -> usize {
+        0
+    }
+
+    #[no_mangle]
+    extern "C" fn elephc_instr_capture_cancel() {}
+
+    /// A second exact request while one is running is told so, not served silence.
+    ///
+    /// Arming the rendezvous clears it, so the second client used to take the
+    /// first one's answer away and both got an empty profile — which reads like a
+    /// service that had no traffic.
+    #[test]
+    fn a_second_exact_capture_is_refused_rather_than_taking_the_firsts_answer() {
+        let held = super::EXACT_TURN.lock().expect("take the turn");
+        let answer = super::exact_answer();
+        drop(held);
+        assert!(
+            answer.contains("another exact capture is in progress"),
+            "the second client was not told why it got nothing: {answer:?}"
+        );
+        // And the reader skips it rather than counting it as a function.
+        assert!(
+            !answer.contains(" calls="),
+            "the note would parse as a profile row: {answer:?}"
+        );
+    }
+
     use super::*;
 
     /// Serializes the tests that share the pending-handshake registry.

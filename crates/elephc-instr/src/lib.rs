@@ -129,6 +129,9 @@ struct State {
     edges: HashMap<(u32, u32), (u64, u64), BuildIdHasher>,
     /// Pushes dropped at MAX_STACK (reported so silent truncation is visible).
     dropped: u64,
+    /// Frames whose children outran their own span — impossible when the
+    /// accounting is right, so it is reported rather than absorbed.
+    overdrawn: u64,
     /// Activations running right now that were never pushed, because the stack
     /// was already full. Their exits must be ignored symmetrically: an exit
     /// looking for a frame that was never pushed would resync-pop the entire
@@ -151,29 +154,65 @@ struct State {
 /// depth is back at or below the throw's. That is why what the handler spends in
 /// the meantime has to wait here rather than be charged as it happens: the frame
 /// it would be charged to is the one the exception just destroyed.
+/// One throw, and where every counter stood when it happened.
+///
+/// All six, because a frame closed at the throw's clock but the catcher's
+/// allocation counter is charged for every object the handler allocated.
 #[derive(Default)]
-struct Unwind {
+struct Throw {
     /// Stack depth at the throw. The catcher is somewhere below it; every frame
     /// above the catcher is already dead but still on the stack.
     depth: usize,
-    /// Every counter at the moment of the throw — the instant the frames it
-    /// destroyed are closed at. All of them, because a frame closed at the
-    /// throw's clock but the catcher's allocation counter is charged for every
-    /// object the handler allocated.
     t: u64,
     a: u64,
     f: u64,
     io: u64,
     w: u64,
-    /// What the handler has spent so far, charged to no one yet.
+    /// What this throw's handler has spent, charged to no one yet.
+    ///
+    /// Per throw rather than per unwind because each has its own catcher: an
+    /// exception raised and caught inside a call the outer handler made is
+    /// resolved by an exit that is nowhere near the outer catcher, and pouring
+    /// both handlers' work into one bucket handed it all to whichever exit came
+    /// first.
     children_ns: u64,
     children_allocs: u64,
     children_frees: u64,
     children_io: u64,
     children_wait: u64,
-    /// `(callee, calls, summed inclusive ns)` for what the handler called. Their
-    /// caller has no name until the catcher exits either.
+    /// `(callee, calls, summed inclusive ns)` for what this handler called.
     edges: Vec<(u32, u64, u64)>,
+}
+
+/// How many nested throws are recorded before the oldest ones have to serve for
+/// the newest too. A handler that throws, whose handler throws, thirty-two deep,
+/// is past the point where one more instant improves the answer.
+const MAX_NESTED_THROWS: usize = 32;
+
+#[derive(Default)]
+struct Unwind {
+    /// Every throw still unresolved, oldest first. More than one exists whenever
+    /// a handler throws — or calls something that throws and catches — before
+    /// the first exception reached its own catcher.
+    throws: Vec<Throw>,
+}
+
+impl Unwind {
+    /// Where every counter stood at the throw that killed the frame at `index`.
+    ///
+    /// A frame was on the stack at every throw deeper than its own index, and it
+    /// died at the first of them; later throws found it already dead. The one
+    /// shape this reads wrong is the frame that CAUGHT an earlier throw and then
+    /// died to a later one: nothing on the wire distinguishes it from the corpse
+    /// beside it, so it is closed at the earlier instant too, and the span
+    /// between lands on its caller — an ancestor, rather than on a frame that
+    /// had already stopped running.
+    fn killer_of(&self, index: usize) -> Option<(u64, u64, u64, u64, u64)> {
+        self.throws
+            .iter()
+            .find(|throw| throw.depth > index)
+            .map(|k| (k.t, k.a, k.f, k.io, k.w))
+    }
 }
 
 impl State {
@@ -189,14 +228,24 @@ impl State {
         // taken out of its frames, so losing it here would stop the exclusives
         // from partitioning the root. It rides along to the next catcher, which
         // is where a rethrow puts it anyway.
-        let mut unwind = self.unwinding.take().unwrap_or_default();
-        unwind.depth = self.stack.len();
-        unwind.t = t;
-        unwind.a = a;
-        unwind.f = f;
-        unwind.io = io;
-        unwind.w = w;
-        self.unwinding = Some(unwind);
+        let depth = self.stack.len();
+        let unwind = self.unwinding.get_or_insert_with(Unwind::default);
+        // A throw raised while another is in flight joins it rather than
+        // replacing it: the frames the first one killed died then, and only its
+        // own instants say when.
+        if unwind.throws.len() < MAX_NESTED_THROWS {
+            unwind.throws.push(Throw { depth, t, a, f, io, w, ..Throw::default() });
+        } else if let Some(last) = unwind.throws.last_mut() {
+            // Past the cap the newest throw takes over the last record and keeps
+            // what it had accumulated — precision on frames opened very late in
+            // a deeply nested unwind, against losing their cost entirely.
+            last.depth = depth;
+            last.t = t;
+            last.a = a;
+            last.f = f;
+            last.io = io;
+            last.w = w;
+        }
         self.dropped_depth = 0;
     }
 
@@ -207,12 +256,18 @@ impl State {
     /// below is one the handler opened itself and is a real caller; at the
     /// throw's own depth it is either the catcher or a corpse, and nothing
     /// distinguishes them until the catcher returns.
-    fn pending_charge(&mut self) -> Option<&mut Unwind> {
+    fn pending_charge(&mut self) -> Option<&mut Throw> {
         let at = self.stack.len();
-        match &mut self.unwinding {
-            Some(u) if u.depth > 0 && at == u.depth => Some(u),
-            _ => None,
+        if at == 0 {
+            return None;
         }
+        // Any throw at this depth will do: throws at equal depths are resolved
+        // by the same exit and hand their charge to the same frame.
+        self.unwinding
+            .as_mut()?
+            .throws
+            .iter_mut()
+            .find(|throw| throw.depth == at)
     }
 
     fn ensure(&mut self, id: u32) {
@@ -296,22 +351,24 @@ impl State {
             self.dropped_depth -= 1;
             return;
         }
-        // An unwind ends at the CATCHER, which is the first exit to bring the
-        // depth back to where the throw left it. A handler that calls anything —
-        // logging, a retry, building a response — returns from that call first,
-        // and ending the unwind there closed the dead frames at the handler's
-        // clock instead of the throw's, handing them everything it did.
-        let ending = match &self.unwinding {
-            Some(u) => self.stack.len() <= u.depth,
-            None => false,
+        // Where this exit's frame sits, which is what says which throws it ends.
+        //
+        // A throw is caught below the depth it was raised at, so an exit at index
+        // i ends every throw deeper than i and none of the others. Testing the
+        // whole unwind instead — "is the stack back where the throw left it" —
+        // was wrong twice over: a handler that calls anything returns from that
+        // call first and ended the unwind early, and an exception raised AND
+        // caught inside such a call ended the outer one from the wrong place
+        // entirely.
+        //
+        // Walked from the top, like the resync below, so a handler's own frame
+        // is found on the first step and the catcher costs what popping down to
+        // it was going to cost anyway. Only while an exception is in flight.
+        let catcher = match &self.unwinding {
+            Some(_) => self.stack.iter().rposition(|frame| frame.id == id),
+            None => None,
         };
-        // Frames above the catcher are closed at the instant the throw happened,
-        // not now: everything between the two belongs to the unwinding and the
-        // handler, not to the code that threw.
-        let (unwound_t, unwound_a, unwound_f, unwound_io, unwound_w) = match &self.unwinding {
-            Some(u) if ending => (u.t, u.a, u.f, u.io, u.w),
-            _ => (t, a, f, io, w),
-        };
+
         // Frames an exception unwound never ran their own exit hook. Closing
         // them HERE, at the instant the throw is observed passing them, keeps
         // their cost on them; simply discarding them left it inside the
@@ -322,28 +379,67 @@ impl State {
                 break;
             }
             let stale = self.stack.pop().expect("last() was Some");
-            self.close_frame(stale, unwound_t, unwound_a, unwound_f, unwound_io, unwound_w);
+            // Frames above the catcher are closed at the instant of the throw
+            // that killed THEM — everything between that and the catcher's
+            // return belongs to the unwinding and the handler, not to the code
+            // that was unwound. Which throw that is depends on how deep the
+            // frame sat, so it is looked up per frame rather than shared.
+            let killer = self
+                .unwinding
+                .as_ref()
+                .and_then(|u| u.killer_of(self.stack.len()));
+            match killer {
+                // A frame cannot be closed before it was entered, which is what
+                // an older throw's instant would do to one the handler opened
+                // after it. Its own entry reports it as instantaneous, which
+                // understates it, where the subtraction would have wrapped.
+                Some((kt, ka, kf, kio, kw)) => {
+                    let at = if kt > stale.t_enter { kt } else { stale.t_enter };
+                    self.close_frame(stale, at, ka, kf, kio, kw)
+                }
+                None => self.close_frame(stale, t, a, f, io, w),
+            }
         }
-        // The unwind ends where it is caught — and only there.
-        let held = if ending { self.unwinding.take() } else { None };
         let Some(mut frame) = self.stack.pop() else {
             return;
         };
         if frame.id != id {
             return;
         }
-        // This frame is the catcher, so it is the caller the handler's work was
-        // waiting for.
-        if let Some(u) = held {
-            frame.children_ns = frame.children_ns.wrapping_add(u.children_ns);
-            frame.children_allocs = frame.children_allocs.wrapping_add(u.children_allocs);
-            frame.children_frees = frame.children_frees.wrapping_add(u.children_frees);
-            frame.children_io = frame.children_io.wrapping_add(u.children_io);
-            frame.children_wait = frame.children_wait.wrapping_add(u.children_wait);
-            for (callee, calls, ns) in u.edges {
-                let entry = self.edges.entry((id, callee)).or_insert((0, 0));
-                entry.0 = entry.0.wrapping_add(calls);
-                entry.1 = entry.1.wrapping_add(ns);
+        // This frame caught every throw raised above it, so it is the caller
+        // their handlers' work has been waiting for. Throws raised BELOW it — an
+        // outer exception this one was unwound by — stay open for their own
+        // catcher further down.
+        //
+        // Taken only once there is a frame to hand them to: draining before the
+        // pop dropped the charge whenever the resync had emptied the stack, and
+        // a dropped charge is one the exclusives no longer account for anywhere.
+        if let (Some(u), Some(index)) = (self.unwinding.as_mut(), catcher) {
+            let mut resolved = Vec::new();
+            u.throws.retain_mut(|throw| {
+                if throw.depth > index {
+                    resolved.push(std::mem::take(throw));
+                    false
+                } else {
+                    true
+                }
+            });
+            let empty = u.throws.is_empty();
+            for throw in resolved {
+                frame.children_ns = frame.children_ns.wrapping_add(throw.children_ns);
+                frame.children_allocs =
+                    frame.children_allocs.wrapping_add(throw.children_allocs);
+                frame.children_frees = frame.children_frees.wrapping_add(throw.children_frees);
+                frame.children_io = frame.children_io.wrapping_add(throw.children_io);
+                frame.children_wait = frame.children_wait.wrapping_add(throw.children_wait);
+                for (callee, calls, ns) in throw.edges {
+                    let entry = self.edges.entry((id, callee)).or_insert((0, 0));
+                    entry.0 = entry.0.wrapping_add(calls);
+                    entry.1 = entry.1.wrapping_add(ns);
+                }
+            }
+            if empty {
+                self.unwinding = None;
             }
         }
         if TRACE_ON.load(Ordering::Relaxed) {
@@ -370,8 +466,19 @@ impl State {
         let elapsed_frees = f.wrapping_sub(frame.f_enter);
         let elapsed_io = io.wrapping_sub(frame.io_enter);
         let elapsed_wait = w.wrapping_sub(frame.w_enter);
+        // Children can only exceed their parent's own span if the accounting
+        // has gone wrong somewhere, and no sequence found so far reaches this —
+        // the two that did were both fixed at their cause. It stays because of
+        // what the alternative costs: wrapping turned it into roughly 1.8e19 ns
+        // of self time, a number large enough to drown every real row in the
+        // profile it appears in. Saturating costs one wrong row instead, and the
+        // counter makes it something the report admits to rather than something
+        // a reader has to notice.
+        if frame.children_ns > elapsed_ns {
+            self.overdrawn = self.overdrawn.saturating_add(1);
+        }
         let acc = &mut self.fns[id as usize];
-        acc.excl_ns = acc.excl_ns.wrapping_add(elapsed_ns.wrapping_sub(frame.children_ns));
+        acc.excl_ns = acc.excl_ns.wrapping_add(elapsed_ns.saturating_sub(frame.children_ns));
         acc.excl_allocs = acc
             .excl_allocs
             .wrapping_add(elapsed_allocs.wrapping_sub(frame.children_allocs));
@@ -430,6 +537,7 @@ impl State {
         self.stack.clear();
         self.edges.clear();
         self.dropped = 0;
+        self.overdrawn = 0;
         self.dropped_depth = 0;
         // The stack goes with the slice, so the frame this unwind was holding a
         // charge for goes with it too. Carrying it across would hand the next
@@ -458,6 +566,13 @@ impl State {
             out.push_str(&format!(
                 "elephc-instr: note: {} calls beyond depth {} were not tracked\n",
                 self.dropped, MAX_STACK
+            ));
+        }
+        if self.overdrawn > 0 {
+            out.push_str(&format!(
+                "elephc-instr: note: {} frames were charged more by their callees than \
+                 they ran for; their self time reads as zero\n",
+                self.overdrawn
             ));
         }
         if tick_rate().is_none() {
@@ -822,6 +937,12 @@ pub extern "C" fn elephc_instr_trace_begin(
     route_ptr: *const u8,
     route_len: usize,
 ) {
+    // Dormant costs nothing, like every other entry point: a service built with
+    // the capability and nobody profiling it must not open /dev/urandom twice per
+    // request to publish a trace id no one will read.
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     let inbound = if ptr.is_null() || len == 0 {
         None
     } else {
@@ -915,6 +1036,7 @@ pub extern "C" fn elephc_instr_request(begin: u32) {
             }
             STATE.with(|s| s.borrow_mut().reset());
             SLICE_OPEN.store(true, Ordering::Relaxed);
+            CAPTURE_ONLY.store(begin == 2, Ordering::Relaxed);
             switch_on();
         }
         _ => {
@@ -932,6 +1054,14 @@ pub extern "C" fn elephc_instr_request(begin: u32) {
 /// The end call arrives on every request now, so it needs to know whether there
 /// was anything to end.
 static SLICE_OPEN: AtomicBool = AtomicBool::new(false);
+
+/// Whether the open slice exists only to answer the endpoint.
+///
+/// Such a slice is an answer to a question, and every request that started one
+/// while the capture was armed but did not win the slot has nothing to hand
+/// over. Writing those to stderr put a request profile in the service's log for
+/// every request in the window.
+static CAPTURE_ONLY: AtomicBool = AtomicBool::new(false);
 
 /// Reads the initial hook state from the environment, at program start.
 ///
@@ -1347,9 +1477,10 @@ pub extern "C" fn elephc_instr_exit(id: u32, allocs: u64, frees: u64) {
 /// state cannot span that, which is why the first version of this worked
 /// everywhere except the one place it was for.
 ///
-/// Layout: `armed`, `filled`, `len`, then the text. Three `u32` headers and the
-/// bytes, so a reader in another process needs no allocator agreement.
-const CAPTURE_HEADER: usize = 12;
+/// Layout: `armed`, `filled`, `len`, `claimed_at`, then the text. Four `u32`
+/// headers and the bytes, so a reader in another process needs no allocator
+/// agreement.
+const CAPTURE_HEADER: usize = 16;
 /// One mebibyte holds a large per-function table with room to spare; a slice
 /// bigger than this is refused rather than cut, since a truncated profile is
 /// indistinguishable from a complete one.
@@ -1362,6 +1493,42 @@ const CAPTURE_BYTES: usize = 1 << 20;
 const EMPTY: u32 = 0;
 const READY: u32 = 1;
 const CLAIMED: u32 = 2;
+/// How long a claim may stand before the worker that made it is presumed gone.
+///
+/// A claim is a memcpy of at most a mebibyte, so any claim this old belongs to a
+/// process that died holding it. Without this the slot would stay claimed for the
+/// life of the parent and no profile could ever be captured again — the arm used
+/// to clear it unconditionally, which healed that at the cost of corrupting a
+/// copy in progress.
+const STALE_CLAIM_SECS: u32 = 5;
+
+/// Wall-clock seconds, for deciding whether a claim was abandoned. Coarse on
+/// purpose: it is compared against five seconds, never used as a measurement.
+fn wall_seconds() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as u32)
+        .unwrap_or(0)
+}
+
+/// Clears a slice nobody is going to take, and leaves alone one being written.
+///
+/// Storing EMPTY outright is what let a second worker's claim succeed while the
+/// first was still copying into the region.
+fn release_stale_slice(filled: &AtomicU32, claimed_at: &AtomicU32) {
+    if filled
+        .compare_exchange(READY, EMPTY, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        return;
+    }
+    if filled.load(Ordering::Acquire) == CLAIMED {
+        let age = wall_seconds().saturating_sub(claimed_at.load(Ordering::Relaxed));
+        if age > STALE_CLAIM_SECS {
+            let _ = filled.compare_exchange(CLAIMED, EMPTY, Ordering::AcqRel, Ordering::Relaxed);
+        }
+    }
+}
 /// Base address of that mapping, or 0 when it could not be established — in
 /// which case the capture is simply unavailable and the dump keeps logging.
 static CAPTURE_REGION: AtomicUsize = AtomicUsize::new(0);
@@ -1425,8 +1592,10 @@ pub extern "C" fn elephc_instr_capture_arm() {
     // makes the entry point self-sufficient without changing where the mapping
     // that matters — the one inherited across the fork — is established.
     map_capture_region();
-    if let (Some(filled), Some(armed)) = (capture_word(1), capture_word(0)) {
-        filled.store(EMPTY, Ordering::Relaxed);
+    if let (Some(filled), Some(armed), Some(claimed_at)) =
+        (capture_word(1), capture_word(0), capture_word(3))
+    {
+        release_stale_slice(filled, claimed_at);
         armed.store(1, Ordering::Release);
     }
 }
@@ -1477,9 +1646,11 @@ pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> 
 /// diverted to nobody.
 #[no_mangle]
 pub extern "C" fn elephc_instr_capture_cancel() {
-    if let (Some(armed), Some(filled)) = (capture_word(0), capture_word(1)) {
+    if let (Some(armed), Some(filled), Some(claimed_at)) =
+        (capture_word(0), capture_word(1), capture_word(3))
+    {
         armed.store(0, Ordering::Relaxed);
-        filled.store(EMPTY, Ordering::Relaxed);
+        release_stale_slice(filled, claimed_at);
     }
 }
 
@@ -1510,6 +1681,14 @@ fn offer_capture(text: &str) -> bool {
     {
         return false;
     }
+    if let Some(claimed_at) = capture_word(3) {
+        claimed_at.store(wall_seconds(), Ordering::Relaxed);
+    }
+    // The question has its answer, so stop asking it of everything else still
+    // running. Leaving it armed kept every later request paying for a slice that
+    // could no longer be handed over, and the refused offers fell through to the
+    // log.
+    armed.store(0, Ordering::Release);
     let note;
     let mut bytes = text.as_bytes();
     if bytes.len() > CAPTURE_BYTES - CAPTURE_HEADER {
@@ -1570,8 +1749,10 @@ pub extern "C" fn elephc_instr_dump() {
     let slice = format!("{}{}{}", render_trace(), text, render_queries());
     // Someone asked for this one over the endpoint: hand it over instead of
     // logging it. Doing both would write a request's profile into the service's
-    // log every time an operator looked at it.
-    if !offer_capture(&slice) {
+    // log every time an operator looked at it — and so would logging the ones
+    // that lose the race, which is every other request that was in flight when
+    // the capture was armed.
+    if !offer_capture(&slice) && !CAPTURE_ONLY.load(Ordering::Relaxed) {
         let _ = std::io::stderr().write_all(slice.as_bytes());
     }
     if TRACE_ON.load(Ordering::Relaxed) {
@@ -1596,6 +1777,7 @@ pub extern "C" fn elephc_instr_dump() {
 /// deltas against a per-frame snapshot, so letting them run keeps every
 /// attribution correct across slices.
 fn end_slice() {
+    CAPTURE_ONLY.store(false, Ordering::Relaxed);
     STATE.with(|s| s.borrow_mut().reset());
     if let Ok(mut q) = QUERIES.lock() {
         q.clear();
@@ -1698,6 +1880,73 @@ mod tests {
         );
     }
 
+    /// Winning the slot closes the window behind it.
+    ///
+    /// Every request that starts while a capture is armed pays for a slice, and
+    /// only one can be handed over. Leaving it armed kept the rest paying, and
+    /// their refused offers fell through to the service log.
+    #[test]
+    fn the_worker_that_wins_the_slot_disarms_the_capture() {
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        reset_capture();
+        elephc_instr_capture_arm();
+        assert_eq!(
+            capture_word(0).expect("mapped").load(Ordering::Acquire),
+            1,
+            "arming did not arm"
+        );
+
+        assert!(super::offer_capture("elephc-instr: won calls=1 incl_ns=5\n"));
+
+        assert_eq!(
+            capture_word(0).expect("mapped").load(Ordering::Acquire),
+            0,
+            "the capture stayed armed after its answer was in hand"
+        );
+        // And a later request finds nothing to start a slice for.
+        assert!(
+            !super::offer_capture("elephc-instr: late calls=1 incl_ns=5\n"),
+            "a second profile was accepted after the answer was taken"
+        );
+        reset_capture();
+    }
+
+    /// A slice that exists only to answer the endpoint is never logged.
+    ///
+    /// Under `--web` every request in the armed window opens one, and all but the
+    /// first find the slot taken. The dump's own contract is that such a slice is
+    /// "an answer to a question, not a log line".
+    #[test]
+    fn an_endpoint_slice_that_loses_the_race_is_not_written_to_the_log() {
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        reset_capture();
+
+        // A capture is armed and this request opens a slice for it.
+        elephc_instr_capture_arm();
+        elephc_instr_request(2);
+        assert!(
+            CAPTURE_ONLY.load(Ordering::Relaxed),
+            "a slice opened for the endpoint was not marked as one"
+        );
+
+        // Another worker got there first.
+        assert!(super::offer_capture("elephc-instr: other calls=1 incl_ns=5\n"));
+
+        // This one has nothing to hand over, and nothing to say either.
+        elephc_instr_request(0);
+        assert!(
+            !CAPTURE_ONLY.load(Ordering::Relaxed),
+            "the marking outlived the slice it described"
+        );
+
+        // A slice opened because the binary is being profiled outright still is
+        // a log line, as it always was.
+        elephc_instr_request(1);
+        assert!(!CAPTURE_ONLY.load(Ordering::Relaxed));
+        elephc_instr_request(0);
+        reset_capture();
+    }
+
     /// A profile too large for the rendezvous answers with a sentence.
     ///
     /// It used to publish its true length and no bytes, so the reader — which
@@ -1706,7 +1955,7 @@ mod tests {
     #[test]
     fn a_profile_too_large_to_carry_does_not_publish_a_length_it_cannot_back() {
         let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
-        elephc_instr_capture_cancel();
+        reset_capture();
         elephc_instr_capture_arm();
 
         let huge = "x".repeat(CAPTURE_BYTES * 2);
@@ -1737,7 +1986,7 @@ mod tests {
     #[test]
     fn a_length_the_mapping_cannot_back_is_refused_rather_than_copied() {
         let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
-        elephc_instr_capture_cancel();
+        reset_capture();
         elephc_instr_capture_arm();
         assert!(super::offer_capture("elephc-instr: small\n"));
 
@@ -1752,6 +2001,21 @@ mod tests {
         );
     }
 
+    /// Puts the rendezvous back to untouched.
+    ///
+    /// `capture_cancel` deliberately will not do this: it leaves a slot a worker
+    /// is mid-copy into alone, because clearing one is how two profiles ended up
+    /// written over each other. Setup needs the unconditional version, and saying
+    /// so in the header rather than through the API keeps the difference visible.
+    fn reset_capture() {
+        map_capture_region();
+        for index in 0..4 {
+            if let Some(word) = capture_word(index) {
+                word.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
     /// Two workers reach an armed slot at once. Only one may write it.
     ///
     /// The interleaving is staged rather than raced: the loser is the worker that
@@ -1761,7 +2025,7 @@ mod tests {
     #[test]
     fn a_claimed_capture_slot_is_neither_written_again_nor_read_early() {
         let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
-        elephc_instr_capture_cancel();
+        reset_capture();
         elephc_instr_capture_arm();
 
         // A worker has claimed the slot and is still copying into it.
@@ -1776,13 +2040,16 @@ mod tests {
             0,
             "a slice still being written was served as complete"
         );
+        // A claim this fresh outlives `cancel` by design, so it has to be cleared
+        // here rather than left for the next test to trip over.
+        reset_capture();
     }
 
     /// The same property under real concurrency: many threads, one winner.
     #[test]
     fn only_one_of_many_concurrent_offers_wins_the_slot() {
         let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
-        elephc_instr_capture_cancel();
+        reset_capture();
         elephc_instr_capture_arm();
 
         let start = std::sync::Barrier::new(8);
@@ -1901,6 +2168,209 @@ mod tests {
         assert_eq!(allocs, 100, "allocations should partition the root's hundred");
     }
 
+    /// A function that catches what it threw itself keeps its handler's work.
+    ///
+    /// Nothing distinguishes this from an outer frame catching for an inner one
+    /// at the moment the handler runs — the stack looks identical either way,
+    /// and which frame is the catcher is only known when one of them returns.
+    /// The deferred charge has to land correctly in both, and this is the case
+    /// where "correctly" means the frame the charge was deferred FROM.
+    #[test]
+    fn a_function_that_catches_its_own_throw_keeps_the_handlers_work() {
+        let mut state = State::default();
+        state.enter_at(0, 0, 0, 0, 0, 0); // caller
+        state.enter_at(1, 10, 0, 0, 0, 0); // throws and catches, all its own
+
+        state.note_throw(20, 0, 0, 0, 0);
+        state.enter_at(2, 30, 0, 0, 0, 0); // the handler calls something
+        state.exit_at(2, 900, 0, 0, 0, 0);
+        state.exit_at(1, 950, 0, 0, 0, 0);
+        state.exit_at(0, 1_000, 0, 0, 0, 0);
+
+        assert_eq!(
+            state.edges.get(&(1, 2)).map(|e| e.0),
+            Some(1),
+            "the handler's call belongs to the frame that ran it"
+        );
+        assert_eq!(state.fns[2].excl_ns, 870, "the call ran for 870");
+        let total: u64 = state.fns.iter().map(|a| a.excl_ns).sum();
+        assert_eq!(total, 1_000, "self time should still partition the root");
+    }
+
+    /// A handler that throws again does not lose what it already spent.
+    ///
+    /// The second throw replaces the unwind record. Replacing it outright
+    /// dropped the charge the first one was holding — already subtracted from
+    /// its frames, so nothing would have accounted for it again.
+    #[test]
+    fn a_rethrow_carries_the_first_unwinds_charge_to_the_next_catcher() {
+        let mut state = State::default();
+        state.enter_at(0, 0, 0, 0, 0, 0); // outer catcher
+        state.enter_at(1, 10, 0, 0, 0, 0); // thrower
+
+        state.note_throw(20, 0, 0, 0, 0);
+        state.enter_at(2, 30, 0, 0, 0, 0); // the handler works
+        state.exit_at(2, 500, 0, 0, 0, 0);
+        state.note_throw(600, 0, 0, 0, 0); // and then throws again
+        state.exit_at(0, 1_000, 0, 0, 0, 0);
+
+        let total: u64 = state.fns.iter().map(|a| a.excl_ns).sum();
+        assert_eq!(
+            total, 1_000,
+            "the first unwind's charge went missing across the rethrow"
+        );
+        assert_eq!(state.fns[2].excl_ns, 470, "the handler's call ran for 470");
+    }
+
+    /// An exception raised and caught inside a call the handler made.
+    ///
+    /// The inner one is resolved by an exit nowhere near the outer catcher, so
+    /// resolving unwinds in a batch handed the outer exception's bookkeeping to
+    /// the inner catcher: the logger's cost charged to the frame the outer
+    /// exception had already destroyed, an invented self-edge, the real edge
+    /// lost, and the outer dead frames closed at the outer catcher's clock. The
+    /// self times still summed to the root, which is why nothing caught it.
+    #[test]
+    fn an_exception_caught_inside_a_handlers_callee_leaves_the_outer_one_alone() {
+        let mut state = State::default();
+        state.enter_at(0, 0, 0, 0, 0, 0); // outer catcher
+        state.enter_at(1, 10, 0, 0, 0, 0); // throws at 20
+
+        state.note_throw(20, 0, 0, 0, 0);
+        state.enter_at(2, 30, 0, 0, 0, 0); // the handler calls the logger
+        state.enter_at(3, 40, 0, 0, 0, 0); // which calls something that throws
+        state.note_throw(50, 0, 0, 0, 0);
+        state.exit_at(2, 100, 0, 0, 0, 0); // and the logger catches it itself
+        state.exit_at(0, 1_000, 0, 0, 0, 0);
+
+        assert!(state.stack.is_empty(), "the outer catcher did not resync");
+        let total: u64 = state.fns.iter().map(|a| a.excl_ns).sum();
+        assert_eq!(total, 1_000, "self time did not partition the root");
+
+        assert_eq!(
+            state.fns[1].excl_ns, 10,
+            "the outer thrower ran ten ticks and died at its own throw"
+        );
+        assert_eq!(state.fns[3].excl_ns, 10, "the inner thrower ran ten ticks");
+        assert_eq!(
+            state.fns[2].excl_ns, 60,
+            "the logger ran from 30 to 100, less the ten its callee took"
+        );
+
+        assert_eq!(
+            state.edges.get(&(0, 2)),
+            Some(&(1, 70)),
+            "the handler's call belongs to the catcher that ran it"
+        );
+        assert!(
+            !state.edges.contains_key(&(1, 2)),
+            "the call was attributed to the frame the exception destroyed"
+        );
+        assert!(
+            !state.edges.contains_key(&(2, 2)),
+            "the inner catcher was given an edge to itself"
+        );
+    }
+
+    /// A handler that throws again, from inside a call that never returns.
+    ///
+    /// The frame the handler opened is still on the stack when the catcher
+    /// finally exits, because the second throw unwound it and unwound frames run
+    /// no exit. Stack height therefore never comes back down to the throw's
+    /// depth, and asking it whether the unwind is over answers no — leaving the
+    /// dead frames to be closed at the catcher's clock and the pending charge
+    /// with nobody to go to.
+    #[test]
+    fn a_second_throw_from_an_open_handler_frame_still_ends_at_the_catcher() {
+        let mut state = State::default();
+        state.enter_at(0, 0, 0, 0, 0, 0); // outer catcher
+        state.enter_at(1, 10, 0, 0, 0, 0); // thrower
+
+        state.note_throw(20, 0, 0, 0, 0);
+        state.enter_at(2, 30, 0, 0, 0, 0); // the handler calls this...
+        state.enter_at(3, 40, 0, 0, 0, 0); // ...which calls this
+        state.exit_at(3, 50, 0, 0, 0, 0); // only the inner one returns
+        state.note_throw(600, 0, 0, 0, 0); // and then the handler throws again
+
+        state.exit_at(0, 1_000, 0, 0, 0, 0);
+
+        assert!(state.stack.is_empty(), "the catcher's exit did not resync");
+        assert_eq!(
+            state.fns[1].incl_ns, 10,
+            "the first thrower still carries only its own ten ticks"
+        );
+        let total: u64 = state.fns.iter().map(|a| a.excl_ns).sum();
+        assert!(
+            total <= 1_000,
+            "self time ran past the root's thousand ticks: {total}"
+        );
+    }
+
+    /// Every tick of a nested unwind lands on exactly one function.
+    ///
+    /// This is the sequence that forced the accounting to record one instant per
+    /// throw rather than one per unwind. With a single instant there is no right
+    /// answer: keep the first and the frame the handler opened is closed before
+    /// it started, keep the second and the frame the first throw killed is
+    /// credited with everything the handler did. Both were tried here, and both
+    /// showed up as a total that was not the root's.
+    #[test]
+    fn a_nested_unwind_still_accounts_for_exactly_the_roots_span() {
+        let mut state = State::default();
+        state.enter_at(0, 0, 0, 0, 0, 0);
+        state.enter_at(1, 10, 0, 0, 0, 0);
+        state.note_throw(20, 0, 0, 0, 0);
+        state.enter_at(2, 30, 0, 0, 0, 0);
+        state.enter_at(3, 40, 0, 0, 0, 0);
+        state.exit_at(3, 50, 0, 0, 0, 0);
+        state.note_throw(600, 0, 0, 0, 0);
+        state.exit_at(0, 1_000, 0, 0, 0, 0);
+
+        for (id, acc) in state.fns.iter().enumerate() {
+            assert!(
+                acc.excl_ns <= 1_000,
+                "#{id} reports {} ns of self time in a run of 1000",
+                acc.excl_ns
+            );
+        }
+        let total: u64 = state.fns.iter().map(|a| a.excl_ns).sum();
+        assert_eq!(total, 1_000, "self time did not partition the root");
+        assert_eq!(
+            state.fns[2].excl_ns, 560,
+            "the frame the handler opened ran from 30 until the second throw at \
+             600, less the 10 its own callee took"
+        );
+        assert_eq!(
+            state.fns[1].excl_ns, 10,
+            "the first thrower died at the FIRST throw, not the second"
+        );
+        assert_eq!(
+            state.overdrawn, 0,
+            "a frame was charged more than it ran for, and the total only holds \
+             because the subtraction saturated"
+        );
+    }
+
+    /// A throw with nothing on the stack accounts for nothing, and breaks nothing.
+    #[test]
+    fn a_throw_at_depth_zero_leaves_the_next_slice_alone() {
+        let mut state = State::default();
+        state.note_throw(0, 0, 0, 0, 0);
+
+        state.enter_at(0, 100, 0, 0, 0, 0);
+        state.enter_at(1, 110, 0, 0, 0, 0);
+        state.exit_at(1, 200, 0, 0, 0, 0);
+        state.exit_at(0, 300, 0, 0, 0, 0);
+
+        assert_eq!(state.fns[1].excl_ns, 90, "the callee ran for 90");
+        assert_eq!(state.fns[0].excl_ns, 110, "the caller ran for 110");
+        assert_eq!(
+            state.edges.get(&(0, 1)).map(|e| e.0),
+            Some(1),
+            "the call was deferred to a catcher that does not exist"
+        );
+    }
+
     /// A slice boundary that lands mid-unwind does not carry the charge over.
     #[test]
     fn a_reset_mid_unwind_does_not_charge_the_next_slice() {
@@ -1926,7 +2396,7 @@ mod tests {
     #[test]
     fn a_slice_offered_while_armed_is_handed_to_the_taker() {
         let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
-        elephc_instr_capture_cancel();
+        reset_capture();
         elephc_instr_capture_arm();
 
         let slice = "elephc-instr: hot calls=3 incl_ns=10\n";
@@ -1955,8 +2425,7 @@ mod tests {
     #[test]
     fn a_slice_left_by_a_forked_child_reaches_the_parent() {
         let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
-        elephc_instr_capture_cancel();
-        map_capture_region();
+        reset_capture();
         elephc_instr_capture_arm();
 
         let slice = "elephc-instr: forked calls=7 incl_ns=99\n";
@@ -2002,8 +2471,14 @@ mod tests {
     /// test asserting rendered nanoseconds against hand-written timestamps is
     /// therefore asserting something about the host's counter unless it says
     /// which rate it means — on this machine, 24 MHz, `30` renders as `1250`.
-    fn ticks_are_nanoseconds() {
+    fn ticks_are_nanoseconds() -> std::sync::MutexGuard<'static, ()> {
+        // The guard comes back with it: the rate is one global, every test that
+        // switches the profiler on replaces it with the hardware's, and these run
+        // in parallel. Handing back the lock is what makes it impossible to set
+        // the rate without also holding the right to rely on it.
+        let serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         super::TICK_HZ.store(1_000_000_000, super::Ordering::Relaxed);
+        serial
     }
 
     /// Switching the hooks on must always fix the time reference too.
@@ -2182,7 +2657,7 @@ mod tests {
 
     #[test]
     fn render_lists_metrics_and_edges() {
-        ticks_are_nanoseconds();
+        let _serial = ticks_are_nanoseconds();
         let mut s = State::default();
         s.enter_at(0, 0, 0, 0, 0, 0);
         s.enter_at(1, 0, 0, 0, 0, 0);
@@ -2199,7 +2674,7 @@ mod tests {
 
     #[test]
     fn retained_is_signed_and_partitions_like_the_other_dimensions() {
-        ticks_are_nanoseconds();
+        let _serial = ticks_are_nanoseconds();
         // `cleanup` frees more than it allocates (it releases what main built),
         // so its retained is negative — the dimension must not clamp at zero.
         let mut s = State::default();
@@ -2284,8 +2759,22 @@ mod tests {
 
     #[test]
     fn trace_begin_continues_a_valid_trace_and_starts_one_otherwise() {
-        // Inbound header: same trace, our span is a child of the caller's.
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         let hdr = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+        // Dormant, it does nothing at all — no trace id minted, no environment
+        // published, no /dev/urandom read. This is the contract the capability is
+        // defined by, and this entry point was the one place it did not hold.
+        ENABLED.store(false, Ordering::Relaxed);
+        std::env::remove_var("ELEPHC_TRACEPARENT");
+        elephc_instr_trace_begin(hdr.as_ptr(), hdr.len(), std::ptr::null(), 0);
+        assert!(
+            std::env::var("ELEPHC_TRACEPARENT").is_err(),
+            "a dormant binary published a trace context"
+        );
+
+        switch_on();
+        // Inbound header: same trace, our span is a child of the caller's.
         elephc_instr_trace_begin(hdr.as_ptr(), hdr.len(), std::ptr::null(), 0);
         let line = render_trace();
         assert!(line.contains("trace=4bf92f3577b34da6a3ce929d0e0e4736"), "{line}");
@@ -2299,11 +2788,12 @@ mod tests {
         let root = render_trace();
         assert!(root.contains("parent=-"), "{root}");
         assert!(!root.contains("4bf92f3577b34da6a3ce929d0e0e4736"), "{root}");
+        ENABLED.store(false, Ordering::Relaxed);
     }
 
     #[test]
     fn reset_makes_each_dump_a_fresh_slice() {
-        ticks_are_nanoseconds();
+        let _serial = ticks_are_nanoseconds();
         // Two identical "requests" on one worker. Without the reset the second
         // reports calls=2 and double the time — the --web bug this fixes.
         let mut s = State::default();
@@ -2371,29 +2861,32 @@ mod tests {
         let mut s = State::default();
         // id 0 wraps everything and must survive intact.
         s.enter_at(0, 0, 0, 0, 0, 0);
-        // Fill the stack to the cap with id 1.
+        // Fill the stack to the cap with id 1. The timestamps only ever move
+        // forward, as the counter this stands in for does: an exit stamped
+        // before its own entry produces a negative span, and the totals below
+        // then hold by wrapping around rather than by adding up.
         for i in 0..(MAX_STACK - 1) {
-            s.enter_at(1, i as u64, 0, 0, 0, 0);
+            s.enter_at(1, 1 + i as u64, 0, 0, 0, 0);
         }
         assert_eq!(s.stack.len(), MAX_STACK);
         // Two further activations of a DIFFERENT id cannot be pushed.
-        s.enter_at(2, 9_000, 0, 0, 0, 0);
-        s.enter_at(2, 9_001, 0, 0, 0, 0);
+        s.enter_at(2, 70_000, 0, 0, 0, 0);
+        s.enter_at(2, 70_001, 0, 0, 0, 0);
         assert_eq!(s.dropped, 2);
         assert_eq!(s.stack.len(), MAX_STACK, "nothing was pushed past the cap");
         // Their exits must not disturb the stack.
-        s.exit_at(2, 9_002, 0, 0, 0, 0);
-        s.exit_at(2, 9_003, 0, 0, 0, 0);
+        s.exit_at(2, 70_002, 0, 0, 0, 0);
+        s.exit_at(2, 70_003, 0, 0, 0, 0);
         assert_eq!(s.stack.len(), MAX_STACK, "a dropped exit pops nothing");
         assert_eq!(s.dropped_depth, 0);
         // Unwind normally.
         for i in 0..(MAX_STACK - 1) {
-            s.exit_at(1, 10_000 + i as u64, 0, 0, 0, 0);
+            s.exit_at(1, 80_000 + i as u64, 0, 0, 0, 0);
         }
-        s.exit_at(0, 100_000, 0, 0, 0, 0);
+        s.exit_at(0, 200_000, 0, 0, 0, 0);
         assert!(s.stack.is_empty(), "fully unwound");
         // The outermost frame kept its span, which is what used to be destroyed.
-        assert_eq!(s.fns[0].incl_ns, 100_000);
+        assert_eq!(s.fns[0].incl_ns, 200_000);
         assert_eq!(s.fns[0].depth, 0);
         assert_eq!(s.fns[1].depth, 0);
         // The dropped calls are counted but carry no timing.
@@ -2402,6 +2895,7 @@ mod tests {
         // Exclusive time still partitions the root's inclusive.
         let sum: u64 = s.fns.iter().map(|a| a.excl_ns).sum();
         assert_eq!(sum, s.fns[0].incl_ns);
+        assert_eq!(s.overdrawn, 0, "no frame was charged more than it ran for");
     }
 
     #[test]
@@ -2528,7 +3022,7 @@ mod tests {
 
     #[test]
     fn chrome_trace_is_well_formed() {
-        ticks_are_nanoseconds();
+        let _serial = ticks_are_nanoseconds();
         // Spans in ns; base is the min enter. Complete ('X') events, µs.
         let spans = vec![(0u32, 1_000u64, 5_000u64), (1u32, 2_000u64, 3_500u64)];
         let names = vec!["{main}".to_string(), "child".to_string()];
