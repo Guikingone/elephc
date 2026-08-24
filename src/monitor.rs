@@ -3624,25 +3624,28 @@ fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
         "connected to probe build {}",
         elephc_probe::handshake::fingerprint(&key)
     );
+    if cmd.exact {
+        // An exact slice is `elephc-instr:` rows, not folded stacks: handing it
+        // to the sampled parser produced an empty display and a message saying
+        // nothing had arrived, while the server had in fact just sent 290 bytes
+        // of profile. Same rendering as a locally captured exact run, because it
+        // is the same data.
+        let graph = parse_instrument_dump(&folded);
+        if graph.nodes.is_empty() {
+            eprintln!(
+                "elephc monitor: no exact slice arrived within the wait. A slice is \
+                 rendered when a profiled request completes, so a service with no \
+                 traffic has none to give yet; drop `--exact` for the sampled view, \
+                 which does not need a request to finish."
+            );
+            return 1;
+        }
+        print!("{}", instrument_table(&graph));
+        return 0;
+    }
     let display = folded_text_to_display(&folded);
     if display.is_empty() {
-        if cmd.exact {
-            // Say which shape of "nothing" this is. An exact slice is rendered
-            // by the process that RUNS the request, and under `--web` that is a
-            // forked worker, while this endpoint lives in the parent that
-            // accepted before forking. The sampled ring crosses that boundary
-            // because it is mapped MAP_SHARED; nothing else does yet.
-            eprintln!(
-                "elephc monitor: no exact slice arrived. A slice is rendered when a \
-                 profiled request completes IN THE PROCESS SERVING THE ENDPOINT — under \
-                 `--web` that is a forked worker, and the endpoint answers from the \
-                 parent, so `--exact` has no answer there yet. Use a signed \
-                 `X-Elephc-Query` header for one request's exact numbers, or drop \
-                 `--exact` for the sampled view, which does cross the fork."
-            );
-        } else {
-            eprintln!("elephc monitor: the probe returned no samples yet — is the process busy?");
-        }
+        eprintln!("elephc monitor: the probe returned no samples yet — is the process busy?");
         return 1;
     }
     if let Some(out_path) = &cmd.out {

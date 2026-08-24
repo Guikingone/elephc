@@ -438,6 +438,25 @@ both sides so you can confirm you reached the intended deployment — and it is
 printed *after* the handshake, so it reports what was proven rather than what was
 claimed.
 
+Two answers come back through that one address, and the flag says which:
+
+```bash
+elephc monitor host:9411 --key app.key           # sampled: what the process is doing, now
+elephc monitor host:9411 --key app.key --exact   # exact: the next request that completes
+```
+
+The **sampled** answer is always available — a timer fills a ring, so a process
+doing anything has something to hand over, and the ring is shared across every
+`--web` worker. The **exact** answer is the same measurement a local run gives:
+per-function calls, self and inclusive time, allocations, retained objects,
+queries and I/O wait, for one request. It exists only once a request completes,
+so `--exact` waits for the next one and says so if none arrives.
+
+Under `--web` those two live in different processes — the endpoint answers from
+the parent that accepts and forks, the request runs in a worker — so the slice
+travels through a small shared mapping established before the fork, the same way
+the sample ring does.
+
 The profile itself is **encrypted**, whatever it travels over. Once both sides
 have proven the key, each derives the same pair of subkeys from that key and the
 two nonces they just exchanged, and the payload crosses sealed and authenticated.
