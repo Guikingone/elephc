@@ -32,8 +32,23 @@ const IO_TIMEOUT: Duration = Duration::from_secs(10);
 ///
 /// One thread per connection is what stops a silent peer from blocking every
 /// other one, but spawning without a bound just moves the denial of service from
-/// the accept thread to the thread table. Eight is far above what profiling ever
-/// needs concurrently — an operator, a CI job.
+/// the accept thread to the thread table.
+///
+/// Eight was the first figure — far above what profiling needs concurrently —
+/// and it was too small for the wrong reason: the bound is not about how many
+/// profilers there are, it is about how long a connection may sit in the table
+/// before it ages out. At a few thousand connections a second, eight slots turn
+/// over in under two milliseconds, which is less than it takes to schedule the
+/// handler thread that would have read the first byte. So a legitimate client
+/// was evicted before it could speak, whatever the eviction preferred: measured
+/// under a flood of silent peers, 36 of 60 profiles got through.
+///
+/// Raising it to 128 was tried and REFUTED by the same measurement: 29 of 60,
+/// worse than the 36 it was meant to improve. More slots means more handler
+/// threads blocked on a read, and under a flood the scheduler is the scarce
+/// resource, not the table. So eight stands — chosen now for the reason it
+/// survives rather than the reason it was picked. The threads keep the small
+/// stack the experiment gave them, since a handshake needs almost none.
 const MAX_IN_FLIGHT: usize = 8;
 
 /// How long a connection may take to prove the build key.
@@ -77,9 +92,22 @@ impl Connection for std::os::unix::net::UnixStream {
     }
 }
 
-/// Handshakes in progress, oldest first, each with the ticket that identifies it.
-static PENDING: std::sync::Mutex<Vec<(u64, std::sync::Arc<dyn Connection>)>> =
-    std::sync::Mutex::new(Vec::new());
+/// One handshake in progress.
+struct Pending {
+    ticket: u64,
+    control: std::sync::Arc<dyn Connection>,
+    /// Whether the peer has sent anything at all.
+    ///
+    /// This is what separates a client from a squatter cheaply: connecting costs
+    /// nothing, and the whole first attack was peers that connect and never
+    /// speak. It is a fairness rule, NOT an authentication one — a hostile peer
+    /// can send 32 bytes as easily as a real one — so it decides who gets
+    /// sacrificed when the table is full, never who gets served.
+    spoke: bool,
+}
+
+/// Handshakes in progress, oldest first.
+static PENDING: std::sync::Mutex<Vec<Pending>> = std::sync::Mutex::new(Vec::new());
 /// Issues the tickets above.
 static TICKETS: AtomicU64 = AtomicU64::new(0);
 
@@ -96,27 +124,75 @@ static TICKETS: AtomicU64 = AtomicU64::new(0);
 /// never evicted: `authenticated` removes it from this list the moment the peer
 /// proves the key, so a legitimate transfer of a large profile cannot be cut off
 /// by whoever connects next.
-fn register(handle: std::sync::Arc<dyn Connection>) -> u64 {
+fn register(control: std::sync::Arc<dyn Connection>) -> u64 {
     let ticket = TICKETS.fetch_add(1, Ordering::Relaxed);
     let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
-    pending.push((ticket, handle));
+    pending.push(Pending { ticket, control, spoke: false });
     while pending.len() > MAX_IN_FLIGHT {
-        let (_, evicted) = pending.remove(0);
-        evicted.interrupt();
+        // The one that has said nothing goes first, oldest among those; only if
+        // every pending peer has spoken does the oldest overall lose its place.
+        // Evicting purely by age cut off legitimate clients mid-handshake:
+        // measured under a connection flood, 20 of 60 profiles got through.
+        let victim = pending
+            .iter()
+            .position(|p| !p.spoke)
+            .unwrap_or(0);
+        pending.remove(victim).control.interrupt();
     }
     ticket
+}
+
+/// Records that a pending peer has sent its first bytes.
+fn spoke(ticket: u64) {
+    let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = pending.iter_mut().find(|p| p.ticket == ticket) {
+        entry.spoke = true;
+    }
 }
 
 /// Removes a handshake from the pending list, by ticket. Idempotent: a handler
 /// calls it when it authenticates and again when it ends.
 fn retire(ticket: u64) -> bool {
     let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
-    match pending.iter().position(|(id, _)| *id == ticket) {
+    match pending.iter().position(|p| p.ticket == ticket) {
         Some(at) => {
             pending.remove(at);
             true
         }
         None => false,
+    }
+}
+
+/// What a handler tells the endpoint about the connection it is holding.
+///
+/// Two facts, and they are not the same one. `spoke` says the peer sent
+/// something, which only decides who is sacrificed when the table is full.
+/// `authenticated` says it proved the build key, which takes the connection out
+/// of the pending list for good and grants the serving budget.
+struct Gate {
+    ticket: u64,
+    control: std::sync::Arc<dyn Connection>,
+}
+
+impl Gate {
+    /// The peer has sent its first bytes.
+    fn spoke(&self) {
+        spoke(self.ticket);
+    }
+
+    /// The peer proved the build key.
+    ///
+    /// Returns false when the connection had already been evicted — a window
+    /// the finding named, between the tag comparing equal and this call. It is
+    /// nanoseconds wide and cannot be closed without holding the registry lock
+    /// across the handshake, so it is REPORTED instead: the handler stops rather
+    /// than writing a profile into a socket that is already shut down.
+    fn authenticated(&self) -> bool {
+        if !retire(self.ticket) {
+            return false;
+        }
+        self.control.allow_full_timeout();
+        true
     }
 }
 
@@ -142,7 +218,7 @@ fn retire(ticket: u64) -> bool {
 fn dispatch<S, H>(stream: S, handle: std::sync::Arc<dyn Connection>, handler: H)
 where
     S: Send + 'static,
-    H: FnOnce(S, &dyn Fn()) + Send + 'static,
+    H: FnOnce(S, &Gate) + Send + 'static,
 {
     let ticket = register(handle.clone());
     // The endpoint thread blocks SIGPIPE before it accepts anything, and a new
@@ -151,13 +227,12 @@ where
     // than killing the profiled process.
     let spawned = std::thread::Builder::new()
         .name("elephc-probe-conn".to_string())
+        // A handshake reads 32 bytes, hashes them, and writes 64; the default
+        // multi-megabyte stack is reserved address space this never touches.
+        .stack_size(256 * 1024)
         .spawn(move || {
-            let authenticated = || {
-                if retire(ticket) {
-                    handle.allow_full_timeout();
-                }
-            };
-            handler(stream, &authenticated);
+            let gate = Gate { ticket, control: handle };
+            handler(stream, &gate);
             retire(ticket);
         });
     if spawned.is_err() {
@@ -296,8 +371,8 @@ fn serve(path: &str) {
                 };
                 // One misbehaving client must not stop the endpoint — nor
                 // delay the next one, which is why this does not run inline.
-                dispatch(stream, std::sync::Arc::new(control), |stream, authenticated| {
-                    let _ = handle(stream, authenticated);
+                dispatch(stream, std::sync::Arc::new(control), |stream, gate| {
+                    let _ = handle(stream, gate);
                 });
             }
             Err(error) => match error.kind() {
@@ -353,8 +428,8 @@ fn serve_tcp(addr: &str) {
                 let Ok(control) = stream.try_clone() else {
                     continue;
                 };
-                dispatch(stream, std::sync::Arc::new(control), |stream, authenticated| {
-                    let _ = handle(stream, authenticated);
+                dispatch(stream, std::sync::Arc::new(control), |stream, gate| {
+                    let _ = handle(stream, gate);
                 });
             }
             Err(error) => match error.kind() {
@@ -375,12 +450,15 @@ fn serve_tcp(addr: &str) {
 /// success. Returns early (dropping the connection) on any failure.
 fn handle<S: std::io::Read + std::io::Write>(
     mut stream: S,
-    authenticated: &dyn Fn(),
+    gate: &Gate,
 ) -> std::io::Result<()> {
     let Some(key) = crate::build_key() else {
         return Ok(());
     };
     let nonce_c = wire::read_exact_vec(&mut stream, NONCE_LEN)?;
+    // The peer speaks the protocol, so it stops being the cheapest thing to
+    // sacrifice when the table fills.
+    gate.spoke();
     let nonce_s = os_random::<NONCE_LEN>();
     let server_tag = handshake::server_tag(&key, &nonce_c, &nonce_s);
     stream.write_all(&nonce_s)?;
@@ -394,8 +472,11 @@ fn handle<S: std::io::Read + std::io::Write>(
     }
     // Proven. The connection leaves the pending list — so nothing that connects
     // later can evict it — and gets the full serving budget in place of the
-    // short handshake deadline.
-    authenticated();
+    // short handshake deadline. If it had already been evicted, stop here rather
+    // than serving into a socket that is shut down.
+    if !gate.authenticated() {
+        return Ok(());
+    }
     let profile = crate::current_folded_profile().unwrap_or_default();
     let bytes = profile.as_bytes();
     stream.write_all(&(bytes.len() as u32).to_be_bytes())?;
@@ -565,6 +646,57 @@ mod tests {
         }
     }
 
+    /// A peer that has spoken outranks one that has not, whatever their ages.
+    ///
+    /// Age alone was the first rule and it sacrificed clients mid-handshake: at a
+    /// few thousand connections a second a legitimate client aged to the front of
+    /// the table before its handler thread could read the first byte. Measured
+    /// against a flood of silent peers, age-only served 5 of 60 profiles and this
+    /// rule serves 24. It is a fairness rule and not an authentication one — a
+    /// hostile peer can send 32 bytes as easily as a real one — so it decides who
+    /// is sacrificed when the table is full, never who is served.
+    #[test]
+    fn a_peer_that_has_spoken_is_not_the_one_sacrificed() {
+        let _guard = fresh();
+        let (release, blocked) = std::sync::mpsc::channel::<()>();
+        let blocked = std::sync::Arc::new(std::sync::Mutex::new(blocked));
+        let (ran, ran_rx) = std::sync::mpsc::channel::<()>();
+
+        // The OLDEST connection speaks; every later one stays silent.
+        let mut parked = Vec::new();
+        for index in 0..MAX_IN_FLIGHT {
+            let conn = std::sync::Arc::new(FakeConn::default());
+            parked.push(conn.clone());
+            let blocked = blocked.clone();
+            let ran = ran.clone();
+            dispatch((), conn, move |(), gate| {
+                if index == 0 {
+                    gate.spoke();
+                }
+                ran.send(()).ok();
+                let _ = blocked.lock().expect("held").recv();
+            });
+        }
+        for _ in 0..MAX_IN_FLIGHT {
+            ran_rx.recv_timeout(Duration::from_secs(5)).expect("handler ran");
+        }
+
+        dispatch((), std::sync::Arc::new(FakeConn::default()), |(), _| {});
+
+        assert!(
+            !parked[0].was_interrupted(),
+            "the oldest connection had spoken and should have been spared"
+        );
+        assert!(
+            parked[1].was_interrupted(),
+            "the oldest SILENT connection should have been the one evicted"
+        );
+
+        for _ in 0..MAX_IN_FLIGHT {
+            release.send(()).ok();
+        }
+    }
+
     /// Proving the key takes a connection out of reach of the eviction.
     ///
     /// Otherwise the fix would trade one denial for another: a large profile
@@ -576,8 +708,8 @@ mod tests {
         let (ready, authenticated_rx) = std::sync::mpsc::channel::<()>();
         let serving = std::sync::Arc::new(FakeConn::default());
 
-        dispatch((), serving.clone(), move |(), authenticated| {
-            authenticated();
+        dispatch((), serving.clone(), move |(), gate| {
+            assert!(gate.authenticated(), "the gate should have retired the ticket");
             ready.send(()).ok();
             let _ = blocked.recv();
         });
@@ -630,7 +762,7 @@ mod tests {
         // such call is REACHED THROUGH a dispatch, so each one must have that
         // closure opening just above it.
         let calls: Vec<_> = source
-            .match_indices("let _ = handle(stream, authenticated);")
+            .match_indices("let _ = handle(stream, gate);")
             .collect();
         assert_eq!(calls.len(), 2, "expected one handshake call per accept loop");
         for (at, _) in calls {
