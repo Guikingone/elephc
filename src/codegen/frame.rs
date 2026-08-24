@@ -514,7 +514,14 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     // exiting, so the exit-based main epilogue (where `--gc-stats` normally
     // prints) is never reached. Emitting the counters here, once per request,
     // is the only way to observe them in server mode.
-    emit_probe_dump(ctx);
+    //
+    // The SAMPLED profile is deliberately NOT dumped here. Dumping is terminal —
+    // it disarms the timer and marks the process stopped — so doing it per
+    // request meant the first request ended sampling for the life of the worker,
+    // and a later `monitor host:port` read a ring that had stopped filling. A
+    // service is read through its endpoint, on demand, for as long as it runs;
+    // per-request EXACT slices come from the instrumentation path, which brackets
+    // each request and is not terminal.
     if ctx.gc_stats {
         emit_gc_stats(ctx);
     }

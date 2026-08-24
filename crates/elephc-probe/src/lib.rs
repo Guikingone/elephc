@@ -154,6 +154,17 @@ extern "C" {
 /// Set by `elephc_probe_dump` so a late signal cannot race the ring read.
 static STOPPED: AtomicBool = AtomicBool::new(false);
 
+/// Whether this process was ever ASKED to profile.
+///
+/// Distinct from "the ring is mapped", which is true in every `--with-monitoring`
+/// binary because the mapping is what makes the capability free to carry. Arming
+/// on the mapping instead of on this made a `--web` service sample and log itself
+/// with nobody asking: the worker re-armed at startup, and the first request's
+/// epilogue dumped to stderr. Measured on a service built with the flag and asked
+/// nothing: 12 `elephc-probe:` lines over three ordinary requests, against none
+/// from the same program built without it.
+static ASKED: AtomicBool = AtomicBool::new(false);
+
 /// Returns the shared head counter, or `None` before the region is mapped.
 ///
 /// # Safety
@@ -521,6 +532,7 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
     if control_fd_present() || std::env::var_os("ELEPHC_PROBE_ADDR").is_some() {
         let flag = std::ptr::addr_of_mut!(elephc_monitor_active);
         flag.write(1);
+        ASKED.store(true, Ordering::Relaxed);
         arm_timer();
     }
 
@@ -599,9 +611,21 @@ pub unsafe extern "C" fn elephc_probe_disarm() {
 /// Ordinary FFI entry; just arms the interval timer.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_probe_rearm() {
-    if REGION.load(Ordering::Relaxed) != 0 {
+    if should_arm(ASKED.load(Ordering::Relaxed), REGION.load(Ordering::Relaxed)) {
         arm_timer();
     }
+}
+
+/// Whether a forked worker should start sampling.
+///
+/// On ASKED, not on the mapping: every monitored binary maps the ring — that is
+/// what makes the capability free to carry — so re-arming on the mapping alone
+/// made a dormant `--web` service profile and log itself. A pure function
+/// because the alternative, a test that mutates the globals, would have to make
+/// `REGION` non-zero to reach the interesting branch at all, and would otherwise
+/// pass without ever testing what it claims.
+fn should_arm(asked: bool, region: usize) -> bool {
+    asked && region != 0
 }
 
 /// Returns the embedded build key, or `None` if unpublished.
@@ -780,6 +804,12 @@ pub fn current_folded_profile() -> Option<String> {
 /// concurrently once the stop flag is set and the timer is disarmed.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_probe_dump() {
+    // A binary nobody asked prints nothing, whatever calls this. The emitted
+    // epilogues cannot express "was it asked" — that is a run-time fact — so the
+    // check belongs here, once, rather than at each site that might grow one.
+    if !ASKED.load(Ordering::Relaxed) {
+        return;
+    }
     STOPPED.store(true, Ordering::Relaxed);
     let disarm = libc::itimerval {
         it_interval: libc::timeval { tv_sec: 0, tv_usec: 0 },
@@ -919,6 +949,34 @@ fn symbolize<'a>(symbols: &[(u64, &'a str)], pc: u64) -> &'a str {
 
 #[cfg(test)]
 mod tests {
+    /// A worker only starts sampling because someone asked, never because the
+    /// ring happens to be mapped.
+    #[test]
+    fn a_forked_worker_arms_only_when_asked() {
+        assert!(super::should_arm(true, 0x1000), "asked, ring mapped: sample");
+        assert!(!super::should_arm(false, 0x1000), "nobody asked: stay dormant");
+        assert!(!super::should_arm(true, 0), "asked but no ring: nothing to fill");
+        assert!(!super::should_arm(false, 0));
+    }
+
+    /// A binary nobody asked prints nothing, whatever calls the dump.
+    ///
+    /// Observable without a ring or a key: the dump's first act is to mark the
+    /// process stopped, so a dump that returns early leaves that flag alone.
+    #[test]
+    fn a_dump_on_a_binary_nobody_asked_does_nothing() {
+        assert!(
+            !super::ASKED.load(super::Ordering::Relaxed),
+            "a test build must start unasked, or this proves nothing"
+        );
+        super::STOPPED.store(false, super::Ordering::Relaxed);
+        unsafe { super::elephc_probe_dump() };
+        assert!(
+            !super::STOPPED.load(super::Ordering::Relaxed),
+            "the dump ran on a binary nobody asked"
+        );
+    }
+
     /// The capability check must not consume a stream that is not its own.
     ///
     /// fd 3 is just a number: a supervisor can hand a child a connected socket
