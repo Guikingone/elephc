@@ -1465,9 +1465,10 @@ fn test_unknown_callee_does_not_over_reach() {
 ///
 /// `$cb` is a `callable` parameter with no signature attached, so `infer_pipe_type` falls through
 /// to its syntactic return-type guess with no `ref_params` to consult — the same position the
-/// sixteen sites above are in. The branch-divergent pre-scan already disqualifies the piped value
-/// (`mixed_storage_scan`'s `Pipe` arm calls `disqualify_root` on it), so recording the alias here
-/// is what makes the two sides agree. The surface is narrow — the RFC gives the pipe no by-ref
+/// sixteen sites above are in. The branch-divergent pre-scan disqualifies the piped value for this
+/// same target (`mixed_storage_scan`'s `Pipe` arm resolves nothing here, so it falls to
+/// `disqualify_root`), so recording the alias here is what makes the two sides agree. The surface
+/// is narrow — the RFC gives the pipe no by-ref
 /// parameters and the known-signature path rejects one outright — but the conservatism must not
 /// depend on which call syntax reached the callee.
 #[test]
@@ -1488,13 +1489,53 @@ fn test_unresolved_pipe_target_arg_not_killable() {
 /// A resolved pipe signature is by-value by construction — `check_pipe_known_callable_call`
 /// rejects any `ref_params` entry with "Pipe operator does not support by-reference parameters"
 /// before it checks anything else — so the known path needs no aliasing of its own and must keep
-/// the kill and the retype it grants today.
+/// the kill and the retype it grants today. The MARKING side reaches the same conclusion for the
+/// same target (see `test_known_by_value_pipe_target_leaves_the_piped_value_markable`), so a known
+/// by-value pipe costs a local nothing on either side.
 #[test]
 fn test_pipe_conservatism_does_not_over_reach() {
     expect_no_error("<?php $a = 1; $r = $a |> strval(...); unset($a); $a = \"s\"; echo $a, $r;");
     expect_no_error("<?php $a = 1; $r = $a |> strval(...); $a = \"s\"; echo $a, $r;");
     expect_no_error(
         "<?php function g(callable $cb) { $a = 1; $b = 2; $r = $b |> $cb; unset($a); $a = \"s\"; echo $a, $r; }",
+    );
+}
+
+/// The same rule on the MARKING side: a pipe whose target is a known BY-VALUE function leaves the
+/// piped value an ordinary read, so a branch-divergent local keeps the boxed-mixed mark that the
+/// identical call written WITHOUT the pipe gets.
+///
+/// The pre-scan used to disqualify every piped value unconditionally, which cost this program its
+/// mark purely because of the call syntax: `echo $a |> strval(...);` failed with
+/// `cannot reassign $a from int to string` while `echo strval($a);` compiled. The `Pipe` arm now
+/// consults the same `callee_may_bind_arguments_by_ref` the ordinary call arm consults, so the two
+/// spellings agree.
+#[test]
+fn test_known_by_value_pipe_target_leaves_the_piped_value_markable() {
+    expect_no_error(
+        "<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a |> strval(...);",
+    );
+    // The symmetry control: the same operation without the pipe, which has always marked.
+    expect_no_error("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo strval($a);");
+}
+
+/// The conservative half of the `Pipe` arm, unchanged: a target the scan cannot resolve to a name
+/// with a signature still disqualifies the piped value, and so does a resolvable BY-REFERENCE one.
+///
+/// A `callable` parameter carries no signature here, so an unknown callee could bind the piped
+/// value by reference for the rest of the body — the divergent assignment stays the pre-feature
+/// hard error. The by-reference first-class callable is the arm that proves the new gate is the
+/// signature and not the syntax: same shape, same `strval(...)` spelling, different `ref_params`,
+/// and the checker rejects the pipe itself on top.
+#[test]
+fn test_unresolved_or_by_ref_pipe_target_still_disqualifies_the_piped_value() {
+    expect_error(
+        "<?php function g(callable $cb, int $n) { if ($n > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a |> $cb; }",
+        "cannot reassign $a from int to string",
+    );
+    expect_error(
+        "<?php function f(&$x) { $x = 1; return 1; } if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a |> f(...);",
+        "cannot reassign $a from int to string",
     );
 }
 

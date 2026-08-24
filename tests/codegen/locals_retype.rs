@@ -2218,3 +2218,45 @@ echo $a;"#;
     assert_eq!(compile_and_run(CLOSURE), "s");
     assert_eq!(compile_and_run(ENUM), "s");
 }
+
+/// A branch-divergent local piped into a known BY-VALUE target is MARKED, lowers, and runs — the
+/// pipe spelling and the plain call spelling are the same program.
+///
+/// The pre-scan's `Pipe` arm used to disqualify the piped value for every target, so this fixture
+/// failed to compile with `cannot reassign $a from int to string` while `echo strval($a);` — the
+/// identical operation — was boxed and ran. The arm now asks
+/// `callee_may_bind_arguments_by_ref` about a resolvable target exactly as the ordinary call arm
+/// does, so both spellings warn identically, are rejected identically under `--strict-locals`, and
+/// print PHP's answer (`ciao`, verified with `strval($a)` on php 8.4 — the pipe itself is 8.5
+/// syntax the reference interpreter here cannot parse). The heap-debug arm is the part the
+/// checker could not promise: the boxed value crosses a synthesized single-argument call, and a
+/// missing release there would be a leak rather than a diagnostic.
+#[test]
+fn test_marked_local_piped_into_a_known_by_value_target() {
+    const PIPED: &str =
+        "<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a |> strval(...);";
+    const PLAIN: &str = "<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo strval($a);";
+    const WARNING: &str = "$a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)";
+
+    for source in [PIPED, PLAIN] {
+        let warnings = check_files_diagnostics(&[("main.php", source)], "main.php", false)
+            .expect("the piped fixture must type-check");
+        assert_eq!(warnings, vec![WARNING.to_string()], "source: {source}");
+
+        let error = check_files_diagnostics(&[("main.php", source)], "main.php", true)
+            .expect_err("--strict-locals must reject the marked local either way");
+        assert!(
+            error.contains("cannot reassign $a"),
+            "expected the strict rejection for {source}, got: {error}"
+        );
+
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "program failed for {source}: {}", out.stderr);
+        assert_eq!(out.stdout, "ciao", "source: {source}");
+        assert!(
+            out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "expected a clean heap for {source}, got: {}",
+            out.stderr
+        );
+    }
+}

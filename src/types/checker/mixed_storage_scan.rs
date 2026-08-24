@@ -1085,9 +1085,32 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
             collect_expr(checker, class_name, depth, facts);
             collect_exprs(checker, args, depth, facts);
         }
-        // `$v |> $f` passes `$v` as `$f`'s single argument.
+        // `$v |> $f` passes `$v` as `$f`'s single argument, so the piped value is judged by the
+        // rule the ordinary call arm applies to an argument — through the SAME helper, so the two
+        // arms cannot drift: a callee that may bind it by reference disqualifies it, a known
+        // by-value callee leaves it an ordinary read that is still walked for nested writes.
+        // Deciding this by call SYNTAX instead cost `$v |> strval(...)` the mark that the identical
+        // `strval($v)` keeps.
+        //
+        // The only pipe target this scan can resolve is a first-class callable over a plain
+        // FUNCTION name: `fn_decls` and the builtin registry are keyed by name, so a callable
+        // variable (no signature until inference), a closure literal and a method/static-method
+        // first-class callable all stay conservative.
+        //
+        // Symmetric with the kill/retype side on every pipe class: `infer_pipe_type` records an
+        // unresolved-callee alias exactly on its signatureless fall-through, and every path that
+        // does resolve goes through `check_pipe_known_callable_call`, which rejects a by-reference
+        // parameter outright per the RFC.
         ExprKind::Pipe { value, callable } => {
-            disqualify_root(facts, value);
+            let target_is_known_by_value = match &callable.kind {
+                ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+                    !callee_may_bind_arguments_by_ref(checker, name)
+                }
+                _ => false,
+            };
+            if !target_is_known_by_value {
+                disqualify_root(facts, value);
+            }
             collect_expr(checker, value, depth, facts);
             collect_expr(checker, callable, depth, facts);
         }
