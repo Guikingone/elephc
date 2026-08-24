@@ -1175,11 +1175,13 @@ impl Checker {
         // are no `ref_params` to consult, and the piped value is the one argument such a callee
         // would bind. Recording it through the shared helper keeps this in step with the ordinary
         // unresolvable-callee sites and with the branch-divergent pre-scan, whose `Pipe` arm
-        // disqualifies the same operand under the same condition — it asks
-        // `callee_may_bind_arguments_by_ref` about a target it can resolve to a name and refuses
-        // every target it cannot, so the two sides agree on every pipe class. The KNOWN-signature
-        // paths above need nothing: `check_pipe_known_callable_call` rejects a by-reference
-        // parameter outright per the RFC.
+        // asks the same `callee_may_bind_arguments_by_ref` helper — so the two sides agree
+        // exactly on the `Function(name)` class. Targets this path resolves through
+        // `check_pipe_known_callable_call` (`Method`/`StaticMethod` first-class callables,
+        // closures with inferred signatures) stay permissive here while the pre-scan keeps them
+        // conservative; that residual asymmetry only ever withholds a mark, never a kill/retype
+        // the pre-scan would have allowed. The KNOWN-signature paths above need nothing:
+        // `check_pipe_known_callable_call` rejects a by-reference parameter outright per the RFC.
         self.record_unresolved_callee_argument_aliases(&synth_args);
         match &callable.kind {
             ExprKind::Closure { body, .. } => {

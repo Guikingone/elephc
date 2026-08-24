@@ -1097,10 +1097,15 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
         // variable (no signature until inference), a closure literal and a method/static-method
         // first-class callable all stay conservative.
         //
-        // Symmetric with the kill/retype side on every pipe class: `infer_pipe_type` records an
-        // unresolved-callee alias exactly on its signatureless fall-through, and every path that
-        // does resolve goes through `check_pipe_known_callable_call`, which rejects a by-reference
-        // parameter outright per the RFC.
+        // Symmetric with the kill/retype side for the `Function(name)` class this arm resolves:
+        // both sides read the same `ref_params` source, so a by-value function target marks AND
+        // stays killable/retypeable while a by-ref one refuses both. The other resolvable classes
+        // (`Method`/`StaticMethod` first-class callables, closures with inferred signatures) are
+        // NOT symmetric yet: `infer_pipe_type` resolves them through
+        // `check_pipe_known_callable_call` (kill/retype permissive, by-ref rejected per the RFC)
+        // while this arm keeps them conservative — the scan has no inference-time state to
+        // resolve them. Extending this match the way `ops.rs` resolves those targets is the
+        // natural closure of that residual gap; until then the cost is only a withheld mark.
         ExprKind::Pipe { value, callable } => {
             let target_is_known_by_value = match &callable.kind {
                 ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
