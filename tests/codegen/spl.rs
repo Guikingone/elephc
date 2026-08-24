@@ -30,6 +30,8 @@ mod redirects;
 mod exceptions;
 #[path = "spl/filesystem.rs"]
 mod filesystem;
+#[path = "spl/file_object_open.rs"]
+mod file_object_open;
 #[path = "spl/file_object_lines.rs"]
 mod file_object_lines;
 #[path = "spl/recursive.rs"]

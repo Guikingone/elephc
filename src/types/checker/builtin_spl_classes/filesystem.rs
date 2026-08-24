@@ -861,15 +861,71 @@ fn spl_file_object_construct_body(path: Expr, mode: Expr) -> Vec<Stmt> {
     spl_file_object_construct_body_with_backing(path.clone(), path, mode)
 }
 
+/// Suppresses a call's own diagnostics, so the caller can report the failure its own way.
+fn suppress_expr(value: Expr) -> Expr {
+    expr(ExprKind::ErrorSuppress(Box::new(value)))
+}
+
+/// The message php throws when a file object cannot open its stream.
+///
+/// The reason is approximated from `file_exists()`, the way `DirectoryIterator` already does:
+/// the synthesized body is PHP and has no `errno`, and `error_get_last()` — which would carry
+/// php's own text — is not implemented. The two reasons this distinguishes are the two that
+/// happen: a path that is not there, and one that is but cannot be opened. MEASURED on
+/// `php -n` 8.5.6 for both.
+fn spl_open_failure_message(backing_path: Expr) -> Expr {
+    binary_expr(
+        binary_expr(
+            binary_expr(
+                string_expr("SplFileObject::__construct("),
+                BinOp::Concat,
+                string_copy_expr(backing_path.clone()),
+            ),
+            BinOp::Concat,
+            string_expr("): Failed to open stream: "),
+        ),
+        BinOp::Concat,
+        expr(ExprKind::Ternary {
+            condition: Box::new(function_call("file_exists", vec![string_copy_expr(backing_path)])),
+            then_expr: Box::new(string_expr("Permission denied")),
+            else_expr: Box::new(string_expr("No such file or directory")),
+        }),
+    )
+}
+
 /// Builds SplFileObject initialization with separate logical and backing paths.
 fn spl_file_object_construct_body_with_backing(path: Expr, backing_path: Expr, mode: Expr) -> Vec<Stmt> {
     let mut body = vec![
+        // php refuses a DIRECTORY before it opens anything, and says so as a LogicException.
+        // elephc opened it, warned three times about bytes it could not read, and handed back a
+        // live object — MEASURED: `new SplFileObject(".")` threw in php and answered an object here.
+        if_stmt(
+            function_call("is_dir", vec![string_copy_expr(backing_path.clone())]),
+            vec![throw_stmt(new_object_expr(
+                "LogicException",
+                vec![string_expr("Cannot use SplFileObject with directories")],
+            ))],
+            None,
+        ),
         property_assign_stmt(this_expr(), "path", string_copy_expr(path.clone())),
         property_assign_stmt(this_expr(), "backingPath", string_copy_expr(backing_path.clone())),
+        // php opens the stream ITSELF and THROWS instead of warning. Suppressing the open is what
+        // removes the three warnings php never prints — `fopen()`, then `file()` on the same
+        // missing path, then `foreach` over the `false` that came back.
         property_assign_stmt(
             this_expr(),
             "stream",
-            function_call("fopen", vec![string_copy_expr(backing_path.clone()), mode]),
+            suppress_expr(function_call("fopen", vec![string_copy_expr(backing_path.clone()), mode])),
+        ),
+        // `new SplFileObject($p)` is php's way of saying "open this or fail loudly". elephc failed
+        // QUIETLY: the object came back with a `false` stream and every later call read nothing.
+        if_stmt(
+            binary_expr(file_stream_expr(), BinOp::StrictEq, bool_expr(false)),
+            vec![throw_stmt(new_object_expr(
+                "RuntimeException",
+                vec![spl_open_failure_message(backing_path.clone())],
+            ))],
+            None,
         ),
         property_assign_stmt(this_expr(), "fileClass", string_expr("SplFileObject")),
         property_assign_stmt(this_expr(), "infoClass", string_expr("SplFileInfo")),
@@ -886,19 +942,50 @@ fn spl_file_object_construct_body_with_backing(path: Expr, backing_path: Expr, m
     body
 }
 
-/// Builds statements that reload SplFileObject line storage from a filesystem path.
-fn file_object_load_lines_body(path: Expr) -> Vec<Stmt> {
+/// Builds statements that reload SplFileObject line storage from THE STREAM IT HOLDS.
+///
+/// Not from the path. `file($this->backingPath)` re-opened the file by name, and a stream that
+/// has no name to re-open — `php://memory`, `php://temp`, everything `SplTempFileObject` is built
+/// on — came back EMPTY every time. MEASURED on `php -n` 8.5.6: after `$t = new
+/// SplTempFileObject(); $t->fwrite("temp\n"); $t->rewind();`, php's `current()` answers
+/// `"temp\n"` and elephc answered `""` for `php://memory` and dropped the newline for a temp
+/// object — two different wrong answers from the same cause.
+///
+/// The read costs what `fgets()` costs, which is no longer the reason to avoid it: a 900 KB file
+/// of 100 000 lines went from 538 ms to 20 ms when the line reader learned to fill the stream's
+/// own buffer. The position is saved and restored, because reloading is not a seek the program
+/// asked for.
+fn file_object_load_lines_body(_path: Expr) -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "lines", empty_array_expr()),
-        foreach_stmt(
-            function_call("file", vec![path]),
-            None,
-            "line",
-            vec![property_array_push_stmt(this_expr(), "lines", var_expr("line"))],
+        assign_stmt("__splPos", function_call("ftell", vec![file_stream_expr()])),
+        expr_stmt(function_call("rewind", vec![file_stream_expr()])),
+        while_stmt(
+            binary_expr(
+                assign_expr("__splLine", function_call("fgets", vec![file_stream_expr()])),
+                BinOp::StrictNotEq,
+                bool_expr(false),
+            ),
+            vec![property_array_push_stmt(this_expr(), "lines", var_expr("__splLine"))],
         ),
+        expr_stmt(function_call(
+            "fseek",
+            vec![file_stream_expr(), var_expr("__splPos")],
+        )),
         spl_file_object_trailing_line_stmt(),
         spl_file_object_csv_refresh_stmt(),
     ]
+}
+
+/// Builds `$name = <value>` as an EXPRESSION, for a `while` that reads and tests in one step.
+fn assign_expr(name: &str, value: Expr) -> Expr {
+    expr(ExprKind::Assignment {
+        target: Box::new(var_expr(name)),
+        value: Box::new(value),
+        result_target: None,
+        prelude: Vec::new(),
+        conditional_value_temp: None,
+    })
 }
 
 /// Appends the FINAL empty line php's iteration yields, when the file has one.
