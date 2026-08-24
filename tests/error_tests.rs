@@ -27,6 +27,33 @@ fn check_source(src: &str) -> Result<(), String> {
 
 /// Like [`check_source`] but also applies conditional defines from `defines` before type-checking.
 fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> {
+    check_source_with_defines_and_options(src, defines, types::CheckOptions::default())
+}
+
+/// Like [`check_source`] but type-checks with `--strict-locals` semantics.
+///
+/// Mirrors the same frontend pipeline so the only difference a strict-mode assertion can
+/// observe is the `CheckOptions` handed to the checker.
+fn check_source_strict(src: &str) -> Result<(), String> {
+    check_source_with_defines_and_options(
+        src,
+        &[],
+        types::CheckOptions {
+            strict_locals: true,
+        },
+    )
+}
+
+/// The frontend pipeline (tokenize → parse → conditional → autoload → name-resolve → optimize →
+/// type-check) shared by every `check_source*` helper above, parameterized by the conditional
+/// defines and the `CheckOptions` the two callers otherwise hand-duplicated. Keeping ONE copy of
+/// this pipeline means [`check_source_with_defines`] and [`check_source_strict`] cannot drift out
+/// of step with each other — the full suite exercising both is the proof they still agree.
+fn check_source_with_defines_and_options(
+    src: &str,
+    defines: &[&str],
+    options: types::CheckOptions,
+) -> Result<(), String> {
     let tokens = tokenize(src).map_err(|e| e.message.clone())?;
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
@@ -45,31 +72,7 @@ fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> 
     // their own diagnostics reach this harness instead of a bare `Undefined function`.
     let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
-    types::check(&ast).map_err(|e| e.message.clone())?;
-    Ok(())
-}
-
-/// Like [`check_source`] but type-checks with `--strict-locals` semantics.
-///
-/// Mirrors the same frontend pipeline so the only difference a strict-mode assertion can
-/// observe is the `CheckOptions` handed to the checker.
-fn check_source_strict(src: &str) -> Result<(), String> {
-    let tokens = tokenize(src).map_err(|e| e.message.clone())?;
-    let ast = parse(&tokens).map_err(|e| e.message.clone())?;
-    let ast = elephc::conditional::apply(ast, &HashSet::new());
-    let ast = elephc::autoload::collect_aliases(ast);
-    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
-    let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
-    let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
-    let ast = elephc::optimize::fold_constants(ast);
-    types::check_with_options(
-        &ast,
-        elephc::types::CheckOptions {
-            strict_locals: true,
-        },
-    )
-    .map_err(|e| e.message.clone())?;
+    types::check_with_options(&ast, options).map_err(|e| e.message.clone())?;
     Ok(())
 }
 
