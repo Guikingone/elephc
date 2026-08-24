@@ -343,12 +343,15 @@ By default (permissive mode) an **untyped** local variable is allowed to
 change type during its lifetime in three shapes that would otherwise be a
 compile error:
 
-- **`unset()` kill.** `unset($a)` on a binding whose creating assignment sits
-  at conditional depth 0 — a straight-line statement, not nested inside any
-  `if`/loop/`try`/`switch`/…, which can occur anywhere in the body and not
-  only as its first statement — and never reference-aliased KILLS the
-  binding: a later read of `$a` is an `Undefined variable: $a` error, and a
-  later assignment binds `$a` fresh, at any type, with no warning. This is
+- **`unset()` kill.** `unset($a)` KILLS the binding when BOTH the binding's
+  creating assignment and the `unset($a)` call itself sit at conditional depth
+  0 — each a straight-line statement, not nested inside any
+  `if`/loop/`try`/`switch`/…. The creating assignment can occur anywhere in
+  the body, not only as its first statement; a CONDITIONAL `unset($a)` (one
+  itself nested inside a branch or loop) does not kill, since the branch may
+  never run. The name must also be never reference-aliased. A later read of a
+  killed `$a` is an `Undefined variable: $a` error, and a later assignment
+  binds `$a` fresh, at any type, with no warning. This is
   **mode-independent** — it behaves identically under `--strict-locals`.
 - **Straight-line retype.** A plain statement-form reassignment at the same
   eligibility (`$a = 0; $a = "ciao";`, and a compound form that parses as a

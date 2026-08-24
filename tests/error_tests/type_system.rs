@@ -1624,7 +1624,15 @@ fn test_unset_inside_try_leaves_the_pre_feature_error() {
 /// like an `if` with no `else`. Probed via `--check`: `$s = "heap" . $argc; try { $s =
 /// mightThrow($argc); } catch (...) {}`, where `mightThrow` returns `int`, stays the ordinary
 /// depth-gated hard error — whether the RHS can throw changes nothing the checker looks at. This
-/// shape never reaches lowering, so it is pinned here rather than as a codegen e2e fixture.
+/// LITERAL shape never reaches lowering, so it is pinned here rather than as a codegen e2e
+/// fixture.
+///
+/// This is not the last word on the underlying ownership risk, though: moving the depth-0 retype
+/// into a CALLEE and the `try` into the CALLER reaches a shape that DOES compile, because the
+/// retype is no longer nested inside the `try` at all — only the CALL that can throw is. See
+/// `codegen::locals_retype::test_retype_whose_throwing_rhs_unwinds_out_of_the_callee_frame` for
+/// the e2e fixture that pins the unwind-across-a-pending-release case this rejection alone would
+/// otherwise leave uncovered.
 #[test]
 fn test_retype_inside_try_with_throwing_rhs_stays_the_depth_gated_error() {
     expect_error(
@@ -2845,7 +2853,7 @@ fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
     }
 }
 
-/// Marking verification for a representative set of end-to-end fixtures in
+/// Marking verification for 28 of the 38 total `changes type from`-emitting end-to-end fixtures in
 /// `codegen::locals_retype` that claim the straight-line RETYPE path (shape 2: an incompatible
 /// depth-0 reassignment) — the mirror of
 /// `test_every_lowering_fixture_takes_the_mixed_storage_path` above, for `local_retype_sites`
@@ -2857,13 +2865,20 @@ fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
 /// `--check` before inclusion; the assertion is that the checker really recorded a retype site
 /// for it (and, since every one of these warns, that the warning fired too).
 ///
-/// One superficially similar fixture is deliberately NOT here:
-/// `codegen::locals_retype::test_string_incdec_local_retyped_to_int_still_increments_as_int`'s
-/// `$s = "a" . $argc; $s++; echo $s; $s = 5; $s++; echo $s;` was probed and neither warns nor
-/// records a retype site (even under `--strict-locals`, where it still compiles clean) — the `++`
-/// target marking (`CheckResult::string_incdec_locals`) makes the later `int` store a plain
-/// compatible merge rather than an incompatible retype, so it would itself be a vacuous entry
-/// here.
+/// The remaining 10 of the 38 are deliberately NOT here:
+/// - 9 are multi-file `require`-based fixtures (e.g.
+///   `test_two_different_names_retyped_at_one_position_both_take_effect`,
+///   `test_require_once_scopes_the_depth_rule_to_top_level_statements`), which
+///   `check_source_full` cannot exercise: it parses one in-memory string with no include
+///   resolution, so a fixture whose retype lives in a second `require`d file has no single-string
+///   form to probe here.
+/// - One superficially similar fixture is excluded on its merits, not on a harness limit:
+///   `codegen::locals_retype::test_string_incdec_local_retyped_to_int_still_increments_as_int`'s
+///   `$s = "a" . $argc; $s++; echo $s; $s = 5; $s++; echo $s;` was probed and neither warns nor
+///   records a retype site (even under `--strict-locals`, where it still compiles clean) — the
+///   `++` target marking (`CheckResult::string_incdec_locals`) makes the later `int` store a
+///   plain compatible merge rather than an incompatible retype, so it would itself be a vacuous
+///   entry here.
 #[test]
 fn test_every_lowering_fixture_takes_the_retype_path() {
     for source in [
@@ -2886,6 +2901,15 @@ fn test_every_lowering_fixture_takes_the_retype_path() {
         "<?php function w() { global $a; $a = 5; } $a = \"x\"; $a = 2; w(); echo $a;",
         "<?php\n$a = [1, $argc];\n$b = $argc;\n$b = $argc > 0 ? \"yes\" : \"no\";\n$a[0] = \"s\";\necho $b, \"|\", $a[0], \"|\", $a[1];",
         "<?php\nfunction probe(int $n): string {\n    $q = \"a\" . $n;\n    if ($n > 5) { echo \"x\"; }\n    $r = $q;\n    $q = 1;\n    return $r . \"|\" . $q;\n}\necho probe($argc);",
+        "<?php $a = $argc; $a = \"ciao\" . $argc; echo strlen($a), \"|\", $a;",
+        "<?php $a = \"n\" . $argc; $a = strlen($a); echo $a;",
+        "<?php $a = \"s\" . $argc; $a = [$a]; echo $a[0];",
+        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } else { echo \"y\"; } echo $q; $q = 1; echo \"|\", $q;",
+        "<?php $q = \"a\" . $argc; switch ($argc) { case 9: echo \"x\"; break; default: echo \"y\"; } echo $q; $q = 1; echo \"|\", $q;",
+        "<?php $q = \"a\" . $argc; try { echo \"t\"; } catch (Exception $e) { echo \"c\"; } echo $q; $q = 1; echo \"|\", $q;",
+        "<?php $n = $argc; if ($argc > 5) { echo \"x\"; } echo $n; $n = \"s\" . $argc; echo \"|\", $n;",
+        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } $q = 1; echo \"|\", $q;",
+        "<?php $v = $argc; $arr = [1, 2, 3]; foreach ($arr as $v) { } $v = \"ciao\" . $argc; echo $v;",
     ] {
         let result = check_source_full(source)
             .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{}", error.message, source));

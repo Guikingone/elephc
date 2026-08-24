@@ -662,10 +662,15 @@ fn test_bool_and_int_retype_merges_without_a_warning() {
     assert_eq!(out, "int(1)\n");
 }
 
-/// A `null`-typed binding is a WIDENING merge too, not the incompatible-retype shape, in either
-/// direction and whatever the second type is — `merged_assignment_type` special-cases `Void`
-/// (a bare `null`'s inferred type) to merge into whatever the other side is, so no warning fires
-/// and the checker accepts it mode-independently (probed under `--strict-locals` too).
+/// A `null`-typed binding is a WIDENING merge too, not the incompatible-retype shape, in both
+/// directions — but not by merging "into whatever the other side is" symmetrically.
+/// `merged_assignment_type` has two distinct `Void` arms: when the EXISTING binding is `null` (a
+/// bare `null`'s inferred `Void`), the merge takes the NEW value's type, so `$a = null; $a =
+/// $argc;` leaves `$a` checked as `int` going forward. When the value being ASSIGNED is `null`
+/// instead, the merge keeps the EXISTING type: `$c = $argc; $c = null;` leaves `$c` checked as
+/// `int` still — only the RUNTIME value is null, which is why the fixture below asserts
+/// `is_null($c)` rather than a type. Either way no warning fires and the checker accepts it
+/// mode-independently (probed under `--strict-locals` too).
 ///
 /// The middle case (`null` then a HEAP string) is pinned with `compile_and_run` only, on purpose:
 /// probing found it pays the same pre-existing "boxed-detach" leak described on
@@ -907,6 +912,40 @@ fn test_mixed_local_survives_a_thrown_and_caught_exception() {
     let out = compile_and_run_with_heap_debug(SOURCE);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "c|s1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The straight-line-retype counterpart of the fixture above: a heap value PENDING
+/// retype-release is live in a CALLEE frame when the RHS of the retype itself throws, and the
+/// unwind crosses into the caller's `try`.
+///
+/// `error_tests::type_system::test_retype_inside_try_with_throwing_rhs_stays_the_depth_gated_error`
+/// pins the shape the brief asked for literally (`try { $s = throws(); }`) as a rejection, because
+/// `try` raises conditional depth and the retype there never reaches lowering. But putting the
+/// depth-0 retype in a CALLEE and the `try` in the CALLER reaches a shape that DOES compile: the
+/// unwind crosses a frame whose slot still owns the pre-retype `"heap" . $n` string when the RHS
+/// call throws, before the retype's release/store pair ever runs. That is exactly the ownership
+/// risk item 3 exists to cover, so it is pinned here rather than left to the rejection alone.
+#[test]
+fn test_retype_whose_throwing_rhs_unwinds_out_of_the_callee_frame() {
+    const SOURCE: &str = "<?php\nfunction mightThrow(int $n): int { if ($n === 1) { throw new Exception(\"boom\"); } return $n; }\nfunction inner(int $n): int {\n    $s = \"heap\" . $n;\n    $s = mightThrow($n);\n    return $s;\n}\ntry { echo inner($argc); } catch (Exception $e) { echo \"caught|\"; }\necho \"done\";";
+
+    let warnings = check_files_diagnostics(&[("main.php", SOURCE)], "main.php", false)
+        .expect("the callee-retype/caller-catch fixture must type-check");
+    assert_eq!(
+        warnings,
+        vec![
+            "$s changes type from string to int; the previous value is discarded (compile with --strict-locals to make this an error)".to_string(),
+        ],
+    );
+
+    let out = compile_and_run_with_heap_debug(SOURCE);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "caught|done");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",
