@@ -293,15 +293,18 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     request_state::set_request(method, uri, path, query, headers, body, meta);
                     probe_route::trace_begin(req_traceparent.as_deref(), &probe_route);
                     probe_route::set(&probe_route);
-                    if profile_this {
-                        probe_route::profile_request(true);
-                    }
+                    // A signed header authorizes this request outright; without
+                    // one, offer the request anyway — the instrumentation starts
+                    // a slice only if something is waiting for one, which is how
+                    // `monitor <address> --exact` gets an answer without a second
+                    // way into the request path. The offer costs a call through a
+                    // slot and a flag read.
+                    probe_route::profile_request_kind(if profile_this { 1 } else { 2 });
                     let resp_body = run_handler(handler);
-                    if profile_this {
-                        // Ends and dumps this request's slice, so consecutive
-                        // profiled requests stay separate captures.
-                        probe_route::profile_request(false);
-                    }
+                    // Unconditional and idempotent: a request that started no
+                    // slice ends none, and consecutive profiled requests stay
+                    // separate captures.
+                    probe_route::profile_request_kind(0);
                     probe_route::clear();
                     let status = request_state::take_status();
                     let mut resp_headers = request_state::take_headers();
@@ -499,13 +502,20 @@ mod probe_route {
     /// question a dev build answers — for the one request that asked. That is the
     /// difference between "profiling is a dev thing" and "profiling is a thing you
     /// can do where the problem actually is".
-    pub fn profile_request(begin: bool) {
+    /// Brackets a request, saying WHY rather than only whether.
+    ///
+    /// `1` this request was authorized by a signed header, `2` offer it — start
+    /// a slice only if something is waiting for one — and `0` end whatever
+    /// started. The bridge cannot answer "is anyone waiting": that state lives in
+    /// the instrumentation, so it reports what it knows and lets the other side
+    /// decide.
+    pub fn profile_request_kind(kind: u32) {
         let addr = unsafe { std::ptr::addr_of!(elephc_instr_request_fn).read() };
         if addr == 0 {
             return;
         }
         let bracket = unsafe { std::mem::transmute::<usize, RequestFn>(addr) };
-        unsafe { bracket(u32::from(begin)) };
+        unsafe { bracket(kind) };
     }
 
     /// Opens the exact profiler's trace context for this request from the

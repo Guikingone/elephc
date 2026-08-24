@@ -729,16 +729,44 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 ///
 /// Ending dumps and clears, so consecutive profiled requests do not accumulate
 /// into each other — the bug that made `--web` report running totals.
+/// `1` starts a slice because the caller was authorized to ask; `2` starts one
+/// only if something is waiting for it; `0` ends whatever was started.
+///
+/// The three-way encoding is what lets the endpoint ask for an exact slice
+/// without a second channel into the request path. The web bridge cannot know
+/// whether anyone armed a capture — that state lives here — so it reports what
+/// it knows (`1` when the request carried a signed header, `2` otherwise) and
+/// this decides. The alternative was a new runtime slot for a single bit, in the
+/// area where a hardcoded symbol underscore once broke every Linux link.
+///
+/// `0` is unconditional and idempotent: a request that started no slice must not
+/// dump one, or an unprofiled request would end the previous one's capture.
 #[no_mangle]
 pub extern "C" fn elephc_instr_request(begin: u32) {
-    if begin != 0 {
-        STATE.with(|s| s.borrow_mut().reset());
-        switch_on();
-    } else {
-        ENABLED.store(false, Ordering::Relaxed);
-        elephc_instr_dump();
+    match begin {
+        1 | 2 => {
+            if begin == 2 && !CAPTURE_ARMED.load(Ordering::Relaxed) {
+                return;
+            }
+            STATE.with(|s| s.borrow_mut().reset());
+            SLICE_OPEN.store(true, Ordering::Relaxed);
+            switch_on();
+        }
+        _ => {
+            if !SLICE_OPEN.swap(false, Ordering::Relaxed) {
+                return;
+            }
+            ENABLED.store(false, Ordering::Relaxed);
+            elephc_instr_dump();
+        }
     }
 }
+
+/// Whether a slice is currently being recorded for one request.
+///
+/// The end call arrives on every request now, so it needs to know whether there
+/// was anything to end.
+static SLICE_OPEN: AtomicBool = AtomicBool::new(false);
 
 /// Reads the initial hook state from the environment, at program start.
 ///
@@ -1095,6 +1123,92 @@ pub extern "C" fn elephc_instr_exit(id: u32, allocs: u64, frees: u64) {
     STATE.with(|s| s.borrow_mut().exit_at(id, t, allocs, frees, io, w));
 }
 
+/// A slice someone asked to receive, rather than to read in the log.
+///
+/// `Some(None)` means armed and waiting; `Some(Some(text))` means the next dump
+/// filled it. `None` means nobody is waiting, which is the state that costs
+/// nothing: the dump checks one lock-free flag.
+static CAPTURE: Mutex<Option<Option<String>>> = Mutex::new(None);
+/// Whether anyone is waiting, so the dump path can tell without taking the lock.
+static CAPTURE_ARMED: AtomicBool = AtomicBool::new(false);
+
+/// Asks for the next slice to be handed back instead of only printed.
+///
+/// Idempotent: arming twice leaves one waiter, because two readers of the same
+/// slice would each get half an answer. The endpoint serializes its callers.
+#[no_mangle]
+pub extern "C" fn elephc_instr_capture_arm() {
+    if let Ok(mut slot) = CAPTURE.lock() {
+        if slot.is_none() {
+            *slot = Some(None);
+        }
+    }
+    CAPTURE_ARMED.store(true, Ordering::Relaxed);
+}
+
+/// Takes the captured slice, if one has been rendered since arming.
+///
+/// Copies at most `cap` bytes into `out` and returns the full length, so a
+/// caller that guessed too small learns by how much rather than receiving a
+/// silently truncated profile. Returns 0 when nothing has been captured yet.
+///
+/// # Safety
+/// `out` must point to at least `cap` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> usize {
+    let Ok(mut slot) = CAPTURE.lock() else {
+        return 0;
+    };
+    // Peek. The first version emptied the slot on every call, so the caller's
+    // "how long is it?" poll disarmed the capture it was waiting for and the
+    // slice could never arrive.
+    let Some(Some(text)) = slot.as_ref() else {
+        return 0;
+    };
+    let len = text.len();
+    if out.is_null() || cap < len {
+        // Report the size and keep the slice: a caller that guessed too small
+        // learns by how much rather than receiving a truncated profile.
+        return len;
+    }
+    std::ptr::copy_nonoverlapping(text.as_ptr(), out, len);
+    *slot = None;
+    CAPTURE_ARMED.store(false, Ordering::Relaxed);
+    len
+}
+
+/// Stops waiting, so a caller that gave up does not leave the next slice
+/// diverted to nobody.
+#[no_mangle]
+pub extern "C" fn elephc_instr_capture_cancel() {
+    CAPTURE_ARMED.store(false, Ordering::Relaxed);
+    if let Ok(mut slot) = CAPTURE.lock() {
+        *slot = None;
+    }
+}
+
+/// Hands a rendered slice to whoever armed the capture, if anyone did.
+///
+/// Returns whether it was taken, because the caller still has to decide about
+/// stderr: a slice asked for over the endpoint is an answer to a question, not
+/// a log line, and printing it as well would put one request's profile in the
+/// service's log every time someone looked.
+fn offer_capture(text: &str) -> bool {
+    if !CAPTURE_ARMED.load(Ordering::Relaxed) {
+        return false;
+    }
+    let Ok(mut slot) = CAPTURE.lock() else {
+        return false;
+    };
+    match slot.as_mut() {
+        Some(waiting @ None) => {
+            *waiting = Some(text.to_string());
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Writes the exact per-function table and edge list to stderr, one line each,
 /// then **clears the accumulators** so the next dump reports a fresh slice.
 ///
@@ -1121,9 +1235,13 @@ pub extern "C" fn elephc_instr_dump() {
         end_slice();
         return;
     }
-    let _ = std::io::stderr().write_all(render_trace().as_bytes());
-    let _ = std::io::stderr().write_all(text.as_bytes());
-    let _ = std::io::stderr().write_all(render_queries().as_bytes());
+    let slice = format!("{}{}{}", render_trace(), text, render_queries());
+    // Someone asked for this one over the endpoint: hand it over instead of
+    // logging it. Doing both would write a request's profile into the service's
+    // log every time an operator looked at it.
+    if !offer_capture(&slice) {
+        let _ = std::io::stderr().write_all(slice.as_bytes());
+    }
     if TRACE_ON.load(Ordering::Relaxed) {
         if let Some(path) = TRACE_PATH.lock().ok().and_then(|g| g.clone()) {
             STATE.with(|s| {

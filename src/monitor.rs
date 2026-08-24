@@ -55,6 +55,10 @@ pub(crate) struct MonitorCommand {
     /// Serve the live page over HTTP at this address instead of writing a file.
     pub serve: Option<String>,
     pub probe_key: Option<String>,
+    /// Ask a running service for its next EXACT slice rather than the sampled
+    /// ring. Only a `--web` service brackets requests, so this has an answer
+    /// there and reports its absence anywhere else.
+    pub exact: bool,
     /// Graphviz DOT call-graph export path.
     pub dot_out: Option<String>,
     /// Self-contained interactive HTML call-graph export path.
@@ -179,6 +183,7 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
     let mut baseline = None;
     let mut fail_on_regression = None;
     let mut probe_key = None;
+    let mut exact = false;
     let mut otlp = None;
     let mut prom_out = None;
     let mut dot_out = None;
@@ -230,6 +235,9 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
             }
             "--key" => {
                 probe_key = Some(it.next().ok_or("--key needs a file path")?.clone());
+            }
+            "--exact" => {
+                exact = true;
             }
             "--dot" => {
                 dot_out = Some(it.next().ok_or("--dot needs a file path")?.clone());
@@ -302,6 +310,7 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
         baseline,
         fail_on_regression,
         probe_key,
+        exact,
         otlp,
         prom_out,
         dot_out,
@@ -3589,10 +3598,16 @@ fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
         },
     };
     let nonce_c = probe_nonce();
+    let want = if cmd.exact {
+        elephc_probe::endpoint::WANT_EXACT
+    } else {
+        elephc_probe::endpoint::WANT_SAMPLED
+    };
     let folded = match elephc_probe::endpoint::wire::client_handshake_and_fetch(
         &mut stream,
         &key,
         &nonce_c,
+        want,
     ) {
         Ok(text) => text,
         Err(error) => {
@@ -3611,7 +3626,23 @@ fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
     );
     let display = folded_text_to_display(&folded);
     if display.is_empty() {
-        eprintln!("elephc monitor: the probe returned no samples yet — is the process busy?");
+        if cmd.exact {
+            // Say which shape of "nothing" this is. An exact slice is rendered
+            // by the process that RUNS the request, and under `--web` that is a
+            // forked worker, while this endpoint lives in the parent that
+            // accepted before forking. The sampled ring crosses that boundary
+            // because it is mapped MAP_SHARED; nothing else does yet.
+            eprintln!(
+                "elephc monitor: no exact slice arrived. A slice is rendered when a \
+                 profiled request completes IN THE PROCESS SERVING THE ENDPOINT — under \
+                 `--web` that is a forked worker, and the endpoint answers from the \
+                 parent, so `--exact` has no answer there yet. Use a signed \
+                 `X-Elephc-Query` header for one request's exact numbers, or drop \
+                 `--exact` for the sampled view, which does cross the fork."
+            );
+        } else {
+            eprintln!("elephc monitor: the probe returned no samples yet — is the process busy?");
+        }
         return 1;
     }
     if let Some(out_path) = &cmd.out {

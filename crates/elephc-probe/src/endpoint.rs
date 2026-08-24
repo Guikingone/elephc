@@ -20,6 +20,60 @@ use std::time::Duration;
 
 use crate::handshake::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
 
+/// Which answer the client is asking for, sent as one byte after its proof.
+///
+/// The two live in the same process behind the same key, so they are one
+/// protocol rather than two endpoints: an operator learns one address, and the
+/// server defends one handshake.
+pub const WANT_SAMPLED: u8 = b'S';
+/// The exact per-function slice, rendered by the instrumentation when the next
+/// one completes.
+pub const WANT_EXACT: u8 = b'E';
+
+/// How long the server waits for an exact slice to be rendered.
+///
+/// An exact slice exists only once something runs, so on an idle service there
+/// is nothing to hand over. Bounded and answered rather than blocking: a caller
+/// that waits forever cannot tell a quiet process from a broken one.
+const EXACT_WAIT: Duration = Duration::from_secs(30);
+
+extern "C" {
+    /// Asks the instrumentation to hand back the next slice. Always linked
+    /// beside this crate: `--with-monitoring` adds both bridges together and the
+    /// `--with-<name>` surface refuses to name either alone.
+    fn elephc_instr_capture_arm();
+    fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> usize;
+    fn elephc_instr_capture_cancel();
+}
+
+/// Arms the exact profiler and waits for the slice it renders next.
+///
+/// Polls rather than blocks on a condition variable: the producer is a PHP
+/// request finishing on another thread, in code that must not learn about this
+/// one. A slice arrives in milliseconds when traffic exists and never when it
+/// does not, and the poll costs one atomic read per interval.
+fn exact_slice() -> Option<String> {
+    unsafe { elephc_instr_capture_arm() };
+    let deadline = std::time::Instant::now() + EXACT_WAIT;
+    while std::time::Instant::now() < deadline {
+        let needed = unsafe { elephc_instr_capture_take(std::ptr::null_mut(), 0) };
+        if needed > 0 {
+            // The poll above reports the length and keeps the slice, so ask
+            // again with room. Only the second call consumes it.
+            let mut buffer = vec![0u8; needed];
+            let written = unsafe { elephc_instr_capture_take(buffer.as_mut_ptr(), needed) };
+            if written == 0 {
+                break;
+            }
+            buffer.truncate(written.min(needed));
+            return String::from_utf8(buffer).ok();
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    unsafe { elephc_instr_capture_cancel() };
+    None
+}
+
 /// Per-connection I/O timeout, so a stalled handshake ends rather than lasting
 /// forever. It BOUNDS a stall; `dispatch` is what keeps the stall off the accept
 /// thread. The timeout alone did not: a peer that connected and never sent its
@@ -264,6 +318,7 @@ pub mod wire {
         stream: &mut (impl Read + Write),
         key: &[u8; KEY_LEN],
         nonce_c: &[u8; NONCE_LEN],
+        want: u8,
     ) -> std::io::Result<String> {
         stream.write_all(nonce_c)?;
         stream.flush()?;
@@ -278,6 +333,7 @@ pub mod wire {
         }
         let client_tag = handshake::client_tag(key, &nonce_s, nonce_c);
         stream.write_all(&client_tag)?;
+        stream.write_all(&[want])?;
         stream.flush()?;
         let mut len_bytes = [0u8; 4];
         stream.read_exact(&mut len_bytes)?;
@@ -489,7 +545,13 @@ fn handle<S: std::io::Read + std::io::Write>(
     if !gate.authenticated() {
         return Ok(());
     }
-    let profile = crate::current_folded_profile().unwrap_or_default();
+    // Which answer was asked for. A client that says nothing gets the sampled
+    // ring, which is what every client did before this byte existed.
+    let want = wire::read_exact_vec(&mut stream, 1)?;
+    let profile = match want.first().copied() {
+        Some(WANT_EXACT) => exact_slice().unwrap_or_default(),
+        _ => crate::current_folded_profile().unwrap_or_default(),
+    };
     let (k_enc, k_mac) = handshake::session_keys(&key, &nonce_c, &nonce_s);
     let (sealed, payload_tag) = handshake::seal(&k_enc, &k_mac, profile.as_bytes());
     let bytes = sealed.as_slice();
@@ -824,7 +886,7 @@ mod tests {
             read_pos: 0,
             written: Vec::new(),
         };
-        let got = wire::client_handshake_and_fetch(&mut duplex, &key, &nonce_c).unwrap();
+        let got = wire::client_handshake_and_fetch(&mut duplex, &key, &nonce_c, WANT_SAMPLED).unwrap();
         assert_eq!(got, profile);
         // The client wrote nonce_c then the correct client_tag.
         assert_eq!(&duplex.written[..NONCE_LEN], &nonce_c);
@@ -849,7 +911,7 @@ mod tests {
             written: Vec::new(),
         };
         // Client holds the WRONG key: it must reject the server tag and not read a profile.
-        let err = wire::client_handshake_and_fetch(&mut duplex, &wrong, &nonce_c).unwrap_err();
+        let err = wire::client_handshake_and_fetch(&mut duplex, &wrong, &nonce_c, WANT_SAMPLED).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
