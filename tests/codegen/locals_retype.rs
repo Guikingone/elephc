@@ -2220,6 +2220,23 @@ fn test_eval_fragment_composes_with_strict_locals() {
     assert_eq!(caller_local, "z");
 }
 
+/// The REJECTION counterpart to `test_eval_fragment_composes_with_strict_locals`: drives the real
+/// `elephc` CLI (not a library-level `CheckOptions` replica) with `--strict-locals` on an
+/// incompatible depth-0 reassignment and asserts compilation fails with the hard reassign error.
+/// If `src/pipeline.rs` ever regressed to building `CheckOptions::default()` instead of threading
+/// the CLI flag, this is the only test in the suite that would catch it.
+#[test]
+fn test_strict_locals_rejects_via_real_cli() {
+    let stderr = compile_cli_file_with_flags_expect_failure(
+        "<?php\n$a = 1;\n$a = \"s\";\n",
+        &["--strict-locals"],
+    );
+    assert!(
+        stderr.contains("cannot reassign $a from int to string"),
+        "expected the strict reassign error, got: {stderr}"
+    );
+}
+
 /// A top-level ARRAY whose name some closure declares `global` must keep working.
 ///
 /// Widening `collect_global_var_names` to closure bodies moved such a name into `_eir_global_*`

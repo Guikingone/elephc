@@ -151,6 +151,32 @@ pub(crate) fn compile_cli_file_and_run_with_flags(source: &str, flags: &[&str]) 
     compile_cli_file_and_run_with_native_and_flags(source, &[], false, flags)
 }
 
+/// Compiles a CLI fixture with arbitrary compiler FLAGS and asserts compilation FAILS.
+///
+/// The real-CLI counterpart to `compile_cli_file_and_run_with_flags`: exercises the same
+/// `elephc` binary and argument-parsing path a REJECTION under a flag like `--strict-locals`
+/// actually goes through, rather than a library-level `CheckOptions` replica. Returns stderr.
+pub(crate) fn compile_cli_file_with_flags_expect_failure(source: &str, flags: &[&str]) -> String {
+    let dir = make_cli_test_dir("elephc_cli_test_fail");
+
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).unwrap();
+
+    let mut compile_cmd = elephc_cli_command(&dir);
+    for flag in flags {
+        compile_cmd.arg(flag);
+    }
+    compile_cmd.arg(&php_path);
+    let compile_out = compile_cmd.output().expect("failed to run elephc CLI");
+    assert!(
+        !compile_out.status.success(),
+        "elephc CLI unexpectedly succeeded"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    String::from_utf8(compile_out.stderr).unwrap()
+}
+
 /// Compiles and runs one CLI fixture with optional managed-PCRE2 project setup.
 fn compile_cli_file_and_run_with_native(
     source: &str,
