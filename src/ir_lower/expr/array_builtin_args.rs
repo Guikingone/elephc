@@ -308,7 +308,14 @@ fn create_by_ref_arg_locals(
             continue;
         };
         let declared = param.map(|param| crate::builtins::convert::type_spec_to_php(&param.ty));
-        create_by_ref_arg_local(ctx, name, declared.as_ref(), target);
+        // A callee that FILLS the caller's array needs one handed over, not the boxed null every
+        // other out-parameter starts as — and afterwards the local holds what it filled it with.
+        // Both halves are the same shared answer the checker binds its own view to.
+        let filled = crate::builtins::by_ref_fill::filled_array_arg_type(canonical, index);
+        create_by_ref_arg_local(ctx, name, declared.as_ref(), target, filled.clone());
+        if let Some(filled) = filled {
+            ctx.set_local_type(name, filled);
+        }
     }
 }
 

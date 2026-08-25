@@ -1380,6 +1380,42 @@ echo count($matches);
     );
 }
 
+/// Verifies `$matches` reads back correctly however the caller declared it.
+///
+/// Three shapes, because they took three different paths and only the last was right. An
+/// UNDECLARED `$matches` was created as the boxed null every out-parameter starts as, and the
+/// runtime — which fills the caller's array in place rather than replacing the slot — wrote
+/// through that cell as though it were an array: `var_dump($matches)` answered `bool(true)` and
+/// `count($matches)` was an uncaught `TypeError`. A `$m = []` one was a real array, but the
+/// lowering kept believing `array<never>`, so `count($m)` said 3 while every `$m[$i]` and every
+/// `foreach` value read `NULL` — right and wrong from one variable, in silence. MEASURED against
+/// `php -n` 8.5.6, which answers the same three strings for all three.
+#[test]
+fn ir_backend_preg_match_fills_matches_however_it_was_declared() {
+    let source = r#"<?php
+preg_match("/(a)?(b)/", "b", $undeclared);
+var_dump($undeclared[2], count($undeclared));
+$empty = [];
+preg_match("/(a)?(b)/", "b", $empty);
+var_dump($empty[2], count($empty));
+$typed = ["x"];
+preg_match("/(a)?(b)/", "b", $typed);
+var_dump($typed[2], count($typed));
+foreach ($undeclared as $key => $value) { echo $key, "=[", $value, "]"; }
+echo "\n";
+$missed = preg_match("/zzz/", "b", $nothing);
+var_dump($missed, $nothing);
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend_with_managed_pcre2("preg_match_matches_shapes", source),
+        "string(1) \"b\"\nint(3)\n\
+         string(1) \"b\"\nint(3)\n\
+         string(1) \"b\"\nint(3)\n\
+         0=[b]1=[]2=[b]\n\
+         int(0)\narray(0) {\n}\n"
+    );
+}
+
 /// Verifies `preg_replace_callback()` can call static string user callbacks.
 #[test]
 fn ir_backend_handles_preg_replace_callback_static_string() {
@@ -6887,7 +6923,13 @@ fn compile_and_run_ir_backend(name: &str, source: &str) -> String {
 /// Compiles a managed-PCRE2 fixture, runs its output binary, and returns stdout.
 fn compile_and_run_ir_backend_with_managed_pcre2(name: &str, source: &str) -> String {
     let run = compile_ir_backend_and_run_with_managed_pcre2(name, source, &[]);
-    assert!(run.status.success(), "IR backend binary failed for {name}");
+    assert!(
+        run.status.success(),
+        "IR backend binary failed for {name} ({}): stdout={} stderr={}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
     String::from_utf8(run.stdout).unwrap()
 }
 

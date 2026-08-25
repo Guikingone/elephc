@@ -16,6 +16,7 @@ pub mod semantics;
 pub mod spec;
 pub mod registry;
 pub mod docs;
+pub(crate) mod by_ref_fill;
 pub(crate) mod convert;
 mod requirements;
 mod array;

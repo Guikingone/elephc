@@ -295,11 +295,19 @@ impl Checker {
                 // The callee may mutate any reachable object; drop property narrowings. (The
                 // call's own argument checking above still saw them.)
                 Self::purge_property_narrowings(env);
-                if builtin_name.eq_ignore_ascii_case("preg_match") {
-                    if let Some(arg) = expanded_args.get(2) {
-                        if let Some(name) = output_variable(arg) {
-                            env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
-                        }
+                // A by-reference argument whose ARRAY the callee fills in place, rather than
+                // replacing the caller's slot. The type is the shared answer the LOWERING binds
+                // its own local to as well: the two keep separate maps, and when only this half
+                // knew, `count($matches)` said 3 while every `$matches[$i]` read NULL.
+                let canonical = php_symbol_key(builtin_name);
+                for (idx, arg) in expanded_args.iter().enumerate() {
+                    let Some(filled) =
+                        crate::builtins::by_ref_fill::filled_array_arg_type(&canonical, idx)
+                    else {
+                        continue;
+                    };
+                    if let Some(name) = output_variable(arg) {
+                        env.insert(name.clone(), filled);
                     }
                 }
                 // Bind each write-only by-ref argument to the type the builtin writes. Going

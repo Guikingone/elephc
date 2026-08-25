@@ -67,26 +67,41 @@ pub(super) fn create_by_ref_arg_locals(
             continue;
         };
         let declared = sig.params.get(index).map(|(_, ty)| ty.clone());
-        create_by_ref_arg_local(ctx, name, declared.as_ref(), arg);
+        create_by_ref_arg_local(ctx, name, declared.as_ref(), arg, None);
     }
 }
 
 /// Creates ONE by-reference argument's variable, in storage the callee can write through.
 ///
-/// The value is always PHP's null, because that is what the variable holds until the callee
+/// The value is usually PHP's null, because that is what the variable holds until the callee
 /// writes. The STORAGE follows the parameter's declared type: a `mixed` out-parameter — which
 /// is how every builtin with an out-parameter declares one, `stream_socket_server`'s
 /// `$error_code` and `$error_message` included — needs a boxed cell, and creating a bare null
 /// slot for it made the backend refuse with `by-ref string output written into a null slot`,
 /// taking `examples/udp-socket` and `examples/udg-socket` from wrong output to no output. An
 /// untyped user parameter keeps the plain null slot, which is what its caller reads back.
+///
+/// `filled` overrides that null, because SOME callees do not write a value into the caller's
+/// slot at all — they FILL the array the caller handed over, in place. `preg_match` is the one
+/// such builtin: MEASURED, `preg_match("/(a)?(b)/", "b", $matches)` on an undeclared `$matches`
+/// answered `bool(true)` where php answers the three-element array, because the boxed null cell
+/// was written through as though it were an array. The type is not decided here — it is the one
+/// shared answer `by_ref_fill` gives the checker too.
 pub(super) fn create_by_ref_arg_local(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     declared: Option<&PhpType>,
     arg: &Expr,
+    filled: Option<PhpType>,
 ) {
     if !ctx.local_name_is_undefined(name) {
+        return;
+    }
+    if let Some(filled) = filled {
+        let empty = Expr::new(ExprKind::ArrayLiteral(Vec::new()), arg.span);
+        let lowered = lower_expr(ctx, &empty);
+        ctx.set_local_type(name, filled.clone());
+        ctx.store_local(name, lowered, filled, Some(arg.span));
         return;
     }
     if matches!(declared, Some(PhpType::Mixed)) {
