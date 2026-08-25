@@ -13,11 +13,13 @@ use crate::parser::ast::{
     BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
     InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
 };
+use crate::span::Span;
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+mod binding_decisions;
 mod control;
 mod effect_analysis;
 mod effects;
@@ -25,6 +27,7 @@ mod fold;
 mod propagate;
 pub mod reachability;
 
+use binding_decisions::{with_local_binding_decision_spans, with_mixed_storage_locals};
 use control::*;
 use effect_analysis::{
     collect_instance_dispatch_metadata, compute_program_callable_effects, method_effect_key,
@@ -89,21 +92,38 @@ pub fn fold_constants(program: Program) -> Program {
 }
 
 /// Propagates scalar constants across statements and control flow.
+///
+/// `mixed_storage_locals` comes from `CheckResult::mixed_storage_local_names()`. It is a REQUIRED
+/// argument for the same reason `eliminate_dead_code`'s span set is: a caller that silently passed
+/// an empty set would re-enable substitution on a local the checker boxed, and the divergence
+/// surfaces as a compiler PANIC inside a checked builtin's lowering — nothing a reader would trace
+/// back to this call. The test tree shadows this with a no-set wrapper for hand-built ASTs.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
-pub fn propagate_constants(program: Program) -> Program {
-    PostTypecheckOptimizer::new(&program).propagate(program)
+pub fn propagate_constants(program: Program, mixed_storage_locals: HashSet<String>) -> Program {
+    PostTypecheckOptimizer::new(&program).propagate(program, mixed_storage_locals)
 }
 
 /// Normalizes control flow structures (ifs, switches, try/catch) for easier optimization.
+///
+/// `binding_decision_spans` is `CheckResult::local_binding_decision_spans()`, required for the same
+/// reason `eliminate_dead_code`'s is: this phase runs the single-case switch rewrite, which CLONES
+/// the default body into both branches of the synthesized `if`, and a caller that silently passed
+/// an empty set would let that clone hand one span-keyed checker decision to two statements.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
-pub fn normalize_control_flow(program: Program) -> Program {
-    PostTypecheckOptimizer::new(&program).normalize(program)
+pub fn normalize_control_flow(program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+    PostTypecheckOptimizer::new(&program).normalize(program, binding_decision_spans)
 }
 
 /// Prunes branches with constant conditions that cannot be reached.
+///
+/// `binding_decision_spans` is required here for the same reason as in `normalize_control_flow`:
+/// both phases run `control::prune_switch_stmt`, whose single-case rewrite clones statements.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
-pub fn prune_constant_control_flow(program: Program) -> Program {
-    PostTypecheckOptimizer::new(&program).prune(program)
+pub fn prune_constant_control_flow(
+    program: Program,
+    binding_decision_spans: HashSet<Span>,
+) -> Program {
+    PostTypecheckOptimizer::new(&program).prune(program, binding_decision_spans)
 }
 
 /// A fact the propagation environment records for a local variable.
@@ -196,7 +216,14 @@ impl PostTypecheckOptimizer {
     }
 
     /// Propagates constants while using the shared callable-effect summary.
-    pub fn propagate(&self, program: Program) -> Program {
+    ///
+    /// `mixed_storage_locals` is `CheckResult::mixed_storage_local_names()`: the locals the
+    /// checker's pre-scan compiled as boxed `mixed` frame storage. It is a REQUIRED argument for
+    /// the same reason `eliminate_dead_code`'s span set is — a caller that silently passed an
+    /// empty set would re-enable substitution on a boxed local, and the divergence surfaces as a
+    /// compiler PANIC in a checked builtin's fast path rather than as anything a reader would
+    /// connect back to this call.
+    pub fn propagate(&self, program: Program, mixed_storage_locals: HashSet<String>) -> Program {
         reset_reference_volatile();
         // Request superglobals are writable from any scope under `--web`, so they
         // can never carry propagated facts.
@@ -207,35 +234,69 @@ impl PostTypecheckOptimizer {
         // known-pure user callables stop clearing the environment. Substitution
         // into by-ref argument positions is masked by `propagate_args`, which
         // keeps those arguments lvalues.
-        with_callable_effect_analysis(&self.callable_effects, || {
-            with_by_ref_signatures(self.by_ref_signatures.clone(), || {
-                propagate_block(program, HashMap::new()).0
+        with_mixed_storage_locals(mixed_storage_locals, || {
+            with_callable_effect_analysis(&self.callable_effects, || {
+                with_by_ref_signatures(self.by_ref_signatures.clone(), || {
+                    propagate_block(program, HashMap::new()).0
+                })
             })
         })
     }
 
     /// Normalizes control flow using the shared callable-effect summary.
-    pub fn normalize(&self, program: Program) -> Program {
-        with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+    ///
+    /// Takes the same `binding_decision_spans` as `eliminate_dead_code` because this phase is the
+    /// SECOND cloning pass: `control::prune_switch_stmt` rewrites a single-case switch on a
+    /// non-scalar subject into an `if`, and the default body is materialized into BOTH branches
+    /// with its original spans. The spans let that rewrite veto itself; see
+    /// `control::switch::single_case_rewrite_would_clone_a_decision`.
+    pub fn normalize(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+        with_local_binding_decision_spans(binding_decision_spans, || {
+            with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+        })
     }
 
     /// Prunes constant control-flow branches using the shared callable-effect summary.
-    pub fn prune(&self, program: Program) -> Program {
-        with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+    ///
+    /// Installs `binding_decision_spans` for the same reason `normalize` does — the two phases run
+    /// the same `prune_block`, so the cloning switch rewrite is reachable from both.
+    pub fn prune(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+        with_local_binding_decision_spans(binding_decision_spans, || {
+            with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+        })
     }
 
     /// Eliminates dead code using the shared callable-effect summary.
-    pub fn eliminate_dead_code(&self, program: Program) -> Program {
-        with_callable_effect_analysis(&self.callable_effects, || {
-            with_by_ref_signatures(self.by_ref_signatures.clone(), || dce_block(program))
+    ///
+    /// `binding_decision_spans` is the union of the checker's three span-keyed local-binding
+    /// decision maps — `CheckResult::local_bind_kill_sites`, `local_retype_sites` and
+    /// `mixed_storage_store_sites`. A clone carries the original's span, so NO post-typecheck pass
+    /// may duplicate a node carrying one: it would hand a single checker decision to two syntactic
+    /// sites. DCE's tail-sinking is one of the two passes that clone (the single-case switch
+    /// rewrite reached from `normalize`/`prune` is the other); passing the spans in lets it keep
+    /// those statements singular. See `control::binding_decisions`.
+    pub fn eliminate_dead_code(
+        &self,
+        program: Program,
+        binding_decision_spans: HashSet<Span>,
+    ) -> Program {
+        with_local_binding_decision_spans(binding_decision_spans, || {
+            with_callable_effect_analysis(&self.callable_effects, || {
+                with_by_ref_signatures(self.by_ref_signatures.clone(), || dce_block(program))
+            })
         })
     }
 }
 
 /// Eliminates dead code for this module.
+///
+/// `binding_decision_spans` comes from `CheckResult::local_binding_decision_spans`. It is a
+/// REQUIRED argument rather than a default: a caller that silently passed an empty set would
+/// re-enable the tail-sinking clone of a decision-carrying statement, and the divergence would be
+/// invisible until the resulting program printed the wrong answer.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
-pub fn eliminate_dead_code(program: Program) -> Program {
-    PostTypecheckOptimizer::new(&program).eliminate_dead_code(program)
+pub fn eliminate_dead_code(program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+    PostTypecheckOptimizer::new(&program).eliminate_dead_code(program, binding_decision_spans)
 }
 
 /// Returns true when the named builtin can invoke user code through a callback

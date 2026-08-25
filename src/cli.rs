@@ -101,6 +101,7 @@ Modes:
   --web                   Compile as a prefork HTTP server
   --web-isolation MODE    worker (default) | pool | request; requires --web
   --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
+  --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning
 
 Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
@@ -182,6 +183,9 @@ pub(crate) struct CliConfig {
     /// Accept only PHP-compatible constructs: elephc extensions (`ptr`, `buffer<T>`,
     /// `packed class`, `extern`, `ifdef`, extension builtins) become compile errors.
     pub(crate) strict_php: bool,
+    /// Make an incompatible local retype (e.g. a variable assigned `int` then
+    /// later `string`) a compile error instead of a warning.
+    pub(crate) strict_locals: bool,
     pub(crate) web: bool,
     /// Process-isolation architecture baked into a `--web` executable.
     pub(crate) web_isolation: WebIsolation,
@@ -266,6 +270,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut extra_frameworks: Vec<String> = Vec::new();
     let mut defines: HashSet<String> = HashSet::new();
     let mut strict_php = false;
+    let mut strict_locals = false;
     let mut web = false;
     let mut web_isolation = WebIsolation::default();
     let mut web_isolation_explicit = false;
@@ -395,6 +400,8 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             ));
         } else if arg == "--strict-php" {
             strict_php = true;
+        } else if arg == "--strict-locals" {
+            strict_locals = true;
         } else if arg == "--web" {
             web = true;
         } else if arg == "--web-isolation" {
@@ -496,6 +503,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         extra_frameworks,
         defines,
         strict_php,
+        strict_locals,
         web,
         web_isolation,
         with_crates,
@@ -1019,6 +1027,22 @@ mod tests {
         let config = compile_config(&args);
         assert!(config.strict_php);
         assert!(config.defines.contains("FEATURE"));
+    }
+
+    /// Verifies `--strict-locals` sets the strict_locals flag on the parsed config.
+    #[test]
+    fn strict_locals_flag_sets_strict_locals() {
+        let args = vec!["elephc".into(), "--strict-locals".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(config.strict_locals);
+    }
+
+    /// Verifies the absence of `--strict-locals` defaults to permissive local retyping.
+    #[test]
+    fn no_strict_locals_flag_defaults_off() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(!config.strict_locals);
     }
 
     /// Verifies `--quiet` sets the quiet flag.

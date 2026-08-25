@@ -162,6 +162,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
         Op::UnsetLocal => lower_unset_local(ctx, &inst),
+        Op::ZeroLocalSlot => lower_zero_local_slot(ctx, &inst),
         Op::LoadRefCell => lower_load_ref_cell(ctx, &inst),
         Op::StoreRefCell => lower_store_ref_cell(ctx, &inst),
         Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),

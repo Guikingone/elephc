@@ -252,6 +252,7 @@ pub enum Op {
     LoadLocal,
     StoreLocal,
     UnsetLocal,
+    ZeroLocalSlot,
     LoadRefCell,
     StoreRefCell,
     PromoteLocalRefCell,
@@ -617,9 +618,8 @@ impl Op {
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
-            StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | FinallyEnter | FinallyExit => {
-                E::WRITES_LOCAL
-            }
+            StoreLocal | UnsetLocal | ZeroLocalSlot | StoreRefCell | ListUnpack | FinallyEnter
+            | FinallyExit => E::WRITES_LOCAL,
             PromoteLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
@@ -838,6 +838,7 @@ impl Op {
             LoadLocal => "load_local",
             StoreLocal => "store_local",
             UnsetLocal => "unset_local",
+            ZeroLocalSlot => "zero_local_slot",
             LoadRefCell => "load_ref_cell",
             StoreRefCell => "store_ref_cell",
             PromoteLocalRefCell => "promote_local_ref_cell",

@@ -44,7 +44,7 @@ use super::schema::{
     validate_deferred_declaration_defaults,
 };
 use super::yield_validation::validate_yield_contexts;
-use super::Checker;
+use super::{CheckOptions, Checker};
 
 mod declaration_metadata;
 mod externs;
@@ -77,11 +77,20 @@ use declaration_metadata::{
 ///
 /// Returns `Ok((Checker, TypeEnv))` on success or `Err(CompileError)` if any phase reports errors.
 /// The `Checker` carries resolved class/interface/enum/function metadata; `TypeEnv` holds the global type environment.
+/// `options` is copied onto the constructed `Checker` (e.g. `strict_locals`) before any phase runs.
 pub(super) fn check_types_impl(
     program: &Program,
     target_platform: Platform,
+    options: CheckOptions,
 ) -> Result<(Checker, TypeEnv), CompileError> {
     let mut checker = Checker::new(target_platform);
+    checker.strict_locals = options.strict_locals;
+    // Program-wide and computed once, BEFORE any body is walked: the top-level `unset` that has to
+    // consult it can sit textually above the `function w() { global $a; }` that makes the name
+    // program-global. Shared with EIR lowering's `all_global_var_names` so the two sides cannot
+    // drift — see `crate::global_decls`, whose preamble also records the measured reason the veto
+    // must NOT see further than lowering does.
+    checker.program_global_names = crate::global_decls::collect_global_var_names(program);
     let mut errors = Vec::new();
 
     errors.extend(validate_yield_contexts(program));
