@@ -51,6 +51,19 @@ pub(super) fn lower_referenced_builtin_spl_methods(
 /// Finds builtin SPL methods whose symbols are required by already-lowered EIR.
 pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, String)> {
     let mut methods = Vec::new();
+    // A DYNAMIC call — `$obj->$name()` — carries no method name for the walk below to read, so
+    // nothing was discovered and the dispatch ladder came up empty: MEASURED,
+    // `$info->$call()` over `["getFilename", "getSize"]` died with `callable array did not
+    // resolve to an invokable target` where php answers both. Calling each name STATICALLY first
+    // made the same loop work, which is what said the ladder is bounded by what was EMITTED.
+    //
+    // The widening is bounded by the classes the program CONSTRUCTS: a program with no dynamic
+    // invoke pays nothing, and one that has them pays only for the classes it built.
+    if module_has_dynamic_invoke(module) {
+        for class_name in constructed_builtin_spl_classes(module) {
+            push_every_supported_builtin_spl_method(&mut methods, module, &class_name);
+        }
+    }
     for function in module
         .functions
         .iter()
@@ -164,6 +177,80 @@ pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, St
         }
     }
     methods
+}
+
+/// Reports whether any function in the module invokes a callable whose target is decided at run
+/// time — `$obj->$name()`, `call_user_func([$obj, $name])`, and the closure forms.
+fn module_has_dynamic_invoke(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .any(|function| {
+            function
+                .instructions
+                .iter()
+                .any(|inst| matches!(inst.op, Op::CallableDescriptorInvoke))
+        })
+}
+
+/// Every builtin SPL class the module builds an instance of, parents included.
+fn constructed_builtin_spl_classes(module: &Module) -> Vec<String> {
+    let mut names = Vec::new();
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for inst in &function.instructions {
+            if !matches!(inst.op, Op::ObjectNew) {
+                continue;
+            }
+            let Some(class_name) = class_data_name(module, inst) else {
+                continue;
+            };
+            let mut current = Some(class_name);
+            while let Some(name) = current {
+                if !names.iter().any(|seen: &String| seen == name) {
+                    names.push(name.to_string());
+                }
+                current = module
+                    .class_infos
+                    .get(name)
+                    .and_then(|class_info| class_info.parent.as_deref());
+            }
+        }
+    }
+    names
+}
+
+/// Registers every method of `class_name` the backend can serve, for a ladder that cannot name
+/// the one it wants.
+fn push_every_supported_builtin_spl_method(
+    methods: &mut Vec<(String, String)>,
+    module: &Module,
+    class_name: &str,
+) {
+    let Some(class_info) = module.class_infos.get(class_name) else {
+        return;
+    };
+    let mut keys = class_info.methods.keys().cloned().collect::<Vec<_>>();
+    keys.sort();
+    for method_key in keys {
+        if is_supported_builtin_spl_method(class_name, &method_key) {
+            methods.push((class_name.to_string(), method_key));
+        }
+    }
 }
 
 /// Returns true when generic `new $class` can emit static metadata for this class.
