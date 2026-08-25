@@ -453,6 +453,8 @@ mod probe_route {
     type RequestFn = unsafe extern "C" fn(u32);
     type VerifyFn = unsafe extern "C" fn(*const u8, usize) -> u32;
 
+    /// The route-tagging function, or `None` when the slot is empty because the
+    /// binary was built without the probe.
     fn resolve() -> Option<SetRouteFn> {
         let addr = unsafe { std::ptr::addr_of!(elephc_probe_route_fn).read() };
         if addr == 0 {
@@ -542,6 +544,11 @@ mod probe_route {
     }
 }
 
+/// Runs one request's PHP handler and returns the response bytes it produced.
+///
+/// Resets the per-request capture state first, arms the execution-timeout
+/// watchdog around the blocking call when one is configured, and collects
+/// whatever the handler wrote.
 fn run_handler(handler: extern "C" fn()) -> Vec<u8> {
     request_state::set_capture(true);
     request_state::clear_body();

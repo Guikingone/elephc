@@ -1,7 +1,15 @@
-//! `elephc monitor`: handing a launched program its control channel, and finding the key
+//! Purpose:
+//! Hands a program `monitor` launches its control channel, and finds the build
+//! key that authorizes the request. Possession of the channel — an inherited
+//! socket on fd 3 — is the credential for a launched program, so there is
+//! nothing to copy, replay, or set from another shell.
 //!
-//! Moved out of a 5,379-line `monitor.rs` without a line of it changing, so
-//! the split can be read as a move rather than a rewrite.
+//! Called from:
+//! - `local::run`, before spawning the target.
+//!
+//! Key details:
+//! - The child end is inherited across the spawn; both ends close on drop.
+//! - The key comes from the `<binary>.key` sidecar, or an explicit override.
 
 use super::*;
 

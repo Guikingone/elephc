@@ -1562,6 +1562,10 @@ fn emit_counters_dump(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Emits the `--gc-stats` allocation summary to stderr.
+///
+/// Called from both the exit-based main epilogue and, under `--web`, the
+/// per-request handler epilogue — a server never reaches the former.
 fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
     ctx.emitter
         .comment("gc-stats: print allocation statistics to stderr");

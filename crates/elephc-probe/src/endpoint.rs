@@ -42,7 +42,11 @@ extern "C" {
     /// beside this crate: `--with-monitoring` adds both bridges together and the
     /// `--with-<name>` surface refuses to name either alone.
     fn elephc_instr_capture_arm();
+    /// Copies the rendered slice into `out` (at most `cap` bytes) and returns its
+    /// true length, which may exceed `cap`; 0 when no slice is waiting.
     fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> usize;
+    /// Disarms a rendezvous this thread armed, so a client that gave up waiting
+    /// does not leave the next request handing its profile to nobody.
     fn elephc_instr_capture_cancel();
 }
 
@@ -155,9 +159,13 @@ trait Connection: Send + Sync + 'static {
 }
 
 impl Connection for std::net::TcpStream {
+    /// Shuts the socket down in both directions, so a peer blocked in `read`
+    /// returns instead of holding the accept thread for the full timeout.
     fn interrupt(&self) {
         let _ = self.shutdown(std::net::Shutdown::Both);
     }
+    /// Restores the ordinary read/write deadlines on a connection that has
+    /// proven itself, which may legitimately take the whole window.
     fn allow_full_timeout(&self) {
         let _ = self.set_read_timeout(Some(IO_TIMEOUT));
         let _ = self.set_write_timeout(Some(IO_TIMEOUT));
@@ -165,9 +173,12 @@ impl Connection for std::net::TcpStream {
 }
 
 impl Connection for std::os::unix::net::UnixStream {
+    /// Shuts the socket down in both directions; same contract as the TCP one,
+    /// since the accept thread must not depend on which transport it got.
     fn interrupt(&self) {
         let _ = self.shutdown(std::net::Shutdown::Both);
     }
+    /// Restores the ordinary read/write deadlines once authority is proven.
     fn allow_full_timeout(&self) {
         let _ = self.set_read_timeout(Some(IO_TIMEOUT));
         let _ = self.set_write_timeout(Some(IO_TIMEOUT));
@@ -734,6 +745,7 @@ mod tests {
     }
 
     #[test]
+    /// A typo in ELEPHC_PROBE_ADDR must not cost the operator a file.
     fn a_regular_file_at_the_endpoint_path_is_never_removed() {
         let path = scratch("regular");
         std::fs::write(&path, b"an operator's config, named by a typo").unwrap();
@@ -749,6 +761,7 @@ mod tests {
     }
 
     #[test]
+    /// A link is judged as a link: neither it nor what it points at is removed.
     fn a_symlink_at_the_endpoint_path_is_refused_as_itself() {
         let target = scratch("symlink-target");
         let link = scratch("symlink");
@@ -766,6 +779,8 @@ mod tests {
     }
 
     #[test]
+    /// A socket that still accepts belongs to a running server, which would be
+    /// left holding a name nobody can reach.
     fn a_live_endpoint_is_not_stolen_from_the_process_serving_it() {
         let path = scratch("live");
         let name = path.to_str().unwrap().to_string();
@@ -784,6 +799,8 @@ mod tests {
     }
 
     #[test]
+    /// The case the guard must NOT refuse, or binding would never succeed after
+    /// a crash left its socket behind.
     fn a_stale_socket_is_what_the_guard_exists_to_remove() {
         let path = scratch("stale");
         let name = path.to_str().unwrap().to_string();
@@ -799,6 +816,7 @@ mod tests {
     }
 
     #[test]
+    /// Nothing to remove is success, not an error.
     fn a_free_name_is_already_what_bind_wants() {
         let path = scratch("absent");
         clear_stale_socket(path.to_str().unwrap())
@@ -806,14 +824,17 @@ mod tests {
     }
 
     #[no_mangle]
+    /// Stub: this crate's tests link without the instrumentation runtime.
     extern "C" fn elephc_instr_capture_arm() {}
 
     #[no_mangle]
+    /// Stub: no slice is ever waiting, which is the dormant case.
     extern "C" fn elephc_instr_capture_take(_out: *mut u8, _cap: usize) -> usize {
         0
     }
 
     #[no_mangle]
+    /// Stub: nothing was armed, so cancelling is a no-op.
     extern "C" fn elephc_instr_capture_cancel() {}
 
     /// A second exact request while one is running is told so, not served silence.
@@ -862,18 +883,22 @@ mod tests {
     }
 
     impl FakeConn {
+        /// Whether the accept loop shut this connection down.
         fn was_interrupted(&self) -> bool {
             self.interrupted.load(Ordering::Relaxed)
         }
+        /// Whether this connection was granted the full post-proof timeout.
         fn was_relaxed(&self) -> bool {
             self.relaxed.load(Ordering::Relaxed)
         }
     }
 
     impl Connection for FakeConn {
+        /// Records the shutdown instead of performing one.
         fn interrupt(&self) {
             self.interrupted.store(true, Ordering::Relaxed);
         }
+        /// Records the deadline relaxation instead of performing one.
         fn allow_full_timeout(&self) {
             self.relaxed.store(true, Ordering::Relaxed);
         }
@@ -1268,6 +1293,7 @@ mod tests {
     }
 
     #[test]
+    /// Authority is checked before a single profile byte is written.
     fn a_wrong_key_is_rejected_before_any_profile() {
         let real = [42u8; KEY_LEN];
         let wrong = [7u8; KEY_LEN];
@@ -1295,6 +1321,8 @@ mod tests {
     }
 
     impl Read for MockStream {
+        /// Serves the canned server frames, advancing a cursor; a short read at
+        /// the end is what a real stream does too.
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             let remaining = &self.to_read[self.read_pos..];
             let n = remaining.len().min(buf.len());
@@ -1305,10 +1333,12 @@ mod tests {
     }
 
     impl Write for MockStream {
+        /// Records everything the client sent, so a test can assert the wire order.
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             self.written.extend_from_slice(buf);
             Ok(buf.len())
         }
+        /// Nothing is buffered, so flushing always succeeds.
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }

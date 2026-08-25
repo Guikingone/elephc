@@ -1,7 +1,14 @@
-//! `elephc monitor`: turning measurements into something a person reads
+//! Purpose:
+//! Turns a capture into something a person reads: the per-function table, the
+//! cost breakdown, the live top-style frame, and the recommendations.
 //!
-//! Moved out of a 5,379-line `monitor.rs` without a line of it changing, so
-//! the split can be read as a move rather than a rewrite.
+//! Called from:
+//! - `local::run`, `remote::run` and `sampled::run`, at the end of a capture.
+//!
+//! Key details:
+//! - A hotspot is named only when it dominates, and an N+1 only when both the
+//!   call fan-out and the exact query counts say so.
+//! - Bars are a linear read of the percentage, so two reports compare by eye.
 
 use super::*;
 

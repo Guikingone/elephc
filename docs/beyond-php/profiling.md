@@ -1145,11 +1145,27 @@ sampled function makes inlining visible by difference.
   `exec()`/`proc_open`/`popen` (which fork first) are already safe.
 - **`--live` and `--attach` are macOS-only.** They read a process from the
   outside, which needs `/usr/bin/sample`; no equivalent ships on Linux. The
-  Linux answer is not a lesser profile, it is a better one: run the program with
-  `ELEPHC_PROBE_ADDR` set and read it with `elephc monitor <addr>`, which reaches
-  a live process, needs no external tool, and returns exact numbers rather than
-  sampled ones. Everything else — profiling a source, a binary, a service, the
-  assertions, the exports, `--stitch` — is platform-independent.
+  Linux answer needs no external tool: run the program with `ELEPHC_PROBE_ADDR`
+  set and read it with `elephc monitor <addr>`, which reaches a live process and
+  answers from the sample ring, or with `--exact` returns the measured
+  per-function table for one completed request. Everything else — profiling a
+  source, a binary, a service, the assertions, the exports, `--stitch` — is
+  platform-independent.
+- **A service answers from the ring by default; `--exact` measures one request.**
+  `elephc monitor <addr>` returns folded sampled stacks — shares that sharpen as
+  samples accumulate — and `--exact` arms the instrumentation and returns the
+  measured per-function table of the next request that completes. The exact
+  answer is that table alone: the exporters (Speedscope, pprof, DOT, HTML) render
+  the sampled capture, so `--exact` with `--out`, `--pprof`, `--dot` or `--html`
+  is refused rather than accepted and ignored. A program you launch is measured
+  throughout and exports everything.
+- **The sampled answer from a `--with-monitoring` binary carries no query
+  summary.** Both runtimes are linked, and the exact one claims the PDO I/O slots
+  on purpose — it attributes the same events per function through its shadow
+  stack, which strictly refines the sampler's per-route counts. The consequence
+  is that per-route SQL and I/O wait, which a probe-only binary would report, are
+  not in the sampled capture of a combined one. Ask for them with `--exact`, or
+  with a signed `X-Elephc-Query` header.
 - **Sampled captures are CPU-time only.** `--live` and `--attach` sample on the
   CPU-time timer, so time spent blocked on I/O is not attributed in those two
   modes. The exact profile measures wait time directly (see *CPU vs waiting*

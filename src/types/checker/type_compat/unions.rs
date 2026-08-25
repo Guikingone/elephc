@@ -196,6 +196,8 @@ impl Checker {
         }
     }
 
+    /// The type a slot holds after being assigned `new_ty` while holding
+    /// `existing` — the widening that a second write to one variable forces.
     pub(crate) fn merged_assignment_type(
         &self,
         existing: &PhpType,

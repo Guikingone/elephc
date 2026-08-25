@@ -1,7 +1,15 @@
-//! `elephc monitor`: running a target this process launched
+//! Purpose:
+//! Profiles a program `monitor` launches — a `.php` source (built first) or a
+//! binary. This is the measured path: the run is instrumented from inside, so
+//! every dimension is exact and every export is available.
 //!
-//! Moved out of a 5,379-line `monitor.rs` without a line of it changing, so
-//! the split can be read as a move rather than a rewrite.
+//! Called from:
+//! - `monitor::main`, when the target is a file rather than an address.
+//!
+//! Key details:
+//! - A binary without the capability is refused, not profiled approximately.
+//! - The control channel is established before the spawn; the program reads it
+//!   during its own init.
 
 use super::*;
 

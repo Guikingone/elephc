@@ -141,6 +141,7 @@ mod tests {
     }
 
     impl<'a> Reader<'a> {
+        /// Reads one base-128 varint from the cursor, advancing it.
         fn varint(&mut self) -> u64 {
             let mut value = 0u64;
             let mut shift = 0;
@@ -155,6 +156,8 @@ mod tests {
             }
         }
 
+        /// Reads the next protobuf field as (number, payload), or `None` at the
+        /// end of the buffer.
         fn next_field(&mut self) -> Option<(u64, Field<'a>)> {
             if self.pos >= self.data.len() {
                 return None;
@@ -179,6 +182,8 @@ mod tests {
         Bytes(&'a [u8]),
     }
 
+    /// Decompresses an encoded profile, since pprof output is gzipped and the
+    /// test decodes what it just produced.
     fn gunzip(data: &[u8]) -> Vec<u8> {
         let mut decoder = flate2::read::GzDecoder::new(data);
         let mut out = Vec::new();
@@ -187,6 +192,8 @@ mod tests {
     }
 
     #[test]
+    /// The encoder's output decodes as a valid pprof profile, and its stacks
+    /// are leaf-first — the order the format requires and readers assume.
     fn encodes_a_decodable_profile_with_leaf_first_stacks() {
         let stacks = vec![
             (vec!["main".to_string(), "hot".to_string()], 7u64),

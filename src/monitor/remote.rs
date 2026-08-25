@@ -1,7 +1,16 @@
-//! `elephc monitor`: reading a service through its endpoint
+//! Purpose:
+//! Reads a service already serving traffic, over its endpoint. Answers from the
+//! sample ring by default; `--exact` arms the instrumentation and returns the
+//! measured table for the next request that completes.
 //!
-//! Moved out of a 5,379-line `monitor.rs` without a line of it changing, so
-//! the split can be read as a move rather than a rewrite.
+//! Called from:
+//! - `monitor::main`, when the target parses as an address or a URL.
+//!
+//! Key details:
+//! - The mutual handshake proves both sides hold the build key before a byte of
+//!   profile crosses, and the payload is sealed under keys derived from it.
+//! - Over `https://` the certificate must validate against the system roots
+//!   first; the listener itself speaks the framed protocol, not TLS.
 
 use super::*;
 
@@ -48,6 +57,7 @@ pub(crate) struct RemoteTarget {
 }
 
 impl RemoteTarget {
+    /// `host:port`, the form the connect call and the diagnostics both want.
     fn authority(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }

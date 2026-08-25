@@ -135,6 +135,8 @@ pub(crate) struct CallGraph {
 }
 
 impl CallGraph {
+    /// This many samples as a percentage of the run, guarding the empty graph
+    /// so an export of nothing renders zeroes rather than dividing by zero.
     fn share(&self, samples: u64) -> f64 {
         100.0 * samples as f64 / self.total.max(1) as f64
     }
@@ -348,6 +350,8 @@ fn fmt_ns_short(ns: u64) -> String {
     }
 }
 
+/// Renders the graph as Graphviz DOT: one node per function, heat-coloured by
+/// self share, one edge per observed caller→callee pair.
 pub(crate) fn render_dot(graph: &CallGraph) -> String {
     let mut out = String::from("digraph elephc_callgraph {\n");
     out.push_str("  rankdir=TB;\n");
@@ -562,6 +566,8 @@ const HEAT_STOPS: [(f64, u8, u8, u8); 5] = [
     (1.0, 0xff, 0x00, 0x70),
 ];
 
+/// Interpolates the heat gradient at `heat` (clamped to 0..=1), returning the
+/// RGB triple between the two surrounding stops.
 fn heat_rgb(heat: f64) -> (u8, u8, u8) {
     let t = heat.clamp(0.0, 1.0);
     let mut i = 0;
@@ -2348,6 +2354,8 @@ const DATA = __DATA_JSON__;
 mod tests {
     use super::*;
 
+    /// A two-function graph with known shares, so an export's numbers can be
+    /// asserted literally rather than approximately.
     fn sample_graph() -> CallGraph {
         CallGraph {
             nodes: vec![
@@ -2391,6 +2399,8 @@ mod tests {
     }
 
     #[test]
+    /// The DOT export carries the nodes, the edges and the cost breakdown — a
+    /// graph without causes is a picture rather than a profile.
     fn dot_encodes_nodes_edges_and_causes() {
         let dot = render_dot(&sample_graph());
         assert!(dot.starts_with("digraph elephc_callgraph {"));
@@ -2401,6 +2411,8 @@ mod tests {
     }
 
     #[test]
+    /// Spans nest by parent and their bars scale within their own trace, so one
+    /// slow trace does not flatten every other one on the page.
     fn trace_html_nests_spans_and_scales_bars_within_a_trace() {
         let span = |service: &str, span_id: &str, parent: &str, ns: u64| TraceSpan {
             service: service.into(),
@@ -2505,6 +2517,8 @@ mod tests {
     }
 
     #[test]
+    /// Service and function names reach the page as text: they come from a
+    /// profiled program, and a page that renders them as markup is an injection.
     fn trace_html_escapes_service_and_function_names() {
         let html = render_trace_html(
             &[TraceSpan {
@@ -2527,6 +2541,8 @@ mod tests {
     }
 
     #[test]
+    /// The gradient hits its named stops exactly at both ends and at the gold
+    /// midpoint, so the colour scale means the same thing across reports.
     fn heat_ramps_over_the_elephc_gradient() {
         assert_eq!(heat_color(0.0), "#f2e9e4"); // cold: warm pale
         assert_eq!(heat_color(0.08), "#ffd900"); // gold stop
@@ -2537,6 +2553,8 @@ mod tests {
     }
 
     #[test]
+    /// The report is one file with its data inlined — it has to open from a
+    /// laptop with no network and no sibling assets.
     fn html_is_self_contained_and_embeds_data() {
         let html = render_html(&sample_graph(), "demo");
         assert!(html.starts_with("<!doctype html>"));
@@ -2556,6 +2574,8 @@ mod tests {
     }
 
     #[test]
+    /// A function named `</script>` must not close the embedded data block; the
+    /// escaping is what keeps a profiled program from writing the page.
     fn html_neutralizes_script_close_in_names() {
         let graph = CallGraph {
             nodes: vec![GraphNode {
@@ -2586,6 +2606,8 @@ mod tests {
     }
 
     #[test]
+    /// A multi-frame report carries every captured window and marks which one
+    /// is live, which is what the timeline scrubber navigates.
     fn multi_frame_embeds_every_frame_and_marks_live() {
         let g1 = sample_graph();
         let g2 = sample_graph();

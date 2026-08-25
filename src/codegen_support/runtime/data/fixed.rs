@@ -1573,6 +1573,9 @@ mod tests {
         found
     }
 
+    /// Collects every runtime `.comm` symbol the bridge crates declare, by
+    /// reading their sources — the test that holds the emitted set and the
+    /// declared set to each other.
     fn collect_extern_statics(dir: &std::path::Path, found: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;

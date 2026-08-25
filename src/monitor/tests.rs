@@ -1,4 +1,15 @@
-//! `elephc monitor`'s unit tests, moved whole out of `monitor.rs`.
+//! Purpose:
+//! The unit tests for `monitor`: parsing, accounting, rendering, exporting, the
+//! budget assertions, and the stitching.
+//!
+//! Called from:
+//! - `cargo test -p elephc --lib`, through `mod tests` in `monitor/mod.rs`.
+//!
+//! Key details:
+//! - Fixtures are canned captures with known numbers, so assertions are literal
+//!   rather than approximate.
+//! - Anything reaching a rendered page is asserted to arrive as text: the names
+//!   come from a profiled program and must not be able to write the page.
 
     /// A bare name that IS a local file becomes absolute, so the OS runs it
     /// rather than searching `PATH` and reporting it missing.
@@ -99,6 +110,9 @@
     fn exact_export_accounts_for_the_run_exactly_once() {
         use crate::call_graph::{CallGraph, GraphEdge, GraphNode};
 
+        /// A graph node with only the two time dimensions set; every other
+        /// metric is zero, so an assertion about time cannot be satisfied by
+        /// something else drifting.
         fn node(name: &str, inclusive: u64, exclusive: u64) -> GraphNode {
             GraphNode {
                 name: name.to_string(),
@@ -217,6 +231,7 @@
     fn bounding_the_export_does_not_cost_its_accounting() {
         use crate::call_graph::{CallGraph, GraphEdge, GraphNode};
 
+        /// Same fixture shape as the block above, in this module's compact form.
         fn node(name: &str, inclusive: u64, exclusive: u64) -> GraphNode {
             GraphNode {
                 name: name.to_string(), inclusive, exclusive, call_count: None,
@@ -291,6 +306,8 @@
     }
 
     #[test]
+    /// A key is 32 bytes of hex or nothing: a short, long, or non-hex value is
+    /// refused rather than silently truncated into a wrong credential.
     fn probe_key_hex_parses_and_rejects_malformed() {
         let key = parse_hex_key(
             "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
@@ -303,6 +320,8 @@
     }
 
     #[test]
+    /// The endpoint's folded wire text parses into the same display the local
+    /// sampler produces, so one renderer serves both.
     fn folded_endpoint_text_becomes_display_stacks() {
         let text = "elephc-probe: <native>;{main};grind 480\n\
                     elephc-probe: <native>;{main};grind;<native> 20\n\
@@ -347,6 +366,8 @@ Total number in stack (recursive counted multiple, when >=5):
 ";
 
     #[test]
+    /// dyld frames are dropped and depths rebased on the first program frame,
+    /// so the tree starts at the program rather than at the loader.
     fn parses_depths_and_addresses_from_decorated_prefixes() {
         let rows = parse_call_graph(REPORT);
         // dyld rows dropped, depths rebased on the first program frame.
@@ -367,6 +388,8 @@ Total number in stack (recursive counted multiple, when >=5):
     }
 
     #[test]
+    /// Self weights sum to each parent's count — the partition property the
+    /// whole display rests on.
     fn self_weights_partition_every_parent_count() {
         let rows = parse_call_graph(REPORT);
         let samples = build_samples(&rows);
@@ -605,6 +628,8 @@ Total number in stack (recursive counted multiple, when >=5):
     }
 
     #[test]
+    /// A service log is mostly not profiles; slices are cut on the trace line
+    /// and everything else is passed over rather than misparsed.
     fn slices_split_on_the_trace_line_and_ignore_other_log_output() {
         let log = format!(
             "starting up\n{}{}",
@@ -622,6 +647,8 @@ Total number in stack (recursive counted multiple, when >=5):
     }
 
     #[test]
+    /// Spans nest by parent id, and one whose parent never arrived stays a root
+    /// instead of being dropped — a partial trace is still worth reading.
     fn stitch_nests_spans_by_parent_and_keeps_orphans_as_roots() {
         let mk = |service: &str, chunk: String| Slice {
             service: service.to_string(),
@@ -643,6 +670,8 @@ Total number in stack (recursive counted multiple, when >=5):
     }
 
     #[test]
+    /// Two addresses on one line accumulate; an address the dSYM could not place
+    /// leaves both the counts and the denominator, so shares stay honest.
     fn line_attribution_sums_weights_and_drops_unresolvable_addresses() {
         // Two addresses on the same line accumulate; one address the dSYM could
         // not place is excluded from the counts AND from the denominator.
@@ -663,6 +692,7 @@ Total number in stack (recursive counted multiple, when >=5):
     }
 
     #[test]
+    /// Query shapes are parsed and ordered by count, so the N+1 leads.
     fn parses_instrument_query_lines_hottest_first() {
         let dump = "\
 elephc-instr: get_user calls=200 incl_ns=100 excl_ns=10 incl_allocs=0 excl_allocs=0 incl_io=200 excl_io=0
@@ -686,6 +716,7 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
     }
 
     #[test]
+    /// Emitted symbol names map back to what the programmer wrote.
     fn demangles_php_symbols() {
         assert_eq!(demangle("main"), "{main}");
         assert_eq!(demangle("fn_hot_u_leaf"), "hot_leaf");
@@ -696,6 +727,8 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
     }
 
     #[test]
+    /// Runtime helpers are named as costs; PHP functions are left alone, since
+    /// a user function is not a 'cause' of anything.
     fn causes_translate_helpers_and_ignore_php() {
         assert_eq!(cause_for("_rt_mixed_from_value"), Some("Mixed cell boxing"));
         assert_eq!(cause_for("_rt_heap_alloc"), Some("heap allocation"));
@@ -706,6 +739,8 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
     }
 
     #[test]
+    /// A helper's cost is charged to the PHP function that caused it, not to the
+    /// helper — which is what makes the breakdown actionable.
     fn why_table_attributes_causes_to_the_php_owner() {
         let rows = parse_call_graph(REPORT);
         let samples = build_samples(&rows);
@@ -744,6 +779,7 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
     }
 
     #[test]
+    /// The bar is a linear read of the percentage, including both extremes.
     fn bars_scale_with_the_percentage() {
         assert_eq!(bar(0.0, 10), "░░░░░░░░░░");
         assert_eq!(bar(50.0, 10), "█████░░░░░");
@@ -753,6 +789,8 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
     }
 
     #[test]
+    /// The note explaining merged processes appears when processes were merged,
+    /// and not otherwise — an unconditional caveat teaches readers to skip it.
     fn multi_process_note_appears_only_when_merging() {
         let rows = parse_call_graph(REPORT);
         let samples = build_samples(&rows);
@@ -762,6 +800,8 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
     }
 
     #[test]
+    /// A live frame carries the delta against the previous window, which is what
+    /// makes the top-style display readable while it moves.
     fn live_frame_tracks_trends_between_windows() {
         let rows = parse_call_graph(REPORT);
         let samples = build_samples(&rows);
@@ -796,6 +836,8 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
     }
 
     #[test]
+    /// Declaration ranges are found for both functions and methods, so a sample
+    /// landing anywhere inside one is attributed to it.
     fn decl_ranges_cover_functions_and_methods() {
         let source = "<?php
 function hot_leaf(int $n): int {
@@ -826,6 +868,8 @@ echo call_hot(1);
     }
 
     #[test]
+    /// A sample landing on a line owned by another function grows a virtual
+    /// frame for it, which is how inlined callees stay visible.
     fn inlined_frame_is_injected_from_a_foreign_line() {
         // main sampled on a line owned by call_hot's range grows a virtual frame.
         let mut samples = vec![(
@@ -873,6 +917,8 @@ echo call_hot(1);
         assert!(table.contains("100.0%"), "{table}");
     }
 
+    /// A small exact call graph parsed from a canned instrumentation dump,
+    /// shared by the tests that render or export one.
     fn instr_graph() -> crate::call_graph::CallGraph {
         use crate::call_graph::{CallGraph, GraphEdge, GraphNode};
         let node = |name: &str, incl, excl, calls, ai, ae| GraphNode {
@@ -904,6 +950,8 @@ echo call_hot(1);
     }
 
     #[test]
+    /// Budget assertions parse in the documented form and evaluate against a
+    /// capture, including the case that fails.
     fn parses_and_evaluates_assertions() {
         assert_eq!(
             parse_assert("calls:leaf<=1000"),
@@ -1005,6 +1053,8 @@ echo call_hot(1);
     }
 
     #[test]
+    /// The recommendation names the function that actually dominates, rather
+    /// than the first row or the deepest one.
     fn recommends_the_hotspot() {
         let out = instrument_recommendations(&instr_graph());
         assert!(out.contains("leaf is the hotspot"), "{out}");

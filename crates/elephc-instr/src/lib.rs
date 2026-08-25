@@ -307,6 +307,10 @@ impl State {
             .find(|throw| throw.depth == at)
     }
 
+    /// Grows the per-function accumulator vector so `id` indexes into it.
+    ///
+    /// Ids are dense and assigned at compile time, so a vector indexed by id
+    /// beats a map on the hot path; this is the one place that pays for it.
     fn ensure(&mut self, id: u32) {
         let idx = id as usize;
         if idx >= self.fns.len() {
@@ -1485,6 +1489,7 @@ fn ticks_to_ns(ticks: u64) -> u64 {
 struct IdHasher(u64);
 
 impl std::hash::Hasher for IdHasher {
+    /// Folds arbitrary bytes in, for completeness rather than for use.
     fn write(&mut self, bytes: &[u8]) {
         // Not expected — the derived Hash for (u32, u32) calls write_u32 — but a
         // Hasher must accept bytes, and silently hashing nothing would collapse
@@ -1494,10 +1499,14 @@ impl std::hash::Hasher for IdHasher {
         }
     }
 
+    /// The path that actually runs: packs the two `u32`s of a `(caller, callee)`
+    /// key into one word, losing nothing, since an edge is exactly 64 bits.
     fn write_u32(&mut self, value: u32) {
         self.0 = (self.0 << 32) | u64::from(value);
     }
 
+    /// Mixes the packed pair so adjacent ids do not land in adjacent buckets —
+    /// dense compile-time ids would otherwise cluster hard.
     fn finish(&self) -> u64 {
         let mut x = self.0;
         x ^= x >> 33;
@@ -1512,6 +1521,7 @@ struct BuildIdHasher;
 
 impl std::hash::BuildHasher for BuildIdHasher {
     type Hasher = IdHasher;
+    /// A fresh hasher per lookup; the state is one word, so this is free.
     fn build_hasher(&self) -> IdHasher {
         IdHasher(0)
     }
@@ -2748,6 +2758,8 @@ mod tests {
     fn a_route_round_trips_through_the_trace_line() {
         // The decoder that ships in `monitor`, restated here so this crate can
         // test the pair without depending on the compiler crate.
+        /// Decodes the wire escaping, restated from `monitor` so the pair can be
+        /// tested here without depending on the compiler crate.
         fn decode(value: &str) -> Vec<u8> {
             let bytes = value.as_bytes();
             let mut out = Vec::with_capacity(bytes.len());
@@ -2797,6 +2809,8 @@ mod tests {
     use super::*;
 
     #[test]
+    /// The base case: a callee's time is inclusive in its caller and excluded
+    /// from that caller's self.
     fn simple_parent_child_accounting() {
         let mut s = State::default();
         // Timestamps then allocation counters. a=main, b=child.
@@ -2832,6 +2846,8 @@ mod tests {
     }
 
     #[test]
+    /// Inclusive time is credited at the OUTERMOST activation, so a recursive
+    /// function does not accumulate its own nested time repeatedly.
     fn recursion_does_not_double_count() {
         let mut s = State::default();
         s.enter_at(0, 0, 0, 0, 0, 0);
@@ -2849,6 +2865,8 @@ mod tests {
     }
 
     #[test]
+    /// An exit for a frame below the top closes the frames above it, which is
+    /// how the stack recovers from an unwind it never saw.
     fn exit_resyncs_past_unwound_frames() {
         let mut s = State::default();
         s.enter_at(0, 0, 0, 0, 0, 0); // a
@@ -3088,6 +3106,8 @@ mod tests {
     }
 
     #[test]
+    /// The dump carries both per-function metrics and caller→callee edges, in
+    /// the exact line shapes `monitor` parses.
     fn render_lists_metrics_and_edges() {
         let _serial = ticks_are_nanoseconds();
         let mut s = State::default();
@@ -3105,6 +3125,8 @@ mod tests {
     }
 
     #[test]
+    /// Retained objects go negative for a function that frees what it did not
+    /// allocate, and still partition — clamping at zero would hide a release.
     fn retained_is_signed_and_partitions_like_the_other_dimensions() {
         let _serial = ticks_are_nanoseconds();
         // `cleanup` frees more than it allocates (it releases what main built),
@@ -3128,6 +3150,8 @@ mod tests {
     }
 
     #[test]
+    /// W3C `traceparent` parsing: a well-formed header continues its trace, and
+    /// anything malformed is refused rather than half-read.
     fn traceparent_accepts_valid_headers_and_rejects_everything_else() {
         let good = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
         assert_eq!(
@@ -3190,6 +3214,8 @@ mod tests {
     }
 
     #[test]
+    /// A request joins its caller's trace when one arrives, and starts a fresh
+    /// one when nothing usable does — never an island either way.
     fn trace_begin_continues_a_valid_trace_and_starts_one_otherwise() {
         let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         let hdr = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
@@ -3224,6 +3250,8 @@ mod tests {
     }
 
     #[test]
+    /// Each request is its own slice: without the reset the second request on a
+    /// worker reported the first one's calls and time as well.
     fn reset_makes_each_dump_a_fresh_slice() {
         let _serial = ticks_are_nanoseconds();
         // Two identical "requests" on one worker. Without the reset the second
@@ -3289,6 +3317,8 @@ mod tests {
     }
 
     #[test]
+    /// Past the depth cap the frames already on the stack stay exact; what is
+    /// beyond it is dropped rather than corrupting what is below.
     fn overflowing_the_shadow_stack_keeps_the_frames_it_did_hold() {
         let mut s = State::default();
         // id 0 wraps everything and must survive intact.
@@ -3331,6 +3361,8 @@ mod tests {
     }
 
     #[test]
+    /// Self time divides into CPU and blocked-in-the-driver wait, so a slow
+    /// function is legible as slow code or as a slow query.
     fn wait_splits_self_time_into_cpu_and_io() {
         // `query` spends 80 of its 100ns blocked in the driver; `compute` runs
         // 50ns of pure CPU. Wait is attributed like every other dimension, so
@@ -3355,6 +3387,9 @@ mod tests {
     }
 
     #[test]
+    /// Literals collapse to `?` so repeated queries aggregate into one shape,
+    /// while table and column names survive — a shape with no identifiers
+    /// names nothing.
     fn normalize_query_folds_literals_but_keeps_identifiers() {
         // String and numeric literals become ?, so an N+1 aggregates.
         assert_eq!(
@@ -3387,6 +3422,8 @@ mod tests {
     static ENABLED_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
+    /// Statements sharing a shape accumulate into one row with a count, which
+    /// is what turns two hundred identical selects into a visible N+1.
     fn instr_query_aggregates_by_shape() {
         // Recording is gated on having been asked, so a test that does not ask
         // measures the gate rather than the aggregation.
@@ -3453,6 +3490,8 @@ mod tests {
     }
 
     #[test]
+    /// The timeline parses as the Chrome/Perfetto trace format, with matched
+    /// begin/end phases — a viewer rejects the file otherwise.
     fn chrome_trace_is_well_formed() {
         let _serial = ticks_are_nanoseconds();
         // Spans in ns; base is the min enter. Complete ('X') events, µs.
@@ -3473,6 +3512,8 @@ mod tests {
     }
 
     #[test]
+    /// Quotes, backslashes and control characters are escaped, so a PHP
+    /// function name cannot break the trace file that carries it.
     fn json_escape_handles_specials() {
         assert_eq!(json_escape("a\"b\\c"), "a\\\"b\\\\c");
         assert_eq!(json_escape("x\ny"), "x\\ny");

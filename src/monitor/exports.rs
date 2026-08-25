@@ -1,7 +1,14 @@
-//! `elephc monitor`: Speedscope, pprof, DOT, HTML, OTLP and Prometheus
+//! Purpose:
+//! Writes a capture out in the formats other tools read: Speedscope JSON, pprof,
+//! Graphviz DOT, and the self-contained HTML call graph.
 //!
-//! Moved out of a 5,379-line `monitor.rs` without a line of it changing, so
-//! the split can be read as a move rather than a rewrite.
+//! Called from:
+//! - `local::run` and `sampled::run`, after a capture is rendered.
+//!
+//! Key details:
+//! - Every export is one file with nothing to fetch: a report has to open on a
+//!   laptop with no network.
+//! - The exporters consume weighted stacks, so an exact graph is flattened first.
 
 use super::*;
 

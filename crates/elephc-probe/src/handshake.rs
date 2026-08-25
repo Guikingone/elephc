@@ -360,6 +360,8 @@ mod tests {
 
     // NIST SHA-256 known-answer vectors.
     #[test]
+    /// The digest is checked against FIPS 180-4's published vectors — a
+    /// hand-rolled SHA-256 is worth exactly what its vectors say it is.
     fn sha256_matches_known_vectors() {
         assert_eq!(
             hex(&sha256(b"")),
@@ -373,6 +375,8 @@ mod tests {
 
     // RFC 4231 HMAC-SHA256 test case 2.
     #[test]
+    /// HMAC is checked against RFC 4231, including the over-long key case
+    /// that exercises the pre-hash branch.
     fn hmac_matches_rfc4231() {
         let tag = hmac_sha256(b"Jefe", b"what do ya want for nothing?");
         assert_eq!(
@@ -382,6 +386,8 @@ mod tests {
     }
 
     #[test]
+    /// Both proofs verify under the right key and fail under any other, which
+    /// is the whole credential: possession, never transmission.
     fn mutual_handshake_accepts_the_matching_key_and_rejects_others() {
         let key = [7u8; KEY_LEN];
         let nonce_c = [1u8; NONCE_LEN];
@@ -400,6 +406,8 @@ mod tests {
     }
 
     #[test]
+    /// The public fingerprint is a function of the key alone, so an operator
+    /// can confirm which build answered without learning the key.
     fn fingerprint_is_stable_and_key_dependent() {
         let a = fingerprint(&[1u8; KEY_LEN]);
         assert_eq!(a.len(), 8);
@@ -407,6 +415,7 @@ mod tests {
         assert_ne!(a, fingerprint(&[2u8; KEY_LEN]));
     }
 
+    /// Decodes a hex test vector into bytes.
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
     }

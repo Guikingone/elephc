@@ -114,6 +114,8 @@ mod tests {
     }
 
     #[test]
+    /// A key override is 32 bytes of hex or it is refused: a short or non-hex
+    /// value must not become a silently different credential.
     fn malformed_override_is_rejected() {
         assert!(parse_hex_key("tooshort").is_none());
         assert!(parse_hex_key(&"zz".repeat(32)).is_none());

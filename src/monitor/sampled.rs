@@ -1,7 +1,17 @@
-//! `elephc monitor`: the sampler's ring, and the summaries drawn from it
+//! Purpose:
+//! The sampled path: `--live` and `--attach`, which read a process from the
+//! outside through `/usr/bin/sample`, and the folded-stack parsing shared with
+//! the endpoint's sampled answer.
 //!
-//! Moved out of a 5,379-line `monitor.rs` without a line of it changing, so
-//! the split can be read as a move rather than a rewrite.
+//! Called from:
+//! - `monitor::main` for `--live`/`--attach`.
+//! - `remote::run`, to parse what a service's ring returned.
+//!
+//! Key details:
+//! - macOS-only, because no equivalent external sampler ships on Linux; the
+//!   Linux answer is the endpoint.
+//! - Sampled shares sharpen as samples accumulate and carry real noise; time
+//!   spent blocked on I/O is not attributed on the CPU-time timer.
 
 use super::*;
 

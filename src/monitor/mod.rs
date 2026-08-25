@@ -434,6 +434,9 @@ pub(crate) struct ControlChannel {
 }
 
 impl Drop for ControlChannel {
+    /// Closes both ends. The child end is inherited across the spawn, so
+    /// leaking either would leave the profiled program holding a channel
+    /// nobody reads.
     fn drop(&mut self) {
         unsafe {
             libc::close(self.parent);

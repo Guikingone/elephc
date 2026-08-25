@@ -119,10 +119,16 @@ files keep their extension-enabled profile. See
 Compiled programs profile at the PHP level, with **one command that does not
 change with the environment**. Build with `--with-monitoring` and `elephc
 monitor` reads the binary you ran, or the service already serving traffic at
-`https://host:9411` — same command, same numbers. What it reports is *measured*,
-not sampled: exact time, allocations, retained objects, I/O wait, SQL queries and
-call counts, so an N+1 is a certainty rather than a suspicion, and a profile taken
-in production says the same kind of thing as one taken on a laptop. The capability
+`https://host:9411`.
+
+A program you *launch* is measured from inside: exact time, allocations, retained
+objects, I/O wait, SQL queries and call counts, so an N+1 is a certainty rather
+than a suspicion. A service you *connect to* answers from its sample ring by
+default — CPU-time shares, sharp enough to name a hotspot — and `elephc monitor
+<addr> --exact` returns the measured per-function table for one completed request,
+which is the same kind of answer a laptop run gives. A `--web` service also
+answers a signed `X-Elephc-Query` header, which measures that one request exactly
+and leaves the rest untouched. The capability
 is dormant until asked, and asking takes the build key — a control channel for a
 program you launch, a mutual handshake for one you connect to, a signed
 `X-Elephc-Query` header for a single production request. A project's performance

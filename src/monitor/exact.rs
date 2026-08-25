@@ -1,7 +1,16 @@
-//! `elephc monitor`: the exact per-function capture and what it asserts
+//! Purpose:
+//! The exact per-function capture: parsing an instrumentation dump into a call
+//! graph, flattening it into stacks for the exporters, and evaluating the
+//! project's performance budget against it.
 //!
-//! Moved out of a 5,379-line `monitor.rs` without a line of it changing, so
-//! the split can be read as a move rather than a rewrite.
+//! Called from:
+//! - `local::run` for a program monitor launched.
+//! - `remote::run` when `--exact` asked a service for one request's slice.
+//!
+//! Key details:
+//! - `elephc-instr: note:` lines carry no metrics and are skipped by the parser;
+//!   the reason they carry is surfaced by the caller.
+//! - Self times partition the root's inclusive, in every dimension.
 
 use super::*;
 
@@ -558,6 +567,11 @@ pub(crate) fn inject_inlined_frames(
 // --probe-host: connect to a running probe endpoint
 // --------------------------------------------------------------------------
 
+/// Flattens an exact call graph into weighted leaf-first stacks.
+///
+/// The exporters consume stacks, not graphs, so a measured capture is walked
+/// from its roots and each path is emitted with the self weight of its leaf.
+/// Edges naming a node outside the graph are skipped rather than trusted.
 pub(crate) fn exact_stacks(graph: &crate::call_graph::CallGraph) -> Vec<(Vec<(String, Kind)>, u64)> {
     let mut children: Vec<Vec<(usize, u64)>> = vec![Vec::new(); graph.nodes.len()];
     let mut incoming: Vec<u64> = vec![0; graph.nodes.len()];

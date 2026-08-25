@@ -41,6 +41,8 @@ pub(crate) struct OtlpSpan {
     pub string_attributes: Vec<(String, String)>,
 }
 
+/// Appends `value` as a protobuf base-128 varint, seven bits per byte with the
+/// high bit marking continuation.
 fn put_varint(out: &mut Vec<u8>, mut value: u64) {
     loop {
         let byte = (value & 0x7f) as u8;
@@ -53,12 +55,15 @@ fn put_varint(out: &mut Vec<u8>, mut value: u64) {
     }
 }
 
+/// Appends a length-delimited (wire type 2) field: tag, length, then bytes.
 fn put_bytes(out: &mut Vec<u8>, field: u64, payload: &[u8]) {
     put_varint(out, (field << 3) | 2);
     put_varint(out, payload.len() as u64);
     out.extend_from_slice(payload);
 }
 
+/// Appends a varint field, omitting it entirely when zero — proto3 treats an
+/// absent field and its default as the same thing, and emitting both is waste.
 fn put_varint_field(out: &mut Vec<u8>, field: u64, value: u64) {
     if value == 0 {
         return; // proto3 default — omitted
@@ -108,6 +113,7 @@ fn key_value_int(key: &str, value: i64) -> Vec<u8> {
     kv
 }
 
+/// Encodes one OTLP `KeyValue` whose `AnyValue` is a string.
 fn key_value_str(key: &str, value: &str) -> Vec<u8> {
     let mut any = Vec::new();
     // AnyValue.string_value = 1
@@ -118,6 +124,8 @@ fn key_value_str(key: &str, value: &str) -> Vec<u8> {
     kv
 }
 
+/// Encodes one `Span`: trace and span ids as raw bytes (not hex text), the
+/// parent when there is one, name, timestamps and attributes.
 fn encode_span(span: &OtlpSpan) -> Vec<u8> {
     let mut out = Vec::new();
     put_bytes(&mut out, 1, &hex_bytes(&span.trace_id));
@@ -235,6 +243,7 @@ pub(crate) fn post_traces(endpoint: &str, body: &[u8]) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// One span with W3C-shaped ids, the fixture the encoder tests decode back.
     fn span() -> OtlpSpan {
         OtlpSpan {
             service: "gateway".into(),

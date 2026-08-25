@@ -56,6 +56,8 @@ fn restrict_to_owner(path: &std::path::Path) -> std::io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
 }
 
+/// Runs the backend half of a build: emit the assembly, assemble it, and link
+/// the result against the runtime and whichever bridge crates were requested.
 pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     let BackendInputs {
         filename,

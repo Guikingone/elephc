@@ -743,6 +743,11 @@ fn coercible_or_throw_stmt(
     )
 }
 
+/// Lowers the thunk that `new $class(...)` calls when the class is only known
+/// at run time.
+///
+/// The thunk pads the call with the constructor's declared defaults for the
+/// arguments the site did not provide, which a dynamic call site cannot know.
 pub(crate) fn lower_dynamic_constructor_thunk(
     class_name: &str,
     class_info: &ClassInfo,

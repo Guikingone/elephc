@@ -1183,6 +1183,8 @@ mod tests {
     static ROUTE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
+    /// An address resolves to the symbol whose range contains it, and one past
+    /// the last function resolves to `<native>` rather than to that function.
     fn symbolize_uses_start_ranges_and_the_end_sentinel() {
         let symbols = vec![
             (0x1000, "main"),
@@ -1357,6 +1359,8 @@ mod tests {
     }
 
     #[test]
+    /// An unsigned, stale, or wrongly-signed header turns nothing on: asking
+    /// to profile production is a privileged act.
     fn only_a_signed_query_enables_profiling() {
         let key = [7u8; handshake::KEY_LEN];
         let published: Vec<u8> = key.to_vec();
@@ -1401,6 +1405,8 @@ mod tests {
     }
 
     #[test]
+    /// I/O events are counted, not sampled — a driver call fires exactly one,
+    /// so the per-route figure is exact even in a sampled capture.
     fn io_events_are_counted_exactly_per_route() {
         // Shares REGION and CURRENT_ROUTE with the other route tests, and cargo
         // runs tests in parallel; without this they trample each other.
@@ -1444,6 +1450,8 @@ mod tests {
     }
 
     #[test]
+    /// Past the route table's capacity samples are recorded untagged rather
+    /// than attributed to whatever route happened to hash there.
     fn route_table_overflow_returns_untagged() {
         let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut region = vec![0u8; REGION_BYTES];

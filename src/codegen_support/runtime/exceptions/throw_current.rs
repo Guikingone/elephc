@@ -61,6 +61,11 @@ fn emit_instr_throw_hook(emitter: &mut Emitter) {
     emitter.label(skip);
 }
 
+/// Emits the runtime helper that throws the exception in the current slot.
+///
+/// x86_64 takes its own path: the two architectures differ in which register
+/// carries the helper's single argument, which is not a detail the shared
+/// body can paper over.
 pub fn emit_throw_current(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_throw_current_linux_x86_64(emitter);
@@ -126,6 +131,8 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{Platform, Target};
 
+    /// The helper's assembly for one platform/arch pair, so a test can assert
+    /// on what each target actually emits.
     fn emitted(platform: Platform, arch: Arch) -> String {
         let mut emitter = Emitter::new(Target::new(platform, arch));
         emit_throw_current(&mut emitter);

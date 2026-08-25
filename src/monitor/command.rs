@@ -1,7 +1,15 @@
-//! `elephc monitor`: parsing the command line and the project budget file
+//! Purpose:
+//! Parses `elephc monitor`'s arguments into a `MonitorCommand`, and carries the
+//! help text. Combinations that cannot be honoured are refused here rather than
+//! discovered later — an accepted flag that writes nothing is worse than an error.
 //!
-//! Moved out of a 5,379-line `monitor.rs` without a line of it changing, so
-//! the split can be read as a move rather than a rewrite.
+//! Called from:
+//! - `monitor::main`, on the raw argument list.
+//!
+//! Key details:
+//! - `--exact` cannot be combined with the exporters: an exact remote answer is
+//!   the per-function table, and the exports render the sampled capture.
+//! - `--serve` needs `--live` and `--html`, since it serves the live graph.
 
 use super::*;
 
@@ -88,9 +96,14 @@ to read, and monitor says so and stops rather than quietly returning less. The
 capability is dormant until asked: a monitored binary run on its own behaves and
 prints exactly like one built without it.
 
-What comes back is an exact per-function profile — inclusive and self time, call
-counts, allocations, retained bytes, SQL queries and I/O wait — not an estimate,
-and the same numbers whichever of the four targets above produced them.
+A program monitor LAUNCHES (a source or a binary) is measured from inside: an
+exact per-function profile — inclusive and self time, call counts, allocations,
+retained bytes, SQL queries and I/O wait — not an estimate, with every export.
+
+A service monitor CONNECTS to answers from its sample ring: CPU-time shares that
+sharpen as samples accumulate. Add --exact for the measured per-function table of
+the next request that completes; that answer is the table alone, so --exact
+cannot be combined with --out, --pprof, --dot or --html.
 
 --live refreshes the table window after window, top-style, until the target
 exits (or Ctrl-C). --attach reads an already-running local process; child worker

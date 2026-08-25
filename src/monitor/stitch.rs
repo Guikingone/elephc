@@ -1,7 +1,15 @@
-//! `elephc monitor`: correlating several services' slices into traces
+//! Purpose:
+//! Correlates per-request slices from several service logs into span trees, so a
+//! profile joins the distributed trace its caller already belongs to.
 //!
-//! Moved out of a 5,379-line `monitor.rs` without a line of it changing, so
-//! the split can be read as a move rather than a rewrite.
+//! Called from:
+//! - `monitor::main`, for `--stitch <log>...`.
+//!
+//! Key details:
+//! - Grouped by W3C trace id and nested by parent span; a span whose parent never
+//!   arrived stays a root rather than being dropped.
+//! - A slice records its duration but not its start time, so the view compares
+//!   durations rather than placing spans on a shared axis.
 
 use super::*;
 
@@ -215,6 +223,11 @@ pub(crate) fn service_summary(slices: &[Slice]) -> String {
     out
 }
 
+/// Renders correlated slices as span trees, one section per trace id.
+///
+/// Slices arrive from separate service logs with no shared clock, so they are
+/// grouped by trace and nested by parent; a span whose parent never arrived
+/// stays a root rather than being dropped.
 pub(crate) fn stitch_report(slices: &[Slice]) -> String {
     use std::collections::BTreeMap;
     let mut by_trace: BTreeMap<&str, Vec<&Slice>> = BTreeMap::new();
