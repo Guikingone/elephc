@@ -240,6 +240,12 @@ fn spl_file_object_properties() -> Vec<ClassProperty> {
         protected_storage_property("enclosure", TypeExpr::Str),
         protected_storage_property("escape", TypeExpr::Str),
         protected_storage_property("maxLineLen", TypeExpr::Int),
+        // What a `seek()` past the last line left behind. php's `seek()` walks the stream line by
+        // line, so a seek to or beyond the end consumes the read-ahead and the object reports
+        // `valid() === false` afterwards even though `key()` names a line. MEASURED on a
+        // four-line file (five elements): `seek(4)` answers key 4, current `""`, valid FALSE;
+        // `seek(99)` answers key 4, current FALSE, valid FALSE. 0 = neither happened.
+        protected_storage_property("seekState", TypeExpr::Int),
         // READ_CSV records, and whether they still describe `lines` under the current controls.
         // A RECORD is not a line: a quoted field may hold newlines, so one record can span
         // several entries of `lines`, and the mapping has to be built once rather than guessed
@@ -291,6 +297,47 @@ fn recursive_caching_iterator_properties() -> Vec<ClassProperty> {
     vec![storage_property("recursiveInner", named_type("RecursiveIterator"))]
 }
 
+/// Which of php's two wordings a failing `SplFileInfo` getter uses.
+#[derive(Clone, Copy)]
+enum SplStatKind {
+    /// `stat failed for <path>` — every getter that follows symlinks.
+    Stat,
+    /// `Lstat failed for <path>` — `getType()`, which does not.
+    Lstat,
+}
+
+/// Builds a stat-backed `SplFileInfo` getter that THROWS when the file is not there.
+///
+/// php refuses to answer these at all for a path it cannot stat: MEASURED on `php -n` 8.5.6, all
+/// nine raise `RuntimeException: SplFileInfo::<name>(): stat failed for <path>` — `getType()`
+/// with `Lstat` instead. elephc answered `0` or `false` in silence, so a program that trusted
+/// `getSize()` got a size of zero for a file that was not there.
+fn spl_file_info_stat_getter_body(name: &str, builtin: &str, kind: SplStatKind) -> Vec<Stmt> {
+    let tail = match kind {
+        SplStatKind::Stat => "(): stat failed for ",
+        SplStatKind::Lstat => "(): Lstat failed for ",
+    };
+    vec![
+        assign_stmt(
+            "__splStat",
+            suppress_expr(function_call(builtin, vec![file_path_arg_expr()])),
+        ),
+        if_stmt(
+            binary_expr(var_expr("__splStat"), BinOp::StrictEq, bool_expr(false)),
+            vec![throw_stmt(new_object_expr(
+                "RuntimeException",
+                vec![binary_expr(
+                    string_expr(&format!("SplFileInfo::{name}{tail}")),
+                    BinOp::Concat,
+                    file_path_arg_expr(),
+                )],
+            ))],
+            None,
+        ),
+        return_stmt(var_expr("__splStat")),
+    ]
+}
+
 /// Builds SplFileInfo methods.
 fn spl_file_info_methods() -> Vec<ClassMethod> {
     vec![
@@ -316,15 +363,60 @@ fn spl_file_info_methods() -> Vec<ClassMethod> {
             return_body(function_call("basename", vec![file_path_arg_expr(), var_expr("suffix")])),
         ),
         method_with_body("getPathname", Vec::new(), Some(TypeExpr::Str), return_body(file_path_expr())),
-        method_with_body("getPerms", Vec::new(), Some(mixed_type()), return_body(function_call("fileperms", vec![file_path_arg_expr()]))),
-        method_with_body("getInode", Vec::new(), Some(mixed_type()), return_body(function_call("fileinode", vec![file_path_arg_expr()]))),
-        method_with_body("getSize", Vec::new(), Some(TypeExpr::Int), return_body(function_call("filesize", vec![file_path_arg_expr()]))),
-        method_with_body("getOwner", Vec::new(), Some(mixed_type()), return_body(function_call("fileowner", vec![file_path_arg_expr()]))),
-        method_with_body("getGroup", Vec::new(), Some(mixed_type()), return_body(function_call("filegroup", vec![file_path_arg_expr()]))),
-        method_with_body("getATime", Vec::new(), Some(mixed_type()), return_body(function_call("fileatime", vec![file_path_arg_expr()]))),
-        method_with_body("getMTime", Vec::new(), Some(TypeExpr::Int), return_body(function_call("filemtime", vec![file_path_arg_expr()]))),
-        method_with_body("getCTime", Vec::new(), Some(mixed_type()), return_body(function_call("filectime", vec![file_path_arg_expr()]))),
-        method_with_body("getType", Vec::new(), Some(mixed_type()), return_body(function_call("filetype", vec![file_path_arg_expr()]))),
+        method_with_body(
+            "getPerms",
+            Vec::new(),
+            Some(mixed_type()),
+            spl_file_info_stat_getter_body("getPerms", "fileperms", SplStatKind::Stat),
+        ),
+        method_with_body(
+            "getInode",
+            Vec::new(),
+            Some(mixed_type()),
+            spl_file_info_stat_getter_body("getInode", "fileinode", SplStatKind::Stat),
+        ),
+        method_with_body(
+            "getSize",
+            Vec::new(),
+            Some(TypeExpr::Int),
+            spl_file_info_stat_getter_body("getSize", "filesize", SplStatKind::Stat),
+        ),
+        method_with_body(
+            "getOwner",
+            Vec::new(),
+            Some(mixed_type()),
+            spl_file_info_stat_getter_body("getOwner", "fileowner", SplStatKind::Stat),
+        ),
+        method_with_body(
+            "getGroup",
+            Vec::new(),
+            Some(mixed_type()),
+            spl_file_info_stat_getter_body("getGroup", "filegroup", SplStatKind::Stat),
+        ),
+        method_with_body(
+            "getATime",
+            Vec::new(),
+            Some(mixed_type()),
+            spl_file_info_stat_getter_body("getATime", "fileatime", SplStatKind::Stat),
+        ),
+        method_with_body(
+            "getMTime",
+            Vec::new(),
+            Some(TypeExpr::Int),
+            spl_file_info_stat_getter_body("getMTime", "filemtime", SplStatKind::Stat),
+        ),
+        method_with_body(
+            "getCTime",
+            Vec::new(),
+            Some(mixed_type()),
+            spl_file_info_stat_getter_body("getCTime", "filectime", SplStatKind::Stat),
+        ),
+        method_with_body(
+            "getType",
+            Vec::new(),
+            Some(mixed_type()),
+            spl_file_info_stat_getter_body("getType", "filetype", SplStatKind::Lstat),
+        ),
         method_with_body("isWritable", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("is_writable", vec![file_path_arg_expr()]))),
         method_with_body("isWriteable", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("is_writeable", vec![file_path_arg_expr()]))),
         method_with_body("isReadable", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("is_readable", vec![file_path_arg_expr()]))),
@@ -446,16 +538,25 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Int),
             spl_file_object_fseek_body(),
         ),
-        method_with_body("seek", vec![param("line", TypeExpr::Int)], Some(TypeExpr::Void), vec![property_assign_stmt(this_expr(), "lineNumber", var_expr("line"))]),
+        method_with_body(
+            "seek",
+            vec![param("line", TypeExpr::Int)],
+            Some(TypeExpr::Void),
+            spl_file_object_seek_body(),
+        ),
         method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(file_object_flags_expr())),
         method_with_body(
             "setFlags",
             vec![param("flags", TypeExpr::Int)],
             Some(TypeExpr::Void),
-            vec![
-                property_assign_stmt(this_expr(), "flags", var_expr("flags")),
-                spl_file_object_csv_refresh_stmt(),
-            ],
+            {
+                // The blank-line filter depends on the FLAGS, and `setFlags()` may turn them on
+                // long after the lines were read — so the lines are read again from the stream,
+                // which is cheap and is also the only way a later `setFlags(0)` gets them back.
+                let mut body = vec![property_assign_stmt(this_expr(), "flags", var_expr("flags"))];
+                body.extend(file_object_load_lines_body(file_backing_path_arg_expr()));
+                body
+            },
         ),
         method_with_body("getMaxLineLen", Vec::new(), Some(TypeExpr::Int), return_body(property_access(this_expr(), "maxLineLen"))),
         method_with_body("setMaxLineLen", vec![param("maxLength", TypeExpr::Int)], Some(TypeExpr::Void), vec![property_assign_stmt(this_expr(), "maxLineLen", var_expr("maxLength"))]),
@@ -960,9 +1061,56 @@ fn file_object_load_lines_body(_path: Expr) -> Vec<Stmt> {
             "fseek",
             vec![file_stream_expr(), var_expr("__splPos")],
         )),
+        spl_file_object_skip_empty_stmt(),
         spl_file_object_trailing_line_stmt(),
         spl_file_object_csv_refresh_stmt(),
     ]
+}
+
+/// Drops the blank lines php steps over when DROP_NEW_LINE and SKIP_EMPTY are BOTH set.
+///
+/// php only honours `SKIP_EMPTY` together with `DROP_NEW_LINE` — alone it changes nothing but the
+/// final element. MEASURED on `"a\n\nb\n"`: with both flags php yields `'a'`, `'b'`, `false`,
+/// and the keys are CONSECUTIVE — 0 and 1, not 0 and 2 — so the blank is removed from the
+/// sequence rather than stepped over in place.
+///
+/// The removal happens before the trailing element is appended, so a file that ends in a newline
+/// still gets one.
+fn spl_file_object_skip_empty_stmt() -> Stmt {
+    let mask = SPL_FILE_SKIP_EMPTY | SPL_FILE_DROP_NEW_LINE;
+    if_stmt(
+        binary_expr(
+            binary_expr(
+                binary_expr(file_object_flags_expr(), BinOp::BitAnd, int_expr(mask)),
+                BinOp::StrictEq,
+                int_expr(mask),
+            ),
+            BinOp::And,
+            // READ_CSV has its own rule, and it is the OPPOSITE one: php steps over the blank
+            // RECORD without renumbering, so `0, 2, 3` — measured. Removing the blank line here
+            // would renumber the records that follow it.
+            not_expr(flag_enabled_expr(file_object_flags_expr(), SPL_FILE_READ_CSV)),
+        ),
+        vec![
+            assign_stmt("__splKept", empty_array_expr()),
+            foreach_stmt(
+                file_lines_expr(),
+                None,
+                "__splLine",
+                vec![if_stmt(
+                    binary_expr(
+                        function_call("rtrim", vec![var_expr("__splLine"), string_expr("\n")]),
+                        BinOp::StrictNotEq,
+                        string_expr(""),
+                    ),
+                    vec![array_push_stmt("__splKept", var_expr("__splLine"))],
+                    None,
+                )],
+            ),
+            property_assign_stmt(this_expr(), "lines", var_expr("__splKept")),
+        ],
+        None,
+    )
 }
 
 /// Builds `$name = <value>` as an EXPRESSION, for a `while` that reads and tests in one step.
@@ -1080,6 +1228,30 @@ fn spl_file_object_current_body() -> Vec<Stmt> {
                     file_line_number_expr(),
                 )),
             ],
+            None,
+        ),
+        // See `spl_file_object_seek_body`: a seek past every line answers `false`, not the last
+        // element — php has read the stream out by then.
+        if_stmt(
+            binary_expr(
+                property_access(this_expr(), "seekState"),
+                BinOp::StrictEq,
+                int_expr(2),
+            ),
+            vec![return_stmt(bool_expr(false))],
+            None,
+        ),
+        // `SKIP_EMPTY` does not SHORTEN the iteration — it changes what the last element IS.
+        // MEASURED on `php -n` 8.5.6 over seven file shapes: with the flag set, the element php
+        // ends on is `false`, where without it the same element is `""`. The count is the same
+        // either way, which is what an earlier reading of this got backwards.
+        if_stmt(
+            binary_expr(
+                flag_enabled_expr(file_object_flags_expr(), SPL_FILE_SKIP_EMPTY),
+                BinOp::And,
+                binary_expr(file_current_line_expr(), BinOp::StrictEq, string_expr("")),
+            ),
+            vec![return_stmt(bool_expr(false))],
             None,
         ),
         return_stmt(spl_file_object_drop_new_line_expr(file_current_line_expr())),
@@ -1375,6 +1547,7 @@ fn spl_file_object_rewind_body() -> Vec<Stmt> {
     vec![
         expr_stmt(function_call("rewind", vec![file_stream_expr()])),
         property_assign_stmt(this_expr(), "lineNumber", int_expr(0)),
+        property_assign_stmt(this_expr(), "seekState", int_expr(0)),
         spl_file_object_csv_skip_blank_stmt(),
     ]
 }
@@ -1421,6 +1594,50 @@ fn spl_file_object_csv_skip_blank_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds SplFileObject seek(), which php bounds at both ends.
+///
+/// A NEGATIVE line is a `ValueError` in php, not a silent rewind — elephc stored it and answered
+/// `key() === -1`. Past the end, php clamps the key to the last element and leaves the object
+/// invalid, because the walk consumed the stream getting there. Both MEASURED on `php -n` 8.5.6.
+fn spl_file_object_seek_body() -> Vec<Stmt> {
+    let last_index = binary_expr(count_expr(file_lines_expr()), BinOp::Sub, int_expr(1));
+    vec![
+        if_stmt(
+            binary_expr(var_expr("line"), BinOp::Lt, int_expr(0)),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(
+                    "SplFileObject::seek(): Argument #1 ($line) must be greater than or equal to 0",
+                )],
+            ))],
+            None,
+        ),
+        property_assign_stmt(this_expr(), "seekState", int_expr(0)),
+        if_stmt(
+            binary_expr(var_expr("line"), BinOp::GtEq, count_expr(file_lines_expr())),
+            vec![
+                // Past every line: php has read the stream out and answers `false` for the value.
+                property_assign_stmt(this_expr(), "seekState", int_expr(2)),
+                property_assign_stmt(this_expr(), "lineNumber", last_index.clone()),
+            ],
+            Some(vec![
+                property_assign_stmt(this_expr(), "lineNumber", var_expr("line")),
+                if_stmt(
+                    binary_expr(var_expr("line"), BinOp::GtEq, last_index),
+                    vec![property_assign_stmt(this_expr(), "seekState", int_expr(1))],
+                    None,
+                ),
+            ]),
+        ),
+        // An empty listing has no last index to clamp to; php answers key 0 there.
+        if_stmt(
+            binary_expr(file_line_number_expr(), BinOp::Lt, int_expr(0)),
+            vec![property_assign_stmt(this_expr(), "lineNumber", int_expr(0))],
+            None,
+        ),
+    ]
+}
+
 /// Builds SplFileObject valid().
 ///
 /// Under READ_CSV the bound is the RECORD count, not the line count: a quoted field holding
@@ -1437,27 +1654,45 @@ fn spl_file_object_valid_body() -> Vec<Stmt> {
             ))],
             None,
         ),
-        // `SKIP_EMPTY` drops the FINAL empty line the stream-driven iteration yields after a
-        // trailing newline: it is an empty line like any other. Measured on `php -n` 8.5.6 with
-        // `"a\n\nb\n"` and `SKIP_EMPTY | READ_AHEAD` — php answers `"a\n"`, `"\n"`, `"b\n"` and
-        // stops. The middle line stays because without `DROP_NEW_LINE` it is `"\n"`, not empty.
-        // Tested HERE rather than at load time because `setFlags()` may turn the flag on long
-        // after the lines were read.
+        // See `spl_file_object_seek_body`: a seek that reached the last line consumed the stream.
+        if_stmt(
+            binary_expr(
+                property_access(this_expr(), "seekState"),
+                BinOp::Gt,
+                int_expr(0),
+            ),
+            vec![return_stmt(bool_expr(false))],
+            None,
+        ),
+        // `SKIP_EMPTY` WITH `READ_AHEAD` removes the trailing element entirely, where the flag
+        // alone only changes it to `false` (see `spl_file_object_current_body`). php reads the
+        // next line before answering `valid()`, so with the read-ahead on it is already at end of
+        // file and the element is never yielded. MEASURED over the whole 6 shapes × 8 flags
+        // matrix on `php -n` 8.5.6 — the two earlier readings of this each had half of it,
+        // because neither varied `READ_AHEAD`.
         if_stmt(
             binary_expr(
                 binary_expr(
-                    flag_enabled_expr(file_object_flags_expr(), SPL_FILE_SKIP_EMPTY),
-                    BinOp::And,
-                    binary_expr(count_expr(file_lines_expr()), BinOp::Gt, int_expr(0)),
+                    binary_expr(
+                        file_object_flags_expr(),
+                        BinOp::BitAnd,
+                        int_expr(SPL_FILE_SKIP_EMPTY | SPL_FILE_READ_AHEAD),
+                    ),
+                    BinOp::StrictEq,
+                    int_expr(SPL_FILE_SKIP_EMPTY | SPL_FILE_READ_AHEAD),
                 ),
                 BinOp::And,
                 binary_expr(
-                    array_access(
-                        file_lines_expr(),
-                        binary_expr(count_expr(file_lines_expr()), BinOp::Sub, int_expr(1)),
+                    binary_expr(count_expr(file_lines_expr()), BinOp::Gt, int_expr(0)),
+                    BinOp::And,
+                    binary_expr(
+                        array_access(
+                            file_lines_expr(),
+                            binary_expr(count_expr(file_lines_expr()), BinOp::Sub, int_expr(1)),
+                        ),
+                        BinOp::StrictEq,
+                        string_expr(""),
                     ),
-                    BinOp::StrictEq,
-                    string_expr(""),
                 ),
             ),
             vec![return_stmt(binary_expr(

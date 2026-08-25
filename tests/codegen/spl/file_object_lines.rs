@@ -103,14 +103,22 @@ unlink("rows.csv");
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Verifies `SKIP_EMPTY` drops that trailing line, because it is an empty line like any other.
+/// Verifies the trailing element under `SKIP_EMPTY`, which depends on `READ_AHEAD` as well.
 ///
-/// The middle line STAYS: without `DROP_NEW_LINE` it is `"\n"`, which is not empty. Measured on
-/// `php -n` 8.5.6, which answers three lines here and stops. The flag is read at iteration time
-/// rather than at load time because `setFlags()` may turn it on long after the lines were read —
-/// this very program does.
+/// MEASURED over the whole 6 file shapes × 8 flags matrix on `php -n` 8.5.6, because two earlier
+/// readings each had half of it and neither varied `READ_AHEAD`:
+///
+/// ```text
+/// no SKIP_EMPTY               the trailing element is ""
+/// SKIP_EMPTY, no READ_AHEAD   the trailing element is false
+/// SKIP_EMPTY and READ_AHEAD   there is no trailing element  <- this program
+/// ```
+///
+/// The middle line stays in every one of them: without `DROP_NEW_LINE` it is `"\n"`, not empty.
+/// The flags are read at iteration time rather than at load time because `setFlags()` may turn
+/// them on long after the lines were read — this very program does.
 #[test]
-fn test_skip_empty_drops_the_trailing_empty_line() {
+fn test_skip_empty_with_read_ahead_drops_the_trailing_element() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 file_put_contents("s.txt", "a\n\nb\n");

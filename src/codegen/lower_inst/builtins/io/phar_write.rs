@@ -19,12 +19,31 @@ use super::*;
 ///
 /// `__rt_implode` leaves its result in the string result registers, which is where every caller
 /// here reads the payload from, so the array case needs nothing after it.
+/// Reports whether a value of this type could be a STREAM at run time.
+///
+/// `fopen()` is declared `resource|false`, so the common case is a union rather than a bare
+/// resource, and `mixed` can hold one too. Both are decided by the tag, at run time.
+fn may_be_a_stream(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Resource(_) | PhpType::Mixed => true,
+        PhpType::Union(members) => members.iter().any(may_be_a_stream),
+        _ => false,
+    }
+}
+
 pub(super) fn load_file_put_contents_payload(
     ctx: &mut FunctionContext<'_>,
     data: ValueId,
 ) -> Result<()> {
+    // php DRAINS a stream argument: `file_put_contents($p, $h)` writes what `$h` still holds,
+    // from wherever it is. elephc converted the handle to a STRING and wrote the eleven bytes of
+    // `Resource id #5` — MEASURED: php wrote `from-stream` (11 bytes) and elephc wrote 14.
+    let declared = ctx.value_php_type(data)?;
+    if may_be_a_stream(&declared) {
+        return load_file_put_contents_stream_payload(ctx, data, &declared);
+    }
     if !matches!(
-        ctx.value_php_type(data)?.codegen_repr(),
+        declared.codegen_repr(),
         PhpType::Array(_) | PhpType::AssocArray { .. }
     ) {
         return load_string_to_result(ctx, data, "file_put_contents data");
@@ -44,6 +63,64 @@ pub(super) fn load_file_put_contents_payload(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_implode");                          // the pair lands in the string result registers
+    Ok(())
+}
+
+/// Materializes the payload for a `$data` that may be a stream, deciding at run time.
+///
+/// A BARE `resource` is the handle itself; a union or `mixed` is a boxed cell whose tag says so.
+/// Anything else falls through to the string conversion this call has always done.
+fn load_file_put_contents_stream_payload(
+    ctx: &mut FunctionContext<'_>,
+    data: ValueId,
+    declared: &PhpType,
+) -> Result<()> {
+    let boxed = declared.codegen_repr() != PhpType::Int;
+    let plain = ctx.next_label("fpc_data_not_stream");
+    let done = ctx.next_label("fpc_data_done");
+    load_value_to_first_int_arg(ctx, data)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            if boxed {
+                ctx.emitter.instruction(&format!("cbz x0, {plain}"));           // a null cell holds no stream
+                ctx.emitter.instruction("ldr x9, [x0]");                        // the cell's runtime tag
+                ctx.emitter.instruction("cmp x9, #9");                          // tag 9 is a resource
+                ctx.emitter.instruction(&format!("b.ne {plain}"));
+                ctx.emitter.instruction("ldr x0, [x0, #8]");                    // payload_lo is the opaque handle
+            }
+            ctx.emitter.instruction("sub sp, sp, #16");
+            ctx.emitter.instruction("str x0, [sp, #0]");                        // the handle outlives the chunk-size call
+            abi::emit_call_label(ctx.emitter, "__rt_stream_chunk_size");
+            ctx.emitter.instruction("mov x1, x0");                              // the read-loop chunk php would use
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            ctx.emitter.instruction("add sp, sp, #16");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");      // x1 = bytes, x2 = length
+            abi::emit_jump(ctx.emitter, &done);
+        }
+        Arch::X86_64 => {
+            if boxed {
+                ctx.emitter.instruction("test rax, rax");
+                ctx.emitter.instruction(&format!("jz {plain}"));                // a null cell holds no stream
+                ctx.emitter.instruction("mov r10, QWORD PTR [rax]");            // the cell's runtime tag
+                ctx.emitter.instruction("cmp r10, 9");                          // tag 9 is a resource
+                ctx.emitter.instruction(&format!("jne {plain}"));
+                ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");        // payload_lo is the opaque handle
+            }
+            ctx.emitter.instruction("sub rsp, 16");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // the handle outlives the chunk-size call
+            ctx.emitter.instruction("mov rdi, rax");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_chunk_size");
+            ctx.emitter.instruction("mov rsi, rax");                            // the read-loop chunk php would use
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");
+            ctx.emitter.instruction("mov rdi, rax");
+            ctx.emitter.instruction("add rsp, 16");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");      // rax = bytes, rdx = length
+            abi::emit_jump(ctx.emitter, &done);
+        }
+    }
+    ctx.emitter.label(&plain);
+    load_string_to_result(ctx, data, "file_put_contents data")?;
+    ctx.emitter.label(&done);
     Ok(())
 }
 
