@@ -47,7 +47,75 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
                 .flatten()
         })
         .unwrap_or_else(|| lower_expr(ctx, value));
+    // The checker recorded this assignment as an incompatible RE-BINDING of `$name`: end the old
+    // binding here, so the store below mints a fresh slot at the new type instead of widening a
+    // slot the program will never read at the old type again.
+    //
+    // Placed exactly here for two reasons. The right-hand side is already lowered, so
+    // `$a = "n=" . $a` (and every compound assignment, which the parser hands over in this same
+    // shape) still reads the OLD binding. And it is before `contextualize_local_assignment`,
+    // whose whole job is to coerce the value into the storage contract the name ALREADY has —
+    // the contract of the binding being abandoned, which must not apply to the new one.
+    if ctx.is_recorded_retype_site(span, name) {
+        ctx.rebind_local_for_retype(name, Some(span));
+    }
+    // The checker's pre-scan marked `$name` as assigned incompatible types across a branch, so its
+    // frame storage is boxed `Mixed` for the WHOLE body (`checker::mixed_storage_scan`), and this
+    // is one of the assignments it recorded. Two things follow, and BOTH are needed.
+    //
+    // The slot is declared `Mixed` here, ahead of the store. Every write to a marked name is a
+    // recorded store site — anything else disqualifies the name — so this runs at the FIRST one,
+    // and `has_local_slot` makes it idempotent for the rest. (A name the frame already bound keeps
+    // that slot: the declare is skipped, not re-typed. The one marked name that can arrive already
+    // bound in the body's incoming environment is a by-value closure capture, and the pre-scan
+    // MARKS those rather than refusing them — dropping the mark strands the value the capture owns.
+    // Whether the mark also WARNS is decided by replaying the name's assignments from the capture's
+    // INCOMING type, the replay `--strict-locals` itself would run: a rejection makes the warning's
+    // advice true and pushes it, a clean merge would make that advice false and the mark stays
+    // silent. Both ways the store sites reach here, and what carries the boxed contract for such a
+    // name is the forced `Mixed` STORE type below: it re-types the local from the first recorded
+    // store onwards, so every read after that one is a boxed read, while a read BEFORE it still
+    // sees the incoming value at the type it actually arrived with.) Letting the first store mint
+    // a slot at its own value's type is what made a marked program miscompile:
+    // `$a = 123456789; for (…) { $a = "s"; }` wrote a raw int into an `Int` slot that the loop
+    // body then widened, and a zero-trip loop read the surviving int back through the widened
+    // string view (`string(9) "123456789"`).
+    //
+    // And the store's PHP type is `Mixed`, not the value's own. `store_local` records it as the
+    // local's LOGICAL type, and every read of the name is lowered against that one: inside the
+    // arm that stored it, inside the copies DCE's tail-sinking makes of the code BELOW the branch,
+    // and after the join (`join_arm_types` keeps nothing for an `int`-against-`string`
+    // disagreement, so the merge inherits the last arm's fact). Leaving those facts concrete is
+    // what turned `if (…) { $a = 42; } else { $a = "hello"; } echo strlen($a);` into a compiler
+    // PANIC — "strlen cannot lower checked operand type Int" — from the copy of the `echo` sunk
+    // into the `int` arm. `Mixed` on every store makes every read a boxed read, which is exactly
+    // the type the checker bound for the name. This mirrors `boxed_incdec_storage_type`, the other
+    // whole-frame boxed-storage contract, which forces the same substitution inside `store_local`.
+    //
+    // That is also what makes the checker's flow NARROWING harmless here. Inside
+    // `if (is_string($a)) { strlen($a); }` the checker types this marked name `Str` while its slot
+    // is boxed — but lowering never sees that fact. `load_local` types every read from the
+    // LOWERING's own `local_types`, which this store just set to `Mixed`, and nothing on this side
+    // narrows on a type guard (statement-level conditionals snapshot and restore `local_types`
+    // across arms; they never refine them). So the load is emitted at the slot's real storage type
+    // and the guard's narrowing turns into an unbox/cast APPLIED TO THE LOADED VALUE, inside the
+    // branch, where the runtime tag check belongs. The narrowing is a diagnostics decision — it
+    // says whether `strlen($a)` type-checks — never a load-shape one.
+    //
+    // Nothing is forced for a name backed by program-global storage: `store_local` overrides the
+    // type with `global_alias_type` (already `Mixed`) and stores through the global symbol, so a
+    // marked top-level local another body writes via `global $a` keeps exactly the representation
+    // it has today.
+    let mixed_storage_site = ctx.is_recorded_mixed_storage_site(span, name);
+    if mixed_storage_site && !ctx.has_local_slot(name) {
+        ctx.declare_local(name, PhpType::Mixed);
+    }
     let (lowered, php_type) = contextualize_local_assignment(ctx, name, value, lowered, span);
+    let php_type = if mixed_storage_site {
+        PhpType::Mixed
+    } else {
+        php_type
+    };
     ctx.store_local(name, lowered, php_type, Some(span));
     let callable_result = if direct_closure {
         ctx.take_pending_static_callable_result()

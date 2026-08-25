@@ -231,13 +231,40 @@ fn try_compile_source_to_asm_with_defines_repr(
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:
+    // the harness seeds `set_linked_extensions` from the same bits so
+    // `extension_loaded('PDO'/'mysqli')` agrees between `compile_and_run` and
+    // the CLI. mysqli injects after PDO so the shared `elephc_pdo` externs
+    // (merged in idempotently by either) are declared exactly once.
+    let pdo_used = elephc::pdo_prelude::program_uses_pdo(&resolved);
+    let resolved = elephc::pdo_prelude::inject_if_used_for_version(
+        resolved,
+        false,
+        php_version,
+        &mut prelude_inventory,
+    );
+    let mysqli_used = elephc::mysqli_prelude::program_uses_mysqli(&resolved);
+    let resolved = elephc::mysqli_prelude::inject_if_used(
+        resolved,
+        false,
+        php_version,
+        &mut prelude_inventory,
+    );
+    let mut linked_php_surfaces: Vec<String> = Vec::new();
+    if pdo_used {
+        linked_php_surfaces.push("PDO".to_string());
+    }
+    if mysqli_used {
+        linked_php_surfaces.push("mysqli".to_string());
+    }
+    elephc::codegen::set_linked_extensions(linked_php_surfaces);
+    let resolved = elephc::tz_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::list_id_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::var_export_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved =
-        elephc::pdo_prelude::inject_if_used_for_version(resolved, false, php_version);
-    let resolved = elephc::tz_prelude::inject_if_used(resolved, false);
-    let resolved = elephc::list_id_prelude::inject_if_used(resolved);
-    let resolved = elephc::var_export_prelude::inject_if_used(resolved);
-    let resolved = elephc::image_prelude::inject_if_used(resolved, false);
-    let resolved = elephc::hash_prelude::inject_if_used(resolved, false);
+        elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
@@ -246,12 +273,33 @@ fn try_compile_source_to_asm_with_defines_repr(
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
-    let check_result =
+    let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
-    let optimized = elephc::optimize::propagate_constants(resolved);
-    let optimized = elephc::optimize::prune_constant_control_flow(optimized);
-    let optimized = elephc::optimize::normalize_control_flow(optimized);
-    let optimized = elephc::optimize::eliminate_dead_code(optimized);
+    let optimized =
+        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
+    let optimized = elephc::optimize::prune_constant_control_flow(
+        optimized,
+        check_result.local_binding_decision_spans(),
+    );
+    let optimized = elephc::optimize::normalize_control_flow(
+        optimized,
+        check_result.local_binding_decision_spans(),
+    );
+    let optimized = elephc::optimize::eliminate_dead_code(
+        optimized,
+        check_result.local_binding_decision_spans(),
+    );
+    let empty_roots = HashSet::new();
+    let optimized = elephc::optimize::prune_unreachable_declarations(
+        optimized,
+        &mut check_result,
+        elephc::optimize::reachability::PruneOptions {
+            inventory: &prelude_inventory,
+            forced_groups: &empty_roots,
+            exported_functions: &empty_roots,
+            eval_forced: false,
+        },
+    );
     let requires_elephc_tls = check_result
         .required_libraries
         .iter()
@@ -274,6 +322,7 @@ fn try_compile_source_to_asm_with_defines_repr(
         &exported_functions,
         regalloc_linear,
         false,
+        elephc::codegen::WebIsolation::Worker,
     );
     let runtime_features = ir_module.required_runtime_features;
     let runtime_asm =

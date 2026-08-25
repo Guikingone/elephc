@@ -146,7 +146,7 @@ pub struct Value {
 | `Mixed` | `Heap(Mixed)` | Pointer to runtime tagged Mixed cell. |
 | `Array(inner)` | `Heap(Array)` | Indexed array heap object; element type stays in `php_type`. |
 | `AssocArray { key, value }` | `Heap(Hash)` | Hash table heap object; key/value types stay in `php_type`. |
-| `Buffer(inner)` | `Heap(Buffer(inner))` | Fixed-size elephc buffer header; not PHP array COW storage. |
+| `Buffer(inner)` | `Heap(Buffer(inner))` | Opaque generation/index handle resolved through the static buffer descriptor registry; not PHP array COW storage. |
 | `Callable` | `I64` | Callable descriptor address; ownership is tracked separately and released via callable descriptor runtime. |
 | `Object(name)` | `Heap(Object(name))` | Runtime object pointer and class metadata. |
 | `Packed(name)` | `Heap(Packed(name))` | Pointer/layout handle for packed POD data. |
@@ -462,6 +462,8 @@ Each instruction has:
 |---|---|---|---|
 | `LoadLocal(slot)` | none | slot type | `reads_local` |
 | `StoreLocal(slot, value)` | value | `Void` | `writes_local`, maybe `refcount_op` |
+| `UnsetLocal(slot)` | none | `Void` | `writes_local` |
+| `ZeroLocalSlot(slot)` | none | `Void` | `writes_local` |
 | `LoadRefCell(slot)` | none | value or address | `reads_local`, maybe `reads_heap` |
 | `StoreRefCell(slot, value)` | value | `Void` | `writes_local`, maybe `writes_heap`, `refcount_op` |
 | `LoadGlobal(name)` | none | declared type | `reads_global` |
@@ -471,6 +473,17 @@ Each instruction has:
 | `InitStaticLocal(slot, value)` | value | `Void` | `reads_global`, `writes_global`, maybe allocation/refcount effects |
 | `LoadStaticProperty(class, property)` | none | property type | `reads_global`, maybe `may_deopt` for late static |
 | `StoreStaticProperty(class, property, value)` | value | `Void` | `writes_global`, maybe `refcount_op`, `may_deopt` |
+
+`UnsetLocal` and `ZeroLocalSlot` both clear a slot at its own storage type and
+differ only in the bit pattern, which is what each caller needs. `UnsetLocal`
+writes the tagged-null SENTINEL, for a slot whose NAME still resolves to it: a
+later `Mixed` read of that slot has to see PHP null. `ZeroLocalSlot` writes
+literal zeros, for a slot whose name is being ABANDONED by a local-binding kill
+or retype: nothing reads it again and the only remaining consumer is the frame
+epilogue's cleanup, which recognises zero (`__rt_heap_free_safe` walks past a
+null pointer) and would misread the sentinel as a live pointer. Zero is also
+what both prologues already write into cleanup-tracked slots, so an abandoned
+slot ends in the state one whose store never ran is already in.
 
 ### Integer, Float, and Bitwise Operations
 
@@ -737,10 +750,10 @@ eval-scope helpers, or retain interpreter fallback. See
 | `PtrReadString`, `PtrWriteString` | pointer and string/len | string or int | native memory effects, maybe `alloc_heap`, `may_fatal` |
 | `PtrOffset` | pointer, byte offset | `I64` pointer | pure arithmetic, but php_type tag preserved |
 | `PtrCheckNonnull` | pointer | `Void` | `may_fatal` |
-| `BufferNew(element_type, len)` | length | `Heap(Buffer)` | `alloc_heap`, `may_fatal` |
-| `BufferLen` | buffer | `I64` | `reads_heap`, `may_fatal` on freed buffer |
-| `BufferGet`, `BufferSet` | buffer, index, value | typed value or `Void` | `reads_heap`/`writes_heap`, bounds `may_fatal` |
-| `BufferFree` | buffer | `Void` | `writes_heap`, `may_fatal` on invalid state |
+| `BufferNew(element_type, len)` | length | `Heap(Buffer)` | allocates a separate payload and publishes a generation-safe handle; `alloc_heap`, `may_fatal` |
+| `BufferLen` | buffer handle | `I64` | resolves generation/activity, then `reads_heap`; `may_fatal` on stale or invalid handles |
+| `BufferGet`, `BufferSet` | buffer handle, index, value | typed value or `Void` | resolve generation/activity before payload access; `reads_heap`/`writes_heap`, bounds `may_fatal` |
+| `BufferFree` | local buffer handle | `Void` | invalidates the descriptor before releasing the payload and clears the local; `writes_heap`, `may_fatal` on stale aliases |
 | `PackedFieldGet`, `PackedFieldSet` | packed pointer, field metadata | typed value or `Void` | raw memory effects |
 | `ExternGlobalLoad`, `ExternGlobalStore` | global metadata | typed value or `Void` | external state effects |
 
@@ -1248,9 +1261,9 @@ wraps a refcounted slot's store with separate `acquire`/`release` instructions
 and releases the prior occupant, so dropping the `store_local` alone would leak
 the acquired value. Scalar slots carry no such ownership ops and their scope-exit
 cleanup is a no-op, so removing a dead scalar store is refcount-neutral. Any other
-slot-naming op (ref-cell promote/alias/release, `unset_local`, static-local or
-global access) makes a slot ineligible because it could read or alias the slot in
-a way the pass does not model.
+slot-naming op (ref-cell promote/alias/release, `unset_local`, `zero_local_slot`,
+static-local or global access) makes a slot ineligible because it could read or
+alias the slot in a way the pass does not model.
 
 Condition (4) is subtle: a by-reference call argument (`new Box($v)` for a
 `public int &$value` constructor) or a by-reference closure capture

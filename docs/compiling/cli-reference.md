@@ -16,12 +16,13 @@ exhaustive *what*.
 
 ```text
 elephc [OPTIONS] <source-file>
+elephc --version
 elephc native <COMMAND> [OPTIONS]
 ```
 
-Exactly one positional argument is required: the path to tagged `.php` or
-tagless `.lfc` source. The binary is written next to it, named after the source
-without its extension.
+Except for `--help` and `--version`, exactly one positional argument is required:
+the path to tagged `.php` or tagless `.lfc` source. The binary is written next
+to it, named after the source without its extension.
 Only an exact first argument of `native` selects the package command family. A
 source file literally named `native` must therefore be passed as `./native` or
 by another explicit path.
@@ -59,10 +60,13 @@ selection, toolchain overrides, and transactional behavior.
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run front-end checks only; write nothing. |
 | `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
+| `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. See [Strict locals mode](#strict-locals-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
+| `--keep-symbols` | — | off | Keep the symbol table in the linked executable. It is stripped by default; `--debug-info` also implies keeping it. See [Symbol stripping](#symbol-stripping). |
 | `--php-version VERSION` | `8.2`, `8.3`, `8.4`, `8.5` | detected, else `8.5` | Select the maintained PHP compatibility profile for version-dependent behavior. Sessions use it for PHP 8.4 deprecations/validation and PHP 8.5 CHIPS/option semantics. Usually unnecessary — see [Where the profile comes from](#where-the-profile-comes-from) and [Profile dependence](#profile-dependence). |
 | `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
+| `--web-isolation MODE` / `--web-isolation=MODE` | `worker`, `pool`, `request` | `worker` | Bake the web handler process model into the produced binary. Requires `--web`; plain `--web` is exactly `worker`. |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
 be combined with `--check`, `--emit cdylib`, `--emit-asm`, or `--emit-ir`. See
@@ -206,17 +210,31 @@ runtime arguments (not elephc compiler flags):
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of prefork worker processes. Minimum 1. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes (`0` = unlimited); oversized bodies get `413`. |
-| `--max-requests N` | No | `0` (never) | Recycle each worker after N requests (bounds memory growth). |
-| `--max-execution-time N` | No | `0` (no limit) | Kill and respawn a worker whose request handler runs longer than N seconds. |
+| `--max-requests N` | No | `0` (never) | Recycle each worker after N completed requests; stop accepting, drain active HTTP connections, then respawn it. |
+| `--max-execution-time N` | No | `0` (no limit) | Kill/respawn the web worker in `worker`; kill only the handler process in `pool`/`request`. |
+| `--handler-concurrency N` | No | `1` | Handler processes per web worker; `pool`/`request` only. |
+| `--max-handler-requests N` | No | `1000` | Replace a persistent handler after N requests (`0` = never); `pool` only. |
+| `--body-read-timeout N` | No | `30` | Request-body receive deadline in seconds (`0` = unlimited); `pool`/`request` only. |
+| `--response-write-timeout N` | No | `30` | Client-backpressure deadline in seconds (`0` = unlimited); `pool`/`request` only. |
 | `--gzip` | No | off | Compress responses when the client sends `Accept-Encoding: gzip`. |
 | `--access-log` | No | off | Log one line per request to stderr. |
 | `--help` (`-h`), `--version` (`-V`) | No | — | Print usage / version and exit. |
 
 ```bash
 elephc --web app.php
+elephc --web --web-isolation=pool app.php
+elephc --web --web-isolation=request app.php
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4 --max-body-size 1048576 --access-log
 ```
+
+The isolation choice is compile-time: the generated entry stub calls the
+selected bridge symbol directly. Mode-specific runtime flags are rejected by a
+binary compiled for another model rather than ignored. See [Choosing a web
+isolation model](../beyond-php/web.md#choosing-a-model) for concrete worker,
+pool, and request deployment examples, then [Concurrency
+model](../beyond-php/web.md#concurrency-model) for process trees, state lifetime,
+streaming, cancellation, and performance trade-offs.
 
 The served program also receives `$_COOKIE`, `$_REQUEST`, and `$_ENV`, and can
 emit cookies with `setcookie()`. The server shuts down cleanly on
@@ -254,7 +272,7 @@ See [Optimization and codegen controls](optimization.md).
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
-| `--with-NAME` | `pdo`, `tls`, `crypto`, `phar`, `tz`, `image`, `eval`, `regex`, `web` | — | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-web` is an alias for `--web`. An unknown name is an error. |
+| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `phar`, `tz`, `image`, `eval`, `regex`, `mysqli`, `web` | — | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic when static detection cannot see a call. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-web` is an alias for `--web`. An unknown name is an error. |
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 
@@ -314,6 +332,194 @@ an otherwise unused define is valid.
 Strict mode guarantees that the *constructs* used are PHP-compatible; it does
 not change elephc's static-subset semantics. A strict-valid program can still be
 rejected by the type checker in places where the PHP interpreter would run it.
+
+## Strict locals mode
+
+| Flag | Values | Default | Description |
+|---|---|---|---|
+| `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. |
+
+By default (permissive mode) an **untyped** local variable is allowed to
+change type during its lifetime in three shapes that would otherwise be a
+compile error:
+
+- **`unset()` kill.** `unset($a)` KILLS the binding when BOTH the binding's
+  creating assignment and the `unset($a)` call itself sit at conditional depth
+  0 — each a straight-line statement, not nested inside any
+  `if`/loop/`try`/`switch`/…. The creating assignment can occur anywhere in
+  the body, not only as its first statement; a CONDITIONAL `unset($a)` (one
+  itself nested inside a branch or loop) does not kill, since the branch may
+  never run. The name must also be never reference-aliased. A later read of a
+  killed `$a` is an `Undefined variable: $a` error, and a later assignment
+  binds `$a` fresh, at any type, with no warning. This is
+  **mode-independent** — it behaves identically under `--strict-locals`.
+- **Straight-line retype.** A plain statement-form reassignment at the same
+  eligibility (`$a = 0; $a = "ciao";`, and a compound form that parses as a
+  plain assignment, such as `$x = 1; $x .= "a";`) re-binds the name to a fresh
+  slot of the new type and emits a warning instead of failing:
+  ```text
+  $a changes type from int to string; the previous value is discarded (compile with --strict-locals to make this an error)
+  ```
+- **Branch-divergent assignment.** `if (…) { $a = 0; } else { $a = "ciao"; }`
+  — and the same shape for a single-branch retype of an outer binding, or a
+  heterogeneous loop-carried local — compiles instead of failing, as
+  whole-frame boxed `Mixed` storage for that local, with a warning:
+  ```text
+  $a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)
+  ```
+  The warning is a performance signal as much as a correctness one: every read
+  of a `Mixed`-storage local goes through boxed dispatch instead of a plain
+  register/stack slot for the rest of the body.
+
+All three shapes require the name to be **never reference-aliased** — no `=&`
+target or source, no `use (&$x)` capture, no by-reference parameter (including
+a variadic `&...$xs`), and neither name a by-reference `foreach` touches:
+`foreach ($arr as &$v)` permanently aliases **both** `$arr`, the container the
+loop holds references into, and `$v`, which *is* one of those references. PHP
+leaves `$v` bound to the last element after the loop ends, so a later
+`$v = "s"` writes straight into `$arr` — which is why `$v = 0; foreach ($arr as
+&$v) {} $v = "s";` stays a hard error in both modes instead of retyping. The
+by-VALUE form copies each element and aliases nothing, so `$arr` and `$v` both
+stay eligible there.
+
+Passing the name to a call aliases it too, whenever elephc cannot see the
+callee's parameter list. An argument bound to a declared `&$p` is the obvious
+case, but so is ANY plain-variable argument of a call whose callee has no
+resolvable signature: a variable function (`$f = "strlen"; $f($a);`), a
+dynamically named method (`$o->$m($a)`), a `call_user_func()` whose target is
+picked at run time, a `callable` parameter elephc could not specialize. Such a
+callee may bind the argument by reference, and the reference outlives the call,
+so the conservative answer is the only sound one. A call elephc CAN resolve
+costs the name nothing: `f($a)`, `$c->m($a)`, `call_user_func('var_dump', $a)`
+and `$a |> strval(...)` all leave a by-value argument fully eligible.
+
+None of the three applies to a name whose storage this body does not own: a name
+this body binds with `global`, a `static` name, or a superglobal or seeded name
+(`$argc`, `$argv`, and the extern C globals, seeded into the top-level scope).
+A **declared type** always stays strict in both modes: a typed local
+(`int $x = 5;`), a type-hinted parameter, and a class property never retype or
+box to `Mixed` — reassigning one incompatibly is a compile error exactly as
+before.
+
+Beyond those shared exclusions the shapes are gated differently:
+
+- The **`unset()` kill** and the **straight-line retype** additionally require
+  the name's current binding to be **unconditional**: the binding and the
+  `unset`/reassignment must both sit at conditional depth 0 — straight-line
+  code that dominates everything after it. That is what makes ending the
+  binding safe, since the store that replaces it definitely runs.
+  Top-level code pulled in with **`require_once`** is not at depth 0: its
+  include guard lowers to a runtime branch, so every TOP-LEVEL statement of the
+  included file sits at conditional depth ≥ 1 and neither shape fires there (an
+  incompatible reassignment among them is the hard error, or the
+  branch-divergent boxing if it qualifies). A FUNCTION, method, or closure body
+  declared in that same file is unaffected: depth is counted per body, so its
+  locals are at depth 0 as usual and both shapes apply to them normally. Plain
+  **`require`** splices the file in with no guard, so even its top-level
+  statements behave exactly like inline code.
+- The **`unset()` kill** additionally stands down at top level for any name
+  some OTHER body's `global` statement declares — a name main itself never
+  declares `global`, and so is not excluded outright above. Such a variable's
+  storage is the program-global symbol other bodies reach, not main's frame
+  slot, so the binding is kept and `unset` is a plain typing no-op on it. The
+  search covers every other function, method, and top-level statement body —
+  exactly the reach the compiler's own lowering has, since both read the same
+  walk. Three positions therefore fall outside it on both sides alike: a
+  `global` written inside a closure body, inside an assignment prelude, or
+  inside an enum method is seen by neither. The straight-line retype is
+  unaffected there and still applies.
+- The **branch-divergent** shape has no such requirement, and could not: it
+  exists precisely for the case where at least one of the two conflicting
+  assignments is inside a branch or loop, as its `if`/`else` example is. It
+  never ends a binding — the local gets one boxed slot for the whole body —
+  so what it requires instead is that every write to the name in the body be
+  syntactically exact evidence: a literal, a scalar cast, or a `.` string
+  concatenation. Any other write shape (`++`/`--`, a `foreach`/`list()`
+  target, an `unset()` mention, `=&`, `global`, or `static`) disqualifies the
+  name from boxing and leaves it on today's hard error. The pre-scan does SKIP
+  an assignment sitting inside a branch guarded by a **non-negated type test on
+  the name itself** (`if (is_string($a)) { $a = "x"; }`): the guard already
+  established the type the assignment writes, so it is not evidence of
+  divergence and does not mark the name.
+
+  Calls are judged more strictly here than by the two kill shapes. This pre-scan
+  runs before inference, so the only callee it can resolve is one it looks up by
+  NAME: every argument — **by value included** — of a method call, a `::` static
+  call, a `new`, a call through a closure variable or an arbitrary expression, or
+  a dynamic `new` disqualifies the local behind it, and so does any argument of a
+  plain function call whose name it cannot resolve. Only a plain call to a KNOWN
+  by-value function, and a pipe into one (`$a |> strval(...)`), leave the
+  argument boxable. So `$c->m($a)` with an ordinary `m(mixed $v)` keeps a
+  branch-divergent `$a` on the hard error, where the identical `f($a)` boxes it.
+
+  A **parameter** is never boxed by this shape at all (it is already bound
+  when the body starts). A by-value closure **capture** is the one pre-bound
+  shape that IS boxed — dropping its mark would strand the value the capture
+  owns — though the warning is withheld where the capture's incoming type
+  already absorbs every assignment, since the advice to compile with
+  `--strict-locals` would be false there.
+
+`--strict-locals` restores the hard error for the two warning shapes above:
+
+```text
+Type error: cannot reassign $a from int to string
+```
+
+`eval()`'d code — whether AOT-lowered from a literal fragment or run through
+the optional Magician interpreter bridge — reads and writes its locals through
+a boxed `Mixed` scope representation rather than a typed frame slot, so it was
+never subject to the monomorphic-local check `--strict-locals` restores.
+`--strict-locals` therefore has no effect inside `eval()` fragments.
+
+A body that **calls** `eval()` anywhere is the other side of that coin: the
+eval scope reaches the surrounding function's locals BY NAME, while the kill
+and the straight-line retype end a binding and give the name a different frame
+slot. Both therefore step aside for the whole body — `unset()` is a plain
+typing no-op there, and an incompatible reassignment is the hard error in both
+modes, whether the `eval()` call sits above or below it. The branch-divergent
+shape is unaffected, because a boxed `Mixed` slot is exactly what the eval
+scope wants:
+
+```php
+$a = 1; unset($a); eval('$a = 5;'); echo $a;   // prints 5 — the binding survives
+$a = "old"; $a = 7; eval('echo $a;');          // Type error: cannot reassign $a
+if ($n > 1) { $b = 1; } else { $b = "z"; }     // still boxed Mixed, still a warning
+eval('echo $b;');
+```
+
+**Two statements at the same position.** elephc files each of these decisions
+against the source position of the statement that triggered it, and a position
+carries no file identity. So when two statements in the compiled program share a
+line *and* column *and* name the same variable — the same line:column in two
+different included files, or one retyping file pulled in twice with plain
+`require`, which splices its statements in again — elephc cannot tell which of
+the two it decided about. Rather than misapply the decision to one of them
+silently, it rejects the program:
+
+```text
+Cannot re-bind $a here: 2 statements in this program sit at line 2 column 1 and name $a. …
+```
+
+The message names both causes because it cannot distinguish them. Keep the two
+assignments type-compatible, or move one statement to a different line or column.
+
+**Migrating.** The `unset()` kill is the one shape that can reject code that
+compiled before. Reading a variable after a straight-line `unset()` of it is now
+`Undefined variable: $a` — in BOTH modes, since the kill is not gated by
+`--strict-locals` — where the read previously saw the nulled slot. That matches
+PHP, which warns on the same read and evaluates it as `null`. The idiomatic
+probe is `isset()` (or `empty()` / `??`), all of which stay legal on an unbound
+name and answer "not set":
+
+```php
+$a = "x"; unset($a);
+echo $a;                            // Undefined variable: $a — compile error
+echo isset($a) ? "set" : "unset";   // fine: prints "unset"
+echo $a ?? "dflt";                  // fine: prints "dflt"
+```
+
+See [The Type Checker](../internals/the-type-checker.md#local-retyping-and-strict-locals-mode)
+for the full mechanism, including which files implement each shape.
 
 ## INI directives
 
@@ -399,9 +605,30 @@ The other 44 directives of the PHP 8.5 set are runtime-overridable.
 | `--quiet` / `-q` | — | off | Disable progress lines and colorized compiler output. |
 | `--gc-stats` | — | off | Print allocation/free counters at exit. |
 | `--heap-debug` | — | off | Enable runtime heap verification (double-free, bad refcount, free-list corruption). |
+| `--help` / `-h` | — | off | Print the compiler help, including the current elephc version, and exit successfully. |
+| `--version` / `-V` | — | off | Print the elephc compiler version and exit successfully. |
 | `--mascotte` | — | off | Print the embedded ASCII mascot and a randomly selected quote before normal output. |
 
 See [Output formats and diagnostics](output-and-diagnostics.md).
+
+## Symbol stripping
+
+A linked executable is stripped of its symbol table, which removes roughly a
+quarter of the file. Nothing in a compiled program reads those names, so this
+changes size only, never behavior.
+
+| Invocation | Symbol table | DWARF |
+|---|---|---|
+| `elephc app.php` | stripped | — |
+| `elephc --keep-symbols app.php` | kept | — |
+| `elephc --debug-info app.php` | kept | emitted |
+
+Use `--keep-symbols` when a profiler needs function names but the full DWARF of
+`--debug-info` is unwanted. Shared libraries built with `--emit cdylib` are
+never stripped, because their exported symbols are their interface.
+
+Details, including what happens when the `strip` tool is unavailable, are in
+[Symbol stripping](linking-and-conditional-compilation.md#symbol-stripping).
 
 ## Environment variables
 

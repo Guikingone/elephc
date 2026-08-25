@@ -30,6 +30,7 @@ use super::*;
 /// `[-+]hhmm` / `[-+]hh:mm` / signed-or-unsigned seconds / greedy alpha chars / IANA-shape identifier)
 /// and are cross-validated against the constructed instant's zone at the end of the parse — a
 /// mismatch returns `false`, matching PHP.
+#[cfg(test)]
 pub(super) const CREATE_FROM_FORMAT_SRC: &str = r##"<?php
 __CFF_CLASS__::$lastErrorCount = 1;
 $now = time();
@@ -412,10 +413,7 @@ return $o->setMicrosecond($umicro);
 /// do not get body-driven return-type inference, and the union lets the method-dispatch path resolve
 /// `->format()` etc. on the success arm.
 pub(super) fn datetime_create_from_format(class_name: &str) -> ClassMethod {
-    let src = CREATE_FROM_FORMAT_SRC.replace("__CFF_CLASS__", class_name);
-    let tokens =
-        crate::lexer::tokenize(&src).expect("createFromFormat body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("createFromFormat body source must parse");
+    let body = super::bodies::create_from_format(class_name);
     ClassMethod {
         name: "createFromFormat".to_string(),
         visibility: Visibility::Public,

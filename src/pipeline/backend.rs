@@ -15,8 +15,13 @@ use super::*;
 pub(super) struct BackendInputs<'a> {
     pub(super) filename: &'a str,
     pub(super) with_crates: &'a HashSet<String>,
+    /// PHP surfaces injected into this compilation ("PDO", "mysqli"), reported to
+    /// `extension_loaded()` alongside archive-derived bridge extensions. Needed
+    /// because the shared `elephc_pdo` archive cannot identify a surface by itself.
+    pub(super) linked_php_surfaces: &'a [String],
     pub(super) ir_module: ir::Module,
     pub(super) web: bool,
+    pub(super) web_isolation: codegen::WebIsolation,
     pub(super) extra_link_libs: &'a [String],
     pub(super) extra_link_paths: &'a [String],
     pub(super) extra_frameworks: &'a [String],
@@ -29,6 +34,7 @@ pub(super) struct BackendInputs<'a> {
     pub(super) exported_functions: &'a HashMap<String, exports::ExportedFunction>,
     pub(super) regalloc_linear: bool,
     pub(super) emit_debug_info: bool,
+    pub(super) keep_symbols: bool,
     pub(super) output_paths: &'a OutputPaths,
     pub(super) emit_source_map: bool,
     pub(super) emit_asm: bool,
@@ -40,8 +46,10 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     let BackendInputs {
         filename,
         with_crates,
+        linked_php_surfaces,
         mut ir_module,
         web,
+        web_isolation,
         extra_link_libs,
         extra_link_paths,
         extra_frameworks,
@@ -54,6 +62,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         exported_functions,
         regalloc_linear,
         emit_debug_info,
+        keep_symbols,
         output_paths,
         emit_source_map,
         emit_asm,
@@ -123,14 +132,22 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // Report the bridges actually linked into THIS compilation to
     // `extension_loaded()` / `get_loaded_extensions()`. Each planned bridge is
     // mapped through the single-source bridge table; bridges with no distinct
-    // PHP extension (tz -> date, eval) are skipped. Seeded into a codegen
-    // thread-local because extension folding happens during instruction lowering.
+    // PHP extension (tz -> date, eval) are skipped, and so is `elephc_pdo`,
+    // whose archive backs more than one PHP surface (its table row maps to
+    // None). The injected PHP surfaces ("PDO", "mysqli") are appended instead.
+    // Seeded into a codegen thread-local because extension folding happens
+    // during instruction lowering.
     let mut linked_extensions: Vec<String> = Vec::new();
     for lib in &planned_link_libraries {
         if let Some(ext) = linker::php_extension_for_lib(lib) {
             if !linked_extensions.iter().any(|existing| existing == ext) {
                 linked_extensions.push(ext.to_string());
             }
+        }
+    }
+    for surface in linked_php_surfaces {
+        if !linked_extensions.iter().any(|existing| existing == surface) {
+            linked_extensions.push(surface.clone());
         }
     }
     codegen::set_linked_extensions(linked_extensions);
@@ -146,6 +163,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         exported_functions,
         regalloc_linear,
         web,
+        web_isolation,
     ) {
         Ok(asm) => asm,
         Err(err) => {
@@ -288,6 +306,16 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // the binary's debug map to it.
     let keep_obj_for_debug =
         emit_debug_info && !linker::bake_debug_info(target, &output_paths.bin);
+
+    // Strip after the dSYM is baked, never before: `dsymutil` reads the binary's debug map, and
+    // a stripped binary has none. `--debug-info` and `--keep-symbols` both opt out — the first
+    // because stripping would undo what it was asked for, the second for profilers, which read
+    // the symbol table and have no other way to get names.
+    if !emit_debug_info && !keep_symbols {
+        if let Err(error) = linker::strip_symbols(target, emit, &output_paths.bin) {
+            eprintln!("Warning: could not strip symbols ({error}); keeping the larger binary");
+        }
+    }
     if !keep_obj_for_debug {
         let _ = fs::remove_file(&output_paths.obj);
     }

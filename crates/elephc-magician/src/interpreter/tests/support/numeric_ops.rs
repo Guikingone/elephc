@@ -293,4 +293,42 @@ impl FakeOps {
         };
         self.int(value)
     }
+
+    /// Compares fake integer and string array keys using PHP regular-sort rules.
+    pub(super) fn runtime_regular_key_compare(
+        &self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<i64, EvalStatus> {
+        let left = self.key(left)?;
+        let right = self.key(right)?;
+        let order = match (&left, &right) {
+            (FakeKey::Int(left), FakeKey::Int(right)) => left.cmp(right),
+            (FakeKey::String(left), FakeKey::String(right)) => {
+                match (left.parse::<f64>(), right.parse::<f64>()) {
+                    (Ok(left), Ok(right)) => left
+                        .partial_cmp(&right)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                    _ => left.cmp(right),
+                }
+            }
+            (FakeKey::Int(left), FakeKey::String(right)) => match right.parse::<f64>() {
+                Ok(right) => (*left as f64)
+                    .partial_cmp(&right)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                Err(_) => left.to_string().cmp(right),
+            },
+            (FakeKey::String(left), FakeKey::Int(right)) => match left.parse::<f64>() {
+                Ok(left) => left
+                    .partial_cmp(&(*right as f64))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                Err(_) => left.cmp(&right.to_string()),
+            },
+        };
+        Ok(match order {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        })
+    }
 }

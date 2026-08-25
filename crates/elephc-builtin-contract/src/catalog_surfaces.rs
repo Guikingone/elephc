@@ -129,15 +129,6 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         "Returns visible default properties for a class."
     ),
     surface!(
-        "get_object_vars",
-        Callables,
-        Function,
-        [param!("object", Mixed)],
-        None,
-        Mixed,
-        "Returns visible properties for an object."
-    ),
-    surface!(
         "hash_copy",
         String,
         PreludeProvided,

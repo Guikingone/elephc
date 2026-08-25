@@ -9,20 +9,20 @@
 
 use super::*;
 
-/// Parses a native PHAR archive and returns a decoded entry payload.
-pub(super) fn parse_native_phar_entry(data: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
-    parse_native_phar_archive(data)?
-        .entries
-        .into_iter()
-        .find(|candidate| candidate.name == entry)
-        .map(|candidate| candidate.payload)
-}
-
 /// Parses a native PHAR archive into entries plus its global metadata and stub.
 ///
 /// The stub is the byte prefix up to and including the `__HALT_COMPILER();` marker
 /// (and any trailing ` ?>\r\n`); the global metadata is the manifest's metadata field.
+#[cfg(test)]
 pub(super) fn parse_native_phar_archive(data: &[u8]) -> Option<Archive> {
+    parse_native_phar_archive_with_public_key(data, None)
+}
+
+/// Parses a native PHAR and authenticates an OpenSSL trailer with `public_key`.
+pub(super) fn parse_native_phar_archive_with_public_key(
+    data: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+) -> Option<Archive> {
     let halt = b"__HALT_COMPILER();";
     let halt_idx = find_subslice(data, halt)?;
     let mut p = halt_idx + halt.len();
@@ -36,7 +36,14 @@ pub(super) fn parse_native_phar_archive(data: &[u8]) -> Option<Archive> {
     let stub = data.get(..manifest_start)?.to_vec();
     let manifest_len = le32(data, manifest_start)? as usize;
     let data_section = manifest_start.checked_add(4)?.checked_add(manifest_len)?;
+    data.get(..data_section)?;
     let num_files = le32(data, manifest_start + 4)?;
+    let global_flags = le32(data, manifest_start + 10)?;
+    verify_native_phar_signature(
+        data,
+        global_flags & PHAR_HDR_SIGNATURE != 0,
+        public_key,
+    )?;
     let mut q = manifest_start + 8 + 2 + 4;
     let alias_len = le32(data, q)? as usize;
     q = q.checked_add(4)?.checked_add(alias_len)?;
@@ -45,8 +52,13 @@ pub(super) fn parse_native_phar_archive(data: &[u8]) -> Option<Archive> {
     let metadata = data.get(q..q.checked_add(meta_len)?)?.to_vec();
     q = q.checked_add(meta_len)?;
 
+    let manifest_remaining = data_section.checked_sub(q)?;
+    // Every entry needs at least a name length and six 32-bit metadata words.
+    if usize::try_from(num_files).ok()? > manifest_remaining / 28 {
+        return None;
+    }
     let mut data_offset = 0usize;
-    let mut entries = Vec::with_capacity(num_files as usize);
+    let mut entries = Vec::new();
     for _ in 0..num_files {
         let name_len = le32(data, q)? as usize;
         q = q.checked_add(4)?;
@@ -84,6 +96,73 @@ pub(super) fn parse_native_phar_archive(data: &[u8]) -> Option<Archive> {
     })
 }
 
+/// Authenticates and scans a native PHAR while decoding only `entry`.
+///
+/// Every manifest record and stored-data extent is validated before the selected
+/// payload is decoded. Unrelated compressed entries therefore cannot consume the
+/// requested entry's decompression budget or force a second payload allocation.
+pub(super) fn parse_native_phar_entry_with_public_key(
+    data: &[u8],
+    entry: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+) -> Option<Vec<u8>> {
+    let halt = b"__HALT_COMPILER();";
+    let halt_idx = find_subslice(data, halt)?;
+    let mut p = halt_idx.checked_add(halt.len())?;
+    for &ch in &[b' ', b'?', b'>', b'\r', b'\n'] {
+        if data.get(p) == Some(&ch) {
+            p = p.checked_add(1)?;
+        }
+    }
+
+    let manifest_start = p;
+    let manifest_len = le32(data, manifest_start)? as usize;
+    let data_section = manifest_start.checked_add(4)?.checked_add(manifest_len)?;
+    data.get(..data_section)?;
+    let num_files = le32(data, manifest_start.checked_add(4)?)?;
+    let global_flags = le32(data, manifest_start.checked_add(10)?)?;
+    verify_native_phar_signature(
+        data,
+        global_flags & PHAR_HDR_SIGNATURE != 0,
+        public_key,
+    )?;
+    let mut q = manifest_start.checked_add(8 + 2 + 4)?;
+    let alias_len = le32(data, q)? as usize;
+    q = q.checked_add(4)?.checked_add(alias_len)?;
+    let metadata_len = le32(data, q)? as usize;
+    q = q.checked_add(4)?.checked_add(metadata_len)?;
+
+    let manifest_remaining = data_section.checked_sub(q)?;
+    if usize::try_from(num_files).ok()? > manifest_remaining / 28 {
+        return None;
+    }
+    let mut data_offset = 0usize;
+    let mut selected: Option<(&[u8], u32, usize)> = None;
+    for _ in 0..num_files {
+        let name_len = le32(data, q)? as usize;
+        q = q.checked_add(4)?;
+        let name = data.get(q..q.checked_add(name_len)?)?;
+        q = q.checked_add(name_len)?;
+        let uncompressed = le32(data, q)? as usize;
+        q = q.checked_add(8)?; // uncompressed size and timestamp
+        let compressed = le32(data, q)? as usize;
+        q = q.checked_add(8)?; // compressed size and CRC32
+        let flags = le32(data, q)?;
+        q = q.checked_add(4)?;
+        let entry_metadata_len = le32(data, q)? as usize;
+        q = q.checked_add(4)?.checked_add(entry_metadata_len)?;
+
+        let start = data_section.checked_add(data_offset)?;
+        let stored = data.get(start..start.checked_add(compressed)?)?;
+        if selected.is_none() && name == entry {
+            selected = Some((stored, flags, uncompressed));
+        }
+        data_offset = data_offset.checked_add(compressed)?;
+    }
+    let (stored, flags, uncompressed) = selected?;
+    decode_phar_payload(stored, flags, uncompressed)
+}
+
 /// Extracts the PHAR compression mode from per-entry flags.
 pub(super) fn phar_compression_from_flags(flags: u32) -> PharCompression {
     if flags & PHAR_FLAG_GZIP != 0 {
@@ -96,19 +175,36 @@ pub(super) fn phar_compression_from_flags(flags: u32) -> PharCompression {
 }
 
 /// Decodes a native PHAR entry payload according to its per-entry flags.
+/// Rejects implausible declared expansion and stops after one byte beyond the
+/// claimed output size so a forged header cannot drive unbounded decompression.
 pub(super) fn decode_phar_payload(stored: &[u8], flags: u32, uncompressed: usize) -> Option<Vec<u8>> {
+    if uncompressed > MAX_PHAR_ENTRY_DECOMPRESSED_BYTES {
+        return None;
+    }
     if flags & PHAR_FLAG_GZIP != 0 {
-        let mut out = Vec::with_capacity(uncompressed);
-        let mut decoder = flate2::read::DeflateDecoder::new(stored);
-        decoder.read_to_end(&mut out).ok()?;
+        if uncompressed > stored.len().checked_mul(MAX_PHAR_DECOMPRESSION_RATIO)? {
+            return None;
+        }
+        let mut out = Vec::new();
+        let decoder = flate2::read::DeflateDecoder::new(stored);
+        decoder
+            .take(u64::try_from(uncompressed.checked_add(1)?).ok()?)
+            .read_to_end(&mut out)
+            .ok()?;
         (out.len() == uncompressed).then_some(out)
     } else if flags & PHAR_FLAG_BZIP2 != 0 {
-        let mut out = Vec::with_capacity(uncompressed);
-        let mut decoder = bzip2_rs::DecoderReader::new(stored);
-        decoder.read_to_end(&mut out).ok()?;
+        if uncompressed > stored.len().checked_mul(MAX_PHAR_DECOMPRESSION_RATIO)? {
+            return None;
+        }
+        let mut out = Vec::new();
+        let decoder = bzip2_rs::DecoderReader::new(stored);
+        decoder
+            .take(u64::try_from(uncompressed.checked_add(1)?).ok()?)
+            .read_to_end(&mut out)
+            .ok()?;
         (out.len() == uncompressed).then_some(out)
     } else {
-        Some(stored.to_vec())
+        (stored.len() == uncompressed).then(|| stored.to_vec())
     }
 }
 
@@ -131,7 +227,7 @@ pub(super) fn upsert_entry(entries: &mut Vec<ArchiveEntry>, entry_name: &[u8], p
 /// archive cannot be read or has no such entry.
 pub(super) fn get_file_metadata_bytes(archive_path: &[u8], entry_name: &[u8]) -> Option<Vec<u8>> {
     let path = std::path::Path::new(std::str::from_utf8(archive_path).ok()?);
-    let archive = parse_archive(&std::fs::read(path).ok()?)?;
+    let archive = parse_archive_path(path)?;
     let entry = archive.entries.iter().find(|e| e.name == entry_name)?;
     Some(entry.metadata.clone())
 }
@@ -144,7 +240,7 @@ pub(super) fn set_file_metadata_bytes(
     metadata: &[u8],
 ) -> Option<()> {
     let path = std::path::Path::new(std::str::from_utf8(archive_path).ok()?);
-    let mut archive = parse_archive(&std::fs::read(path).ok()?)?;
+    let mut archive = parse_archive_path(path)?;
     let entry = archive.entries.iter_mut().find(|e| e.name == entry_name)?;
     entry.metadata.clear();
     entry.metadata.extend_from_slice(metadata);

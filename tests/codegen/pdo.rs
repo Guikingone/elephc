@@ -2912,27 +2912,33 @@ echo $rev . "|" . $nat;
 }
 
 /// Tier-D exception firewall: a collation comparator that `throw`s must not unwind
-/// past the C boundary (SQLite's VDBE + the Rust bridge frame). The adapter's
-/// `setjmp` firewall catches the `throw`, treats the comparison as equal (SQLite's
-/// `xCompare` has no error channel), and lets the query complete. The program must
-/// finish (no deadlock/hang/crash from a `longjmp` over C frames) and the connection
-/// must remain usable — a following query still returns the correct count.
+/// past the C boundary (SQLite's VDBE + the Rust bridge frame). The adapter catches
+/// and releases the Throwable, then the bridge interrupts the active statement so
+/// the callback is not silently treated as equality. The connection remains usable.
 #[test]
 fn test_pdo_sqlite_create_collation_throwing_comparator_does_not_hang() {
     let out = compile_and_run(
         r#"<?php
+class CollationFailure extends Exception {
+    public function __destruct() { echo "released:"; }
+}
 $db = new \Pdo\Sqlite("sqlite::memory:");
 $db->createCollation("BOOM", function($a, $b) {
-    throw new Exception("boom");
+    throw new CollationFailure("boom");
 });
 $db->exec("CREATE TABLE t (name TEXT)");
-$db->exec("INSERT INTO t (name) VALUES ('x'), ('y'), ('z')");
-$rows = $db->query("SELECT name FROM t ORDER BY name COLLATE BOOM")->fetchAll(PDO::FETCH_NUM);
+$db->exec("INSERT INTO t (name) VALUES ('x'), ('y')");
+try {
+    $db->query("SELECT name FROM t ORDER BY name COLLATE BOOM")->fetchAll(PDO::FETCH_NUM);
+    echo "not-thrown:";
+} catch (\PDOException $e) {
+    echo "caught:";
+}
 $count = $db->query("SELECT COUNT(*) FROM t")->fetchColumn();
-echo count($rows) . ":" . $count;
+echo $count;
 "#,
     );
-    assert_eq!(out, "3:3");
+    assert_eq!(out, "released:caught:2");
 }
 
 /// Tier-D `Pdo\Sqlite::createFunction`: a compiled-PHP closure drives a scalar SQL

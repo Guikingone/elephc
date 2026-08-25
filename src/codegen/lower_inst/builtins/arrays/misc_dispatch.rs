@@ -161,13 +161,19 @@ pub(crate) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
     unshift::lower_array_unshift(ctx, inst)
 }
 
-/// Lowers `sort()` for indexed integer arrays by mutating the source array in place.
+/// Lowers `sort()`, rebuilding a hash receiver re-keyed from zero the way PHP does.
 pub(crate) fn lower_sort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if sort_receiver_is_hash(ctx, inst)? {
+        return lower_hash_reindexing_sort(ctx, inst, "sort", "__rt_sort_int", "__rt_sort_str");
+    }
     lower_indexed_array_sort(ctx, inst, "sort", "__rt_sort_int", Some("__rt_sort_str"))
 }
 
-/// Lowers `rsort()` for indexed integer arrays by mutating the source array in place.
+/// Lowers `rsort()`, rebuilding a hash receiver re-keyed from zero the way PHP does.
 pub(crate) fn lower_rsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if sort_receiver_is_hash(ctx, inst)? {
+        return lower_hash_reindexing_sort(ctx, inst, "rsort", "__rt_rsort_int", "__rt_rsort_str");
+    }
     lower_indexed_array_sort(ctx, inst, "rsort", "__rt_rsort_int", Some("__rt_rsort_str"))
 }
 

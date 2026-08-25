@@ -90,13 +90,15 @@ See [FFI & Extern](../beyond-php/extern.md).
 Some optional features are implemented as Rust *bridge crates* (`staticlib`
 archives) that elephc links into the program: `pdo` (database access), `tls`
 (`https://`/`ftps://` streams), `crypto` (the `hash()`/`md5()`/`sha1()` family),
+`bcmath` (exact arbitrary-precision decimal arithmetic),
 `phar` (Phar archives), `tz` (timezone introspection), `image` (GD/Imagick image
 processing), `eval` (the Magician interpreter fallback for dynamic `eval()`),
 and `web` (the `--web` server).
 
 By default a bridge is linked **only when the program uses it** — using a hash
 function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
-referencing `PDO` pulls in `pdo`, and so on. An `eval()` call pulls in Magician
+calling a `bc*` function pulls in `bcmath`, referencing `PDO` pulls in `pdo`,
+and so on. An `eval()` call pulls in Magician
 only when it needs runtime parsing: eligible literal fragments can be parsed at
 compile time and lowered to native EIR without the interpreter bridge. Programs
 that do not need a feature never link its crate, so binaries stay small.
@@ -104,13 +106,14 @@ that do not need a feature never link its crate, so binaries stay small.
 `--with-CRATE` force-enables a bridge regardless of that auto-detection. It
 force-links the staticlib (whole-archived, so it is retained even if no symbol
 references it) and, for crates whose PHP surface comes from an injected prelude
-(`pdo`, `tz`, `image`), force-injects that prelude so the classes/functions are
+(`pdo`, `mysqli`, `tz`, `image`), force-injects that prelude so the classes/functions are
 available. This is useful when a program reaches a feature through indirection
 that detection cannot see. The flag is repeatable:
 
 ```bash
 elephc app.php --with-pdo
 elephc app.php --with-crypto --with-tls
+elephc app.php --with-bcmath
 elephc app.php --with-eval
 ```
 
@@ -134,6 +137,10 @@ Without it, dynamic eval still compiles and runs non-regex code, but `preg_*`
 names are unavailable there and calls fail at runtime. A statically visible
 regex use enables the same provider automatically. Declaring PCRE2 without
 either trigger does not link it.
+
+`--with-mysqli` is the other runtime-capability flag. It force-injects the
+mysqli prelude — which links the shared `elephc_pdo` archive — without
+injecting the PDO classes; there is no separate `elephc_mysqli` bridge.
 
 `--with-web` is an alias for [`--web`](../beyond-php/web.md) (the full server
 mode, which owns the program entry point). An unknown capability name is
@@ -178,8 +185,46 @@ mechanism:
 - **macOS** emits the runtime object with `.subsections_via_symbols` so each
   helper is a separately collectable atom, and links with `-dead_strip`.
 
-Shared libraries (`--emit cdylib`) keep the full runtime, since any exported
-symbol may be reached by a host the linker cannot see.
+Shared libraries (`--emit cdylib`) are collected the same way. Every symbol
+outside the export allowlist — the lifecycle entry points plus `#[Export]`
+trampolines — is emitted `.hidden` on ELF and `.private_extern` on Mach-O, so
+it is not an export and not a collection root; only the public ABI and what it
+reaches survives.
+
+## Symbol stripping
+
+Dead stripping removes unreachable *code*. Stripping removes the *names* of the
+code that stays. The two are independent: the first changes what runs, the
+second changes only what the file says about itself.
+
+A linked **executable** is stripped of its symbol table. Nothing in a compiled
+program reads those names — `Throwable::getTrace()` and `getTraceAsString()` are
+not implemented, and the uncaught-exception report prints no stack trace — so
+they are dead weight at run time, and they are roughly a quarter of the file:
+
+| program | linked | stripped |
+|---|--:|--:|
+| `<?php echo 1;` | 182 680 B | 132 760 B (−27%) |
+| a realistic program | 213 528 B | 152 152 B (−29%) |
+
+The share grows with the program rather than shrinking, because the symbol table
+scales with the number of declarations while the text section does not.
+
+Two flags keep the names, for the two reasons to want them:
+
+- `--debug-info` already means "I am going to debug this", so the pipeline does
+  not invoke `strip` in this mode. On macOS, `dsymutil` still bakes the dSYM and
+  the linked executable keeps its symbol table too.
+- `--keep-symbols` is for profilers, which read the symbol table and have no
+  other source of names.
+
+**Shared libraries are never stripped.** Their exported symbols are their
+interface: a host resolving one with `dlsym` would get a null it may well treat
+as "feature absent" rather than as an error.
+
+If the `strip` tool is missing, or cannot read the target's object format, the
+compiler warns and keeps the larger binary. A failed build would be the worse
+outcome for what is only a size optimization.
 
 ## Binary hardening
 

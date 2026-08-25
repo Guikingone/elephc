@@ -92,10 +92,14 @@ pub(super) fn store_value_through_ref_cell_slot(
     abi::load_at_offset(ctx.emitter, state_reg, state_offset);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select ref-cell storage after a runtime promotion
+            ctx.emitter.instruction(
+                &format!("cbnz {}, {}", state_reg, ref_cell)
+            );                                                                  // select ref-cell storage after a runtime promotion
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+            ctx.emitter.instruction(
+                &format!("test {}, {}", state_reg, state_reg)
+            );                                                                  // test the slot's runtime representation flag
             ctx.emitter.instruction(&format!("jne {}", ref_cell));              // select ref-cell storage after a runtime promotion
         }
     }
@@ -264,6 +268,29 @@ pub(super) fn lower_unset_local(ctx: &mut FunctionContext<'_>, inst: &Instructio
     Ok(())
 }
 
+/// Lowers `zero_local_slot`: writes literal zeros over the slot AT ITS OWN storage type.
+///
+/// The difference from `unset_local` is the bit pattern, and it is the whole point. `unset_local`
+/// writes the tagged-null SENTINEL, which is what a slot must hold when the name still resolves to
+/// it and a later `Mixed` read has to see PHP null. This op is for a slot whose NAME is being
+/// abandoned: nothing reads it again, and the only code that still touches it is the frame
+/// epilogue's cleanup, which recognises ZERO — `__rt_heap_free_safe` walks past a null pointer and
+/// `emit_main_refcounted_cleanup` branches over a zero slot, while the sentinel would reach
+/// `__rt_heap_free_safe` as an out-of-range pointer for a `Str` slot and a bogus refcount
+/// dereference for an `Array`/`Object` one.
+///
+/// Zero is also exactly what both prologues already write into cleanup-tracked slots
+/// (`zero_initialize_main_cleanup_locals` / `zero_initialize_function_cleanup_locals`), so an
+/// abandoned slot ends up in the same state as one whose store never ran.
+pub(super) fn lower_zero_local_slot(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    let offset = ctx.local_offset(slot)?;
+    clear_local_slot_storage(ctx, slot, offset)
+}
+
 /// Zeroes a local slot after an owned hidden temp has been moved into SSA.
 pub(super) fn clear_local_slot_storage(
     ctx: &mut FunctionContext<'_>,
@@ -370,7 +397,9 @@ pub(super) fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str x0, [sp, #16]");           // save the int result to the placeholder slot above the saved Mixed pointer
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax"); // save the int result to the placeholder slot above the saved Mixed pointer
+                        ctx.emitter.instruction(
+                            "mov QWORD PTR [rsp + 16], rax"
+                        );                                                      // save the int result to the placeholder slot above the saved Mixed pointer
                     }
                 }
                 // Pop the saved Mixed pointer into result_reg for decref_mixed.
@@ -392,7 +421,9 @@ pub(super) fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str x0, [sp, #16]");           // save the bool result to the placeholder slot
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax"); // save the bool result to the placeholder slot
+                        ctx.emitter.instruction(
+                            "mov QWORD PTR [rsp + 16], rax"
+                        );                                                      // save the bool result to the placeholder slot
                     }
                 }
                 abi::emit_pop_reg(ctx.emitter, result_reg);
@@ -412,7 +443,9 @@ pub(super) fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str d0, [sp, #16]");           // save the float result to the placeholder slot
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction("movsd QWORD PTR [rsp + 16], xmm0"); // save the float result to the placeholder slot
+                        ctx.emitter.instruction(
+                            "movsd QWORD PTR [rsp + 16], xmm0"
+                        );                                                      // save the float result to the placeholder slot
                     }
                 }
                 abi::emit_pop_reg(ctx.emitter, int_reg); // pop Mixed pointer into int_reg

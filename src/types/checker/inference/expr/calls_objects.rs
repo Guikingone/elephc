@@ -183,6 +183,10 @@ impl Checker {
                 // The unpack-after-named shape is syntactic in
                 // PHP, so it is still rejected without a known constructor.
                 self.require_no_spread_after_named_args(args, "Dynamic constructor")?;
+                // No constructor signature means no parameter binding modes either, so every
+                // argument is conservatively reference-aliased — see
+                // `Checker::record_unresolved_callee_argument_aliases`.
+                self.record_unresolved_callee_argument_aliases(args);
                 self.infer_type(name_expr, env)?;
                 for arg in args {
                     self.infer_type(arg, env)?;

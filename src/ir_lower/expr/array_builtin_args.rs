@@ -105,6 +105,9 @@ pub(super) fn lower_builtin_call_args(
         {
             lower_user_value_sort_args(ctx, sig, args)
         }
+        crate::builtins::semantics::BuiltinArgumentLowering::ReverseKeySort => {
+            lower_reverse_key_sort_args(ctx, sig, args)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::OpensslEncrypt => {
             prepare_openssl_encrypt_tag_local(ctx, args);
             if !crate::types::call_args::has_named_args(args)
@@ -178,6 +181,65 @@ pub(super) fn lower_positional_builtin_args_with_signature(
             }
         })
         .collect()
+}
+
+/// Promotes a packed local before `krsort()` so descending iteration can preserve integer keys.
+///
+/// Packed storage has no independent iteration-order metadata: reversing its slots would also
+/// change `$array[0]`. Converting the by-reference local to hash storage keeps each key/value pair
+/// intact while allowing the runtime helper to reorder only the insertion-order links.
+fn lower_reverse_key_sort_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let Some(sig) = sig else {
+        return lower_args(ctx, args);
+    };
+    if args.len() == 1 && !args.iter().any(is_spread_arg) {
+        let arg = match &args[0].kind {
+            ExprKind::NamedArg { value, .. } => value.as_ref(),
+            _ => &args[0],
+        };
+        if let Some(value) = lower_indexed_array_ref_arg_to_hash(ctx, sig, 0, arg) {
+            return vec![value];
+        }
+    }
+    lower_args_with_signature(ctx, Some(sig), args)
+}
+
+/// Converts one packed by-reference local argument into key-preserving associative storage.
+fn lower_indexed_array_ref_arg_to_hash(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) -> Option<crate::ir::ValueId> {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    let ExprKind::Variable(name) = &arg.kind else {
+        return None;
+    };
+    let PhpType::Array(elem_ty) = ctx.local_type(name).codegen_repr() else {
+        return None;
+    };
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Int),
+        value: elem_ty,
+    };
+    let array = ctx.load_local(name, Some(arg.span));
+    ctx.prepare_mutated_local_owner(name, array, assoc_ty.clone(), Some(arg.span));
+    let hash = ctx.emit_value(
+        Op::ArrayToHash,
+        vec![array.value],
+        None,
+        assoc_ty.clone(),
+        Op::ArrayToHash.default_effects(),
+        Some(arg.span),
+    );
+    ctx.store_prepared_mutated_local(name, hash, assoc_ty, Some(arg.span));
+    Some(ctx.load_local(name, Some(arg.span)).value)
 }
 
 /// Lowers `count()` arguments, dropping a statically-default mode argument.

@@ -176,7 +176,16 @@ $f = (float)42;      // 42.0
 $s = (string)42;     // "42"
 $b = (bool)0;        // false
 $a = (array)42;      // [42]
+$o = (array)$obj;    // property name => value hash, with PHP's visibility-mangled keys
+$m = (array)$mixed;  // dispatches on the runtime tag: arrays pass through, scalars wrap, objects project
 ```
+
+`(array)` on an object projects all of its properties into a string-keyed hash
+using PHP's exact key mangling — `x` for a public property, `"\0*\0y"` for a
+protected one, `"\0Class\0z"` for a private one — including the
+`__PHP_Incomplete_Class` payload a restricted `unserialize()` produces. For the
+scope-aware, unmangled view use `get_object_vars()`. `(array)` on a boxed
+`mixed` value dispatches on the runtime tag at run time.
 
 Cast names and aliases are case-insensitive, matching PHP. For example,
 `(INT)`, `(Integer)`, and `(integer)` are equivalent.
@@ -215,7 +224,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `strval()`      | `strval($val): string`       | Convert to string              |
 | `gettype()`     | `gettype($val): string`      | Returns type name              |
 | `empty()`       | `empty($val): bool`          | Returns true if value is falsy |
-| `unset()`       | `unset($var, ...$vars): void` | Sets one or more variables to null |
+| `unset()`       | `unset($var, ...$vars): void` | Unbinds one or more variables. On an eligible local a later read is a compile error, in both modes — see [Local retyping](#local-retyping) |
 | `settype()`     | `settype($var, $type): bool` | Changes variable type in place |
 
 PHP's predicate aliases are supported and behave identically to their canonical
@@ -238,6 +247,21 @@ function describe($x): string {        // $x may be int or a Point across call s
 Narrowing is not tracked across a reassignment of the variable inside the branch.
 
 Narrowing applies to function and method parameters. A parameter whose call sites pass incompatible types (e.g. `int` at one site and a class instance at another) is inferred as a union, and the guard narrows it inside each branch. This is **not** yet supported for closure parameters: a closure invoked with incompatible argument types is rejected at compile time rather than inferred as a union.
+
+### Local retyping
+
+An **undeclared-type** local is monomorphic by default, but three shapes let it change type anyway. `unset($a)` ends the binding, and the next assignment re-binds `$a` at any type with no diagnostic. A plain straight-line reassignment (`$a = 0; $a = "ciao";`) re-binds `$a` to a fresh slot of the new type and warns. A branch-divergent assignment (`if (…) { $a = 0; } else { $a = "ciao"; }`) compiles the local as boxed `mixed` storage for the whole body and warns — a performance signal as much as a correctness one, since every read of it then goes through the box.
+
+One behaviour differs from PHP: reading a variable after `unset()` is a compile error, where PHP warns and evaluates the read as `null`. Probe the name with `isset()` (or `empty()` / `??`), which stay legal on an unbound name:
+
+```php
+$a = "x";
+unset($a);
+echo $a;                            // Undefined variable: $a — compile error
+echo isset($a) ? "set" : "unset";   // fine: prints "unset"
+```
+
+None of this touches a **declared** type: a typed local, a type-hinted parameter, and a class property stay strict in every mode. `--strict-locals` turns the two warning shapes back into hard errors; see [Strict locals mode](../compiling/cli-reference.md#strict-locals-mode) for the flag and for which names are eligible.
 
 ### Parameter type coercion
 
@@ -370,7 +394,8 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 - `var_dump()`, `print_r()` and `var_export()` render an object's **declared** properties only. Dynamic (undeclared) properties — every property of a `stdClass` built with `$o->p = 1`, and any property added to an `#[\AllowDynamicProperties]` class — are not listed, so `print_r(new stdClass)` prints an empty body where PHP lists the assigned properties. All three renderers share one per-class descriptor, so they never disagree about which properties an object has.
 - `func_num_args()`, `func_get_args()` and `func_get_arg()` are compiled away rather than dispatched as builtin calls, so `function_exists()` reports `false` for the three names where PHP reports `true`. Their supported scopes are also narrower than PHP's: they are rejected in a function with an optional (defaulted) parameter, in a function that already declares its own variadic, and in a method that overrides a parent method or implements an interface method. Everywhere else — functions, methods, static methods, closures, arrow functions, generators — they match PHP, including reporting the current values of the declared parameters. See [Functions](./functions.md#argument-introspection).
 - Surplus *positional* arguments (PHP allows any user function to be called with more arguments than it declares, discarding the extras) are only accepted by functions that use one of the three argument-introspection constructs above. Every other user function keeps elephc's compile-time arity check, so `function f($a) {} f(1, 2);` is a compile error where PHP runs it.
-- `serialize()`/`unserialize()` cover scalars, arrays, and objects (including the `__serialize`/`__unserialize`/`__sleep`/`__wakeup` magic methods and `r:`/`R:` object back-references) byte-for-byte compatibly with PHP. Remaining gaps: a cyclic reference inside an object's own properties resolves to `null` on `unserialize()` (serialization handles cycles), the deprecated `Serializable` interface (`C:` wire form) is unsupported, writing a property of an unserialized object held in a `Mixed` does not persist (a separate `Mixed` property-write limitation), and `unserialize()` does not emit PHP's `E_WARNING` / `E_NOTICE` on malformed input — it just returns `false`.
+- `serialize()`/`unserialize()` cover scalars, arrays, and objects (including the `__serialize`/`__unserialize`/`__sleep`/`__wakeup` magic methods and `r:`/`R:` object back-references) byte-for-byte compatibly with PHP. Objects are registered before property hydration, so self-references resolve correctly; unknown class names materialize as `__PHP_Incomplete_Class` and preserve their original wire name. Remaining gaps: the deprecated `Serializable` interface (`C:` wire form) is unsupported, writing a property of an unserialized object held in a `Mixed` does not persist (a separate `Mixed` property-write limitation), and `unserialize()` does not emit PHP's `E_WARNING` / `E_NOTICE` on malformed input — it just returns `false`.
+- Reading a variable after a straight-line `unset()` of it is a compile error (`Undefined variable: $a`), in both modes, where PHP warns and evaluates the read as `null`. See [Local retyping](#local-retyping) above for the full unset/retype/mixed-storage mechanism and the `isset()`/`empty()`/`??` probes that stay legal on the unbound name.
 
 ### Filesystem functions not implemented
 

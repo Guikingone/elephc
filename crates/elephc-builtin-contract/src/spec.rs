@@ -63,6 +63,22 @@ pub enum TypeSpec {
     Mixed,
     /// PHP `void` in return position.
     Void,
+    /// elephc `pointer` — a raw address, not a PHP type.
+    ///
+    /// Present because a declaration that cannot say what a builtin returns does not become
+    /// silent, it becomes WRONG: the `Area::Pointers` builtins whose check hook returns
+    /// `PhpType::Pointer` otherwise have to declare `Mixed`, and every consumer that reads the
+    /// DECLARED type rather than the checked one — the PHP-type conversion, the generated docs,
+    /// and the result-type fallback lowering takes when it cannot identify a call — then gets
+    /// `mixed` for an address, and hands codegen a boxed cell where a raw address belongs.
+    ///
+    /// A `check` hook makes the declared type non-authoritative, not unused.
+    Ptr,
+    /// PHP `callable`, as the owned runtime descriptor it lowers to.
+    ///
+    /// Same reason as `Ptr`: `__elephc_normalize_callable` checks as `PhpType::Callable`, whose
+    /// representation is a descriptor rather than a boxed cell.
+    Callable,
 }
 
 /// Static PHP value used as an optional builtin parameter default.
@@ -206,5 +222,10 @@ impl BuiltinContract {
             variadic: self.variadic,
             required_param_count: None,
         }
+    }
+
+    /// Returns the fixed PHP parameter names that can contain callable descriptors.
+    pub fn callback_parameter_names(&self) -> &'static [&'static str] {
+        crate::callback_parameters::names(self.id)
     }
 }

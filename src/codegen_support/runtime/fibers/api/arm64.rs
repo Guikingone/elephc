@@ -296,6 +296,7 @@ pub(super) fn emit_resume(emitter: &mut Emitter) {
 /// __rt_fiber_suspend: yield control from the running fiber back to its caller.
 /// Input:  x0 = value to deliver to the resumer's `start()` / `resume()` call
 /// Output: x0 = the value the next resumer passes back via `resume($v)`
+/// Raises FiberError before mutation when an active `unserialize()` owns global parser state.
 pub(super) fn emit_suspend(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_suspend ---");
@@ -316,6 +317,12 @@ pub(super) fn emit_suspend(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #33");                                         // x1 = error message length in bytes
     emitter.instruction("bl __rt_fiber_throw_state_error");                     // raise FiberError; this call does not return
     emitter.label("__rt_fiber_suspend_state_ok");
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_unser_active", 0);          // x9 = active unserialize nesting count
+    emitter.instruction("cbz x9, __rt_fiber_suspend_unserialize_ok");           // switching is safe only when no parser context is live
+    abi::emit_symbol_address(emitter, "x0", "_fiber_msg_suspend_unserialize"); // x0 = stable FiberError message for the forbidden switch
+    emitter.instruction("mov x1, #52");                                         // x1 = error message length in bytes
+    emitter.instruction("bl __rt_fiber_throw_state_error");                     // raise before publishing a yielded value or Suspended state
+    emitter.label("__rt_fiber_suspend_unserialize_ok");
     emitter.instruction("mov x0, x20");                                         // restore the yielded value into x0 for the suspend logic below
     emitter.instruction("ldp x20, x21, [sp], #16");                             // restore caller's x20/x21 now that the state check is done
 

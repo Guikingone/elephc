@@ -281,9 +281,10 @@ impl Emitter {
 /// assembler-local labels, and `L`-prefixed labels also do not start a new atom,
 /// so each `__rt_*` helper stays a single dead-strippable unit. Matching is
 /// whole-token (identifier runs of `[A-Za-z0-9_$]`), so a name is never rewritten
-/// inside a longer identifier; non-identifier text (including UTF-8 in comments)
-/// is copied verbatim. Apply to the runtime text only — the runtime `.data` never
-/// references internal labels, and skipping it avoids touching string literals.
+/// inside a longer identifier. Quoted assembly strings are copied verbatim within
+/// their physical line, so user string constants cannot be changed when user
+/// metadata references one of the localized labels and an unmatched quote cannot
+/// suppress localization on later lines.
 pub fn localize_internal_labels(asm: &str, internal: &HashSet<String>) -> String {
     if internal.is_empty() {
         return asm.to_string();
@@ -293,7 +294,25 @@ pub fn localize_internal_labels(asm: &str, internal: &HashSet<String>) -> String
     let mut out = String::with_capacity(asm.len());
     let mut i = 0;
     while i < bytes.len() {
-        if is_ident(bytes[i]) {
+        if bytes[i] == b'"' {
+            let start = i;
+            i += 1;
+            let mut escaped = false;
+            while i < bytes.len() {
+                let byte = bytes[i];
+                i += 1;
+                if byte == b'\n' {
+                    break;
+                } else if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    break;
+                }
+            }
+            out.push_str(&asm[start..i]);
+        } else if is_ident(bytes[i]) {
             let start = i;
             while i < bytes.len() && is_ident(bytes[i]) {
                 i += 1;
@@ -305,7 +324,7 @@ pub fn localize_internal_labels(asm: &str, internal: &HashSet<String>) -> String
             out.push_str(token);
         } else {
             let start = i;
-            while i < bytes.len() && !is_ident(bytes[i]) {
+            while i < bytes.len() && !is_ident(bytes[i]) && bytes[i] != b'"' {
                 i += 1;
             }
             out.push_str(&asm[start..i]);
@@ -345,4 +364,27 @@ mod tests {
         linux_x86.emit_text_prelude();
         assert_eq!(linux_x86.output(), ".intel_syntax noprefix\n.text\n");
     }
+
+    /// Verifies internal symbol references are localized without rewriting quoted user bytes.
+    #[test]
+    fn test_localize_internal_labels_preserves_assembly_strings() {
+        let internal = HashSet::from(["_eir_branch_1".to_string()]);
+        let asm = "    b _eir_branch_1\n_eir_branch_1:\n    .ascii \"_eir_branch_1\"\n";
+        assert_eq!(
+            localize_internal_labels(asm, &internal),
+            "    b L_eir_branch_1\nL_eir_branch_1:\n    .ascii \"_eir_branch_1\"\n"
+        );
+    }
+
+    /// Verifies an unmatched quote in one assembly line cannot hide labels on later lines.
+    #[test]
+    fn test_localize_internal_labels_bounds_unmatched_quotes_to_one_line() {
+        let internal = HashSet::from(["_eir_branch_1".to_string()]);
+        let asm = "    ; unmatched \" in comment\n    b _eir_branch_1\n_eir_branch_1:\n";
+        assert_eq!(
+            localize_internal_labels(asm, &internal),
+            "    ; unmatched \" in comment\n    b L_eir_branch_1\nL_eir_branch_1:\n"
+        );
+    }
+
 }

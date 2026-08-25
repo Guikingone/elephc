@@ -69,6 +69,20 @@ fn owned_string_parameter_is_persisted_once() {
     }
 }
 
+/// Verifies callable prologues use only the stack-pointer guard and do not add
+/// process-global byte accounting calls on function entry or return.
+#[test]
+fn callable_frames_do_not_emit_a_second_stack_budget_guard() {
+    for target in [
+        Target::new(Platform::Linux, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::X86_64),
+    ] {
+        let asm = owned_string_then_mixed_prologue_asm(target);
+        assert!(asm.contains("call-stack overflow guard"), "{target:?}: {asm}");
+        assert!(!asm.contains("recursion_stack_bytes"), "{target:?}: {asm}");
+    }
+}
+
 /// Builds a callable with an owned string parameter followed by a borrowed Mixed parameter.
 fn owned_string_then_mixed_prologue_asm(target: Target) -> String {
     let mut module = Module::new(target);

@@ -9,7 +9,7 @@
 //! - Duplicate names, duplicate IDs, non-canonical names, hash mismatches, and
 //!   unstable source ordering fail before the catalog is exposed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use crate::{BuiltinContract, BuiltinId};
@@ -95,6 +95,22 @@ fn build_registry() -> Registry {
             "builtin contract ID does not match canonical name: {}",
             contract.name
         );
+        let mut callback_names = HashSet::new();
+        for callback_name in contract.callback_parameter_names() {
+            assert!(
+                callback_names.insert(*callback_name),
+                "duplicate callback parameter metadata for {}::${callback_name}",
+                contract.name
+            );
+            assert!(
+                contract
+                    .params
+                    .iter()
+                    .any(|parameter| parameter.name == *callback_name),
+                "callback parameter metadata references unknown parameter {}::${callback_name}",
+                contract.name
+            );
+        }
         assert!(
             by_name.insert(contract.name, contract).is_none(),
             "duplicate builtin contract name: {}",
@@ -118,7 +134,7 @@ mod tests {
     /// Verifies the shared catalog validates and exposes every compiler/eval surface.
     #[test]
     fn catalog_is_valid_and_complete_for_all_contract_surfaces() {
-        assert_eq!(contracts().len(), 530);
+        assert_eq!(contracts().len(), 544);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }
@@ -137,6 +153,10 @@ mod tests {
     /// Verifies fixed bridge and runtime capabilities are visible on assembled contracts.
     #[test]
     fn assembled_contracts_include_neutral_requirements() {
+        assert_eq!(
+            lookup("bcadd").expect("bcadd contract").requirements,
+            &[crate::BuiltinRequirement::Bridge("elephc_bcmath")]
+        );
         assert_eq!(
             lookup("hash").expect("hash contract").requirements,
             &[crate::BuiltinRequirement::Bridge("elephc_crypto")]

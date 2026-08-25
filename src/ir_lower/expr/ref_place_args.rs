@@ -36,6 +36,8 @@ use crate::names::Name;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 
+mod key_sort;
+
 use super::{
     call_signature, is_spread_arg, lower_expr, lower_function_call,
     lower_non_local_assignment_write, normalize_value_php_type, source_prefers_extension_builtin,
@@ -82,6 +84,11 @@ pub(super) fn lower_builtin_ref_place_call(
         // A spread cannot be split into per-parameter places here; PHP also rejects spreading
         // into a by-reference parameter, and the checker already reports that.
         return None;
+    }
+    if let Some(result) =
+        key_sort::lower_key_sort_ref_place_call(ctx, canonical, &sig, args, expr)
+    {
+        return Some(result);
     }
     let rewrite_indices: Vec<usize> = args
         .iter()

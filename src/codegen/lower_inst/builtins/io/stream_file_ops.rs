@@ -181,7 +181,9 @@ pub(crate) fn lower_fprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     load_string_to_result(ctx, format, "fprintf format")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov x0, #{}", inst.operands.len() - 2)); // pass the number of packed fprintf operands
+            ctx.emitter.instruction(
+                &format!("mov x0, #{}", inst.operands.len() - 2)
+            );                                                                  // pass the number of packed fprintf operands
         }
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rdi", (inst.operands.len() - 2) as i64);
@@ -305,6 +307,7 @@ pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         ctx.emitter.instruction("mov rdi, rax");                                // pass the stream fd to the x86_64 fgetcsv runtime helper
     }
     abi::emit_call_label(ctx.emitter, "__rt_fgetcsv");
+    box_indexed_array_or_false_result(ctx);                                     // EOF is a null result, which PHP reports as false
     store_if_result(ctx, inst)
 }
 

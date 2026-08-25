@@ -33,6 +33,10 @@ fn type_spec_str(ty: &TypeSpec) -> String {
         TypeSpec::Bool => "bool".to_string(),
         TypeSpec::Mixed => "mixed".to_string(),
         TypeSpec::Void => "void".to_string(),
+        // Not a PHP type: the `Area::Pointers` builtins are elephc extensions and this is the
+        // raw address their check hook returns. Rendering it as `mixed` would document a lie.
+        TypeSpec::Ptr => "pointer".to_string(),
+        TypeSpec::Callable => "callable".to_string(),
     }
 }
 
@@ -145,6 +149,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::PregReplaceCallback => "preg_replace_callback",
         BuiltinArgumentLowering::PositionalRegex => "positional_regex",
         BuiltinArgumentLowering::UserValueSort => "user_value_sort",
+        BuiltinArgumentLowering::ReverseKeySort => "reverse_key_sort",
         BuiltinArgumentLowering::OpensslEncrypt => "openssl_encrypt",
         BuiltinArgumentLowering::ArraySplice => "array_splice",
         BuiltinArgumentLowering::ArrayInternalPointer(_) => "array_internal_pointer",

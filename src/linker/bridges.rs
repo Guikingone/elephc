@@ -46,7 +46,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         env_var: "ELEPHC_TLS_LIB_DIR",
         crate_name: "elephc-tls",
         flag_name: "tls",
-        whole_archive: true,
+        whole_archive: false,
         macos_frameworks: &[],
         needs_libdl: true,
         // The TLS bridge implements PHP's OpenSSL-backed stream crypto surface.
@@ -60,8 +60,11 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         macos_frameworks: &["CoreFoundation", "SystemConfiguration"],
         needs_libdl: true,
-        // The bridge exposes the core PDO database-access surface.
-        php_extension: Some("PDO"),
+        // The archive backs MORE THAN ONE PHP surface (PDO and mysqli), so the
+        // linked staticlib alone cannot identify a PHP extension. Reporting comes
+        // from the injected PHP surface(s) instead: `pipeline::compile` passes
+        // `linked_php_surfaces` ("PDO" / "mysqli") to the backend seeding.
+        php_extension: None,
     },
     BridgeStaticlib {
         lib_name: "elephc_crypto",
@@ -73,6 +76,17 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
         // The crypto bridge implements PHP's digest/HMAC `hash` extension.
         php_extension: Some("hash"),
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_bcmath",
+        env_var: "ELEPHC_BCMATH_LIB_DIR",
+        crate_name: "elephc-bcmath",
+        flag_name: "bcmath",
+        whole_archive: false,
+        macos_frameworks: &[],
+        needs_libdl: true,
+        // The decimal bridge implements PHP's procedural `bcmath` extension.
+        php_extension: Some("bcmath"),
     },
     BridgeStaticlib {
         lib_name: "elephc_phar",
@@ -190,6 +204,7 @@ fn resolve_with<F>(
 where
     F: FnMut(&BridgeStaticlib) -> Result<PathBuf, LinkError>,
 {
+    let plan = plan.without_redundant_embedded_bridges();
     let mut located: HashMap<&'static str, PathBuf> = HashMap::new();
     let mut bridge_paths = Vec::new();
     let mut seen_paths = HashSet::new();
@@ -462,24 +477,29 @@ impl BridgeStaticlib {
 
     /// Finds the checkout this elephc was built from, if it was built from one.
     ///
-    /// The EXECUTABLE is asked first and the working directory only as a fallback, because
-    /// they answer different questions. `current_exe()` is a fact about which build produced
-    /// this compiler; the working directory is the user's PHP project, which has no reason to
-    /// sit inside elephc's source tree. Asking the project first meant that compiling from
-    /// anywhere else — every integration test runs from a temp directory — found no workspace
-    /// and silently gave up on rebuilding.
+    /// The compile-time manifest directory identifies the exact checkout that produced this
+    /// compiler, including worktrees whose Cargo target directory is shared with another
+    /// checkout. The working directory and executable ancestry remain fallbacks for relocated
+    /// or installed binaries where that original source tree no longer exists.
     ///
     /// An installed binary has neither, and correctly gets `None`: `/usr/local/bin/elephc` has
     /// no ancestor carrying elephc's crates, so nothing tries to run cargo on a user's machine.
     fn find_workspace(&self) -> Option<PathBuf> {
         let manifest = format!("crates/{}/Cargo.toml", self.crate_name);
+        let compiled_from = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        if compiled_from.join(&manifest).exists() {
+            return Some(compiled_from);
+        }
+        let from_cwd = std::env::current_dir()
+            .ok()
+            .and_then(|cwd| Self::ancestor_carrying(&cwd, &manifest));
+        if from_cwd.is_some() {
+            return from_cwd;
+        }
         let from_executable = std::env::current_exe()
             .ok()
             .and_then(|executable| Self::ancestor_carrying(&executable, &manifest));
-        from_executable.or_else(|| {
-            let cwd = std::env::current_dir().ok()?;
-            Self::ancestor_carrying(&cwd, &manifest)
-        })
+        from_executable
     }
 
     /// Returns the nearest ancestor of `start` that carries `manifest`.
@@ -550,6 +570,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Verifies shared Cargo target directories cannot redirect bridge discovery to another worktree.
+    #[test]
+    fn bridge_workspace_prefers_the_compiler_manifest_checkout() {
+        let bridge = bridge_for_library("elephc_web").expect("web bridge");
+        assert_eq!(
+            bridge.find_workspace().as_deref(),
+            Some(Path::new(env!("CARGO_MANIFEST_DIR")))
+        );
+    }
+
     /// Staleness is decided by modification time, and a nested `target/` never counts.
     ///
     /// The `target/` exclusion is what keeps the check from seeing the bridge's own build
@@ -590,6 +620,9 @@ mod tests {
     /// Verifies representative bridge metadata and archive naming remain registered.
     #[test]
     fn representative_bridge_metadata_is_preserved() {
+        let tls = bridge_for_library("elephc_tls").expect("TLS bridge");
+        assert!(!tls.whole_archive);
+
         let crypto = bridge_for_library("elephc_crypto").expect("crypto bridge");
         assert_eq!(crypto.crate_name, "elephc-crypto");
         assert_eq!(crypto.env_var, "ELEPHC_CRYPTO_LIB_DIR");
@@ -609,6 +642,26 @@ mod tests {
         assert!(!magician.whole_archive);
     }
 
+    /// Verifies automatic TLS linking stays lazy while `--with-tls` force-loads the archive.
+    #[test]
+    fn tls_whole_archive_is_reserved_for_explicit_forcing() {
+        let archive = std::env::current_exe().expect("test executable path");
+        let plan = LinkPlan::from_items(vec![LinkItem::named_runtime("elephc_tls")]);
+
+        for (forced, expected_whole_archive) in [(&[][..], false), (&["elephc_tls".to_string()][..], true)] {
+            let resolution = resolve_with(&plan, forced, |_| Ok(archive.clone()))
+                .expect("TLS bridge must resolve");
+            assert!(resolution.plan.items().iter().any(|item| matches!(
+                item,
+                LinkItem::StaticArchive {
+                    whole_archive,
+                    origin: LinkOrigin::Bridge { name },
+                    ..
+                } if name == "elephc_tls" && *whole_archive == expected_whole_archive
+            )));
+        }
+    }
+
     /// Verifies bridge progress selection and PHP extension reporting share the bridge table.
     #[test]
     fn bridge_reporting_metadata_matches_php_surface() {
@@ -622,8 +675,11 @@ mod tests {
             vec![("elephc_tls", "tls"), ("elephc_magician", "eval")]
         );
         assert_eq!(php_extension_for_lib("elephc_tls"), Some("openssl"));
-        assert_eq!(php_extension_for_lib("elephc_pdo"), Some("PDO"));
+        // elephc_pdo backs two PHP surfaces (PDO, mysqli); reporting is
+        // surface-based via `linked_php_surfaces`, never archive-based.
+        assert_eq!(php_extension_for_lib("elephc_pdo"), None);
         assert_eq!(php_extension_for_lib("elephc_crypto"), Some("hash"));
+        assert_eq!(php_extension_for_lib("elephc_bcmath"), Some("bcmath"));
         assert_eq!(php_extension_for_lib("elephc_phar"), Some("Phar"));
         assert_eq!(php_extension_for_lib("elephc_image"), Some("gd"));
         assert_eq!(php_extension_for_lib("elephc_web"), Some("session"));
@@ -654,6 +710,36 @@ mod tests {
             .plan
             .items()
             .contains(&LinkItem::Framework("SystemConfiguration".to_string())));
+    }
+
+    /// Verifies bridge resolution keeps Magician as the sole provider of its embedded crates.
+    #[test]
+    fn magician_replaces_standalone_embedded_bridge_archives() {
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::named_runtime("elephc_crypto"),
+            LinkItem::named_runtime("elephc_phar"),
+            LinkItem::named_runtime("elephc_magician"),
+        ]);
+        let executable = std::env::current_exe().expect("test executable path");
+        let resolution = resolve_with(&plan, &[], |_| Ok(executable.clone()))
+            .expect("embedded bridge plan must resolve");
+        let bridge_names: Vec<&str> = resolution
+            .plan
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                LinkItem::StaticArchive {
+                    origin: LinkOrigin::Bridge { name },
+                    ..
+                } => Some(name.as_str()),
+                LinkItem::StaticArchive { .. }
+                | LinkItem::NamedLibrary { .. }
+                | LinkItem::SearchPath(_)
+                | LinkItem::Framework(_) => None,
+            })
+            .collect();
+
+        assert_eq!(bridge_names, vec!["elephc_magician"]);
     }
 
     /// Verifies a missing named bridge returns a structured error instead of a `-l` fallback.

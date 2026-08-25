@@ -13,15 +13,21 @@ use std::collections::HashSet;
 use std::process;
 
 pub(crate) use crate::codegen::Emit;
+use crate::codegen::WebIsolation;
 use crate::codegen::platform::Target;
 use crate::native_deps::{native_help, parse_native_args, NativeCommand, NativeParseOutcome};
 
-/// Non-bridge runtime capabilities accepted by `--with-<name>`.
-const RUNTIME_CAPABILITY_FLAGS: &[&str] = &["regex"];
+/// Non-bridge runtime capabilities accepted by `--with-<name>`. `mysqli` is not
+/// a bridge of its own: it force-injects the mysqli prelude, which links the
+/// shared `elephc_pdo` archive (and never injects the PDO classes).
+const RUNTIME_CAPABILITY_FLAGS: &[&str] = &["regex", "mysqli"];
 
 /// Short usage line shown after every parameter error, alongside the `--help` hint.
 /// The full categorized reference lives in `HELP`.
 pub(crate) const USAGE: &str = "Usage: elephc [OPTIONS] <source-file>";
+
+/// Compiler package version embedded into the binary by Cargo.
+pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// ASCII mascot printed by `--mascotte`, embedded at compile time (not read
 /// from a filesystem path — the original source file lives outside this
@@ -76,18 +82,26 @@ fn wants_help(args: &[String]) -> bool {
     args.iter().any(|a| a == "-h" || a == "--help")
 }
 
+/// Returns true if `-V` or `--version` appears anywhere in the argument list.
+fn wants_version(args: &[String]) -> bool {
+    args.iter().any(|a| a == "-V" || a == "--version")
+}
+
 /// Full `--help` reference text, categorized by section. Printed to stdout
 /// with exit code 0 — this is a successful, requested action, not an error.
-pub(crate) const HELP: &str = "Usage: elephc [OPTIONS] <source-file>
+pub(crate) const HELP: &str = concat!("Usage: elephc [OPTIONS] <source-file>
 
 A PHP-to-native AOT compiler
+Version: ", env!("CARGO_PKG_VERSION"), "
 
 Arguments:
   <source-file>           Tagged .php or tagless .lfc source file to compile
 
 Modes:
   --web                   Compile as a prefork HTTP server
+  --web-isolation MODE    worker (default) | pool | request; requires --web
   --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
+  --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning
 
 Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
@@ -114,18 +128,20 @@ Linking:
   --link LIB, -l LIB      Extra library to link
   --link-path DIR, -L DIR Extra library search path
   --framework NAME        macOS framework to link
-  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, web, eval, regex)
+  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, bcmath, web, eval, regex, mysqli)
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
   --quiet, -q             Disable progress lines and colorized output
   --source-map            Emit a .map source map alongside the assembly
   --debug-info            Embed DWARF line info for debuggers
+  --keep-symbols          Keep the symbol table (stripped by default; for profilers)
 
 Other:
   -h, --help              Print this help and exit
+  -V, --version           Print version and exit
   --mascotte              Print an ASCII mascot and a random quote before output
-";
+");
 
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
 /// Controls heap allocation size, debug output, code generation options, and linking behavior.
@@ -149,6 +165,8 @@ pub(crate) struct CliConfig {
     pub(crate) emit_timings: bool,
     pub(crate) emit_source_map: bool,
     pub(crate) emit_debug_info: bool,
+    /// Keep the symbol table in the linked executable; it is stripped by default.
+    pub(crate) keep_symbols: bool,
     pub(crate) regalloc_linear: bool,
     pub(crate) ir_opt: bool,
     pub(crate) target: Target,
@@ -165,7 +183,12 @@ pub(crate) struct CliConfig {
     /// Accept only PHP-compatible constructs: elephc extensions (`ptr`, `buffer<T>`,
     /// `packed class`, `extern`, `ifdef`, extension builtins) become compile errors.
     pub(crate) strict_php: bool,
+    /// Make an incompatible local retype (e.g. a variable assigned `int` then
+    /// later `string`) a compile error instead of a warning.
+    pub(crate) strict_locals: bool,
     pub(crate) web: bool,
+    /// Process-isolation architecture baked into a `--web` executable.
+    pub(crate) web_isolation: WebIsolation,
     /// Optional capabilities the user force-enabled with `--with-<name>` (short
     /// names such as `"pdo"` or `"regex"`). Bridge names force-link their
     /// staticlib; runtime capabilities enable their helper/native requirements.
@@ -221,6 +244,10 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         println!("{HELP}");
         process::exit(0);
     }
+    if wants_version(args) {
+        println!("elephc {VERSION}");
+        process::exit(0);
+    }
 
     let mut heap_size: usize = 8_388_608; // 8MB default
     let mut gc_stats = false;
@@ -233,6 +260,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut emit_timings = false;
     let mut emit_source_map = false;
     let mut emit_debug_info = false;
+    let mut keep_symbols = false;
     let mut filename_arg = None;
     let mut target = Target::detect_host();
     let mut php_version = crate::web_prelude::PhpVersion::default();
@@ -242,7 +270,10 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut extra_frameworks: Vec<String> = Vec::new();
     let mut defines: HashSet<String> = HashSet::new();
     let mut strict_php = false;
+    let mut strict_locals = false;
     let mut web = false;
+    let mut web_isolation = WebIsolation::default();
+    let mut web_isolation_explicit = false;
     let mut quiet = false;
     let mut with_crates: HashSet<String> = HashSet::new();
     let mut ini_overrides: Vec<(String, String)> = Vec::new();
@@ -306,6 +337,8 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             emit_source_map = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
+        } else if arg == "--keep-symbols" {
+            keep_symbols = true;
         } else if arg == "--quiet" || arg == "-q" {
             quiet = true;
         } else if arg == "--mascotte" {
@@ -367,8 +400,21 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             ));
         } else if arg == "--strict-php" {
             strict_php = true;
+        } else if arg == "--strict-locals" {
+            strict_locals = true;
         } else if arg == "--web" {
             web = true;
+        } else if arg == "--web-isolation" {
+            i += 1;
+            web_isolation = parse_web_isolation(&required_value(
+                args,
+                i,
+                "Missing mode after --web-isolation (expected: worker, pool, request)",
+            ));
+            web_isolation_explicit = true;
+        } else if let Some(value) = arg.strip_prefix("--web-isolation=") {
+            web_isolation = parse_web_isolation(value);
+            web_isolation_explicit = true;
         } else if let Some(name) = arg.strip_prefix("--with-") {
             // `--with-web` aliases the full `--web` mode (it owns the program
             // entry point); every other known bridge or runtime capability is
@@ -413,6 +459,9 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     if web && emit_ir {
         fail("--web cannot be combined with --emit-ir");
     }
+    if web_isolation_explicit && !web {
+        fail("--web-isolation requires --web (or --with-web)");
+    }
 
     // With no explicit `--php-version`, take the profile the project already declares. Every
     // source is optional at every level, so a lone `.php` file still resolves to the default
@@ -443,6 +492,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         emit_timings,
         emit_source_map,
         emit_debug_info,
+        keep_symbols,
         regalloc_linear,
         ir_opt,
         target,
@@ -453,7 +503,9 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         extra_frameworks,
         defines,
         strict_php,
+        strict_locals,
         web,
+        web_isolation,
         with_crates,
         quiet,
         ini_overrides,
@@ -578,6 +630,19 @@ fn parse_ir_opt(value: &str) -> bool {
     }
 }
 
+/// Parses the compile-time web process-isolation model.
+fn parse_web_isolation(value: &str) -> WebIsolation {
+    match value {
+        "worker" => WebIsolation::Worker,
+        "pool" => WebIsolation::Pool,
+        "request" => WebIsolation::Request,
+        other => fail(&format!(
+            "Unknown --web-isolation value: {} (expected worker|pool|request)",
+            other
+        )),
+    }
+}
+
 /// Parse a target string to a Target enum, or fail with an error message.
 fn parse_target(value: &str) -> Target {
     match Target::parse(value) {
@@ -635,6 +700,56 @@ mod tests {
         config
     }
 
+    /// Verifies the symbol table is stripped unless the invocation asks to keep it.
+    ///
+    /// The default is the load-bearing part: stripping removes about a quarter of every linked
+    /// executable, so a regression that silently flipped this back would cost that on every build
+    /// while breaking nothing a test would otherwise notice.
+    #[test]
+    fn symbols_are_stripped_unless_kept() {
+        let default = compile_config(&["elephc".to_string(), "app.php".to_string()]);
+        assert!(!default.keep_symbols, "stripping is the default");
+
+        let kept = compile_config(&[
+            "elephc".to_string(),
+            "--keep-symbols".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(kept.keep_symbols, "--keep-symbols must keep the symbol table");
+    }
+
+    /// Verifies `--debug-info` and `--keep-symbols` are independent flags.
+    ///
+    /// They are consumed together at link time — either one keeps the names — but each must parse
+    /// on its own, so that reading one out of the config cannot be mistaken for the other.
+    #[test]
+    fn debug_info_and_keep_symbols_parse_independently() {
+        let debug = compile_config(&[
+            "elephc".to_string(),
+            "--debug-info".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(debug.emit_debug_info);
+        assert!(!debug.keep_symbols, "--debug-info is not --keep-symbols");
+
+        let both = compile_config(&[
+            "elephc".to_string(),
+            "--debug-info".to_string(),
+            "--keep-symbols".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(both.emit_debug_info && both.keep_symbols);
+    }
+
+    /// Verifies `--keep-symbols` appears in the help text.
+    ///
+    /// `docs/compiling/cli-reference.md` is authoritative and must stay in sync with this file; a
+    /// flag missing from `--help` is the first way those two drift apart.
+    #[test]
+    fn keep_symbols_is_documented_in_help() {
+        assert!(HELP.contains("--keep-symbols"));
+    }
+
     /// Verifies an empty `--define` symbol is rejected, matching the `--define=` form,
     /// so the two spellings no longer behave inconsistently.
     #[test]
@@ -686,6 +801,38 @@ mod tests {
         let args = vec!["elephc".into(), "--web".into(), "app.php".into()];
         let config = compile_config(&args);
         assert!(config.web);
+        assert_eq!(config.web_isolation, WebIsolation::Worker);
+    }
+
+    /// Verifies all explicit web-isolation spellings select their compile-time model.
+    #[test]
+    fn web_isolation_parses_all_modes() {
+        for (value, expected) in [
+            ("worker", WebIsolation::Worker),
+            ("pool", WebIsolation::Pool),
+            ("request", WebIsolation::Request),
+        ] {
+            let args = vec![
+                "elephc".into(),
+                "--web".into(),
+                format!("--web-isolation={value}"),
+                "app.php".into(),
+            ];
+            assert_eq!(compile_config(&args).web_isolation, expected);
+        }
+    }
+
+    /// Verifies the split spelling selects the same mode as the equals spelling.
+    #[test]
+    fn web_isolation_accepts_split_form() {
+        let args = vec![
+            "elephc".into(),
+            "--web".into(),
+            "--web-isolation".into(),
+            "pool".into(),
+            "app.php".into(),
+        ];
+        assert_eq!(compile_config(&args).web_isolation, WebIsolation::Pool);
     }
 
     /// Verifies the absence of `--web` leaves the web flag off.
@@ -694,6 +841,7 @@ mod tests {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = compile_config(&args);
         assert!(!config.web);
+        assert_eq!(config.web_isolation, WebIsolation::Worker);
     }
 
     /// Verifies every maintained PHP minor maps to its exact compatibility profile.
@@ -754,6 +902,21 @@ mod tests {
         ];
         let config = compile_config(&args);
         assert!(config.with_crates.contains("regex"));
+        assert!(!config.web);
+    }
+
+    /// Verifies `--with-mysqli` records the runtime capability that force-injects
+    /// the mysqli prelude (which links the shared `elephc_pdo` archive), without
+    /// touching web mode.
+    #[test]
+    fn with_mysqli_records_runtime_capability() {
+        let args = vec![
+            "elephc".into(),
+            "--with-mysqli".into(),
+            "app.php".into(),
+        ];
+        let config = compile_config(&args);
+        assert!(config.with_crates.contains("mysqli"));
         assert!(!config.web);
     }
 
@@ -866,6 +1029,22 @@ mod tests {
         assert!(config.defines.contains("FEATURE"));
     }
 
+    /// Verifies `--strict-locals` sets the strict_locals flag on the parsed config.
+    #[test]
+    fn strict_locals_flag_sets_strict_locals() {
+        let args = vec!["elephc".into(), "--strict-locals".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(config.strict_locals);
+    }
+
+    /// Verifies the absence of `--strict-locals` defaults to permissive local retyping.
+    #[test]
+    fn no_strict_locals_flag_defaults_off() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(!config.strict_locals);
+    }
+
     /// Verifies `--quiet` sets the quiet flag.
     #[test]
     fn quiet_flag_sets_quiet() {
@@ -914,6 +1093,39 @@ mod tests {
     fn wants_help_false_without_help_flag() {
         let args = vec!["elephc".into(), "app.php".into()];
         assert!(!wants_help(&args));
+    }
+
+    /// Verifies `--version` is detected anywhere in the argument list.
+    #[test]
+    fn wants_version_detects_long_flag_anywhere() {
+        let args = vec![
+            "elephc".into(),
+            "--check".into(),
+            "--version".into(),
+            "app.php".into(),
+        ];
+        assert!(wants_version(&args));
+    }
+
+    /// Verifies `-V` is detected as the short alias for `--version`.
+    #[test]
+    fn wants_version_detects_short_flag() {
+        let args = vec!["elephc".into(), "-V".into()];
+        assert!(wants_version(&args));
+    }
+
+    /// Verifies normal arguments are not mistaken for a version request.
+    #[test]
+    fn wants_version_false_without_version_flag() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        assert!(!wants_version(&args));
+    }
+
+    /// Verifies help exposes both the current compiler version and its version flags.
+    #[test]
+    fn help_includes_version_and_version_flags() {
+        assert!(HELP.contains(&format!("Version: {VERSION}")));
+        assert!(HELP.contains("-V, --version"));
     }
 
     /// Verifies `--mascotte` is detected anywhere in the argument list.

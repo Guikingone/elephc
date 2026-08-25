@@ -11,6 +11,7 @@
 
 use crate::{BuiltinId, BuiltinRequirement};
 
+const BCMATH: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_bcmath")];
 const CRYPTO: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_crypto")];
 const PHAR: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_phar")];
 const TLS: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_tls")];
@@ -20,6 +21,27 @@ const REGEX: &[BuiltinRequirement] = &[BuiltinRequirement::RuntimeCapability("pc
 
 /// Returns fixed neutral requirements for one canonical shared contract ID.
 pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement] {
+    if matches_name(
+        id,
+        &[
+            "bcadd",
+            "bcceil",
+            "bccomp",
+            "bcdiv",
+            "bcdivmod",
+            "bcfloor",
+            "bcmod",
+            "bcmul",
+            "bcpow",
+            "bcpowmod",
+            "bcround",
+            "bcscale",
+            "bcsqrt",
+            "bcsub",
+        ],
+    ) {
+        return BCMATH;
+    }
     if matches_name(
         id,
         &[

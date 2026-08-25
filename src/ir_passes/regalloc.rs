@@ -19,12 +19,13 @@
 //! - First cut: only single-word `NonHeap` scalars (`I64`, `F64`) are
 //!   register-eligible, and never block parameters or branch arguments, which
 //!   stay in stack slots so the existing block-parameter moves are unchanged.
-//!   Generators and functions with exception handlers fall back to all-spilled.
+//!   Generators fall back to all-spilled; handler functions still allocate
+//!   scalar ranges, with call clobber analysis protecting exception edges.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::{Arch, Target};
-use crate::ir::{Function, IrType, Op, Ownership, Terminator, ValueId};
+use crate::ir::{Function, IrType, Ownership, Terminator, ValueId};
 use crate::ir_passes::allocation::Allocation;
 use crate::ir_passes::intervals::{build_intervals, LiveInterval};
 use crate::ir_passes::liveness::compute_liveness;
@@ -33,10 +34,10 @@ use crate::ir_passes::liveness::compute_liveness;
 ///
 /// Runs liveness and interval analysis, then a linear scan that assigns
 /// callee-saved registers to eligible intervals and spills the longest-lived
-/// interval when a pool is exhausted. Generators and functions containing
-/// exception handlers conservatively fall back to all-spilled.
+/// interval when a pool is exhausted. Generators conservatively fall back to
+/// all-spilled, while handlers retain ordinary scalar allocation.
 pub fn allocate_registers(func: &Function, target: Target) -> Allocation {
-    if func.flags.is_generator || has_exception_handlers(func) {
+    if func.flags.is_generator {
         return Allocation::all_spilled();
     }
 
@@ -50,15 +51,6 @@ pub fn allocate_registers(func: &Function, target: Target) -> Allocation {
         .collect();
 
     scan(&eligible, target)
-}
-
-/// Returns true when the function contains any exception handler. Such
-/// functions are skipped because a thrown exception may clobber registers
-/// before reaching a handler in this first cut.
-fn has_exception_handlers(func: &Function) -> bool {
-    func.instructions
-        .iter()
-        .any(|inst| inst.op == Op::TryPushHandler)
 }
 
 /// Collects values that must stay in stack slots regardless of their type:

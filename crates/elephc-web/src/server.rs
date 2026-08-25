@@ -3,35 +3,55 @@
 //! worker processes, and supervise them. Each worker serves HTTP independently.
 //!
 //! Called from:
-//! - The compiled `--web` binary's process entry (tail-call to elephc_web_run).
+//! - The compiled `--web` binary's process entry, through one mode-specific C symbol.
 //!
 //! Key details:
 //! - fork() happens BEFORE any tokio runtime is created (tokio does not survive
-//!   fork); each child builds its own current-thread runtime in worker::serve.
+//!   fork); pool/request workers prestart a threadless handler broker, while
+//!   worker isolation retains the original in-process serving path.
 //! - --listen host:port is required; without it the process errors and exits.
 
-use std::ffi::{c_char, CStr};
+mod args;
+
+use std::ffi::c_char;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::worker::{self, WorkerConfig};
+use args::{parse_args, ParsedArgs, ServerArgs};
+use crate::handler_broker::BrokerMode;
+use crate::isolated_worker;
+use crate::worker;
 
-/// `--help` text for the produced `--web` binary.
-const HELP: &str = "\
-Usage: <binary> --listen HOST:PORT [options]
+/// Compile-time model selected by the generated bridge symbol.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum IsolationMode {
+    /// Execute PHP synchronously inside the prefork worker.
+    Worker,
+    /// Reuse a supervised pool of persistent handler processes.
+    Pool,
+    /// Fork one disposable handler process per request.
+    Request,
+}
 
-A standalone prefork HTTP server compiled from PHP by `elephc --web`.
+impl IsolationMode {
+    /// Returns the operator-facing name printed at server startup.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Worker => "worker",
+            Self::Pool => "pool",
+            Self::Request => "request",
+        }
+    }
 
-Options:
-  --listen HOST:PORT     Address to bind (required), e.g. 127.0.0.1:8080
-  --workers N            Number of prefork worker processes (default: CPU count)
-  --max-body-size BYTES  Max request body in bytes; 0 = unlimited (default: 8388608)
-  --max-requests N       Recycle a worker after N requests; 0 = never (default: 0)
-  --access-log           Log one line per request to stderr
-  --max-execution-time N Kill (and respawn) a worker whose handler runs > N seconds; 0 = no limit
-  --gzip                 Compress responses when the client sends Accept-Encoding: gzip
-  --help                 Show this help and exit
-  --version              Show the server version and exit";
+    /// Converts an isolated server mode to its broker lifecycle model.
+    const fn broker_mode(self) -> Option<BrokerMode> {
+        match self {
+            Self::Worker => None,
+            Self::Pool => Some(BrokerMode::Pool),
+            Self::Request => Some(BrokerMode::Request),
+        }
+    }
+}
 
 /// A worker that dies within this window of being spawned counts as a crash-on-
 /// startup; too many in a row (e.g. a bind failure or a handler that crashes on
@@ -78,118 +98,16 @@ fn reset_signal_handlers_to_default() {
     }
 }
 
-/// Default request body cap in bytes (8 MiB), matching PHP's `post_max_size`.
-const DEFAULT_MAX_BODY: usize = 8 * 1024 * 1024;
-
-/// Parsed server configuration from the binary's own argv.
-struct ServerArgs {
-    listen: String,
-    workers: usize,
-    /// Max request body in bytes; `0` means unlimited.
-    max_body: usize,
-    /// Recycle a worker after this many requests; `0` means never.
-    max_requests: usize,
-    /// When true, log one line per request to stderr.
-    access_log: bool,
-    /// Per-request handler time limit in seconds; `0` means no limit.
-    max_exec_secs: u32,
-    /// gzip the response when the client accepts it.
-    gzip: bool,
-}
-
-impl ServerArgs {
-    /// Builds the per-worker config handed to `worker::serve`.
-    fn worker_config(&self) -> WorkerConfig {
-        WorkerConfig {
-            max_body: self.max_body,
-            max_requests: self.max_requests,
-            access_log: self.access_log,
-            max_exec_secs: self.max_exec_secs,
-            gzip: self.gzip,
-        }
-    }
-}
-
-/// Outcome of argument parsing: a runnable config, an early exit (`--help`/
-/// `--version`, exit code 0), or a usage error (exit code 2).
-enum ParsedArgs {
-    Run(ServerArgs),
-    Exit(i32),
-}
-
-/// Collects argv into owned strings.
-fn collect_args(argc: i32, argv: *const *const c_char) -> Vec<String> {
-    (0..argc as isize)
-        .filter_map(|i| unsafe {
-            let p = *argv.offset(i);
-            if p.is_null() {
-                return None;
-            }
-            Some(CStr::from_ptr(p).to_string_lossy().into_owned())
-        })
-        .collect()
-}
-
-/// Parses argv into a runnable config or an early-exit. Handles `--help` /
-/// `--version` (print + exit 0) and a missing `--listen` (error + exit 2).
-fn parse_args(argc: i32, argv: *const *const c_char) -> ParsedArgs {
-    let args = collect_args(argc, argv);
-    if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("{}", HELP);
-        return ParsedArgs::Exit(0);
-    }
-    if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("elephc-web {}", env!("CARGO_PKG_VERSION"));
-        return ParsedArgs::Exit(0);
-    }
-    let mut listen: Option<String> = None;
-    let mut workers: usize = default_workers();
-    let mut max_body: usize = DEFAULT_MAX_BODY;
-    let mut max_requests: usize = 0;
-    let mut access_log = false;
-    let mut max_exec_secs: u32 = 0;
-    let mut gzip = false;
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--listen" => { i += 1; listen = args.get(i).cloned(); }
-            "--workers" => { i += 1; workers = args.get(i).and_then(|w| w.parse().ok()).unwrap_or(workers); }
-            "--max-body-size" => { i += 1; max_body = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_body); }
-            "--max-requests" => { i += 1; max_requests = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_requests); }
-            "--max-execution-time" => { i += 1; max_exec_secs = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_exec_secs); }
-            "--access-log" => { access_log = true; }
-            "--gzip" => { gzip = true; }
-            _ => {}
-        }
-        i += 1;
-    }
-    match listen {
-        Some(l) => ParsedArgs::Run(ServerArgs {
-            listen: l,
-            workers: workers.max(1),
-            max_body,
-            max_requests,
-            access_log,
-            max_exec_secs,
-            gzip,
-        }),
-        None => {
-            eprintln!("error: --web binary requires --listen host:port (try --help)");
-            ParsedArgs::Exit(2)
-        }
-    }
-}
-
-/// Returns the default worker count (number of logical CPUs, min 1).
-fn default_workers() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
-}
-
 /// Forks one worker child that serves until a planned `--max-requests` recycle
 /// (then exits with `worker::RECYCLE_EXIT_CODE`), returning the child pid in the
 /// master. The child restores default signal disposition and never returns. A
 /// fork failure aborts the whole process. Used for both initial spawn and respawn.
-fn spawn_worker(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) -> libc::pid_t {
+fn spawn_worker(
+    listen: &str,
+    handler: extern "C" fn(),
+    args: &ServerArgs,
+    isolation: IsolationMode,
+) -> libc::pid_t {
     match unsafe { libc::fork() } {
         -1 => {
             eprintln!("error: fork failed");
@@ -197,7 +115,12 @@ fn spawn_worker(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) -> li
         }
         0 => {
             reset_signal_handlers_to_default();
-            worker::serve(listen, handler, cfg);
+            match isolation.broker_mode() {
+                None => worker::serve(listen, handler, args.worker_config()),
+                Some(mode) => {
+                    isolated_worker::serve(listen, handler, args.isolated_worker_config(mode))
+                }
+            }
             // serve() only returns when the worker stopped accepting on purpose
             // after serving its --max-requests quota; exit with the recycle code
             // so the reaper skips the crash-loop accounting for this death.
@@ -214,7 +137,25 @@ fn spawn_worker(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) -> li
 /// a small `--max-requests` recycles workers faster than `FAST_DEATH` and the
 /// master mistakes the healthy recycle churn for a startup crash loop.
 fn is_planned_recycle(status: libc::c_int) -> bool {
-    libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == worker::RECYCLE_EXIT_CODE
+    if !libc::WIFEXITED(status) {
+        return false;
+    }
+    let exit_code = libc::WEXITSTATUS(status);
+    exit_code == worker::RECYCLE_EXIT_CODE
+        || exit_code == isolated_worker::RECYCLE_EXIT_CODE
+}
+
+/// Removes one exact worker PID from the supervised set and returns its spawn time.
+///
+/// Reparented broker/handler descendants may also be returned by `waitpid(-1)`
+/// when the master is PID 1; those PIDs are reaped but must not trigger a worker
+/// replacement or change the configured pool size.
+fn remove_tracked_worker(
+    children: &mut Vec<(libc::pid_t, Instant)>,
+    pid: libc::pid_t,
+) -> Option<Instant> {
+    let index = children.iter().position(|(child, _)| *child == pid)?;
+    Some(children.remove(index).1)
 }
 
 /// Server entry: parse args, prefork workers, supervise. Returns an exit code.
@@ -228,7 +169,37 @@ pub extern "C" fn elephc_web_run(
     argv: *const *const c_char,
     handler: extern "C" fn(),
 ) -> i32 {
-    let args = match parse_args(argc, argv) {
+    run_server(argc, argv, handler, IsolationMode::Worker)
+}
+
+/// Pool-isolated server entry selected by `--web-isolation=pool` at compilation.
+#[no_mangle]
+pub extern "C" fn elephc_web_run_pool(
+    argc: i32,
+    argv: *const *const c_char,
+    handler: extern "C" fn(),
+) -> i32 {
+    run_server(argc, argv, handler, IsolationMode::Pool)
+}
+
+/// Request-isolated server entry selected by `--web-isolation=request` at compilation.
+#[no_mangle]
+pub extern "C" fn elephc_web_run_request(
+    argc: i32,
+    argv: *const *const c_char,
+    handler: extern "C" fn(),
+) -> i32 {
+    run_server(argc, argv, handler, IsolationMode::Request)
+}
+
+/// Parses runtime arguments and supervises the selected compile-time server model.
+fn run_server(
+    argc: i32,
+    argv: *const *const c_char,
+    handler: extern "C" fn(),
+    isolation: IsolationMode,
+) -> i32 {
+    let args = match parse_args(argc, argv, isolation) {
         ParsedArgs::Run(a) => a,
         ParsedArgs::Exit(code) => return code,
     };
@@ -237,14 +208,15 @@ pub extern "C" fn elephc_web_run(
     // time so a crash-on-startup loop (e.g. a failed bind) can be detected.
     let mut children: Vec<(libc::pid_t, Instant)> = Vec::new();
     for _ in 0..args.workers {
-        let pid = spawn_worker(&args.listen, handler, args.worker_config());
+        let pid = spawn_worker(&args.listen, handler, &args, isolation);
         children.push((pid, Instant::now()));
     }
     eprintln!(
-        "elephc-web: listening on http://{} ({} worker{})",
+        "elephc-web: listening on http://{} ({} worker{}, isolation={})",
         args.listen,
         args.workers,
-        if args.workers == 1 { "" } else { "s" }
+        if args.workers == 1 { "" } else { "s" },
+        isolation.name()
     );
     // Supervise: wait for any child; break on a shutdown request (SIGINT/SIGTERM).
     let mut fast_deaths: u32 = 0;
@@ -258,11 +230,9 @@ pub extern "C" fn elephc_web_run(
             break;
         }
         if pid > 0 {
-            let spawned_at = children
-                .iter()
-                .find(|(c, _)| *c == pid)
-                .map(|(_, t)| *t);
-            children.retain(|(c, _)| *c != pid);
+            let Some(spawned_at) = remove_tracked_worker(&mut children, pid) else {
+                continue;
+            };
             if SHUTDOWN.load(Ordering::SeqCst) {
                 if children.is_empty() {
                     break;
@@ -275,7 +245,18 @@ pub extern "C" fn elephc_web_run(
             // nor resets the streak, so healthy recycle churn cannot trip the
             // guard yet also cannot mask a real crash loop interleaved with it.
             if !is_planned_recycle(status) {
-                if spawned_at.map(|t| t.elapsed() < FAST_DEATH).unwrap_or(false) {
+                if libc::WIFSIGNALED(status) {
+                    eprintln!(
+                        "elephc-web: worker {pid} terminated by signal {}",
+                        libc::WTERMSIG(status)
+                    );
+                } else if libc::WIFEXITED(status) {
+                    eprintln!(
+                        "elephc-web: worker {pid} exited with status {}",
+                        libc::WEXITSTATUS(status)
+                    );
+                }
+                if spawned_at.elapsed() < FAST_DEATH {
                     fast_deaths += 1;
                     if fast_deaths >= MAX_FAST_DEATHS {
                         eprintln!(
@@ -290,7 +271,7 @@ pub extern "C" fn elephc_web_run(
                 }
             }
             // The worker is gone (crash or recycle): replace it to keep the pool at N.
-            let new_pid = spawn_worker(&args.listen, handler, args.worker_config());
+            let new_pid = spawn_worker(&args.listen, handler, &args, isolation);
             children.push((new_pid, Instant::now()));
         } else if pid == -1 {
             // ECHILD: nothing left to wait for. EINTR: a signal arrived → re-loop
@@ -349,4 +330,19 @@ mod tests {
         assert!(!is_planned_recycle(libc::SIGKILL));
         assert!(!is_planned_recycle(libc::SIGTERM));
     }
+
+    /// A reparented descendant reaped by the master must not consume a tracked
+    /// worker slot or cause the supervisor to spawn an extra worker.
+    #[test]
+    fn untracked_reaped_pid_does_not_change_worker_set() {
+        let first = Instant::now();
+        let second = Instant::now();
+        let mut children = vec![(101, first), (202, second)];
+
+        assert!(remove_tracked_worker(&mut children, 303).is_none());
+        assert_eq!(children.len(), 2);
+        assert!(remove_tracked_worker(&mut children, 101).is_some());
+        assert_eq!(children.iter().map(|(pid, _)| *pid).collect::<Vec<_>>(), vec![202]);
+    }
+
 }

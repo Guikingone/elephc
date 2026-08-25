@@ -2,7 +2,7 @@
 title: "buffer_new()"
 description: "Allocates a raw byte buffer."
 sidebar:
-  order: 320
+  order: 334
 ---
 
 ## buffer_new()
@@ -25,3 +25,7 @@ Allocates a raw byte buffer.
 - **Strict PHP mode**: hidden — this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
+
+## Internals
+
+For how `buffer_new` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/buffer_new.md).

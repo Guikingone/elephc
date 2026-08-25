@@ -312,13 +312,15 @@ fn validate_instruction_immediate(
         | EnumBackingStringToInt
         | EnumBackingMixedToInt
         | PropInitialized
+        | StaticPropInitialized
         | ReflectionStaticPropertyInitialized => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
         EvalLiteralCall => require_immediate(inst_id, inst, "profiled data id", |imm| {
             matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
         }),
-        LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
+        LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
+        | ReleaseLocalRefCell
         | ReleaseLocalSlot | BindRefCellPtr
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
@@ -473,7 +475,8 @@ fn validate_opcode_rules(
         | ExternGlobalLoad => check_count(inst_id, inst, 0, "0"),
         ThrowError => check_count(inst_id, inst, 0, "0"),
         ThrowErrorValue => check_unary(function, inst_id, inst, IrType::Str, "Str"),
-        UnsetLocal | PromoteLocalRefCell | AliasLocalRefCell | ReleaseLocalRefCell
+        UnsetLocal | ZeroLocalSlot | PromoteLocalRefCell | AliasLocalRefCell
+        | ReleaseLocalRefCell
         | ReleaseLocalSlot => {
             check_count(inst_id, inst, 0, "0")
         }

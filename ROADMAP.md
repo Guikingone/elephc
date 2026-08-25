@@ -933,6 +933,8 @@ runtime helpers are reused and driven through EIR lowering.
 Optimization work should now be driven by benchmarks, generated assembly size,
 and 0.x validation rather than by speculative pass work.
 
+- [x] Whole-program declaration reachability — drop unreachable functions, unused classes, and unused methods (including compiler preludes such as PDO) after AST DCE, with conservative keep-all behavior for `eval`, dynamic calls, `unserialize`, and Reflection, and `--with-<crate>` force-keep for forced prelude groups
+
 - [x] Curated native dependencies v1 — `elephc native add/install/update/remove/list/doctor/prune`, exact comment-preserving manifests and deterministic locks, content-addressed target/ABI/toolchain cache, transactional verified source builds, explicit cache cleanup, and read-only compile-time resolution. PCRE2 10.47 links through an opaque Elephc shim with no production system-library fallback; zlib 1.3.2 proves the catalog/recipe path is generic. This remains separate from Composer packages, Rust bridge crates, user `extern` linking, and toolchain installation.
 
 - [x] Generators reimplemented on stackful coroutines (issue #329) — a generator body is compiled by the normal EIR backend and runs on its own coroutine stack (reusing the Fiber runtime), replacing the v1 state-machine lowering on the EIR path. `Generator::throw()` now raises the exception at the suspended `yield`, so a `try`/`catch` inside the generator body handles it and resumes instead of always terminating the generator and propagating to the caller; in-generator method calls, arbitrary control flow, and `try`/`finally` around `yield` work like ordinary functions. `yield from` over generators delegates through `__rt_gen_delegate` (forwarding sent values and returning the inner `getReturn()`) and over arrays desugars into an iterator loop; `send()`/`getReturn()`/closure captures preserved; Generator GC frees the coroutine stack and boxed key/value/return cells.
@@ -968,10 +970,10 @@ and 0.x validation rather than by speculative pass work.
 - [x] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
 - [x] Delete frozen legacy AST → ASM emitter modules after shared ABI/runtime dependencies are disentangled
 - [x] Rename `src/codegen_ir/` to `src/codegen/`
-- [x] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
+- [x] Move historical codegen doc to `docs/internals/legacy-codegen.md` (later retired together with the legacy backend); refresh `docs/internals/the-codegen.md` to describe the IR pipeline
 - [x] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
-- [ ] Installation / packaging documentation for the supported host platforms
+- [x] Installation / packaging documentation for the supported host platforms — macOS Homebrew, source builds, release artifacts, native toolchain requirements, and managed native dependency prerequisites are covered in `docs/getting-started/installation.md`
 
 ## Later 0.x product tracks
 
@@ -1010,6 +1012,13 @@ statics, and static class properties all reset between requests). Run it with
   graceful `SIGINT`/`SIGTERM` shutdown (forward to workers, reap, exit 0), worker
   respawn on unexpected death, and a 30s header-read timeout bounding slow/idle
   keep-alive connections. Out of v1 scope: cookies, sessions, TLS, HTTP/2–3, multipart.
+- [x] **Phase 4.1** — compile-time handler isolation: plain `--web` preserves the
+  original in-process `worker` path and performance; `--web-isolation=pool`
+  selects persistent supervised handler children; `request` selects a tracked,
+  disposable child per request. Isolated modes add configurable handler
+  concurrency, body/response deadlines, streaming output, exact dispatch-ID
+  cancellation, PID reaping/replacement, pool-child quotas, and descendant-safe
+  shutdown without adding request-time branching or IPC to the default mode.
 - [x] **Phase 5** — session support: `session_start()`, `$_SESSION` superglobal,
   `session_id()`, `session_name()`, `session_status()`, `session_save_path()`,
   `session_write_close()` (auto-called at handler end via a finally block),
@@ -1100,7 +1109,7 @@ future use cases.
 |---|---|---|
 | Buffer ergonomics v2 | Medium | Consider dynamic resize/push/pop, `foreach`, array conversion, and automatic cleanup for `buffer<T>` while keeping the hot-path POD contract explicit. |
 | String-capable FFI callbacks | Medium | Allow C callback signatures that pass or return strings once ownership and temporary C-string lifetimes are modeled safely across callback boundaries. |
-| Generator parity v2 | Medium | MVP delivered in v0.21.x for ARM64 and Linux x86_64. Remaining parity work: `yield` inside `try`/`catch`/`finally`, dynamic `yield from` arrays beyond the compile-time literal form, broader dynamic `yield from` Iterator targets, exception propagation through `Generator::throw` to caller-visible finally paths, and PHP-exact `Generator` interface inheritance with `Iterator`. See `docs/php/generators.md`. |
+| Generator parity v2 | Medium | MVP delivered in v0.21.x for ARM64 and Linux x86_64; `yield` inside `try`/`catch`/`finally` and exception propagation through `Generator::throw` landed with the v0.26.x closure work. Remaining parity work: dynamic `yield from` arrays beyond the compile-time literal form, broader dynamic `yield from` Iterator targets, and PHP-exact `Generator` interface inheritance with `Iterator`. See `docs/php/generators.md`. |
 | Fiber parity v2 | Medium | MVP delivered in v0.20.x for ARM64 and Linux x86_64. Remaining parity work: arithmetic auto-unboxing on `mixed` payloads received from `suspend()`, true variadic `start(...$args)` beyond seven args, dynamic callback targets, by-reference callback start parameters, configurable stack sizing, and PHP-exact `FiberError` hierarchy. See `docs/php/fibers.md`. |
 | Conditional include class-like variants | High | Keep class/interface/trait/enum duplicate detection strict for now. Supporting branch-selected class-like declarations would require runtime class metadata/layout dispatch, while modern PHP can avoid the ambiguity with namespaces. |
 

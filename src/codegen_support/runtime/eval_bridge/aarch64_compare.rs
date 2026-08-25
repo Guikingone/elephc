@@ -241,6 +241,45 @@ pub(super) fn emit_aarch64_compare(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #96");                                     // release the loose-equality helper frame
     emitter.instruction("ret");                                                 // return the loose-equality boolean in x0
 
+    label_c_global(emitter, "__elephc_eval_value_regular_key_compare");
+    emitter.instruction("sub sp, sp, #64");                                     // allocate normalized key slots and a saved-call frame
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve frame pointer and return address across unboxing and comparison
+    emitter.instruction("add x29, sp, #48");                                    // establish a stable key-comparison wrapper frame
+    emitter.instruction("stp x0, x1, [sp, #0]");                                // save both boxed key operands before unboxing
+    emitter.instruction("bl __rt_mixed_unbox");                                 // unbox the left integer or string key
+    emitter.instruction("cmp x0, #0");                                          // does the left key carry the integer runtime tag?
+    emitter.instruction("b.eq __elephc_eval_value_regular_key_left_int");       // normalize integer keys to the hash sentinel representation
+    emitter.instruction("cmp x0, #1");                                          // does the left key carry the string runtime tag?
+    emitter.instruction("b.ne __elephc_eval_value_regular_key_invalid");        // reject values that cannot be normalized array keys
+    emitter.instruction("stp x1, x2, [sp, #16]");                               // save the left string pointer and bounded length
+    emitter.instruction("b __elephc_eval_value_regular_key_right");             // continue with the right key
+    emitter.label("__elephc_eval_value_regular_key_left_int");
+    emitter.instruction("mov x2, #-1");                                         // integer hash keys use an all-ones high-word sentinel
+    emitter.instruction("stp x1, x2, [sp, #16]");                               // save the normalized left integer key pair
+    emitter.label("__elephc_eval_value_regular_key_right");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the boxed right key for unboxing
+    emitter.instruction("bl __rt_mixed_unbox");                                 // unbox the right integer or string key
+    emitter.instruction("cmp x0, #0");                                          // does the right key carry the integer runtime tag?
+    emitter.instruction("b.eq __elephc_eval_value_regular_key_right_int");      // normalize integer keys to the hash sentinel representation
+    emitter.instruction("cmp x0, #1");                                          // does the right key carry the string runtime tag?
+    emitter.instruction("b.ne __elephc_eval_value_regular_key_invalid");        // reject values that cannot be normalized array keys
+    emitter.instruction("stp x1, x2, [sp, #32]");                               // save the right string pointer and bounded length
+    emitter.instruction("b __elephc_eval_value_regular_key_call");              // compare the two normalized key pairs
+    emitter.label("__elephc_eval_value_regular_key_right_int");
+    emitter.instruction("mov x2, #-1");                                         // integer hash keys use an all-ones high-word sentinel
+    emitter.instruction("stp x1, x2, [sp, #32]");                               // save the normalized right integer key pair
+    emitter.label("__elephc_eval_value_regular_key_call");
+    emitter.instruction("ldp x0, x1, [sp, #16]");                               // load the normalized left key for the native comparator
+    emitter.instruction("ldp x2, x3, [sp, #32]");                               // load the normalized right key for the native comparator
+    emitter.instruction("bl __rt_key_compare_regular");                         // apply the same SORT_REGULAR ordering used by AOT ksort
+    emitter.instruction("b __elephc_eval_value_regular_key_done");              // preserve the normalized -1, 0, or 1 result
+    emitter.label("__elephc_eval_value_regular_key_invalid");
+    emitter.instruction("mov x0, #0");                                          // invalid key cells compare equal and fail closed
+    emitter.label("__elephc_eval_value_regular_key_done");
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the key-comparison wrapper frame
+    emitter.instruction("ret");                                                 // return the signed comparison result to Rust
+
     label_c_global(emitter, "__elephc_eval_value_spaceship");
     emitter.instruction("sub sp, sp, #32");                                     // allocate wrapper slots for the right operand and left double
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across helper calls

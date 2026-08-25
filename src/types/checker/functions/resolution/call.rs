@@ -326,21 +326,24 @@ impl Checker {
                         );
                     }
                 }
-                if decl.ref_params.get(arg_idx).copied().unwrap_or(false)
-                    && !self.is_by_ref_argument_lvalue(arg, caller_env)?
-                {
-                    let param_name = decl
-                        .params
-                        .get(arg_idx)
-                        .map(String::as_str)
-                        .unwrap_or("arg");
-                    return Err(CompileError::new(
-                        arg.span,
-                        &format!(
-                            "Function '{}' parameter ${} must be passed a variable",
-                            name, param_name
-                        ),
-                    ));
+                if decl.ref_params.get(arg_idx).copied().unwrap_or(false) {
+                    // The callee holds a reference to this local from here on, and it can
+                    // escape, so the local is never kill/retype eligible in this body.
+                    self.record_reference_alias_root(arg);
+                    if !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                        let param_name = decl
+                            .params
+                            .get(arg_idx)
+                            .map(String::as_str)
+                            .unwrap_or("arg");
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "Function '{}' parameter ${} must be passed a variable",
+                                name, param_name
+                            ),
+                        ));
+                    }
                 }
                 if let Some(type_ann) = decl.param_types.get(arg_idx).and_then(|t| t.as_ref()) {
                     let param_name = decl
@@ -379,6 +382,13 @@ impl Checker {
                 param_types.push((decl.params[arg_idx].clone(), ty));
                 arg_idx += 1;
             } else {
+                // A by-REFERENCE variadic (`&...$xs`) binds every collected argument by
+                // reference, so each names a local that is aliased for the rest of the body.
+                // `decl.params` excludes the variadic, which is why this cannot be handled by
+                // the regular-parameter branch above.
+                if decl.variadic_by_ref {
+                    self.record_reference_alias_root(arg);
+                }
                 // Argument collected into the variadic parameter: enforce its declared element
                 // type (`int ...$xs`) against every passed argument, matching PHP.
                 if let Some(declared) = &decl.variadic_type {

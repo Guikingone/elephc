@@ -54,7 +54,7 @@ PHP source (.php)
      │
      ▼
 ┌──────────────┐
-│   Preludes   │  src/{pdo,tz,list_id,var_export,opcache,image,hash,web,version}_prelude*
+│   Preludes   │  src/{pdo,mysqli,tz,list_id,var_export,opcache,image,hash,web,version}_prelude*
 │              │  Injects only the compiler-owned PHP surfaces required by
 │              │  resolved source usage, forced bridge flags, or --web.
 └─────┬────────┘
@@ -74,6 +74,13 @@ PHP source (.php)
 └────┬─────┘
      │
      ▼
+┌──────────────┐
+│ Function args│  src/func_args/
+│  desugaring  │  Rewrites func_num_args/get_args/get_arg into a hidden
+│              │  variadic parameter before optimization and checking.
+└─────┬────────┘
+      │
+      ▼
 ┌──────────────┐
 │ OPcache bake │  src/opcache_prelude/
 │              │  Completes the resolved/autoloaded script manifest and
@@ -128,6 +135,13 @@ PHP source (.php)
 │  Optimizer   │  src/optimize/
 │   (DCE)      │  Drops leftover unreachable or non-observable
 │              │  statements from the normalized AST.
+└─────┬────────┘
+      │
+      ▼
+┌──────────────┐
+│  Optimizer   │  src/optimize/reachability/
+│ (decl-reach) │  Prunes unreachable functions, classes, methods, and
+│              │  prelude declarations, then reconciles checked metadata.
 └─────┬────────┘
       │
       ▼
@@ -223,13 +237,18 @@ src/
 ├── resolver/                  Include/require resolution, declaration discovery, once guards
 ├── eval_aot.rs                Target-independent literal eval planning and fallback classification
 ├── optimize.rs                Public optimizer entry points and effect context
-├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
+├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination, declaration reachability pruning
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
 ├── ir_lower/                  Active checked-AST to EIR lowering
 ├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation
 ├── codegen/                   Active EIR to target assembly backend
 ├── codegen_support/           Shared ABI, runtime, platform, metadata, and callable support
 ├── runtime_cache.rs           Cached shared runtime object preparation
+├── runtime_cache/             Cache identity, lease/publication protocol, and pruning internals
+├── synthetic_class.rs         Rust builders for compiler-injected synthetic PHP declarations
+├── synthetic_class/           Built class bodies (date/time, calendar, …) with parse-parity oracles against the replaced PHP
+├── prelude_prune.rs           Pre-name-resolution usage scan feeding the class gates and superglobal seeding
+├── prelude_prune/             Shared exhaustive AST walk over expressions, statements, and declarations
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
 ├── debug_info.rs              DWARF debug-info injection for `--debug-info` (lldb/gdb source mapping)
 ├── termination.rs             Structured terminal-effect analysis shared by checker and optimizer
@@ -237,6 +256,8 @@ src/
 ├── name_resolver/             Namespace/use resolution to canonical names
 ├── pdo_prelude.rs             PDO standard-library prelude injection entry point
 ├── pdo_prelude/               PDO driver detection from the DSN prefix
+├── mysqli_prelude.rs          mysqli prelude injection entry point (over the shared elephc_pdo bridge)
+├── mysqli_prelude/            mysqli connection, statement, result, procedural, and detection surfaces
 ├── tz_prelude.rs              Timezone-introspection prelude injection entry point
 ├── tz_prelude/                Timezone-introspection prelude usage detection
 ├── list_id_prelude.rs         DateTimeZone identifier-list prelude injection entry point
@@ -321,6 +342,7 @@ src/
 │   ├── function_variants.rs   Include-loaded function-variant dispatcher emission
 │   ├── literal_defaults.rs    Literal property defaults → backend-native values
 │   ├── eval_*_helpers.rs      Eval-to-native bridge helpers: callables, class constants, constructors, methods, properties, ref args, reflection (+ owners), static properties (9 files)
+│   ├── shared_*.rs            Shared once-per-program helper frames: the count() TypeError guard, the boxed-mixed __toString ladder, and their common helper-frame plumbing (3 files)
 │   ├── fibers.rs              Fiber-aware EIR codegen integration
 │   └── web.rs                 `--web` program-entry lowering
 │
@@ -361,7 +383,7 @@ src/
 │   │   ├── linux_transform.rs Linux post-emit transforms, syscall mapping, C-symbol remapping
 │   │   └── toolchain.rs       Assembler / linker invocation
 │   ├── cdylib.rs              C-ABI export trampolines + lifecycle symbols for --emit cdylib
-│   ├── visibility.rs          ELF .hidden directives for internal globals in cdylib emission
+│   ├── visibility.rs          Hidden-visibility directives (ELF .hidden / Mach-O .private_extern) for internal globals in cdylib emission
 │   ├── sentinels.rs           Null representation selection (sentinel vs tagged) and constants
 │   ├── data_section.rs        String/float literal .data section
 │   ├── emit.rs                Assembly text buffer
@@ -373,17 +395,22 @@ src/
 │       ├── eval_bridge.rs     C-ABI value, callable, class, and runtime hooks used by Magician
 │       ├── eval_scope.rs      Core materialized-scope helpers usable without the interpreter
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (74 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (155 files)
+│       ├── emitters/          Managed-value and platform-facing runtime orchestration (3 files)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (95 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (175 files + hash_sort/ target split, 2 files)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (5 files)
-│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (118 files)
-│       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
+│       ├── compare/           Loose/strict comparison and truthiness helpers (5 files)
+│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (121 files)
+│       ├── buffers/           Generation-safe handle resolution, allocation/free, length, bounds/size/use-after-free diagnostics (8 files incl. mod.rs)
+│       ├── bcmath/            Target-aware C-ABI marshalling for exact decimal bridge calls (3 files incl. target assembly)
+│       ├── eval_bridge/       Magician value, array, cast, reflection, clone, and builtin adapters (23 files)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (7 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, getdate, localtime, checkdate, microtime, hrtime, date_default_timezone, match_unhandled, json_encode_*, json_decode, preg_*, ... (43 files)
+│       ├── pdo/               Target-aware PDO callable callback adapters (5 files)
+│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (43 top-level files + 38 files under 6 subdirectories)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
-│       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 files) + `api/` (target-aware public API helpers)
-│       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding, destructor dispatch, new-by-name helpers (10 files)
+│       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 top-level files) + `api/` (4 target-aware public API helper files)
+│       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (15 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
 │       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)
@@ -394,6 +421,7 @@ src/
     └── report.rs              Error formatting
 
 crates/
+├── elephc-bcmath/             Pure-Rust arbitrary-precision decimal bridge for PHP `bc*()` functions
 ├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
 ├── elephc-image/              Pure-Rust image bridge staticlib (GD, Exif, Imagick, Gmagick, Cairo C ABI)
 ├── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
@@ -401,7 +429,7 @@ crates/
 ├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
 ├── elephc-tls/                TLS bridge for the `https://` stream wrapper
 ├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
-└── elephc-web/                Prefork HTTP server bridge for `--web` binaries
+└── elephc-web/                Prefork HTTP bridge with compile-time worker/pool/request isolation
 ```
 
 ## ARM64 calling conventions
@@ -414,7 +442,7 @@ crates/
 | Array result | `x0` (heap ptr) | After emit_expr for Array/AssocArray/Iterable |
 | Mixed result | `x0` (heap ptr) | Pointer to boxed mixed cell |
 | Object result | `x0` (heap ptr) | After emit_expr for Object |
-| Pointer / Buffer / Packed / Callable result | `x0` | Raw address, contiguous buffer pointer, packed-record pointer, or callable descriptor pointer |
+| Pointer / Buffer / Packed / Callable result | `x0` | Raw address, opaque generation-safe buffer handle, packed-record pointer, or callable descriptor pointer |
 | Function args (int) | `x0`-`x7` | Int/Bool/Resource/Array/AssocArray/Iterable/Mixed/Object/Pointer/Buffer/Packed/Callable/Union = 1 reg, Str = 2 regs |
 | Function args (float) | `d0`-`d7` | Separate index from int regs |
 | Frame pointer | `x29` | Saved in prologue |
@@ -477,16 +505,21 @@ Offset  Size  Field
  24      ...  elements  (contiguous)
 ```
 
-### Buffer header (heap-allocated, for `buffer<T>`)
+### Buffer handle and descriptor registry (for `buffer<T>`)
 
 ```
-Offset  Size  Field
-  0      8    length    (logical number of elements)
-  8      8    stride    (bytes per element)
- 16      ...  elements  (contiguous POD payload)
+Public 64-bit handle: [generation:u32][descriptor index:u32]
+
+Descriptor offset  Size  Field
+  0                  8    payload pointer
+  8                  8    logical element count
+ 16                  8    element stride
+ 24                  8    generation slot (low u32 used)
+ 32                  8    active marker
+ 40                  8    free-list successor index
 ```
 
-`buffer<T>` is deliberately separate from the PHP array/hash runtime path. Codegen uses the checked static element type plus the stored stride to emit direct address arithmetic and direct scalar loads/stores, or typed packed-field access for `buffer<PackedType>`.
+`buffer<T>` is deliberately separate from the PHP array/hash runtime path. The static registry has 4096 usable 48-byte descriptors plus reserved index zero. Every length, read, write, and free operation resolves the handle and requires a matching non-zero generation on an active descriptor before consulting its metadata. The payload is a separate allocation in the compiler-managed heap and contains exactly the zero-initialized `length * stride` bytes. Codegen then uses the checked static element type plus the descriptor stride to emit direct address arithmetic and scalar loads/stores, or typed packed-field access for `buffer<PackedType>`. Freeing invalidates the descriptor before releasing the detached payload; eligible slots are recycled with an incremented generation so stale aliases cannot revive.
 
 `match` expressions stay in the normal expression pipeline. When the source omits `default`, codegen now emits a branch to a dedicated runtime fatal helper (`__rt_match_unhandled`) instead of falling through to an undefined result.
 
@@ -499,7 +532,8 @@ The runtime data emission in `src/codegen_support/runtime/data/` is split into `
 | String scratch | `_concat_buf`, `_concat_off` | Temporary string results for expression evaluation |
 | CLI globals | `_global_argc`, `_global_argv` | Saved OS argument state used to build `$argv` |
 | Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_heap_max` | Heap storage plus general/small-bin allocator metadata and heap-debug toggle |
-| Runtime diagnostics | `_rt_diag_suppression`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_instanceof_target_type_msg`, `_heap_dbg_*` | Suppressible warning state/text plus fatal error messages and heap-debug summary/failure strings |
+| Buffer registry | `_buffer_registry`, `_buffer_registry_free`, `_buffer_registry_next` | Static generation-safe descriptors, recycled-slot free-list head, and next never-issued descriptor index |
+| Runtime diagnostics | `_rt_diag_suppression`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_instanceof_target_type_msg`, `_heap_dbg_*` | Suppressible warning state/text plus fatal error messages and heap-debug summary/failure strings |
 | GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_collecting`, `_gc_release_suppressed` | Allocation/free/live-byte counters plus targeted-cycle-collector coordination flags |
 | Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_class_parent_ids` | Active handler stack, activation cleanup stack, current exception object, and parent links used for catch matching |
 | Include-once guards | `_include_once_<hash>` | Per-resolved-file loaded flags used by `include_once` / `require_once` runtime guards |
@@ -508,7 +542,7 @@ The runtime data emission in `src/codegen_support/runtime/data/` is split into `
 | String/runtime tables | `_fmt_g`, `_b64_encode_tbl`, `_b64_decode_tbl` | Formatting and lookup tables for runtime helpers |
 | JSON/date state and tables | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_*`, `_json_decode_assoc`, `_json_error_*`, `_json_true`, `_json_false`, `_json_null`, `_json_err_msg_*`, `_json_err_msg_table`, `_json_err_loc_*`, `_json_int_max_str`, `_json_int_min_str`, `_day_names`, `_month_names`, `_strtotime_*` | Runtime JSON state, JSON literal/error lookup data, decode error-location fragments, bigint thresholds, date lookup tables, and `strtotime()` keyword/unit tables |
 | User-dependent storage | `_gvar_<name>`, `_static_<func>_<name>`, `_static_<func>_<name>_init`, `_static_prop_<class>_<prop>`, enum-case `.comm` symbols via `enum_case_symbol(...)` | Global/static local storage, class static-property storage, plus singleton backing slots for enum cases |
-| Class/interface metadata tables | `_instanceof_target_count`, `_instanceof_target_entries`, `_instanceof_name_*`, `_interface_count`, `_interface_method_ptrs`, `_interface_methods_<id>`, `_class_interface_ptrs`, `_class_interfaces_<id>`, `_class_interface_impl_<class>_<iface>`, `_classes_by_name`, `_classes_by_name_count`, `_generator_class_id`, `_fiber_class_id`, `_fiber_error_class_id`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>`, `_class_destruct_ptrs`, `_class_vtable_ptrs`, `_class_vtable_<id>`, `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` | Dynamic `instanceof` lookup names, case-insensitive `new $name()` class lookup table, built-in runtime-managed class ids, per-interface method-order metadata, per-class property traversal metadata, per-class `__destruct` pointers, and instance/static dispatch tables |
+| Class/interface metadata tables | `_instanceof_target_count`, `_instanceof_target_entries`, `_instanceof_name_*`, `_interface_count`, `_interface_method_ptrs`, `_interface_methods_<id>`, `_class_interface_ptrs`, `_class_interfaces_<id>`, `_class_interface_impl_<class>_<iface>`, `_classes_by_name`, `_classes_by_name_count`, `_generator_class_id`, `_fiber_class_id`, `_fiber_error_class_id`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>`, `_class_destruct_ptrs`, `_class_vtable_ptrs`, `_class_vtable_<id>`, `_class_static_vtable_ptrs`, `_class_static_vtable_<id>`, `_class_tostring_count`, `_class_tostring_ptrs`, `_class_iface_method_count`, `_class_serprop_declaring_ptrs`, `_class_serprop_declaring_missing`, `_class_serprop_declaring_<id>` | Dynamic `instanceof` lookup names, case-insensitive `new $name()` class lookup table, built-in runtime-managed class ids, per-interface method-order metadata, per-class property traversal metadata, per-class `__destruct` pointers, and instance/static dispatch tables |
 
 ### Heap allocator
 

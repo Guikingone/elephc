@@ -146,3 +146,20 @@ foreach ($copy as $k => $v) {
     );
     assert_eq!(out, "a=1;b=2;");
 }
+
+/// Verifies the SPL gate opens for `unserialize`, whose class name lives in the DATA.
+///
+/// A valid serialized `SplFixedArray` came back as `__PHP_Incomplete_Class` because no static walk
+/// can read the name inside the payload — and adding an unrelated `class_exists("SplFixedArray")`
+/// to the program made the same payload work, which is the signature of a gate closing on a
+/// reference it cannot see. The date/time gate already treated `unserialize` this way.
+#[test]
+fn test_spl_registers_for_unserialize() {
+    let out = compile_and_run(
+        r#"<?php
+$o = unserialize('O:13:"SplFixedArray":2:{i:0;i:7;i:1;i:9;}');
+echo get_class($o), ":", $o[0], $o[1];
+"#,
+    );
+    assert_eq!(out, "SplFixedArray:79");
+}

@@ -37,6 +37,8 @@ mod include_paths;
 mod magic_constants;
 mod strings;
 mod io;
+mod mysqli;
+mod mysqli_mysql;
 mod pdo;
 #[cfg(feature = "pdo-dblib")]
 mod pdo_dblib;
@@ -81,5 +83,6 @@ mod iterators;
 mod spl;
 mod generators;
 mod dead_strip;
+mod locals_retype;
 mod stack_guard;
 mod zval;

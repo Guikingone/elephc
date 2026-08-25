@@ -2,7 +2,7 @@
 title: "stream_filter_append() — internals"
 description: "Compiler internals for stream_filter_append(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 373
+  order: 387
 ---
 
 ## `stream_filter_append()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_filter_append.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_filter_append.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:544](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L544) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -12,9 +12,10 @@ sidebar:
 ## Why not PHP arrays?
 
 PHP arrays are hash tables. Every access goes through hashing, probing, and entry
-comparison. `buffer<T>` instead uses a bounds-checked direct address calculation:
-`base + 16 + index * stride`, followed by a native load or store. Repeated immutable
-integer index arithmetic can be shared or moved out of loops by the EIR optimizer.
+comparison. A `buffer<T>` access instead resolves an opaque handle, checks the handle
+generation and bounds, then performs direct address arithmetic over a contiguous
+payload: `payload + index * stride`. Repeated immutable integer index arithmetic can
+be shared or moved out of loops by the EIR optimizer.
 
 ## Creating buffers
 
@@ -32,7 +33,7 @@ Only POD scalar, pointer, or packed-record element types are accepted. No union 
 | Function | Signature | Description |
 |---|---|---|
 | `buffer_new<T>()` | `buffer_new<T>($length): buffer<T>` | Allocate a fixed-size buffer with `$length` elements of type `T` |
-| `buffer_len()` | `buffer_len($buffer): int` | Return the logical element count stored in the buffer header |
+| `buffer_len()` | `buffer_len($buffer): int` | Return the logical element count stored in the buffer descriptor |
 | `buffer_free()` | `buffer_free($buffer): void` | Release a local buffer variable and nullify it |
 
 ## Reading and writing
@@ -65,9 +66,10 @@ buffer_free($buf);   // release heap memory, nullify variable
 Use-after-free produces: `Fatal error: use of buffer after buffer_free()`
 
 Restrictions:
+
 - Only accepts plain local variables
-- Aliases after free are undefined behavior
-- Double-free is undefined behavior
+- Freeing a local nullifies that local; freeing the same local again is a no-op
+- Existing aliases become stale and fail with the use-after-free fatal error, even if the descriptor slot and heap payload are later reused
 
 ## Bounds checking
 
@@ -88,13 +90,25 @@ representable but larger than the configured heap still reports `Fatal error: he
 
 ## Memory layout
 
+The PHP-visible value is an opaque 64-bit handle, not a heap pointer:
+
 ```
-Offset 0:   [length: 8 bytes]
-Offset 8:   [stride: 8 bytes]
-Offset 16:  [element 0]
-Offset 16 + stride: [element 1]
-...
+Bits 63..32: generation (non-zero u32)
+Bits 31..0:  descriptor index (1..=4096)
 ```
+
+The handle resolves through a static descriptor registry. Each 48-byte descriptor contains:
+
+```
+Offset 0:   [payload pointer: 8 bytes]
+Offset 8:   [length: 8 bytes]
+Offset 16:  [stride: 8 bytes]
+Offset 24:  [generation: 8-byte slot, low u32 used]
+Offset 32:  [active marker: 8 bytes]
+Offset 40:  [free-list successor: 8 bytes]
+```
+
+The payload is a separate heap allocation containing exactly `length * stride` zero-initialized bytes. Reusing a descriptor increments its generation, so a stale alias cannot resolve to a newer buffer lifetime.
 
 ## SoA vs AoS patterns
 
@@ -129,3 +143,4 @@ for ($i = 0; $i < buffer_len($particles); $i++) {
 - No `foreach` iteration
 - No mixed element types
 - Payload is zero-initialized by `buffer_new`
+- At most 4096 buffers can be live simultaneously; descriptor slots are recycled after `buffer_free()`

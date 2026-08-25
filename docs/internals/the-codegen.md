@@ -124,8 +124,10 @@ target-aware call helpers on macOS ARM64, Linux ARM64, and Linux x86_64. See
 
 `--emit executable` is the default and emits a process entry point. `--emit
 cdylib` emits a PIC user object with `#[Export]` trampolines and lifecycle
-symbols for embedding hosts. On Linux cdylib output also hides internal runtime
-symbols so separate loaded elephc modules do not preempt each other's state.
+symbols for embedding hosts. Cdylib output also hides internal runtime
+symbols — `.hidden` on ELF, so separate loaded elephc modules do not preempt
+each other's state, and `.private_extern` on Mach-O, so `-dead_strip` has real
+roots to collect against.
 
 ## Key Mechanisms
 

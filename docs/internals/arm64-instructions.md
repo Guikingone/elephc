@@ -18,6 +18,7 @@ This is a reference for the ARM64 instructions elephc uses most often, organized
 | `mul` | `mul x0, x1, x2` | x0 = x1 × x2 |
 | `madd` | `madd x0, x1, x2, x3` | x0 = x3 + (x1 × x2). Multiply-add, used for index/stride address math |
 | `smulh` | `smulh x3, x1, x2` | High 64 bits of the signed 128-bit product, used to detect multiplication overflow |
+| `umulh` | `umulh x3, x1, x2` | High 64 bits of the unsigned 128-bit product, used to reject allocation-size overflow |
 | `udiv` | `udiv x0, x1, x2` | x0 = x1 ÷ x2 (unsigned) |
 | `sdiv` | `sdiv x0, x1, x2` | x0 = x1 ÷ x2 (signed) |
 | `msub` | `msub x0, x1, x2, x3` | x0 = x3 - (x1 × x2). Used for modulo: `a % b = a - (a/b)*b` |
@@ -53,6 +54,7 @@ This is a reference for the ARM64 instructions elephc uses most often, organized
 | `frintz` | `frintz d0, d0` | d0 = round toward zero, used for truncating floating-point values |
 | `fmax` | `fmax d0, d0, d1` | d0 = max(d0, d1) |
 | `fmin` | `fmin d0, d0, d1` | d0 = min(d0, d1) |
+| `fcsel` | `fcsel d0, d1, d2, eq` | Select one of two floating-point values from condition flags, used by rounding-mode correction |
 
 ## Load and store
 
@@ -170,6 +172,7 @@ After `cmp`, these codes test the result:
 | `b.hi` | `b.hi _label` | Jump if higher (unsigned compare) |
 | `b.ls` | `b.ls _label` | Jump if lower or same (unsigned compare) |
 | `b.cs` | `b.cs _label` | Jump if carry set |
+| `b.mi` | `b.mi _label` | Jump if the negative flag is set |
 | `cbz` | `cbz x0, _label` | Jump if x0 == 0 |
 | `cbnz` | `cbnz x0, _label` | Jump if x0 != 0 |
 | `tbnz` | `tbnz x0, #3, _label` | Test one bit and jump if it is non-zero |

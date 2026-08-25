@@ -16,7 +16,7 @@ mod language_constructs;
 pub(crate) mod spl;
 
 use crate::errors::CompileError;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::Checker;
@@ -115,6 +115,42 @@ impl Checker {
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
             crate::builtins::registry::check_arity(name, args.len(), span)?;
+            // One authority for every builtin that declares a by-reference parameter. Several
+            // builtins used to hand-roll this check, which is a catalogue: the ones nobody
+            // wrote it for silently accepted a literal and ran, where PHP raises an Error.
+            for (index, arg) in args.iter().enumerate() {
+                if !def.ref_params.get(index).copied().unwrap_or(false) {
+                    continue;
+                }
+                // `sort($a)`, `preg_match(..., $m)` and friends reach this local through its
+                // storage, so the local is never kill/retype eligible in this body.
+                //
+                // Recorded BEFORE the spread bail-out below, not after it. `sort(...$args)` hands
+                // the callee the very same by-reference parameter, so `$args` is aliased just as
+                // surely; only the LVALUE-SHAPE diagnostic underneath has nothing to say about a
+                // spread, which is what that bail-out is for.
+                self.record_reference_alias_root(arg);
+                if matches!(arg.kind, ExprKind::Spread(_)) {
+                    continue;
+                }
+                if self.is_builtin_by_ref_argument_lvalue(arg) {
+                    continue;
+                }
+                let param_name = def
+                    .params
+                    .get(index)
+                    .map(|(param_name, _)| param_name.as_str())
+                    .unwrap_or("arg");
+                return Err(CompileError::new(
+                    arg.span,
+                    &format!(
+                        "{}(): Argument #{} (${}) could not be passed by reference",
+                        name,
+                        index + 1,
+                        param_name
+                    ),
+                ));
+            }
             let requirement_input = crate::builtins::semantics::BuiltinRequirementInput {
                 args,
             };

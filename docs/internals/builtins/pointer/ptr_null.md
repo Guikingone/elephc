@@ -2,7 +2,7 @@
 title: "ptr_null() — internals"
 description: "Compiler internals for ptr_null(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 324
+  order: 338
 ---
 
 ## `ptr_null()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_null.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_null.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:544](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L544) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function ptr_null(): mixed
+function ptr_null(): pointer
 ```
 
 ## What the type checker enforces

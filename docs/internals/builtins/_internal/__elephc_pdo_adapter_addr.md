@@ -2,7 +2,7 @@
 title: "__elephc_pdo_adapter_addr() — internals"
 description: "Compiler internals for __elephc_pdo_adapter_addr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 508
+  order: 522
 ---
 
 ## `__elephc_pdo_adapter_addr()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/elephc_pdo_adapter_addr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/elephc_pdo_adapter_addr.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:544](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L544) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -37,7 +37,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function __elephc_pdo_adapter_addr(int $kind): mixed
+function __elephc_pdo_adapter_addr(int $kind): pointer
 ```
 
 ## What the type checker enforces

@@ -2,7 +2,7 @@
 title: "is_array()"
 description: "Checks whether a variable is an array."
 sidebar:
-  order: 474
+  order: 488
 ---
 
 ## is_array()

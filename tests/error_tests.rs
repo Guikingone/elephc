@@ -27,6 +27,33 @@ fn check_source(src: &str) -> Result<(), String> {
 
 /// Like [`check_source`] but also applies conditional defines from `defines` before type-checking.
 fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> {
+    check_source_with_defines_and_options(src, defines, types::CheckOptions::default())
+}
+
+/// Like [`check_source`] but type-checks with `--strict-locals` semantics.
+///
+/// Mirrors the same frontend pipeline so the only difference a strict-mode assertion can
+/// observe is the `CheckOptions` handed to the checker.
+fn check_source_strict(src: &str) -> Result<(), String> {
+    check_source_with_defines_and_options(
+        src,
+        &[],
+        types::CheckOptions {
+            strict_locals: true,
+        },
+    )
+}
+
+/// The frontend pipeline (tokenize → parse → conditional → autoload → name-resolve → optimize →
+/// type-check) shared by every `check_source*` helper above, parameterized by the conditional
+/// defines and the `CheckOptions` the two callers otherwise hand-duplicated. Keeping ONE copy of
+/// this pipeline means [`check_source_with_defines`] and [`check_source_strict`] cannot drift out
+/// of step with each other — the full suite exercising both is the proof they still agree.
+fn check_source_with_defines_and_options(
+    src: &str,
+    defines: &[&str],
+    options: types::CheckOptions,
+) -> Result<(), String> {
     let tokens = tokenize(src).map_err(|e| e.message.clone())?;
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
@@ -37,14 +64,15 @@ fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> 
     // resolution so a namespaced caller resolves to it. Without this the four
     // prelude-declared functions report `Undefined function` instead of their real
     // arity diagnostics. Injection is gated on usage, so no other test is affected.
-    let ast = elephc::hash_prelude::inject_if_used(ast, false);
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP before the checker runs, so
     // their own diagnostics reach this harness instead of a bare `Undefined function`.
     let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
-    types::check(&ast).map_err(|e| e.message.clone())?;
+    types::check_with_options(&ast, options).map_err(|e| e.message.clone())?;
     Ok(())
 }
 
@@ -53,7 +81,8 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let tokens = tokenize(src).map_err(|e| elephc::errors::CompileError::new(e.span, &e.message))?;
     let ast = parse(&tokens)?;
     let ast = elephc::autoload::collect_aliases(ast);
-    let ast = elephc::hash_prelude::inject_if_used(ast, false);
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast)?;
     let ast = elephc::func_args::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
@@ -110,6 +139,24 @@ fn expect_error(src: &str, expected_substr: &str) {
     }
 }
 
+/// Verifies a snippet fails under `--strict-locals` with the given substring.
+fn expect_error_strict(src: &str, expected_substr: &str) {
+    match check_source_strict(src) {
+        Ok(_) => panic!(
+            "Expected --strict-locals error containing '{}', but got Ok",
+            expected_substr
+        ),
+        Err(msg) => {
+            assert!(
+                msg.contains(expected_substr),
+                "--strict-locals error '{}' doesn't contain '{}'",
+                msg,
+                expected_substr,
+            );
+        }
+    }
+}
+
 /// Verifies that a snippet type-checks without any diagnostic.
 ///
 /// Used for regressions where checker acceptance is itself the contract; runtime
@@ -117,6 +164,21 @@ fn expect_error(src: &str, expected_substr: &str) {
 fn expect_no_error(src: &str) {
     if let Err(msg) = check_source(src) {
         panic!("Expected source to type-check, but got error: {}", msg);
+    }
+}
+
+/// Verifies that a snippet type-checks under `--strict-locals`.
+///
+/// The mirror of [`expect_error_strict`], for the shapes whose acceptance must be
+/// MODE-INDEPENDENT: `--strict-locals` only tightens the two permissive retype shapes, so a
+/// construct that never went through them has to be accepted in both modes. Without this helper
+/// such a claim could only be pinned in permissive mode, where it proves nothing about the flag.
+fn expect_no_error_strict(src: &str) {
+    if let Err(msg) = check_source_strict(src) {
+        panic!(
+            "Expected source to type-check under --strict-locals, but got error: {}",
+            msg
+        );
     }
 }
 
@@ -225,6 +287,8 @@ mod misc;
 mod narrowing;
 #[path = "error_tests/image.rs"]
 mod image;
+#[path = "error_tests/mysqli.rs"]
+mod mysqli;
 
 // --- Iterator-related errors ---
 

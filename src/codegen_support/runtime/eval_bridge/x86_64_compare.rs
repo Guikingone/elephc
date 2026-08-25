@@ -286,6 +286,48 @@ pub(super) fn emit_x86_64_compare(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the loose-equality boolean in rax
 
+    label_c_global(emitter, "__elephc_eval_value_regular_key_compare");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable key-comparison wrapper frame
+    emitter.instruction("sub rsp, 48");                                         // reserve boxed operands and normalized key pairs
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the boxed left key
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the boxed right key
+    emitter.instruction("mov rax, rdi");                                        // move the left key into the internal unbox input register
+    emitter.instruction("call __rt_mixed_unbox");                               // unbox the left integer or string key
+    emitter.instruction("cmp rax, 0");                                          // does the left key carry the integer runtime tag?
+    emitter.instruction("je __elephc_eval_value_regular_key_left_int_x86");     // normalize integer keys to the hash sentinel representation
+    emitter.instruction("cmp rax, 1");                                          // does the left key carry the string runtime tag?
+    emitter.instruction("jne __elephc_eval_value_regular_key_invalid_x86");     // reject values that cannot be normalized array keys
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the left string pointer
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save the left bounded string length
+    emitter.instruction("jmp __elephc_eval_value_regular_key_right_x86");       // continue with the right key
+    emitter.label("__elephc_eval_value_regular_key_left_int_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the left integer payload
+    emitter.instruction("mov QWORD PTR [rbp - 32], -1");                        // integer hash keys use an all-ones high-word sentinel
+    emitter.label("__elephc_eval_value_regular_key_right_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the boxed right key for unboxing
+    emitter.instruction("call __rt_mixed_unbox");                               // unbox the right integer or string key
+    emitter.instruction("cmp rax, 0");                                          // does the right key carry the integer runtime tag?
+    emitter.instruction("je __elephc_eval_value_regular_key_right_int_x86");    // normalize integer keys to the hash sentinel representation
+    emitter.instruction("cmp rax, 1");                                          // does the right key carry the string runtime tag?
+    emitter.instruction("jne __elephc_eval_value_regular_key_invalid_x86");     // reject values that cannot be normalized array keys
+    emitter.instruction("mov rcx, rdx");                                        // pass the right bounded string length as key_hi
+    emitter.instruction("jmp __elephc_eval_value_regular_key_call_x86");        // compare the two normalized key pairs
+    emitter.label("__elephc_eval_value_regular_key_right_int_x86");
+    emitter.instruction("mov rcx, -1");                                         // integer hash keys use an all-ones high-word sentinel
+    emitter.label("__elephc_eval_value_regular_key_call_x86");
+    emitter.instruction("mov rdx, rdi");                                        // pass the right key low word to the native comparator
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the saved left key low word
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the saved left key high word or integer sentinel
+    emitter.instruction("call __rt_key_compare_regular");                       // apply the same SORT_REGULAR ordering used by AOT ksort
+    emitter.instruction("jmp __elephc_eval_value_regular_key_done_x86");        // preserve the normalized -1, 0, or 1 result
+    emitter.label("__elephc_eval_value_regular_key_invalid_x86");
+    emitter.instruction("xor eax, eax");                                        // invalid key cells compare equal and fail closed
+    emitter.label("__elephc_eval_value_regular_key_done_x86");
+    emitter.instruction("add rsp, 48");                                         // release the key-comparison wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the signed comparison result to Rust
+
     label_c_global(emitter, "__elephc_eval_value_spaceship");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer

@@ -16,6 +16,7 @@ use super::*;
 /// `invert = 0`), matching PHP. Weeks fold into days (×7), fortnights ×14, and the keywords
 /// `tomorrow`/`yesterday` map to ±1 day. `is_numeric()` does not accept a leading `+` here,
 /// so a `+`-prefixed count is detected explicitly; `(int)` then parses the signed value.
+#[cfg(test)]
 pub(super) const CREATE_FROM_DATE_STRING_SRC: &str = r#"<?php
 $iv = new DateInterval("PT0S");
 $s = strtolower(trim($datetime));
@@ -53,9 +54,7 @@ return $iv;
 /// Unknown words are ignored (PHP throws on malformed input); the ISO 8601 duration form is
 /// handled by the constructor instead.
 pub(super) fn date_interval_create_from_date_string() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(CREATE_FROM_DATE_STRING_SRC)
-        .expect("createFromDateString body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("createFromDateString body source must parse");
+    let body = super::bodies::create_from_date_string();
     ClassMethod {
         name: "createFromDateString".to_string(),
         visibility: Visibility::Public,

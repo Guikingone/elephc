@@ -2,7 +2,7 @@
 title: "serialize()"
 description: "Generates a storable representation of a value."
 sidebar:
-  order: 316
+  order: 330
 ---
 
 ## serialize()

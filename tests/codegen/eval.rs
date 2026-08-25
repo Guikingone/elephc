@@ -6186,6 +6186,26 @@ echo function_exists("asort") && function_exists("arsort") && function_exists("k
     );
 }
 
+/// Verifies Magician key sorting delegates mixed-key `SORT_REGULAR` comparison
+/// to the same PHP comparator as AOT instead of ordering by an internal tag rank.
+#[test]
+fn test_eval_key_sort_mixed_keys_matches_aot() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$dynamic = [10 => "a", "9" => "b", "apple" => "c", "Banana" => "d", 2 => "e", "" => "f"];
+ksort($dynamic);
+foreach ($dynamic as $key => $value) { echo $key, "=", $value, ";"; }
+echo "|";
+krsort($dynamic);
+foreach ($dynamic as $key => $value) { echo $key, "=", $value, ";"; }');
+"#,
+    );
+    assert_eq!(
+        out,
+        "=f;2=e;9=b;10=a;Banana=d;apple=c;|apple=c;Banana=d;10=a;9=b;2=e;=f;"
+    );
+}
+
 /// Verifies eval natural sort builtins preserve keys and use natural string order.
 #[test]
 fn test_eval_dispatches_natural_sort_builtin_calls() {
@@ -7277,6 +7297,173 @@ echo ":" . (timezone_version_get() === "" ? "bad" : "version");');
     assert_eq!(out, "2024-01-02 03:04:05:2024:01:UTC:1:version");
 }
 
+/// Verifies a COMPUTED eval fragment can still execute DateTime-family procedural aliases.
+///
+/// This pins the fallback of `ir_lower::builtin_datetime`'s date-alias emission, which lowers
+/// ~45 method bodies — `createFromFormat` alone is 369 lines of PHP, lowered for two classes —
+/// whenever a module might dispatch into them from eval. That emission is now skipped when every
+/// fragment is a LITERAL naming no date symbol, which is what makes `eval('echo 1;')` cheap; the
+/// test above covers that half.
+///
+/// Here the fragment is built at run time, so nothing can read it and the whole surface has to be
+/// emitted anyway. Without this case the narrowing could be tightened until it dropped the
+/// dynamic path too, and the only symptom would be an eval'd program failing to find a method —
+/// at run time, in generated code, with nothing in the suite pointing at the cause.
+#[test]
+fn test_eval_dispatches_datetime_aliases_from_a_computed_fragment() {
+    let out = compile_and_run(
+        r#"<?php
+$verb = "date_create";
+$code = 'echo ' . $verb . '("2024-05-06")->format("Y-m-d");';
+eval($code);
+"#,
+    );
+    assert_eq!(out, "2024-05-06");
+}
+
+/// Verifies the four OTHER channels a fragment can reach a date method by, each of which the
+/// narrowing must treat as unreadable.
+///
+/// The test above covers a fragment built by concatenation. These four are literal fragments that
+/// reach the family without spelling an alias as a called name — the shapes a reader of the
+/// predicate would most plausibly convince themselves are safe:
+///
+/// - a literal callable handed to a callable-taking builtin (`array_map("date_create", …)`),
+/// - a `Class::method` string callable, whose class and method are inside ONE literal,
+/// - a bare variable call (`$f("…")`), whose target no static walk can name,
+/// - a dynamic method call (`$d->$m(…)`), which reaches a method without naming it.
+///
+/// Each channel is its own TEST, not an assertion inside a shared one. That names the channel a
+/// regression broke instead of failing an opaque composite — and it is also what keeps them
+/// runnable: every one of these programs emits the whole date surface, which is the point, and one
+/// alone takes ~20s to compile. Four in a row exceeded the harness's per-test budget and the
+/// composite timed out, reporting nothing about any channel.
+///
+/// All four answered correctly when the narrowing landed; without them, tightening it further
+/// would break them silently at run time.
+#[test]
+fn test_eval_reaches_datetime_through_a_literal_callable() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$r = array_map("date_create", ["2024-01-02"]); echo $r[0]->format("Y-m-d");');
+"#,
+    );
+    assert_eq!(out, "2024-01-02");
+}
+
+/// Verifies a COMPUTED eval fragment reaches EVERY `DateTime` static factory, not just one.
+///
+/// `EVAL_DATE_ALIAS_METHOD_NAMES` listed `createFromFormat` alone, so the other three factories
+/// had their declaration visible to the checker and no BODY in the eval alias set. The call type
+/// checked and then died at run time with `Cannot call abstract method`, with nothing pointing
+/// back at the list:
+///
+///     $m = "createFrom" . "Timestamp";
+///     eval("return DateTime::" . $m . "(0);")
+///     php    : 1970
+///     elephc : Fatal error: Uncaught Error: Cannot call abstract method
+///
+/// Each name is exercised through a CONCATENATED method name on purpose: a literal would let the
+/// ordinary static-call path resolve it and the alias set would never be consulted.
+#[test]
+fn test_eval_reaches_every_datetime_static_factory_through_a_computed_name() {
+    let out = compile_and_run(
+        r#"<?php
+$ts = "createFrom" . "Timestamp";
+$iface = "createFrom" . "Interface";
+$immut = "createFrom" . "Immutable";
+$fmt = "createFrom" . "Format";
+$a = eval('return DateTime::' . $ts . '(0);');
+$b = eval('return DateTime::' . $iface . '(new DateTimeImmutable("2020-05-06"));');
+$c = eval('return DateTime::' . $immut . '(new DateTimeImmutable("2020-05-06"));');
+$d = eval('return DateTime::' . $fmt . '("Y-m-d", "2020-03-04");');
+echo $a->format("Y"), ":", $b->format("Y-m-d"), ":", $c->format("Y-m-d"), ":", $d->format("Y-m-d");
+"#,
+    );
+    assert_eq!(out, "1970:2020-05-06:2020-05-06:2020-03-04");
+}
+
+/// The immutable half of the same set, including the peer only IT declares.
+///
+/// The alias list is pushed for both classes and a class that does not declare a name is skipped,
+/// so `createFromMutable` — which exists only here — and `createFromImmutable` — which exists only
+/// on the mutable class — both cost nothing and keep the list about the FAMILY.
+#[test]
+fn test_eval_reaches_every_datetime_immutable_static_factory() {
+    let out = compile_and_run(
+        r#"<?php
+$ts = "createFrom" . "Timestamp";
+$mut = "createFrom" . "Mutable";
+$iface = "createFrom" . "Interface";
+$a = eval('return DateTimeImmutable::' . $ts . '(0);');
+$b = eval('return DateTimeImmutable::' . $mut . '(new DateTime("2021-07-08"));');
+$c = eval('return DateTimeImmutable::' . $iface . '(new DateTime("2021-07-08"));');
+echo get_class($a), ":", $a->format("Y"), ":", $b->format("Y-m-d"), ":", $c->format("Y-m-d");
+"#,
+    );
+    assert_eq!(out, "DateTimeImmutable:1970:2021-07-08:2021-07-08");
+}
+
+/// A `Class::method` string callable, whose class and method are inside ONE literal.
+///
+/// See `test_eval_reaches_datetime_through_a_literal_callable` for why these four channels are
+/// separate tests rather than one.
+#[test]
+fn test_eval_reaches_datetime_through_a_string_static_callable() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$d = call_user_func("DateTime::createFromFormat", "Y-m-d", "2024-12-13"); echo $d->format("Y-m-d");');
+"#,
+    );
+    assert_eq!(out, "2024-12-13");
+}
+
+/// A bare variable call, whose target no static walk can name.
+#[test]
+fn test_eval_reaches_datetime_through_a_variable_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$f = "date_create"; $d = $f("2024-10-11"); echo $d->format("Y-m-d");');
+"#,
+    );
+    assert_eq!(out, "2024-10-11");
+}
+
+/// A dynamic method call, which reaches a method without naming it.
+#[test]
+fn test_eval_reaches_datetime_through_a_dynamic_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+$d = date_create("2024-09-10");
+$m = "format";
+eval('echo $d->$m("Y-m-d");');
+"#,
+    );
+    assert_eq!(out, "2024-09-10");
+}
+
+/// Verifies a literal `eval` fragment that INCLUDES another file still reaches the date surface.
+///
+/// This is the case a name scan cannot see, and it is why the narrowing asks the AOT planner
+/// rather than reading the fragment itself: `include "d.php"` names no date symbol, and the
+/// `date_create()` it runs lives in a file this pass never reads. The planner classifies such a
+/// fragment as bridge-only — it resolves its names at runtime, so it can reach anything — and the
+/// surface is emitted.
+///
+/// The first version of the narrowing harvested names from the fragment and got this wrong: the
+/// program compiled and failed at run time, with nothing in the suite to catch it.
+#[test]
+fn test_eval_fragment_including_a_file_reaches_the_date_surface() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("eval_include_date.php", '<?php echo date_create("2024-01-02")->format("Y-m-d");');
+eval('include "eval_include_date.php";');
+unlink("eval_include_date.php");
+"#,
+    );
+    assert_eq!(out, "2024-01-02");
+}
+
 /// Verifies eval can execute timezone-introspection aliases without static DateTimeZone references.
 #[test]
 fn test_eval_dispatches_timezone_introspection_aliases_without_static_references() {
@@ -8051,7 +8238,8 @@ echo is_executable("/bin/sh") ? "exec" : "bad"; echo ":";
 echo is_link("eval-stat.txt") ? "bad" : "notlink"; echo ":";
 echo fileatime("missing-stat.txt") === false ? "missing-atime" : "bad"; echo ":";
 echo filetype("missing-stat.txt") === false ? "missing-type" : "bad"; echo ":";
-echo filemtime("missing-stat.txt") === 0 ? "missing-mtime" : "bad"; echo ":";
+echo filemtime("missing-stat.txt") === false ? "missing-mtime" : "bad"; echo ":";
+echo filesize("missing-stat.txt") === false ? "missing-size" : "bad"; echo ":";
 echo call_user_func("filetype", "eval-stat.txt") . ":";
 echo call_user_func_array("fileinode", ["filename" => "eval-stat.txt"]) > 0 ? "callinode" : "bad"; echo ":";
 echo function_exists("filemtime"); echo function_exists("fileatime");
@@ -8064,7 +8252,7 @@ unlink("eval-stat.txt");');
     );
     assert_eq!(
         out,
-        "mtime:atime:ctime:perms:owner:group:inode:file:dir:exec:notlink:missing-atime:missing-type:missing-mtime:file:callinode:1111111111"
+        "mtime:atime:ctime:perms:owner:group:inode:file:dir:exec:notlink:missing-atime:missing-type:missing-mtime:missing-size:file:callinode:1111111111"
     );
 }
 
@@ -18967,6 +19155,39 @@ fn test_eval_rejects_invalid_magic_unserialize_arity_contract() {
     public function __unserialize(): void {}
 }');"#,
     );
+}
+
+/// Verifies AOT and dynamic eval OpenSSL calls share Magician's embedded crypto objects.
+#[test]
+fn test_eval_and_aot_openssl_share_one_crypto_bridge() {
+    let dir = make_cli_test_dir("elephc_eval_aot_openssl_bridge_dedup");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+echo openssl_cipher_iv_length("aes-128-cbc") . ":";
+$code = $argc > 1
+    ? $argv[1]
+    : 'echo openssl_cipher_iv_length("aes-256-gcm");';
+eval($code);
+"#,
+    )
+    .expect("write AOT and eval OpenSSL fixture");
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("compile AOT and eval OpenSSL fixture");
+    assert!(
+        compile.status.success(),
+        "AOT and eval OpenSSL link failed:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = Command::new(dir.join("main"))
+        .output()
+        .expect("run AOT and eval OpenSSL fixture");
+
+    assert!(run.status.success(), "AOT and eval OpenSSL fixture failed");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "16:12");
 }
 
 /// Verifies eval rejects non-array `__debugInfo` return declarations.

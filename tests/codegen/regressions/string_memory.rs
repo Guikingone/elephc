@@ -1320,14 +1320,24 @@ echo "done";
 }
 
 /// Verifies unset frees the string and is_null returns true for unset variable.
-/// Fixture: assign concat, strlen, unset, then is_null check.
+/// Fixture: assign concat, strlen, conditional unset, then is_null check.
+///
+/// The `unset` sits inside a branch on purpose. A straight-line `unset($x)` now KILLS the
+/// binding (see `.plans/local-retype-and-strict-locals.md`), so `is_null($x)` after it is an
+/// `Undefined variable` diagnostic instead of a read of the nulled slot — that half of the
+/// contract lives in `tests/error_tests/type_system.rs::test_read_after_unset_is_undefined`. A
+/// conditional `unset` is not kill-eligible, so it keeps the release-and-null-store behaviour
+/// this regression is about. `$argc` is 1 under the harness, so the branch does run and the
+/// string is still freed here.
 #[test]
 fn test_unset_frees_string() {
     let out = compile_and_run(
         r#"<?php
 $x = "hello" . " world";
 echo strlen($x);
-unset($x);
+if ($argc > 0) {
+    unset($x);
+}
 echo is_null($x) ? "1" : "0";
 "#,
     );

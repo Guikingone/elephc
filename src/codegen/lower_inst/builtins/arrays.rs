@@ -545,10 +545,12 @@ fn lower_array_slice_preserve_keys(
 
 /// Calls one of the `__rt_hash_*sort` insertion-order relinking helpers.
 ///
-/// The receiver is split with `__rt_hash_ensure_unique` first, so an aliased copy taken
-/// before the call keeps the original iteration order, and the possibly relocated pointer
-/// is written back to the source local before the sorter runs. The helpers only rewrite
-/// the table's `prev`/`next`/`head`/`tail` links, so no key or value changes ownership.
+/// Ordinary receivers are split with `__rt_hash_ensure_unique` first, so an aliased copy taken
+/// before the call keeps the original iteration order, and the possibly relocated pointer is
+/// written back to the source local before the sorter runs. A hash returned by
+/// `MixedCellPromoteAttachedToHash(_)` is already unique and published into its parent-owned Mixed
+/// cell; splitting it again would create an opaque clone that cannot be republished. The helpers
+/// only rewrite the table's `prev`/`next`/`head`/`tail` links, so no key or value changes ownership.
 fn lower_hash_link_sort(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -556,17 +558,54 @@ fn lower_hash_link_sort(
 ) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
-    ensure_unique_hash_sort_source(ctx, array)?;
-    receiver.store_back_value(ctx, array)?;
+    if !hash_sort_source_is_attached_mixed_cell(ctx, array)? {
+        if let Some(slot) = receiver.slot() {
+            ctx.release_mutated_source_local_owner(slot, array)?;
+        }
+        ensure_unique_hash_sort_source(ctx, array)?;
+        receiver.store_back_value(ctx, array)?;
+    }
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     abi::emit_call_label(ctx.emitter, helper);
+    let result = if inst.result_php_type.codegen_repr() == PhpType::Bool {
+        1
+    } else {
+        0x7fff_ffff_ffff_fffe
+    };
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        result,
     );
     store_if_result(ctx, inst)
+}
+
+/// Reports whether `value` is the hash already made unique and republished by a Mixed-cell helper.
+fn hash_sort_source_is_attached_mixed_cell(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<bool> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let instruction = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    Ok(matches!(
+        (&instruction.op, &instruction.immediate),
+        (
+            Op::RuntimeCall,
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
+            ))
+        )
+    ))
 }
 
 /// Resolves the `array_slice`/`array_splice` length-present flag into the integer result register.

@@ -307,31 +307,33 @@ fn box_openssl_int_or_false_result(ctx: &mut FunctionContext<'_>, label_prefix: 
     let done_label = ctx.next_label(&format!("{}_done", label_prefix));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // -- box an ARM64 bridge status as integer or false --
             ctx.emitter.instruction("cmp x0, #0");                              // negative IV-length status means unknown cipher
-            ctx.emitter.instruction(&format!("b.lt {}", false_label));
+            ctx.emitter.instruction(&format!("b.lt {}", false_label));          // branch to false for an unknown cipher
             ctx.emitter.instruction("mov x1, x0");                              // integer Mixed payload
-            ctx.emitter.instruction("mov x2, #0");
+            ctx.emitter.instruction("mov x2, #0");                              // clear the high payload word
             ctx.emitter.instruction("mov x0, #0");                              // runtime tag 0 = integer
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the false-result path
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("mov x1, #0");                              // false payload
-            ctx.emitter.instruction("mov x2, #0");
+            ctx.emitter.instruction("mov x2, #0");                              // clear the high payload word
             ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
+            // -- box an x86_64 bridge status as integer or false --
             ctx.emitter.instruction("test rax, rax");                           // negative IV-length status means unknown cipher
-            ctx.emitter.instruction(&format!("js {}", false_label));
+            ctx.emitter.instruction(&format!("js {}", false_label));            // branch to false for an unknown cipher
             ctx.emitter.instruction("mov rdi, rax");                            // integer Mixed payload
-            ctx.emitter.instruction("xor esi, esi");
+            ctx.emitter.instruction("xor esi, esi");                            // clear the high payload word
             ctx.emitter.instruction("xor eax, eax");                            // runtime tag 0 = integer
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the false-result path
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("xor edi, edi");                            // false payload
-            ctx.emitter.instruction("xor esi, esi");
+            ctx.emitter.instruction("xor esi, esi");                            // clear the high payload word
             ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = boolean
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&done_label);

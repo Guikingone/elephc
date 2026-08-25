@@ -252,6 +252,7 @@ pub enum Op {
     LoadLocal,
     StoreLocal,
     UnsetLocal,
+    ZeroLocalSlot,
     LoadRefCell,
     StoreRefCell,
     PromoteLocalRefCell,
@@ -265,6 +266,7 @@ pub enum Op {
     InitStaticLocal,
     LoadStaticProperty,
     StoreStaticProperty,
+    StaticPropInitialized,
     LoadReflectionStaticProperty,
     StoreReflectionStaticProperty,
     ReflectionStaticPropertyInitialized,
@@ -616,9 +618,8 @@ impl Op {
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
-            StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | FinallyEnter | FinallyExit => {
-                E::WRITES_LOCAL
-            }
+            StoreLocal | UnsetLocal | ZeroLocalSlot | StoreRefCell | ListUnpack | FinallyEnter
+            | FinallyExit => E::WRITES_LOCAL,
             PromoteLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
@@ -629,6 +630,7 @@ impl Op {
             ReleaseLocalSlot => E::READS_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
             LoadGlobal
             | LoadStaticProperty
+            | StaticPropInitialized
             | LoadReflectionStaticProperty
             | ReflectionStaticPropertyInitialized
             | ScopedConstantGet
@@ -650,7 +652,9 @@ impl Op {
             IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
             ConcatReset => E::WRITES_GLOBAL,
-            Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL,
+            Cast => {
+                E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL
+            }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
@@ -834,6 +838,7 @@ impl Op {
             LoadLocal => "load_local",
             StoreLocal => "store_local",
             UnsetLocal => "unset_local",
+            ZeroLocalSlot => "zero_local_slot",
             LoadRefCell => "load_ref_cell",
             StoreRefCell => "store_ref_cell",
             PromoteLocalRefCell => "promote_local_ref_cell",
@@ -847,6 +852,7 @@ impl Op {
             InitStaticLocal => "init_static_local",
             LoadStaticProperty => "load_static_property",
             StoreStaticProperty => "store_static_property",
+            StaticPropInitialized => "static_prop_initialized",
             LoadReflectionStaticProperty => "load_reflection_static_property",
             StoreReflectionStaticProperty => "store_reflection_static_property",
             ReflectionStaticPropertyInitialized => "reflection_static_property_initialized",

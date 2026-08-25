@@ -10,7 +10,6 @@
 //!   explicit unsupported-feature errors for control flow not lowered yet.
 //! - The main prologue initializes supported static-property storage before
 //!   user blocks run.
-
 use std::fmt::Write as _;
 
 use crate::codegen::abi;
@@ -19,6 +18,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::emit_fiber_wrapper;
 use crate::codegen::platform::Arch;
 use crate::codegen::Emit;
+use crate::codegen::WebIsolation;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::DeferredFiberWrapper;
 use crate::ir::{BasicBlock, Function, InstId, Module};
@@ -51,7 +51,8 @@ use super::{CodegenIrError, Result};
 ///
 /// `web` restructures the entry point: the top-level body is emitted as the
 /// C-callable `_elephc_web_handler` and the real entry becomes a stub that calls
-/// `elephc_web_run`. When false the normal exit-based main is emitted unchanged.
+/// the bridge entry selected by `web_isolation`. When false the normal
+/// exit-based main is emitted unchanged.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_module(
     module: &Module,
@@ -63,9 +64,26 @@ pub(super) fn emit_module(
     emit: Emit,
     regalloc_linear: bool,
     web: bool,
+    web_isolation: WebIsolation,
 ) -> Result<()> {
     let mut shared = SharedCodegenState::default();
     function_variants::emit_dispatchers(module, emitter, data);
+    // Emitted before the module's own bodies so every string context that calls them is
+    // lowered against helpers that already exist.
+    super::shared_mixed_string::emit_shared_mixed_string_helpers(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
+    super::shared_count_guard::emit_shared_count_guard(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
     // In `--web` builds the reset routine references every request superglobal.
     // If a superglobal is never read or written by user/prelude code, the symbol
     // would otherwise be missing from the object, so reserve storage up front.
@@ -113,6 +131,7 @@ pub(super) fn emit_module(
         requires_elephc_tls,
         regalloc_linear,
         web,
+        web_isolation,
     )?;
     // Generate the per-request reset routine only for `--web`, and only after the
     // handler body is emitted so every function static local (including any in the
@@ -532,10 +551,14 @@ fn emit_generator_constructor(
         }
         match target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("str {}, [x19, #{}]", gen_reg, store_off)) // store the owned Mixed cell into the generator start_args slot
+                emitter.instruction(
+                    &format!("str {}, [x19, #{}]", gen_reg, store_off)
+                )                                                               // store the owned Mixed cell into the generator start_args slot
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov QWORD PTR [r12 + {}], {}", store_off, gen_reg)) // store the owned Mixed cell into the generator start_args slot
+                emitter.instruction(
+                    &format!("mov QWORD PTR [r12 + {}], {}", store_off, gen_reg)
+                )                                                               // store the owned Mixed cell into the generator start_args slot
             }
         }
     }
@@ -544,14 +567,16 @@ fn emit_generator_constructor(
     match target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("mov x9, #{}", n));                    // number of boxed start arguments forwarded to the body
-            emitter.instruction(&format!("str x9, [x19, #{}]", FIBER_START_ARG_COUNT_OFFSET)); // publish the start argument count
+            emitter.instruction(
+                &format!("str x9, [x19, #{}]", FIBER_START_ARG_COUNT_OFFSET)
+            );                                                                  // publish the start argument count
             emitter.instruction("mov x0, x19");                                 // return the Generator object to the caller
         }
         Arch::X86_64 => {
             emitter.instruction(&format!(
                 "mov QWORD PTR [r12 + {}], {}",
                 FIBER_START_ARG_COUNT_OFFSET, n
-            )); // publish the start argument count
+            ));                                                                 // publish the start argument count
             emitter.instruction("mov rax, r12");                                // return the Generator object to the caller
         }
     }
@@ -642,7 +667,9 @@ fn emit_generator_callback(
                 emitter.instruction(&format!("ldr x0, [x19, #{}]", load_off));  // load the boxed Mixed start argument
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", load_off)); // load the boxed Mixed start argument
+                emitter.instruction(
+                    &format!("mov rax, QWORD PTR [r12 + {}]", load_off)
+                );                                                              // load the boxed Mixed start argument
             }
         }
         if gen_param_kind(ty) == GenParamKind::Mixed {
@@ -734,14 +761,16 @@ fn emit_generator_callback(
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop any stack-passed parameters after the body returns
     match target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("str x0, [x19, #{}]", GEN_RETURN_VALUE_OFFSET)); // park the body return value for getReturn()
+            emitter.instruction(
+                &format!("str x0, [x19, #{}]", GEN_RETURN_VALUE_OFFSET)
+            );                                                                  // park the body return value for getReturn()
             emitter.instruction("mov x0, #0");                                  // hand the fiber transfer value a null so it does not alias the return
         }
         Arch::X86_64 => {
             emitter.instruction(&format!(
                 "mov QWORD PTR [r12 + {}], rax",
                 GEN_RETURN_VALUE_OFFSET
-            )); // park the body return value for getReturn()
+            ));                                                                 // park the body return value for getReturn()
             emitter.instruction("xor eax, eax");                                // hand the fiber transfer value a null so it does not alias the return
         }
     }
@@ -785,6 +814,7 @@ fn emit_main_function(
     requires_elephc_tls: bool,
     regalloc_linear: bool,
     web: bool,
+    web_isolation: WebIsolation,
 ) -> Result<()> {
     let entry_symbol = if web {
         frame::WEB_HANDLER_SYMBOL
@@ -820,7 +850,7 @@ fn emit_main_function(
     }
     emit_endfn_marker(ctx.emitter, &function.name);
     if web {
-        frame::emit_web_entry_stub(&mut ctx);
+        frame::emit_web_entry_stub(&mut ctx, web_isolation);
     }
     Ok(())
 }
@@ -1017,6 +1047,19 @@ fn emit_static_property_default_value(
         }
         LiteralDefaultValue::EmptyAssocArray { value_type } => {
             emit_empty_assoc_array_literal_to_result(ctx, value_type);
+        }
+        LiteralDefaultValue::BoxedArray {
+            elem_type,
+            elements,
+        } => {
+            emit_array_literal_default_to_result(ctx, elem_type, elements)?;
+            // The OWNED boxer, because the literal above allocated the array and the box takes
+            // its own reference: the plain one retains without releasing, which leaked one block
+            // per object (`allocs=3 frees=2` where the `mixed $s = "x"` default closed at 3/3).
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Array(Box::new(elem_type.clone())),
+            );
         }
     }
     let symbol = static_property_symbol(class_name, property);
