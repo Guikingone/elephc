@@ -168,8 +168,8 @@ impl Checker {
     ///
     /// The int-dispatch predicate above deliberately excludes `Float`, because the machinery it
     /// gates is integer-shaped. Relational operators are not: PHP compares `float|false` as
-    /// happily as `int|false`, and the lowering already handles it — a boxed Mixed holding a
-    /// float compares correctly today, which is the only reason this may be relaxed.
+    /// happily as `int|false`, and ordering lowers boxed operands through the runtime PHP
+    /// comparison table so fractional floats and boolean truthiness remain distinct.
     ///
     /// Without this, widening a builtin's return to `float|false` turns idiomatic calling code
     /// such as `disk_free_space(".") > 0` into a compile error, trading a wrong value for a

@@ -37,6 +37,33 @@ pub(super) fn lower_compare(
         lhs = lhs_key;
         rhs = rhs_key;
     }
+    if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq)
+        && (needs_runtime_ordering_dispatch(ctx, lhs.value)
+            || needs_runtime_ordering_dispatch(ctx, rhs.value))
+    {
+        let ordering = ctx.emit_value(
+            Op::Spaceship,
+            vec![lhs.value, rhs.value],
+            None,
+            PhpType::Int,
+            Op::Spaceship.default_effects(),
+            Some(expr.span),
+        );
+        let zero = lower_int_literal(ctx, 0, expr);
+        let result = ctx.emit_value(
+            Op::ICmp,
+            vec![ordering.value, zero.value],
+            Some(Immediate::CmpPredicate(cmp_predicate(op))),
+            PhpType::Bool,
+            Op::ICmp.default_effects(),
+            Some(expr.span),
+        );
+        release_binary_operand_temporary(ctx, lhs, expr.span);
+        if rhs.value != lhs.value {
+            release_binary_operand_temporary(ctx, rhs, expr.span);
+        }
+        return result;
+    }
     let opcode = match op {
         BinOp::StrictEq => Op::StrictEq,
         BinOp::StrictNotEq => Op::StrictNotEq,
@@ -74,6 +101,14 @@ pub(super) fn lower_compare(
         release_binary_operand_temporary(ctx, rhs, expr.span);
     }
     result
+}
+
+/// Returns whether an operand carries a runtime tag that must select PHP's ordering rule.
+fn needs_runtime_ordering_dispatch(ctx: &LoweringContext<'_, '_>, value: ValueId) -> bool {
+    matches!(
+        ctx.builder.value_php_type(value).codegen_repr(),
+        PhpType::Mixed | PhpType::TaggedScalar
+    )
 }
 
 /// Releases an owning binary-operator operand once the consuming opcode has read it.
@@ -163,4 +198,3 @@ pub(super) fn cmp_predicate(op: &BinOp) -> CmpPredicate {
         _ => CmpPredicate::Eq,
     }
 }
-

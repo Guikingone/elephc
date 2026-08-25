@@ -265,6 +265,29 @@ echo disk_free_space("/no/such/path/xyz123") === false ? "strict" : "!";
     assert_eq!(out, "bool(false)\nbool(false)\nstrict");
 }
 
+/// Verifies disk-space failures keep PHP boolean ordering against negative numbers.
+/// Casting the boxed `false` to an integer would make both relational and spaceship
+/// results point in the opposite direction because PHP compares a boolean operand by truthiness.
+#[test]
+fn test_disk_space_invalid_path_uses_false_ordering_rules() {
+    let out = compile_and_run(
+        r#"<?php
+$free = disk_free_space("/no/such/path/xyz123");
+$total = disk_total_space("/no/such/path/xyz123");
+var_dump($free > -1);
+var_dump($free < -1);
+var_dump($free <=> -1);
+var_dump(-1 <=> $free);
+var_dump($total > -1);
+var_dump($total <=> -1);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(true)\nint(-1)\nint(1)\nbool(false)\nint(-1)\n"
+    );
+}
+
 /// Verifies a successful `disk_free_space()` still behaves as a float after the return type
 /// widened to `float|false`.
 ///
