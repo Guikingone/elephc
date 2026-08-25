@@ -91,6 +91,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_stream_pending_held(emitter);
     io::emit_stream_pending_consume(emitter);
     io::emit_stream_pending_fill(emitter);
+    io::emit_stream_temp_eof_probe(emitter);
     io::emit_stream_select_cast_warning(emitter);
     io::emit_stream_select_memory_guard(emitter);
     io::emit_stream_context_options_shape_ok(emitter);

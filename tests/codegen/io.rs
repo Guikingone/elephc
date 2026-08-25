@@ -29,6 +29,8 @@ mod wrapper_chunk_reads;
 mod read_buffer;
 #[path = "io/line_reads.rs"]
 mod line_reads;
+#[path = "io/temp_stream_eof.rs"]
+mod temp_stream_eof;
 #[path = "io/file_url_scheme.rs"]
 mod file_url_scheme;
 #[path = "io/path_failure_warnings.rs"]

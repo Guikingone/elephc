@@ -280,6 +280,15 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #48]");                                   // return the result start pointer
     emitter.instruction("ldr x2, [sp, #56]");                                   // return the bytes read
     emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
+
+    // -- `php://temp` calls a drained line read the end of the stream --
+    // Same extra read `fgets()` performs, and for the same reason: php reaches both through one
+    // buffer fill. A refused read leaves its bytes in hand, so the probe finds them and stops.
+    emitter.instruction("stp x1, x2, [sp, #88]");                               // the result survives the probe's own calls
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the opaque stream handle
+    emitter.instruction("bl __rt_stream_temp_eof_probe");                       // one extra read, for the one wrapper that takes it
+    emitter.instruction("ldp x1, x2, [sp, #88]");                               // restore the result pointer and length
+
     emitter.instruction("ldr x0, [sp, #72]");                                   // report whether ANY byte was consumed, after the publish call
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #112");                                    // release the frame
@@ -518,6 +527,16 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the result start pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // return the bytes read
     emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
+
+    // -- `php://temp` calls a drained line read the end of the stream --
+    // See the AArch64 counterpart.
+    emitter.instruction("mov QWORD PTR [rbp - 96], rax");                       // the result survives the probe's own calls
+    emitter.instruction("mov QWORD PTR [rbp - 104], rdx");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_temp_eof_probe");                     // one extra read, for the one wrapper that takes it
+    emitter.instruction("mov rax, QWORD PTR [rbp - 96]");                       // restore the result pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 104]");                      // restore the result length
+
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // report whether ANY byte was consumed, after the publish call
     emitter.instruction("add rsp, 112");                                        // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

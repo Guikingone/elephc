@@ -405,6 +405,15 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #8]");                                    // return the accumulated line length
     emitter.instruction("bl __rt_concat_publish");                              // shrink the claimed window down to the bytes actually read
 
+    // -- `php://temp` calls a drained line read the end of the stream --
+    // AFTER the publish, never before: the probe fills the holding area, and that fill claims a
+    // concat window of its own. Run while this line still held one, it would build its chunk on
+    // top of the line and hand back bytes that had moved.
+    emitter.instruction("stp x1, x2, [sp, #72]");                               // the line survives the probe's own calls
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_temp_eof_probe");                       // one extra read, for the one wrapper that takes it
+    emitter.instruction("ldp x1, x2, [sp, #72]");                               // restore the line pointer and length
+
     // -- restore frame and return --
     emitter.label("__rt_fgets_return");
     emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
@@ -570,6 +579,16 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the reserved start pointer for the fgets() line
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // return the accumulated line length in the x86_64 elephc string-length result register
     emitter.instruction("call __rt_concat_publish");                            // shrink the claimed window down to the bytes actually read
+
+    // -- `php://temp` calls a drained line read the end of the stream --
+    // See the AArch64 counterpart: after the publish, because the probe's own fill claims a
+    // concat window and would otherwise build it on top of this line.
+    emitter.instruction("mov QWORD PTR [rbp - 88], rax");                       // the line survives the probe's own calls
+    emitter.instruction("mov QWORD PTR [rbp - 96], rdx");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_temp_eof_probe");                     // one extra read, for the one wrapper that takes it
+    emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // restore the line pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 96]");                       // restore the line length
     emitter.label("__rt_fgets_return_x86");
     emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the x86_64 fgets() helper completes
