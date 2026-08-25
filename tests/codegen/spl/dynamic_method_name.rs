@@ -66,3 +66,28 @@ echo "\n";
     assert_eq!(out, "12|21\n");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Verifies a virtual call through a PARENT-typed receiver reaches the subclass's own body.
+///
+/// The discovery pass climbs from the receiver's static type to the class that DECLARES the
+/// method, which is the right answer for the type and the wrong one for the object in it.
+/// MEASURED: `function walk(SplFileObject $o) { $o->eof(); }` called with an `SplTempFileObject`
+/// SEGFAULTED on a null vtable slot, and adding an unrelated `$temp->eof()` elsewhere in the same
+/// program made it work — the gap was EMISSION, not dispatch.
+#[test]
+fn a_call_through_a_parent_type_reaches_the_subclasss_body() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+function ask(SplFileObject $o): string {
+    return var_export($o->eof(), true) . "/" . $o->getExtension();
+}
+$t = new SplTempFileObject();
+$t->fwrite("a\n");
+echo ask($t), "|";
+file_put_contents("p.txt", "a\n");
+echo ask(new SplFileObject("p.txt")), "\n";
+"#,
+    );
+    assert_eq!(out, "false/|false/txt\n");
+    let _ = std::fs::remove_dir_all(dir);
+}

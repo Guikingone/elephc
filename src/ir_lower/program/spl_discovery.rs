@@ -393,6 +393,7 @@ pub(super) fn push_supported_builtin_spl_method_for_receiver(
     class_name: &str,
     method_key: &str,
 ) {
+    push_builtin_spl_method_overrides(methods, module, class_name, method_key);
     let mut current = Some(class_name);
     while let Some(name) = current {
         if is_supported_builtin_spl_method(name, method_key) {
@@ -404,6 +405,54 @@ pub(super) fn push_supported_builtin_spl_method_for_receiver(
             .get(name)
             .and_then(|class_info| class_info.parent.as_deref());
     }
+}
+
+/// Pushes the same method on every builtin SPL class BELOW `class_name` that the program builds.
+///
+/// The walk above climbs to the class that DECLARES the method, which is the right answer for the
+/// receiver's static type and the wrong one for the object in it. A call through an
+/// `SplFileObject` parameter holding an `SplTempFileObject` dispatches through the vtable, and the
+/// subclass's own slot was never lowered: MEASURED, `function walk(SplFileObject $o) { $o->eof(); }`
+/// called with an `SplTempFileObject` SEGFAULTED on a null slot, and adding an unrelated
+/// `$temp->eof()` elsewhere in the same program made it work — which is what said the gap was
+/// emission and not dispatch.
+///
+/// Bounded by what the program CONSTRUCTS, because a virtual call can only land on a class
+/// something instantiated. A program that builds no SPL subclass pays a walk over its class table
+/// and emits nothing.
+fn push_builtin_spl_method_overrides(
+    methods: &mut Vec<(String, String)>,
+    module: &Module,
+    class_name: &str,
+    method_key: &str,
+) {
+    for candidate in constructed_builtin_spl_classes(module) {
+        if candidate == class_name
+            || !is_supported_builtin_spl_method(&candidate, method_key)
+            || !builtin_spl_class_descends_from(module, &candidate, class_name)
+        {
+            continue;
+        }
+        methods.push((candidate, method_key.to_string()));
+    }
+}
+
+/// Reports whether `candidate` has `ancestor` somewhere above it.
+fn builtin_spl_class_descends_from(module: &Module, candidate: &str, ancestor: &str) -> bool {
+    let mut current = module
+        .class_infos
+        .get(candidate)
+        .and_then(|class_info| class_info.parent.as_deref());
+    while let Some(name) = current {
+        if name == ancestor {
+            return true;
+        }
+        current = module
+            .class_infos
+            .get(name)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
 }
 
 /// Returns the class-name immediate attached to an instruction.
