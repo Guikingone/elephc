@@ -24,6 +24,25 @@ pub(super) fn lower_fseek_aarch64(
     ctx.emitter.instruction("str x0, [sp, #0]");                                // save the opaque stream handle
     ctx.emitter.instruction("str x1, [sp, #8]");                                // save the requested seek offset
     ctx.emitter.instruction("str x2, [sp, #16]");                               // save the requested whence value
+
+    // -- SEEK_CUR counts from where the PROGRAM is, not from where the descriptor stopped --
+    //
+    // A buffered read leaves the descriptor ahead by whatever it kept, and the kernel's SEEK_CUR
+    // starts from there. MEASURED on `"ab\ncd"`: `rewind(); fread($h, 2); fseek($h, 1, SEEK_CUR);
+    // ftell($h)` answers 3 in php and answered 6 here — past the end of a five-byte file.
+    // `ftell()` already subtracts the held bytes; the seek has to as well, and then the clear
+    // that follows a successful seek throws the buffer away.
+    let adjusted_label = ctx.next_label("fseek_cur_adjusted");
+    ctx.emitter.instruction("ldr x9, [sp, #16]");
+    ctx.emitter.instruction("cmp x9, #1");                                      // SEEK_CUR
+    ctx.emitter.instruction(&format!("b.ne {}", adjusted_label));
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // the opaque stream handle
+    abi::emit_call_label(ctx.emitter, "__rt_stream_pending_held");
+    ctx.emitter.instruction("ldr x1, [sp, #8]");
+    ctx.emitter.instruction("sub x1, x1, x0");                                  // rewind the offset by what is still held
+    ctx.emitter.instruction("str x1, [sp, #8]");
+    ctx.emitter.label(&adjusted_label);
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // the handle the descriptor lookup takes
     abi::emit_call_label(ctx.emitter, "__rt_stream_fd");
     ctx.emitter.instruction("ldr x1, [sp, #8]");                                // restore the requested seek offset
     ctx.emitter.instruction("ldr x2, [sp, #16]");                               // restore the requested whence value
@@ -32,7 +51,7 @@ pub(super) fn lower_fseek_aarch64(
     ctx.emitter.instruction("cmp x0, x9");                                      // test whether this stream is a userspace-wrapper handle
     ctx.emitter.instruction(&format!("b.lo {}", success_label));                // descriptors below the wrapper range use native lseek
     crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "x10");
-    ctx.emitter.instruction("add x10, x9, x10");                        // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
+    ctx.emitter.instruction("add x10, x9, x10");                                // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     ctx.emitter.instruction("cmp x0, x10");                                     // is the backend above the wrapper range?
     ctx.emitter.instruction(&format!("b.lo {}", wrapper_label));                // dispatch wrapper backends to stream_seek
     ctx.emitter.label(success_label);
@@ -116,6 +135,20 @@ pub(super) fn lower_fseek_x86_64(
     ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rdi");                    // save the opaque stream handle
     ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rsi");                    // save the requested seek offset
     ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rdx");                   // save the requested whence value
+
+    // See the AArch64 counterpart: SEEK_CUR counts from where the PROGRAM is, and a buffered
+    // read leaves the descriptor ahead by whatever it kept.
+    let adjusted_label = ctx.next_label("fseek_cur_adjusted");
+    ctx.emitter.instruction("cmp QWORD PTR [rsp + 16], 1");                     // SEEK_CUR
+    ctx.emitter.instruction(&format!("jne {}", adjusted_label));
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // the opaque stream handle
+    abi::emit_call_label(ctx.emitter, "__rt_stream_pending_held");
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");
+    ctx.emitter.instruction("sub rsi, rax");                                    // rewind the offset by what is still held
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rsi");
+    ctx.emitter.label(&adjusted_label);
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // the handle the descriptor lookup takes
+    ctx.emitter.instruction("mov rax, rdi");
     abi::emit_call_label(ctx.emitter, "__rt_stream_fd");
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the resolved backend descriptor to lseek
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                    // restore the requested seek offset
@@ -124,7 +157,7 @@ pub(super) fn lower_fseek_x86_64(
     ctx.emitter.instruction("cmp rdi, r9");                                     // test whether this stream is a userspace-wrapper handle
     ctx.emitter.instruction(&format!("jb {}", success_label));                  // descriptors below the wrapper range use native lseek
     crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "r10");
-    ctx.emitter.instruction("add r10, r9");                             // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
+    ctx.emitter.instruction("add r10, r9");                                     // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     ctx.emitter.instruction("cmp rdi, r10");                                    // is the backend above the wrapper range?
     ctx.emitter.instruction(&format!("jb {}", wrapper_label));                  // dispatch wrapper backends to stream_seek
     ctx.emitter.label(success_label);
@@ -174,7 +207,7 @@ pub(super) fn lower_rewind_aarch64(
     ctx.emitter.instruction("cmp x0, x9");                                      // test whether this stream is a userspace-wrapper handle
     ctx.emitter.instruction(&format!("b.lo {}", success_label));                // descriptors below the wrapper range use native lseek
     crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "x10");
-    ctx.emitter.instruction("add x10, x9, x10");                        // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
+    ctx.emitter.instruction("add x10, x9, x10");                                // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     ctx.emitter.instruction("cmp x0, x10");                                     // is the backend above the wrapper range?
     ctx.emitter.instruction(&format!("b.lo {}", wrapper_label));                // dispatch wrapper backends to stream_seek
     ctx.emitter.label(success_label);
@@ -238,7 +271,7 @@ pub(super) fn lower_rewind_x86_64(
     ctx.emitter.instruction("cmp rdi, r9");                                     // test whether this stream is a userspace-wrapper handle
     ctx.emitter.instruction(&format!("jb {}", success_label));                  // descriptors below the wrapper range use native lseek
     crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "r10");
-    ctx.emitter.instruction("add r10, r9");                             // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
+    ctx.emitter.instruction("add r10, r9");                                     // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     ctx.emitter.instruction("cmp rdi, r10");                                    // is the backend above the wrapper range?
     ctx.emitter.instruction(&format!("jb {}", wrapper_label));                  // dispatch wrapper backends to stream_seek
     ctx.emitter.label(success_label);

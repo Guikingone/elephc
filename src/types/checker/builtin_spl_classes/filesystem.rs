@@ -260,13 +260,14 @@ fn spl_file_object_properties() -> Vec<ClassProperty> {
 }
 
 /// Builds SplTempFileObject-only storage properties.
+///
+/// There are none. The class IS an `SplFileObject` on `php://temp`, so it holds exactly its
+/// parent's state — and declaring storage of its own would put that storage FIRST in the
+/// flattened layout, leaving every inherited method reading its parent's slot index against a
+/// different object. `feof($this->stream)` segfaulted on the four properties that used to be
+/// here.
 fn spl_temp_file_object_properties() -> Vec<ClassProperty> {
-    vec![
-        protected_storage_property("tempMaxMemory", TypeExpr::Int),
-        protected_storage_property("tempBuffer", TypeExpr::Str),
-        protected_storage_property("tempPosition", TypeExpr::Int),
-        protected_storage_property("tempSpilled", TypeExpr::Bool),
-    ]
+    Vec::new()
 }
 
 /// Builds directory iterator storage properties shared by directory subclasses.
@@ -519,27 +520,45 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
 
 /// Builds SplTempFileObject methods.
 fn spl_temp_file_object_methods() -> Vec<ClassMethod> {
+    let mut methods = vec![method_with_body(
+        "__construct",
+        vec![param_default("maxMemory", TypeExpr::Int, int_expr(2_097_152))],
+        Some(TypeExpr::Void),
+        spl_temp_file_object_construct_body(),
+    )];
+    methods.extend(spl_temp_file_object_stream_methods());
+    methods
+}
+
+/// Re-declares the parent's stream methods, with the parent's own bodies.
+///
+/// They are IDENTICAL to `SplFileObject`'s and inheritance ought to supply them. It does not:
+/// a program whose only file object is an `SplTempFileObject` gets a NULL vtable slot for every
+/// method the subclass does not declare, and `$t->ftell()` jumps to address zero. MEASURED —
+/// `lldb` stops at `frame #0: 0x0000000000000000`, and the emitted assembly carries no
+/// `_eir_SplFileObject__ftell` at all. Constructing an `SplFileObject` ANYWHERE in the same
+/// program makes the crash disappear, which is the signature of a body that was never emitted
+/// rather than a dispatch that went wrong.
+///
+/// Declaring them here is what keeps this class working while that gap is open. Each entry is
+/// the same expression `spl_file_object_methods` uses, so there is one behaviour, not two.
+fn spl_temp_file_object_stream_methods() -> Vec<ClassMethod> {
     vec![
-        method_with_body(
-            "__construct",
-            vec![param_default("maxMemory", TypeExpr::Int, int_expr(2_097_152))],
-            Some(TypeExpr::Void),
-            spl_temp_file_object_construct_body(),
-        ),
-        method_with_body("eof", Vec::new(), Some(TypeExpr::Bool), spl_temp_file_object_eof_body()),
-        method_with_body("fgets", Vec::new(), Some(mixed_type()), spl_temp_file_object_fgets_body()),
-        method_with_body("fgetc", Vec::new(), Some(mixed_type()), spl_temp_file_object_fgetc_body()),
+        method_with_body("eof", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("feof", vec![file_stream_expr()]))),
+        method_with_body("fgets", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),
+        method_with_body("getCurrentLine", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),
+        method_with_body("fgetc", Vec::new(), Some(mixed_type()), return_body(function_call("fgetc", vec![file_stream_expr()]))),
         method_with_body(
             "fread",
             vec![param("length", TypeExpr::Int)],
             Some(TypeExpr::Str),
-            spl_temp_file_object_fread_body(),
+            return_body(function_call("fread", vec![file_stream_expr(), var_expr("length")])),
         ),
-        method_with_body("fwrite", vec![param("data", TypeExpr::Str)], Some(TypeExpr::Int), spl_temp_file_object_fwrite_body()),
-        method_with_body("fflush", Vec::new(), Some(TypeExpr::Bool), spl_temp_file_object_fflush_body()),
-        method_with_body("ftruncate", vec![param("size", TypeExpr::Int)], Some(TypeExpr::Bool), spl_temp_file_object_ftruncate_body()),
-        method_with_body("fstat", Vec::new(), Some(mixed_type()), spl_temp_file_object_fstat_body()),
-        method_with_body("ftell", Vec::new(), Some(TypeExpr::Int), spl_temp_file_object_ftell_body()),
+        method_with_body("fwrite", vec![param("data", TypeExpr::Str)], Some(TypeExpr::Int), spl_file_object_fwrite_body()),
+        method_with_body("fflush", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("fflush", vec![file_stream_expr()]))),
+        method_with_body("ftruncate", vec![param("size", TypeExpr::Int)], Some(TypeExpr::Bool), spl_file_object_ftruncate_body()),
+        method_with_body("fstat", Vec::new(), Some(mixed_type()), return_body(function_call("fstat", vec![file_stream_expr()]))),
+        method_with_body("ftell", Vec::new(), Some(TypeExpr::Int), return_body(function_call("ftell", vec![file_stream_expr()]))),
         method_with_body(
             "fseek",
             vec![
@@ -547,15 +566,9 @@ fn spl_temp_file_object_methods() -> Vec<ClassMethod> {
                 param_default("whence", TypeExpr::Int, int_expr(0)),
             ],
             Some(TypeExpr::Int),
-            spl_temp_file_object_fseek_body(),
+            spl_file_object_fseek_body(),
         ),
-        method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), spl_temp_file_object_rewind_body()),
-        protected_method_with_body(
-            "__elephcSpillToFile",
-            Vec::new(),
-            Some(TypeExpr::Void),
-            spl_temp_file_object_spill_body(),
-        ),
+        method_with_body("flock", vec![param("operation", TypeExpr::Int)], Some(TypeExpr::Bool), return_body(function_call("flock", vec![file_stream_expr(), var_expr("operation")]))),
     ]
 }
 
@@ -734,31 +747,6 @@ fn file_object_flags_expr() -> Expr {
 /// Returns `$this->stream` for SplFileObject.
 fn file_stream_expr() -> Expr {
     property_access(this_expr(), "stream")
-}
-
-/// Returns `$this->tempMaxMemory` for SplTempFileObject.
-fn temp_max_memory_expr() -> Expr {
-    property_access(this_expr(), "tempMaxMemory")
-}
-
-/// Returns `$this->tempBuffer` for SplTempFileObject.
-fn temp_buffer_expr() -> Expr {
-    property_access(this_expr(), "tempBuffer")
-}
-
-/// Returns a copied `$this->tempBuffer` for string builtins that may consume temporaries.
-fn temp_buffer_arg_expr() -> Expr {
-    string_copy_expr(temp_buffer_expr())
-}
-
-/// Returns `$this->tempPosition` for SplTempFileObject.
-fn temp_position_expr() -> Expr {
-    property_access(this_expr(), "tempPosition")
-}
-
-/// Returns `$this->tempSpilled` for SplTempFileObject.
-fn temp_spilled_expr() -> Expr {
-    property_access(this_expr(), "tempSpilled")
 }
 
 /// Returns `$this->directory`.
@@ -1023,434 +1011,56 @@ fn spl_file_object_trailing_line_stmt() -> Stmt {
 }
 
 /// Builds the SplTempFileObject constructor body.
+///
+/// php's `SplTempFileObject` IS an `SplFileObject` on `php://temp`, and elephc modelled it with a
+/// hand-written in-memory buffer instead — thirteen method bodies of its own. They disagreed with
+/// php in several places at once. MEASURED on `php -n` 8.5.6:
+///
+///     $t = new SplTempFileObject();
+///     $t->eof()                         php: false   elephc: true
+///     …write "a\nbb\nccc\n", fseek(0)
+///     $t->current()                     php: "a\n"   elephc: "ccc"
+///     iterating it                      php keeps the newlines, elephc dropped them
+///
+/// Opening the stream php opens deletes all of that: everything below is inherited.
+///
+/// The LOGICAL path is what php reports — `php://temp`, or `php://memory` for a negative
+/// `$maxMemory` — while the BACKING path carries the threshold, which is what actually gets
+/// opened. `getPathname()` answers the first; the stream comes from the second.
 fn spl_temp_file_object_construct_body() -> Vec<Stmt> {
-    let body = vec![
-        if_stmt(
-            binary_expr(var_expr("maxMemory"), BinOp::Lt, int_expr(0)),
-            vec![assign_stmt("path", string_expr("php://memory"))],
-            Some(vec![assign_stmt(
-                "path",
-                binary_expr(string_expr("php://temp/maxmemory:"), BinOp::Concat, var_expr("maxMemory")),
-            )]),
-        ),
-        property_assign_stmt(this_expr(), "path", string_copy_expr(var_expr("path"))),
-        property_assign_stmt(this_expr(), "backingPath", string_expr("")),
-        property_assign_stmt(this_expr(), "stream", null_expr()),
-        property_assign_stmt(this_expr(), "lines", empty_array_expr()),
-        property_assign_stmt(this_expr(), "fileClass", string_expr("SplFileObject")),
-        property_assign_stmt(this_expr(), "infoClass", string_expr("SplFileInfo")),
-        property_assign_stmt(this_expr(), "lineNumber", int_expr(0)),
-        property_assign_stmt(this_expr(), "hasReadLine", bool_expr(false)),
-        property_assign_stmt(this_expr(), "flags", int_expr(0)),
-        property_assign_stmt(this_expr(), "delimiter", string_expr(",")),
-        property_assign_stmt(this_expr(), "enclosure", string_expr("\"")),
-        property_assign_stmt(this_expr(), "escape", string_expr("\\")),
-        property_assign_stmt(this_expr(), "maxLineLen", int_expr(0)),
-        property_assign_stmt(this_expr(), "tempMaxMemory", var_expr("maxMemory")),
-        property_assign_stmt(this_expr(), "tempBuffer", string_expr("")),
-        property_assign_stmt(this_expr(), "tempPosition", int_expr(0)),
-        property_assign_stmt(this_expr(), "tempSpilled", bool_expr(false)),
-    ];
-    body
-}
-
-/// Builds SplTempFileObject eof() with memory-buffer and spilled-stream paths.
-fn spl_temp_file_object_eof_body() -> Vec<Stmt> {
-    vec![
-        if_stmt(
-            temp_spilled_expr(),
-            return_body(function_call("feof", vec![file_stream_expr()])),
-            None,
-        ),
-        return_stmt(binary_expr(
-            temp_position_expr(),
-            BinOp::GtEq,
-            function_call("strlen", vec![temp_buffer_arg_expr()]),
-        )),
-    ]
-}
-
-/// Builds SplTempFileObject fgets() over the memory buffer until spill occurs.
-fn spl_temp_file_object_fgets_body() -> Vec<Stmt> {
-    vec![
-        if_stmt(
-            temp_spilled_expr(),
-            return_body(function_call("fgets", vec![file_stream_expr()])),
-            None,
-        ),
-        assign_stmt("line", string_expr("")),
-        while_stmt(
-            binary_expr(
-                temp_position_expr(),
-                BinOp::Lt,
-                function_call("strlen", vec![temp_buffer_arg_expr()]),
-            ),
-            vec![
-                assign_stmt(
-                    "ch",
-                    function_call("substr", vec![temp_buffer_arg_expr(), temp_position_expr(), int_expr(1)]),
-                ),
-                property_assign_stmt(
-                    this_expr(),
-                    "tempPosition",
-                    binary_expr(temp_position_expr(), BinOp::Add, int_expr(1)),
-                ),
-                assign_stmt("line", binary_expr(var_expr("line"), BinOp::Concat, var_expr("ch"))),
-                if_stmt(
-                    binary_expr(var_expr("ch"), BinOp::StrictEq, string_expr("\n")),
-                    spl_temp_file_object_return_line_body(),
-                    None,
-                ),
-            ],
-        ),
-        if_stmt(
-            binary_expr(function_call("strlen", vec![var_expr("line")]), BinOp::Gt, int_expr(0)),
-            vec![property_assign_stmt(
-                this_expr(),
-                "lineNumber",
-                binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
-            )],
-            None,
-        ),
-        return_stmt(var_expr("line")),
-    ]
-}
-
-/// Builds statements that increment the line number and return `$line`.
-fn spl_temp_file_object_return_line_body() -> Vec<Stmt> {
-    vec![
-        property_assign_stmt(
-            this_expr(),
-            "lineNumber",
-            binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
-        ),
-        return_stmt(var_expr("line")),
-    ]
-}
-
-/// Builds SplTempFileObject fgetc() over the memory buffer until spill occurs.
-fn spl_temp_file_object_fgetc_body() -> Vec<Stmt> {
-    vec![
-        if_stmt(
-            temp_spilled_expr(),
-            return_body(function_call("fgetc", vec![file_stream_expr()])),
-            None,
-        ),
-        if_stmt(
-            binary_expr(
-                temp_position_expr(),
-                BinOp::GtEq,
-                function_call("strlen", vec![temp_buffer_arg_expr()]),
-            ),
-            return_body(bool_expr(false)),
-            None,
-        ),
-        assign_stmt(
-            "ch",
-            function_call("substr", vec![temp_buffer_arg_expr(), temp_position_expr(), int_expr(1)]),
-        ),
-        property_assign_stmt(
-            this_expr(),
-            "tempPosition",
-            binary_expr(temp_position_expr(), BinOp::Add, int_expr(1)),
-        ),
-        return_stmt(var_expr("ch")),
-    ]
-}
-
-/// Builds SplTempFileObject fread() with memory-buffer slicing before spill.
-fn spl_temp_file_object_fread_body() -> Vec<Stmt> {
-    vec![
-        if_stmt(
-            temp_spilled_expr(),
-            return_body(function_call("fread", vec![file_stream_expr(), var_expr("length")])),
-            None,
-        ),
-        assign_stmt(
-            "chunk",
-            function_call("substr", vec![temp_buffer_arg_expr(), temp_position_expr(), var_expr("length")]),
-        ),
-        property_assign_stmt(
-            this_expr(),
-            "tempPosition",
-            binary_expr(
-                temp_position_expr(),
-                BinOp::Add,
-                function_call("strlen", vec![var_expr("chunk")]),
-            ),
-        ),
-        return_stmt(var_expr("chunk")),
-    ]
-}
-
-/// Builds SplTempFileObject fwrite() with threshold-based spill to a temp file.
-fn spl_temp_file_object_fwrite_body() -> Vec<Stmt> {
-    let mut body = vec![
-        if_stmt(
-            temp_spilled_expr(),
-            spl_temp_file_object_spilled_fwrite_body(),
-            None,
-        ),
-        assign_stmt("bytes", function_call("strlen", vec![var_expr("data")])),
-        assign_stmt("writeEnd", binary_expr(temp_position_expr(), BinOp::Add, var_expr("bytes"))),
-        assign_stmt("tail", string_expr("")),
-        if_stmt(
-            binary_expr(
-                var_expr("writeEnd"),
-                BinOp::Lt,
-                function_call("strlen", vec![temp_buffer_arg_expr()]),
-            ),
-            vec![assign_stmt(
-                "tail",
-                function_call("substr", vec![temp_buffer_arg_expr(), var_expr("writeEnd")]),
-            )],
-            None,
-        ),
-        property_assign_stmt(
-            this_expr(),
-            "tempBuffer",
-            binary_expr(
+    // php-src keys the NAME off `ZEND_NUM_ARGS()`, not off the value: no argument names
+    // `php://temp`, an explicit one names `php://temp/maxmemory:N`, and a negative one names
+    // `php://memory`. A synthesized body cannot count arguments, so the DEFAULT VALUE stands in
+    // for "no argument" — the two disagree only for an explicit `new SplTempFileObject(2097152)`,
+    // which asks for the default in longhand. MEASURED for all three shapes on `php -n` 8.5.6.
+    let mut body = vec![if_stmt(
+        binary_expr(var_expr("maxMemory"), BinOp::Lt, int_expr(0)),
+        vec![
+            assign_stmt("path", string_expr("php://memory")),
+            assign_stmt("backing", string_expr("php://memory")),
+        ],
+        Some(vec![
+            assign_stmt(
+                "backing",
                 binary_expr(
-                    function_call("substr", vec![temp_buffer_arg_expr(), int_expr(0), temp_position_expr()]),
+                    string_expr("php://temp/maxmemory:"),
                     BinOp::Concat,
-                    var_expr("data"),
+                    cast_expr(CastType::String, var_expr("maxMemory")),
                 ),
-                BinOp::Concat,
-                var_expr("tail"),
             ),
-        ),
-        property_assign_stmt(this_expr(), "tempPosition", var_expr("writeEnd")),
-    ];
-    body.extend(spl_temp_file_object_reload_lines_from_buffer_body());
-    body.push(if_stmt(
-        spl_temp_file_object_should_spill_expr(),
-        vec![expr_stmt(method_call(this_expr(), "__elephcSpillToFile", Vec::new()))],
-        None,
+            if_stmt(
+                binary_expr(var_expr("maxMemory"), BinOp::StrictEq, int_expr(2_097_152)),
+                vec![assign_stmt("path", string_expr("php://temp"))],
+                Some(vec![assign_stmt("path", string_copy_expr(var_expr("backing")))]),
+            ),
+        ]),
+    )];
+    body.extend(spl_file_object_construct_body_with_backing(
+        var_expr("path"),
+        var_expr("backing"),
+        string_expr("w+"),
     ));
-    body.push(return_stmt(var_expr("bytes")));
     body
-}
-
-/// Builds the spilled-stream fwrite() branch for SplTempFileObject.
-fn spl_temp_file_object_spilled_fwrite_body() -> Vec<Stmt> {
-    let mut body = vec![assign_stmt(
-        "bytes",
-        function_call("fwrite", vec![file_stream_expr(), var_expr("data")]),
-    )];
-    body.extend(file_object_load_lines_body(file_backing_path_arg_expr()));
-    body.push(return_stmt(var_expr("bytes")));
-    body
-}
-
-/// Builds SplTempFileObject fflush() with no-op success for memory-only storage.
-fn spl_temp_file_object_fflush_body() -> Vec<Stmt> {
-    vec![
-        if_stmt(
-            temp_spilled_expr(),
-            return_body(function_call("fflush", vec![file_stream_expr()])),
-            None,
-        ),
-        return_stmt(bool_expr(true)),
-    ]
-}
-
-/// Builds SplTempFileObject ftruncate() with memory-buffer truncation before spill.
-fn spl_temp_file_object_ftruncate_body() -> Vec<Stmt> {
-    let mut body = vec![
-        if_stmt(
-            temp_spilled_expr(),
-            spl_temp_file_object_spilled_ftruncate_body(),
-            None,
-        ),
-        if_stmt(
-            binary_expr(var_expr("size"), BinOp::Lt, function_call("strlen", vec![temp_buffer_arg_expr()])),
-            vec![property_assign_stmt(
-                this_expr(),
-                "tempBuffer",
-                function_call("substr", vec![temp_buffer_arg_expr(), int_expr(0), var_expr("size")]),
-            )],
-            None,
-        ),
-        if_stmt(
-            binary_expr(temp_position_expr(), BinOp::Gt, var_expr("size")),
-            vec![property_assign_stmt(this_expr(), "tempPosition", var_expr("size"))],
-            None,
-        ),
-    ];
-    body.extend(spl_temp_file_object_reload_lines_from_buffer_body());
-    body.push(return_stmt(bool_expr(true)));
-    body
-}
-
-/// Builds the spilled-stream ftruncate() branch for SplTempFileObject.
-fn spl_temp_file_object_spilled_ftruncate_body() -> Vec<Stmt> {
-    let mut body = vec![assign_stmt(
-        "ok",
-        function_call("ftruncate", vec![file_stream_expr(), var_expr("size")]),
-    )];
-    body.extend(file_object_load_lines_body(file_backing_path_arg_expr()));
-    body.push(return_stmt(var_expr("ok")));
-    body
-}
-
-/// Builds SplTempFileObject fstat() with a small memory-backed stat array before spill.
-fn spl_temp_file_object_fstat_body() -> Vec<Stmt> {
-    vec![
-        if_stmt(
-            temp_spilled_expr(),
-            return_body(function_call("fstat", vec![file_stream_expr()])),
-            None,
-        ),
-        assign_stmt("size", function_call("strlen", vec![temp_buffer_arg_expr()])),
-        return_stmt(spl_temp_file_object_memory_fstat_expr()),
-    ]
-}
-
-/// Builds a PHP-like fstat array for memory-backed SplTempFileObject storage.
-fn spl_temp_file_object_memory_fstat_expr() -> Expr {
-    expr(ExprKind::ArrayLiteralAssoc(vec![
-        (int_expr(0), int_expr(0)),
-        (string_expr("dev"), int_expr(0)),
-        (int_expr(1), int_expr(0)),
-        (string_expr("ino"), int_expr(0)),
-        (int_expr(2), int_expr(0)),
-        (string_expr("mode"), int_expr(0)),
-        (int_expr(3), int_expr(0)),
-        (string_expr("nlink"), int_expr(0)),
-        (int_expr(4), int_expr(0)),
-        (string_expr("uid"), int_expr(0)),
-        (int_expr(5), int_expr(0)),
-        (string_expr("gid"), int_expr(0)),
-        (int_expr(6), int_expr(0)),
-        (string_expr("rdev"), int_expr(0)),
-        (int_expr(7), var_expr("size")),
-        (string_expr("size"), var_expr("size")),
-        (int_expr(8), int_expr(0)),
-        (string_expr("atime"), int_expr(0)),
-        (int_expr(9), int_expr(0)),
-        (string_expr("mtime"), int_expr(0)),
-        (int_expr(10), int_expr(0)),
-        (string_expr("ctime"), int_expr(0)),
-        (int_expr(11), int_expr(0)),
-        (string_expr("blksize"), int_expr(0)),
-        (int_expr(12), int_expr(0)),
-        (string_expr("blocks"), int_expr(0)),
-    ]))
-}
-
-/// Builds SplTempFileObject ftell() over the memory cursor until spill occurs.
-fn spl_temp_file_object_ftell_body() -> Vec<Stmt> {
-    vec![
-        if_stmt(
-            temp_spilled_expr(),
-            return_body(function_call("ftell", vec![file_stream_expr()])),
-            None,
-        ),
-        return_stmt(temp_position_expr()),
-    ]
-}
-
-/// Builds SplTempFileObject fseek() over the memory cursor until spill occurs.
-fn spl_temp_file_object_fseek_body() -> Vec<Stmt> {
-    vec![
-        if_stmt(
-            temp_spilled_expr(),
-            return_body(function_call(
-                "fseek",
-                vec![file_stream_expr(), var_expr("offset"), var_expr("whence")],
-            )),
-            None,
-        ),
-        if_stmt(
-            binary_expr(var_expr("whence"), BinOp::StrictEq, int_expr(1)),
-            vec![assign_stmt("newPosition", binary_expr(temp_position_expr(), BinOp::Add, var_expr("offset")))],
-            Some(vec![if_stmt(
-                binary_expr(var_expr("whence"), BinOp::StrictEq, int_expr(2)),
-                vec![assign_stmt(
-                    "newPosition",
-                    binary_expr(
-                        function_call("strlen", vec![temp_buffer_arg_expr()]),
-                        BinOp::Add,
-                        var_expr("offset"),
-                    ),
-                )],
-                Some(vec![assign_stmt("newPosition", var_expr("offset"))]),
-            )]),
-        ),
-        if_stmt(
-            binary_expr(var_expr("newPosition"), BinOp::Lt, int_expr(0)),
-            vec![assign_stmt("newPosition", int_expr(0))],
-            None,
-        ),
-        property_assign_stmt(this_expr(), "tempPosition", var_expr("newPosition")),
-        return_stmt(int_expr(0)),
-    ]
-}
-
-/// Builds SplTempFileObject rewind() for memory and spilled-stream storage.
-fn spl_temp_file_object_rewind_body() -> Vec<Stmt> {
-    vec![
-        if_stmt(
-            temp_spilled_expr(),
-            vec![expr_stmt(function_call("rewind", vec![file_stream_expr()]))],
-            None,
-        ),
-        property_assign_stmt(this_expr(), "tempPosition", int_expr(0)),
-        property_assign_stmt(this_expr(), "lineNumber", int_expr(0)),
-    ]
-}
-
-/// Builds the hidden spill helper that moves the memory buffer into a temp file.
-fn spl_temp_file_object_spill_body() -> Vec<Stmt> {
-    let mut body = vec![
-        if_stmt(temp_spilled_expr(), vec![return_void_stmt()], None),
-        property_assign_stmt(
-            this_expr(),
-            "backingPath",
-            function_call("tempnam", vec![function_call("sys_get_temp_dir", Vec::new()), string_expr("elephc")]),
-        ),
-        expr_stmt(function_call("file_put_contents", vec![file_backing_path_arg_expr(), temp_buffer_arg_expr()])),
-        property_assign_stmt(
-            this_expr(),
-            "stream",
-            function_call("fopen", vec![file_backing_path_arg_expr(), string_expr("r+")]),
-        ),
-        property_assign_stmt(this_expr(), "tempSpilled", bool_expr(true)),
-        expr_stmt(function_call("fseek", vec![file_stream_expr(), temp_position_expr()])),
-    ];
-    body.extend(file_object_load_lines_body(file_backing_path_arg_expr()));
-    body
-}
-
-/// Returns true when the in-memory temp buffer has crossed its configured spill threshold.
-fn spl_temp_file_object_should_spill_expr() -> Expr {
-    binary_expr(
-        binary_expr(temp_max_memory_expr(), BinOp::GtEq, int_expr(0)),
-        BinOp::And,
-        binary_expr(
-            function_call("strlen", vec![temp_buffer_arg_expr()]),
-            BinOp::Gt,
-            temp_max_memory_expr(),
-        ),
-    )
-}
-
-/// Builds statements that refresh inherited line storage from the memory buffer.
-fn spl_temp_file_object_reload_lines_from_buffer_body() -> Vec<Stmt> {
-    vec![
-        property_assign_stmt(this_expr(), "lines", empty_array_expr()),
-        if_stmt(
-            binary_expr(function_call("strlen", vec![temp_buffer_arg_expr()]), BinOp::StrictEq, int_expr(0)),
-            Vec::new(),
-            Some(vec![foreach_stmt(
-                function_call("explode", vec![string_expr("\n"), temp_buffer_arg_expr()]),
-                None,
-                "line",
-                vec![property_array_push_stmt(this_expr(), "lines", var_expr("line"))],
-            )]),
-        ),
-        spl_file_object_csv_refresh_stmt(),
-    ]
 }
 
 /// Builds SplFileObject current(), reading a CSV RECORD under READ_CSV.

@@ -471,7 +471,11 @@ echo "|";
 echo $tmp->eof() ? "eof" : "more";
 "#,
     );
-    assert_eq!(out, "php://memory|first|second|eof");
+    // MEASURED on `php -n` 8.5.6: reading the LAST line of a `php://memory` stream does not put
+    // it at end of file — the read stopped exactly at the end, and php reports EOF only once a
+    // read has ASKED for more. The old expectation came from elephc's hand-rolled temp buffer,
+    // which this class no longer uses.
+    assert_eq!(out, "php://memory|first|second|more");
     let _ = fs::remove_dir_all(&dir);
 }
 

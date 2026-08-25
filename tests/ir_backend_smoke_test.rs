@@ -1573,7 +1573,11 @@ fn ir_backend_handles_unset_locals() {
             "AB",
         ),
     ] {
-        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+        // Reading a variable after `unset()` is an UNDEFINED VARIABLE in php, and it says so.
+        // The expectations predate elephc raising that warning, so they pinned its absence.
+        let out = compile_and_run_ir_backend(name, source);
+        assert!(out.contains("Warning: Undefined variable $"), "got {out}");
+        assert_eq!(program_output_only(&out), expected);
     }
 }
 
@@ -3800,7 +3804,10 @@ unlink("a.txt");
 "#;
     assert_eq!(
         compile_and_run_ir_backend("spl_file_object_foreach", source),
-        "0:one\n;1:two\n;"
+        // MEASURED on `php -n` 8.5.6: a file whose last byte is a newline yields ONE MORE
+        // element — php drives the iteration from the stream, which is not at end of file after
+        // the last `\n`. The old expectation was written from elephc's line array.
+        "0:one\n;1:two\n;2:;"
     );
 }
 
@@ -3936,7 +3943,11 @@ echo $tmp->eof() ? "eof" : "more";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("spl_temp_file_object_memory_stream", source),
-        "php://memory|first\n|second\n|eof"
+        // MEASURED on `php -n` 8.5.6: reading the LAST line of a `php://memory` stream does not
+        // put it at end of file — the read stopped exactly at the end, and php only reports EOF
+        // once a read has ASKED for more. The old expectation came from elephc's hand-rolled
+        // temp buffer, which the class no longer uses.
+        "php://memory|first\n|second\n|more"
     );
 }
 
@@ -4298,7 +4309,9 @@ fn ir_backend_handles_basic_indexed_arrays() {
             ":20",
         ),
     ] {
-        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+        // Reading an index that is not there is an UNDEFINED ARRAY KEY in php, and it says
+        // so — verified against `php -n` 8.5.6. The expectation predates elephc raising it.
+        assert_eq!(program_output_only(&compile_and_run_ir_backend(name, source)), expected);
     }
 
     let dynamic_source = "<?php $a = [10, 20, 30]; echo $a[$argc];";
@@ -5357,7 +5370,10 @@ fn ir_backend_handles_basic_associative_arrays() {
         ("hash_set_updates_local", "<?php $h = [\"a\" => 1]; $h[\"a\"] = 7; echo $h[\"a\"];", "7"),
         ("hash_set_string_value", "<?php $h = [\"a\" => \"x\"]; $h[\"a\"] = \"y\"; echo $h[\"a\"];", "y"),
     ] {
-        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+        // Reading a key that is not there is an UNDEFINED ARRAY KEY in php, and it says so
+        // — verified against `php -n` 8.5.6, which prints the same line. These expectations
+        // predate elephc raising it, so they pinned its absence.
+        assert_eq!(program_output_only(&compile_and_run_ir_backend(name, source)), expected);
     }
 }
 
@@ -5851,21 +5867,22 @@ echo "after";
         &[],
     );
     assert!(missing.status.success(), "IR backend missing-file fixture failed");
-    assert_eq!(
-        String::from_utf8(missing.stdout).expect("stdout should be utf8"),
-        "after"
-    );
-    let stderr = String::from_utf8(missing.stderr).expect("stderr should be utf8");
+    // php CLI writes the warning to STDOUT, mixed into what the program printed — measured by
+    // capturing the two streams separately, where stderr was empty. This read `stdout` for the
+    // program's own text and `stderr` for the warning, so it passed only while the warning went
+    // to the wrong stream.
+    let reported = String::from_utf8(missing.stdout).expect("stdout should be utf8");
+    assert_eq!(program_output_only(&reported), "after");
     // php-src names the path and the reason: `file_get_contents(missing.txt): Failed to
     // open stream: No such file or directory`. Asserting the whole message, rather than
     // just the function name, is what would have caught the bare `file_get_contents()`
     // form this test used to accept.
     assert!(
-        stderr.contains(
+        reported.contains(
             "Warning: file_get_contents(missing.txt): Failed to open stream: \
              No such file or directory"
         ),
-        "expected file_get_contents warning, got stderr={stderr}"
+        "expected file_get_contents warning, got stdout={reported}"
     );
 }
 
@@ -5973,10 +5990,13 @@ echo "unreachable";
         &[],
     );
     assert!(!run.status.success(), "false stream handle unexpectedly succeeded");
-    let stderr = String::from_utf8(run.stderr).expect("stream TypeError should be utf8");
+    // php writes the uncaught report to STDOUT, not stderr — measured by capturing the two
+    // streams separately, where stdout held every byte and stderr was empty. This asserted on
+    // stderr, so it passed only while the report went to the wrong stream.
+    let reported = String::from_utf8(run.stdout).expect("stream TypeError should be utf8");
     assert!(
-        stderr.contains("TypeError: fread()") && stderr.contains("resource"),
-        "expected fread TypeError, got stderr={stderr}"
+        reported.contains("TypeError: fread()") && reported.contains("resource"),
+        "expected fread TypeError, got stdout={reported}"
     );
 }
 
@@ -6052,10 +6072,20 @@ $row = fgetcsv($in);
 fclose($in);
 echo $row[0] . ":" . $row[1] . ":" . gettype($row);
 "#;
-    assert_eq!(
-        compile_and_run_ir_backend("stream_csv_round_trip", source),
-        "12:hello:world:array"
-    );
+    // php 8.5 deprecates the omitted `$escape` on BOTH calls, and prints the line as it goes —
+    // MEASURED on `php -n` 8.5.6, which emits the same two lines around the same data. The
+    // expectation was written before elephc raised them, so it pinned their absence; the script
+    // path inside each is a per-run temp directory, which is why they are filtered rather than
+    // spelled out.
+    let out = compile_and_run_ir_backend("stream_csv_round_trip", source);
+    assert_eq!(out.matches("Deprecated: fputcsv():").count(), 1, "got {out}");
+    assert_eq!(out.matches("Deprecated: fgetcsv():").count(), 1, "got {out}");
+    let data: String = out
+        .lines()
+        .filter(|line| !line.starts_with("Deprecated:"))
+        .collect::<Vec<_>>()
+        .join("");
+    assert_eq!(data, "12:hello:world:array");
 }
 
 /// Verifies `flock()` acquires and releases an advisory lock.
@@ -6165,10 +6195,13 @@ echo "unreachable";
         !run.status.success(),
         "false ftruncate handle unexpectedly succeeded"
     );
-    let stderr = String::from_utf8(run.stderr).expect("ftruncate TypeError should be utf8");
+    // php writes the uncaught report to STDOUT, not stderr — measured by capturing the two
+    // streams separately, where stdout held every byte and stderr was empty. This asserted on
+    // stderr, so it passed only while the report went to the wrong stream.
+    let reported = String::from_utf8(run.stdout).expect("ftruncate TypeError should be utf8");
     assert!(
-        stderr.contains("TypeError: ftruncate()") && stderr.contains("resource"),
-        "expected ftruncate TypeError, got stderr={stderr}"
+        reported.contains("TypeError: ftruncate()") && reported.contains("resource"),
+        "expected ftruncate TypeError, got stdout={reported}"
     );
 }
 
@@ -6212,8 +6245,15 @@ echo fileowner("missing.txt") === false ? "O" : "!";
 echo filegroup("missing.txt") === false ? "G" : "!";
 echo fileinode("missing.txt") === false ? "I" : "!";
 "#;
+    let out = compile_and_run_ir_backend("scalar_stat_getters", source);
+    for name in ["fileatime", "filectime", "fileperms", "fileowner", "filegroup", "fileinode"] {
+        assert!(
+            out.contains(&format!("Warning: {name}(): stat failed for missing.txt")),
+            "expected {name}'s stat warning, got {out}"
+        );
+    }
     assert_eq!(
-        compile_and_run_ir_backend("scalar_stat_getters", source),
+        program_output_only(&out),
         "integerintegerintegerintegerintegerinteger:ACPOGI"
     );
 }
@@ -6240,7 +6280,8 @@ echo filetype("missing.txt") === false ? "false" : "string";
         "main.php",
         &[],
     );
-    assert_eq!(out, "file:dir:false");
+    assert!(out.contains("Warning: filetype(): Lstat failed for missing.txt"), "got {out}");
+    assert_eq!(program_output_only(&out), "file:dir:false");
 }
 
 /// Verifies `stat()` and `lstat()` box PHP stat arrays and strict false failures.
@@ -6261,10 +6302,10 @@ echo ":";
 echo stat("missing.txt") === false ? "S" : "!";
 echo lstat("missing.txt") === false ? "L" : "!";
 "#;
-    assert_eq!(
-        compile_and_run_ir_backend("stat_arrays", source),
-        "5:integer:match:lstat:SL"
-    );
+    let out = compile_and_run_ir_backend("stat_arrays", source);
+    assert!(out.contains("Warning: stat(): stat failed for missing.txt"), "got {out}");
+    assert!(out.contains("Warning: lstat(): Lstat failed for missing.txt"), "got {out}");
+    assert_eq!(program_output_only(&out), "5:integer:match:lstat:SL");
 }
 
 /// Verifies `fstat()` boxes PHP stat arrays for stream resources.
@@ -6300,10 +6341,13 @@ echo "unreachable";
         &[],
     );
     assert!(!run.status.success(), "false fstat handle unexpectedly succeeded");
-    let stderr = String::from_utf8(run.stderr).expect("fstat TypeError should be utf8");
+    // php writes the uncaught report to STDOUT, not stderr — measured by capturing the two
+    // streams separately, where stdout held every byte and stderr was empty. This asserted on
+    // stderr, so it passed only while the report went to the wrong stream.
+    let reported = String::from_utf8(run.stdout).expect("fstat TypeError should be utf8");
     assert!(
-        stderr.contains("TypeError: fstat()") && stderr.contains("resource"),
-        "expected fstat TypeError, got stderr={stderr}"
+        reported.contains("TypeError: fstat()") && reported.contains("resource"),
+        "expected fstat TypeError, got stdout={reported}"
     );
 }
 
@@ -6622,14 +6666,13 @@ fn ir_backend_handles_define_builtin() {
         duplicate.status.success(),
         "IR backend duplicate define fixture failed"
     );
-    assert_eq!(
-        String::from_utf8(duplicate.stdout).expect("stdout should be utf8"),
-        "ok1"
-    );
-    let stderr = String::from_utf8(duplicate.stderr).expect("stderr should be utf8");
+    // php CLI writes the warning to STDOUT, mixed into what the program printed; this read the
+    // two streams apart, so it passed only while the warning went to the wrong one.
+    let reported = String::from_utf8(duplicate.stdout).expect("stdout should be utf8");
+    assert_eq!(program_output_only(&reported), "ok1");
     assert!(
-        stderr.contains("Warning: define()"),
-        "expected duplicate define warning, got stderr={stderr}"
+        reported.contains("Warning: define()"),
+        "expected duplicate define warning, got stdout={reported}"
     );
 }
 
@@ -6800,6 +6843,40 @@ fn ir_backend_requires_include_before_function_variant_dispatch() {
         stderr.contains("Fatal error: Call to undefined function double()"),
         "unexpected fatal stderr: {stderr}"
     );
+}
+
+/// Returns the program's own output, with php's diagnostics taken out.
+///
+/// php CLI writes `Warning:`/`Notice:`/`Deprecated:` to STDOUT, so they arrive mixed into what
+/// the program printed — and each carries the script path, which is a per-run temp directory no
+/// test can write down. Several expectations here were recorded before elephc raised the
+/// diagnostic at all and so pinned its ABSENCE; each of those was re-measured against
+/// `php -n` 8.5.6, which prints the same lines around the same data.
+fn program_output_only(out: &str) -> String {
+    // php frames each diagnostic as a BLANK LINE then the text, so removing one means removing
+    // both — and every OTHER newline belongs to the program and has to survive, which a
+    // `lines().join("")` would have eaten.
+    let parts: Vec<&str> = out.split_inclusive('\n').collect();
+    let mut kept = String::new();
+    for (index, part) in parts.iter().enumerate() {
+        let is_diagnostic = |text: &str| {
+            text.starts_with("Warning:")
+                || text.starts_with("Notice:")
+                || text.starts_with("Deprecated:")
+                || text.starts_with("Fatal error:")
+        };
+        if is_diagnostic(part) {
+            // php prefixes every diagnostic with a newline, and that newline is glued to the end
+            // of whatever the program printed last — it is not a line of its own to skip.
+            if kept.ends_with('\n') {
+                kept.pop();
+            }
+            continue;
+        }
+        let _ = index;
+        kept.push_str(part);
+    }
+    kept
 }
 
 /// Compiles `source`, runs the output binary, and returns stdout.
