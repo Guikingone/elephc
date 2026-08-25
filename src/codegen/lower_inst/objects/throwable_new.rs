@@ -169,10 +169,15 @@ pub(in crate::codegen::lower_inst) fn emit_throwable_creation_line_aarch64(
     creation_line: u32,
 ) {
     if creation_line == 0 {
+        // A `new` with no span of its own is one a SYNTHESIZED body performed — an SPL
+        // constructor, a stat getter. php reports the line of the call the program made INTO that
+        // method, because its own `new` lives in php-src and has no php line: MEASURED,
+        // `(new SplFileInfo("nope"))->getSize()` reports the line of the `getSize()` call.
+        abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, "_rt_internal_call_line", 0);
         ctx.emitter.instruction(&format!(
-            "str xzr, [{}, #{}]",
-            payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        ));                                                                     // no span on the allocating instruction: an unknown line reads back as zero
+            "str {}, [{}, #{}]",
+            scratch_reg, payload_reg, THROWABLE_CREATION_LINE_OFFSET
+        ));                                                                     // the caller's line, or zero when there was no call into a builtin
         return;
     }
     abi::emit_load_int_immediate(ctx.emitter, scratch_reg, i64::from(creation_line));
@@ -191,10 +196,20 @@ pub(in crate::codegen::lower_inst) fn emit_throwable_creation_line_x86_64(
     payload_reg: &str,
     creation_line: u32,
 ) {
+    if creation_line == 0 {
+        // See the AArch64 counterpart: a `new` with no span belongs to a synthesized body, and
+        // php names the call the program made into it.
+        abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_rt_internal_call_line", 0);
+        ctx.emitter.instruction(&format!(
+            "mov QWORD PTR [{} + {}], r10",
+            payload_reg, THROWABLE_CREATION_LINE_OFFSET
+        ));                                                                     // the caller's line, or zero when there was no call into a builtin
+        return;
+    }
     ctx.emitter.instruction(&format!(
         "mov QWORD PTR [{} + {}], {}",
         payload_reg, THROWABLE_CREATION_LINE_OFFSET, creation_line
-    ));                                                                         // store the one-based source line of the `new` expression (zero when unknown)
+    ));                                                                         // store the one-based source line of the `new` expression
 }
 
 /// Saves the newly allocated Throwable object while constructor operands are loaded.

@@ -56,6 +56,36 @@ fn literal_is_scanf(value: &str) -> bool {
         .any(|candidate| value.eq_ignore_ascii_case(candidate))
 }
 
+/// Returns whether a call picks its METHOD at run time, and so could reach `fscanf()`.
+///
+/// `$obj->$name()` desugars to `call_user_func([$obj, $name], …)`, and the backend then emits
+/// every method of the classes the program constructs so the dispatch ladder has somewhere to
+/// land — `SplFileObject::fscanf()` among them, whose synthesized body calls the engine. Without
+/// this the engine is not injected and that body compiles a call to a symbol that does not
+/// exist: a link failure, not a diagnostic.
+///
+/// Deliberately coarse, exactly like `method_is_scanf` above: a program that dispatches
+/// dynamically pays for a few hundred lines of PHP it may never reach.
+fn call_may_reach_any_method(name: &Name, args: &[Expr]) -> bool {
+    let dispatches_dynamically = name.last_segment().is_some_and(|segment| {
+        segment.eq_ignore_ascii_case("call_user_func")
+            || segment.eq_ignore_ascii_case("call_user_func_array")
+    });
+    if !dispatches_dynamically {
+        return false;
+    }
+    let Some(first) = args.first() else {
+        return false;
+    };
+    let ExprKind::ArrayLiteral(parts) = &first.kind else {
+        // A callable held in a variable names nothing this walk can read.
+        return !matches!(first.kind, ExprKind::StringLiteral(_));
+    };
+    parts
+        .get(1)
+        .is_some_and(|method| !matches!(method.kind, ExprKind::StringLiteral(_)))
+}
+
 /// Returns whether a METHOD name is one the scanf engine serves.
 ///
 /// `SplFileObject::fscanf()` is compiled from a synthetic body the CHECKER materializes, long
@@ -155,7 +185,9 @@ fn expr_refs_scanf(expr: &Expr) -> bool {
         | ExprKind::MagicConstant(_) => false,
 
         ExprKind::FunctionCall { name, args } => {
-            name_is_scanf(name) || args.iter().any(expr_refs_scanf)
+            name_is_scanf(name)
+                || call_may_reach_any_method(name, args)
+                || args.iter().any(expr_refs_scanf)
         }
         ExprKind::MethodCall {
             object,

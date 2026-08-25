@@ -879,6 +879,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // the PROGRAM wrote rather than the path the syscall got. Zero means the path was not a
     // URL, which is every other call.
     out.push_str(".globl _rt_path_url\n_rt_path_url:\n    .quad 0\n");
+    // The line of the call a program made INTO a builtin class. php reports the CALL SITE
+    // for an exception an internal method raises, because the `new` is inside php-src and
+    // has no php line of its own — the synthesized bodies here are in the same position.
+    out.push_str(".globl _rt_internal_call_line\n_rt_internal_call_line:\n    .quad 0\n");
     out.push_str(".globl _rt_open_diag_name\n_rt_open_diag_name:\n    .quad 0\n");
     out.push_str(".globl _rt_open_diag_name_len\n_rt_open_diag_name_len:\n    .quad 0\n");
     out.push_str(".globl _diag_csv_escape_deprecated_fgetcsv_msg\n_diag_csv_escape_deprecated_fgetcsv_msg:\n    .ascii \"Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");

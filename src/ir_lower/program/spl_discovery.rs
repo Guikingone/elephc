@@ -192,10 +192,22 @@ fn module_has_dynamic_invoke(module: &Module) -> bool {
         .chain(module.extern_callback_trampolines.iter())
         .chain(module.runtime_callable_invokers.iter())
         .any(|function| {
-            function
-                .instructions
-                .iter()
-                .any(|inst| matches!(inst.op, Op::CallableDescriptorInvoke))
+            function.instructions.iter().any(|inst| {
+                if !matches!(inst.op, Op::CallableDescriptorInvoke) {
+                    return false;
+                }
+                // Only a callable ARRAY can name a method at run time. A closure call reaches the
+                // same opcode and names none, so accepting it would emit every method of every
+                // class the program built for a program that never dispatches on a name — and one
+                // of those bodies (`SplFileObject::fscanf`) needs an engine the program did not
+                // ask for, which is a link failure rather than a diagnostic.
+                inst.operands.first().copied().is_some_and(|callable| {
+                    matches!(
+                        function.value(callable).map(|value| &value.php_type),
+                        Some(PhpType::Array(_)) | Some(PhpType::AssocArray { .. })
+                    )
+                })
+            })
         })
 }
 

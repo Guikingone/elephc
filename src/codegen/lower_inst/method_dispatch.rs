@@ -29,6 +29,7 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
             object_ty
         )));
     };
+    super::method_resolution::publish_internal_call_line(ctx, inst, &class_name);
     guard_static_method_receiver(ctx, object, &method_name)?;
     if let Some(state) = fiber_state_predicate(&class_name, &method_name) {
         return lower_fiber_state_predicate(ctx, inst, object, state);

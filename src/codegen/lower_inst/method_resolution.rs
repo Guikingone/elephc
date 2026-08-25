@@ -97,6 +97,44 @@ pub(super) fn emit_dynamic_instance_method_call(ctx: &mut FunctionContext<'_>, s
 }
 
 /// Returns true when the current EIR module includes the target class method body.
+/// Publishes the line of a call INTO a synthesized builtin class, for the exceptions it raises.
+///
+/// php reports the CALL SITE for an exception an internal method throws, because the `new` lives
+/// in php-src and has no php line of its own. The synthesized bodies here are in exactly that
+/// position: their `new` carries no span, so `getLine()` answered 0 and the uncaught report
+/// dropped both its ` in FILE:LINE` suffix and its `thrown in` tail — MEASURED against
+/// `(new SplFileInfo("nope"))->getSize()`, which php reports at the line of the call.
+///
+/// Only calls into a class whose bodies are SYNTHETIC publish anything, so an ordinary method
+/// call costs nothing. NOT the primary scratch: `emit_store_reg_to_symbol` resolves the symbol's
+/// own address through it, which would overwrite the value before the store.
+pub(super) fn publish_internal_call_line(
+    ctx: &mut FunctionContext<'_>,
+    inst: &crate::ir::Instruction,
+    class_name: &str,
+) {
+    let Some(span) = inst.span else {
+        return;
+    };
+    if span.line == 0 || !class_bodies_are_synthetic(ctx, class_name) {
+        return;
+    }
+    let reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, reg, i64::from(span.line));
+    abi::emit_store_reg_to_symbol(ctx.emitter, reg, "_rt_internal_call_line", 0);
+}
+
+/// Reports whether this class's method bodies were SYNTHESIZED rather than written by the user.
+fn class_bodies_are_synthetic(ctx: &FunctionContext<'_>, class_name: &str) -> bool {
+    ctx.module.class_methods.iter().any(|function| {
+        function.flags.is_synthetic
+            && function
+                .name
+                .rsplit_once("::")
+                .is_some_and(|(candidate_class, _)| candidate_class == class_name)
+    })
+}
+
 pub(super) fn class_method_already_emitted(
     ctx: &FunctionContext<'_>,
     class_name: &str,

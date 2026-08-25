@@ -36,6 +36,8 @@ mod file_object_open;
 mod file_object_bounds;
 #[path = "spl/dynamic_method_name.rs"]
 mod dynamic_method_name;
+#[path = "spl/exception_location.rs"]
+mod exception_location;
 #[path = "spl/file_object_lines.rs"]
 mod file_object_lines;
 #[path = "spl/recursive.rs"]
