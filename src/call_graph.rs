@@ -1270,9 +1270,14 @@ const DATA = __DATA_JSON__;
   function totalLabel(total) { return DATA.exact ? fmtNs(total) : (total + ' samples'); }
 
   // --- (re)build the union, layout, and SVG skeleton from FRAMES ---
+  // An edge's identity. Plain concatenation is not injective — `a -> bc` and
+  // `ab -> c` both spell "abc" — so one edge could overwrite another in these
+  // maps. The length prefix can only be split one way, and needs no escaping for
+  // names that contain backslashes or colons, which PHP names routinely do.
+  const edgeKey = (from, to) => from.length + '\u0000' + from + to;
   function computeFrameMaps() {
     frameNode = FRAMES.map(f => { const m = new Map(); f.nodes.forEach(n => m.set(n.name, n)); return m; });
-    frameEdge = FRAMES.map(f => { const m = new Map(); f.edges.forEach(e => m.set(e.from + '' + e.to, e.pct)); return m; });
+    frameEdge = FRAMES.map(f => { const m = new Map(); f.edges.forEach(e => m.set(edgeKey(e.from, e.to), e.pct)); return m; });
   }
   function computeUnion() {
     nameId = new Map(); NAMES = [];
@@ -1280,7 +1285,7 @@ const DATA = __DATA_JSON__;
     uEdge = new Map();
     FRAMES.forEach(f => {
       f.nodes.forEach(n => id(n.name));
-      f.edges.forEach(e => { const k = e.from + '' + e.to; id(e.from); id(e.to);
+      f.edges.forEach(e => { const k = edgeKey(e.from, e.to); id(e.from); id(e.to);
         if (!uEdge.has(k)) uEdge.set(k, {from: id(e.from), to: id(e.to), key: k, count: e.count});
         else if (uEdge.get(k).count == null && e.count != null) uEdge.get(k).count = e.count; });
     });
@@ -1884,7 +1889,7 @@ const DATA = __DATA_JSON__;
   function ingest(nf) {
     if (!nf || !nf.length) return;
     const known = new Set(NAMES);
-    const grew = nf.some(f => f.nodes.some(n => !known.has(n.name)) || f.edges.some(e => !uEdge.has(e.from + '' + e.to)));
+    const grew = nf.some(f => f.nodes.some(n => !known.has(n.name)) || f.edges.some(e => !uEdge.has(edgeKey(e.from, e.to))));
     const curTs = FRAMES[cur] ? FRAMES[cur].ts : 0;
     FRAMES.length = 0; nf.forEach(f => FRAMES.push(f));
     computeFrameMaps();

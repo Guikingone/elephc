@@ -351,4 +351,3 @@ pub(crate) fn mark_folded(
         }
     }
 }
-

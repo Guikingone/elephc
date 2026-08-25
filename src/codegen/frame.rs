@@ -528,9 +528,12 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     if ctx.shared.counters {
         emit_counters_dump(ctx);
     }
-    if ctx.shared.instrument.is_on() {
-        emit_instr_dump(ctx);
-    }
+    // The EXACT profile is not dumped here either. The bridge brackets every
+    // request — `elephc_instr_request(1|2)` before the handler, `(0)` after — and
+    // that close is what ends a slice and writes it, once, and only if one was
+    // opened. Dumping from the epilogue as well wrote a profile for every request
+    // including the ones that never started a slice, which is how an unprofiled
+    // service filled its log.
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);

@@ -379,9 +379,12 @@ pub mod wire {
                 "probe endpoint failed to prove the build key (wrong binary or key)",
             ));
         }
-        let client_tag = handshake::client_tag(key, &nonce_s, nonce_c);
-        stream.write_all(&client_tag)?;
+        // The mode goes first so the server has it before it verifies, and the
+        // proof covers it: a byte flipped in flight fails the tag instead of
+        // selecting a different answer.
+        let client_tag = handshake::client_tag(key, &nonce_s, nonce_c, want);
         stream.write_all(&[want])?;
+        stream.write_all(&client_tag)?;
         stream.flush()?;
         let mut len_bytes = [0u8; 4];
         stream.read_exact(&mut len_bytes)?;
@@ -398,7 +401,7 @@ pub mod wire {
         // both nonces, so proving authority is no longer enough to READ it: a
         // passive observer holds ciphertext, and a relay that replays someone
         // else's handshake holds keys for a session it cannot produce.
-        let (k_enc, k_mac) = handshake::session_keys(key, nonce_c, &nonce_s);
+        let (k_enc, k_mac) = handshake::session_keys(key, nonce_c, &nonce_s, want);
         let payload = handshake::open(&k_enc, &k_mac, &ciphertext, &payload_tag).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -410,6 +413,46 @@ pub mod wire {
     }
 }
 
+/// Frees an endpoint path for `bind` by removing a stale socket — and nothing else.
+///
+/// Returns the reason to refuse when the path holds something this process must
+/// not delete. `bind` fails on a name that already exists, but "free the name"
+/// is not a licence to unlink an arbitrary path: `ELEPHC_PROBE_ADDR` is operator
+/// input, and a typo naming a config file or a database would otherwise be
+/// answered by deleting it. `symlink_metadata` does not follow links, so a
+/// symlink is refused as itself rather than acted on through whatever it points
+/// at; a socket that still accepts a connection belongs to a live server, and
+/// replacing it would leave that process holding a name nobody can reach.
+fn clear_stale_socket(path: &str) -> Result<(), String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        // Nothing there. That is precisely the state `bind` wants.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("cannot be inspected ({error})")),
+    };
+    let kind = meta.file_type();
+    if kind.is_symlink() {
+        return Err("is a symlink; refusing to remove it".to_string());
+    }
+    if !kind.is_socket() {
+        return Err("exists and is not a socket; refusing to remove it".to_string());
+    }
+    // On a shared directory any user can create a name, so an endpoint socket
+    // this user does not own is somebody else's.
+    if meta.uid() != unsafe { libc::getuid() } {
+        return Err("is a socket owned by another user; refusing to remove it".to_string());
+    }
+    if std::os::unix::net::UnixStream::connect(path).is_ok() {
+        return Err(
+            "is a live endpoint served by another process; refusing to replace it".to_string(),
+        );
+    }
+    std::fs::remove_file(path)
+        .map_err(|error| format!("is a stale socket that cannot be removed ({error})"))
+}
+
 /// Spawns the endpoint listener on a background thread. Silent on bind failure —
 /// a diagnostic must never take down the profiled process.
 pub fn spawn(path: String) {
@@ -419,7 +462,8 @@ pub fn spawn(path: String) {
         .ok();
 }
 
-/// Accept loop: bind the Unix socket (replacing a stale one), restrict it to the
+/// Accept loop: bind the Unix socket (replacing a stale socket, and only a
+/// stale socket — see `clear_stale_socket`), restrict it to the
 /// owner, then handle each connection with the handshake and, on success, the
 /// folded profile.
 fn serve(path: &str) {
@@ -444,7 +488,10 @@ fn serve(path: &str) {
         serve_tcp(&addr);
         return;
     }
-    let _ = std::fs::remove_file(path);
+    if let Err(reason) = clear_stale_socket(path) {
+        eprintln!("elephc-probe: endpoint '{path}' {reason}");
+        return;
+    }
     let listener = match UnixListener::bind(path) {
         Ok(listener) => listener,
         Err(error) => {
@@ -595,27 +642,36 @@ fn handle<S: std::io::Read + std::io::Write>(
     stream.write_all(&nonce_s)?;
     stream.write_all(&server_tag)?;
     stream.flush()?;
+    // Which answer was asked for, read BEFORE the proof is checked because the
+    // proof covers it. A byte that is present but unrecognised gets the sampled
+    // ring, which is what every client did before this byte existed; a client
+    // that sends nothing at all fails this read and is disconnected, like any
+    // other unfinished request.
+    let want_byte = wire::read_exact_vec(&mut stream, 1)?;
+    let want = want_byte.first().copied().unwrap_or(WANT_SAMPLED);
     let client_tag = wire::read_exact_vec(&mut stream, TAG_LEN)?;
     // Proving and leaving the evictable registry happen together, so a
     // connection arriving in between cannot evict a socket that has just proven
     // itself. Authority not proven — or already evicted before the proof
-    // finished — disconnects without serving anything.
+    // finished — disconnects without serving anything. The mode is inside the
+    // proof, so a flipped byte lands here as a failed tag rather than as a
+    // different answer: nothing decides what to collect until this passes.
     if !gate.authenticate(|| {
-        let expected = handshake::client_tag(&key, &nonce_s, &nonce_c);
+        let expected = handshake::client_tag(&key, &nonce_s, &nonce_c, want);
         handshake::tags_equal(&client_tag, &expected)
     }) {
         return Ok(());
     }
-    // Which answer was asked for. A byte that is present but unrecognised gets
-    // the sampled ring, which is what every client did before this byte existed;
-    // a client that sends nothing at all fails this read and is disconnected,
-    // like any other unfinished request.
-    let want = wire::read_exact_vec(&mut stream, 1)?;
-    let profile = match want.first().copied() {
-        Some(WANT_EXACT) => exact_answer(),
-        _ => crate::current_folded_profile().unwrap_or_default(),
+    let profile = match want {
+        WANT_EXACT => exact_answer(),
+        _ => {
+            // Asking for the sampled answer is what starts sampled collection.
+            // A service that nobody has asked carries the ring and fills nothing.
+            crate::begin_sampled();
+            crate::current_folded_profile().unwrap_or_default()
+        }
     };
-    let (k_enc, k_mac) = handshake::session_keys(&key, &nonce_c, &nonce_s);
+    let (k_enc, k_mac) = handshake::session_keys(&key, &nonce_c, &nonce_s, want);
     let (sealed, payload_tag) = handshake::seal(&k_enc, &k_mac, profile.as_bytes());
     let bytes = sealed.as_slice();
     stream.write_all(&(bytes.len() as u32).to_be_bytes())?;
@@ -667,6 +723,87 @@ fn os_random<const N: usize>() -> Option<[u8; N]> {
 mod tests {
     //! The instrumentation's half of the rendezvous, stubbed so this crate's
     //! tests link on their own. A shipped binary always has the real ones.
+
+    /// A unique scratch path for one test, without pulling in a temp-dir crate.
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("elephc-probe-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn a_regular_file_at_the_endpoint_path_is_never_removed() {
+        let path = scratch("regular");
+        std::fs::write(&path, b"an operator's config, named by a typo").unwrap();
+        let refused = clear_stale_socket(path.to_str().unwrap());
+        assert!(refused.is_err(), "a regular file must not be unlinked");
+        assert!(path.exists(), "the file is still there");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"an operator's config, named by a typo",
+            "and its contents are untouched",
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_symlink_at_the_endpoint_path_is_refused_as_itself() {
+        let target = scratch("symlink-target");
+        let link = scratch("symlink");
+        std::fs::write(&target, b"pointed at").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let refused = clear_stale_socket(link.to_str().unwrap());
+        assert!(refused.is_err(), "a symlink must not be followed or removed");
+        assert!(target.exists(), "the target survives");
+        assert!(
+            std::fs::symlink_metadata(&link).is_ok(),
+            "and so does the link itself",
+        );
+        std::fs::remove_file(&link).ok();
+        std::fs::remove_file(&target).ok();
+    }
+
+    #[test]
+    fn a_live_endpoint_is_not_stolen_from_the_process_serving_it() {
+        let path = scratch("live");
+        let name = path.to_str().unwrap().to_string();
+        let listener = UnixListener::bind(&name).unwrap();
+        let refused = clear_stale_socket(&name);
+        assert!(
+            refused.is_err(),
+            "a socket that still answers belongs to a running server",
+        );
+        assert!(
+            std::fs::symlink_metadata(&path).is_ok(),
+            "so the name it is serving on stays put",
+        );
+        drop(listener);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_stale_socket_is_what_the_guard_exists_to_remove() {
+        let path = scratch("stale");
+        let name = path.to_str().unwrap().to_string();
+        // Bind and drop: the file stays behind, nothing accepts on it. This is
+        // what a crashed service leaves, and the case bind needs cleared.
+        drop(UnixListener::bind(&name).unwrap());
+        assert!(std::fs::symlink_metadata(&path).is_ok(), "the socket outlived its server");
+        clear_stale_socket(&name).expect("a stale socket is removable");
+        assert!(
+            std::fs::symlink_metadata(&path).is_err(),
+            "and is gone, so bind can have the name",
+        );
+    }
+
+    #[test]
+    fn a_free_name_is_already_what_bind_wants() {
+        let path = scratch("absent");
+        clear_stale_socket(path.to_str().unwrap())
+            .expect("nothing to remove is not a failure");
+    }
 
     #[no_mangle]
     extern "C" fn elephc_instr_capture_arm() {}
@@ -1085,7 +1222,7 @@ mod tests {
         // Server frames: nonce_s, server_tag, then len + SEALED profile + tag,
         // after verifying client_tag.
         let server_tag = handshake::server_tag(&key, &nonce_c, &nonce_s);
-        let (k_enc, k_mac) = handshake::session_keys(&key, &nonce_c, &nonce_s);
+        let (k_enc, k_mac) = handshake::session_keys(&key, &nonce_c, &nonce_s, WANT_SAMPLED);
         let (sealed, payload_tag) = handshake::seal(&k_enc, &k_mac, profile.as_bytes());
         let mut server_to_client = Vec::new();
         server_to_client.extend_from_slice(&nonce_s);
@@ -1109,10 +1246,25 @@ mod tests {
         };
         let got = wire::client_handshake_and_fetch(&mut duplex, &key, &nonce_c, WANT_SAMPLED).unwrap();
         assert_eq!(got, profile);
-        // The client wrote nonce_c then the correct client_tag.
+        // The client wrote nonce_c, then the mode, then the proof over both
+        // nonces AND the mode. The mode leads the proof because the server has
+        // to know which answer was asked for before it can check a tag that
+        // covers it.
         assert_eq!(&duplex.written[..NONCE_LEN], &nonce_c);
-        let expected_client_tag = handshake::client_tag(&key, &nonce_s, &nonce_c);
-        assert_eq!(&duplex.written[NONCE_LEN..NONCE_LEN + TAG_LEN], &expected_client_tag);
+        assert_eq!(duplex.written[NONCE_LEN], WANT_SAMPLED);
+        let expected_client_tag = handshake::client_tag(&key, &nonce_s, &nonce_c, WANT_SAMPLED);
+        assert_eq!(
+            &duplex.written[NONCE_LEN + 1..NONCE_LEN + 1 + TAG_LEN],
+            &expected_client_tag
+        );
+        // And it is a proof OF that mode: asking for the other answer over the
+        // same key and nonces produces a different tag, which is the whole
+        // reason the byte is inside the transcript.
+        let exact_tag = handshake::client_tag(&key, &nonce_s, &nonce_c, WANT_EXACT);
+        assert_ne!(
+            expected_client_tag, exact_tag,
+            "the mode must change the proof, or flipping it in flight stays undetected"
+        );
     }
 
     #[test]

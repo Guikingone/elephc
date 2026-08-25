@@ -156,37 +156,29 @@ pub(crate) fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
         // is the same data.
         let graph = parse_instrument_dump(&folded);
         if graph.nodes.is_empty() {
-            eprintln!(
-                "elephc monitor: no exact slice arrived within the wait. A slice is \
-                 rendered when a profiled request completes, so a service with no \
-                 traffic has none to give yet; drop `--exact` for the sampled view, \
-                 which does not need a request to finish."
-            );
+            // The server distinguishes its reasons — an exact slot already held
+            // by another operator is not the same as a service with no traffic —
+            // and the parser drops `note:` lines because they carry no metrics.
+            // Printing the server's own words keeps that distinction instead of
+            // answering every case with the most common one.
+            match folded
+                .lines()
+                .find_map(|line| line.strip_prefix("elephc-instr: note: "))
+            {
+                Some(note) => eprintln!("elephc monitor: {note}"),
+                None => eprintln!(
+                    "elephc monitor: no exact slice arrived within the wait. A slice is \
+                     rendered when a profiled request completes, so a service with no \
+                     traffic has none to give yet; drop `--exact` for the sampled view, \
+                     which does not need a request to finish."
+                ),
+            }
             return 1;
         }
+        // No export handling here: `--exact` with an export flag is refused
+        // during argument validation, because warning and exiting 0 told a
+        // pipeline it had a file when it had none.
         print!("{}", instrument_table(&graph));
-        // The exporters below read the sampled display, so an exact remote
-        // capture has no file to write yet. Saying so beats accepting a flag and
-        // producing nothing — a silent no-op is indistinguishable from a bug.
-        let ignored: Vec<&str> = [
-            ("--out", cmd.out.is_some()),
-            ("--pprof", cmd.pprof_out.is_some()),
-            ("--dot", cmd.dot_out.is_some()),
-            ("--html", cmd.html_out.is_some()),
-        ]
-        .iter()
-        .filter(|(_, given)| *given)
-        .map(|(name, _)| *name)
-        .collect();
-        if !ignored.is_empty() {
-            eprintln!(
-                "elephc monitor: {} not written — the exports read the sampled \
-                 capture, and `--exact` returns the per-function table only. Drop \
-                 `--exact` to export the sampled view, or profile the program \
-                 locally for an exact export.",
-                ignored.join(", ")
-            );
-        }
         return 0;
     }
     let display = folded_text_to_display(&folded);
@@ -242,4 +234,3 @@ pub(crate) fn probe_nonce() -> [u8; 32] {
     }
     nonce
 }
-

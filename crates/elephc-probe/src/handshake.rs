@@ -140,18 +140,29 @@ pub fn server_tag(key: &[u8], nonce_c: &[u8], nonce_s: &[u8]) -> [u8; TAG_LEN] {
     hmac_sha256(key, &message)
 }
 
-/// Client proof: HMAC over the domain-separated `nonce_s || nonce_c`, proving
-/// the operator holds the key. Distinct domain byte from the server tag so a
-/// server response can never be replayed as a client proof.
-pub fn client_tag(key: &[u8], nonce_s: &[u8], nonce_c: &[u8]) -> [u8; TAG_LEN] {
-    let mut message = Vec::with_capacity(1 + nonce_s.len() + nonce_c.len());
+/// Client proof: HMAC over the domain-separated `nonce_s || nonce_c || want`,
+/// proving the operator holds the key AND fixing which answer was asked for.
+///
+/// Distinct domain byte from the server tag so a server response can never be
+/// replayed as a client proof. `want` is inside the proof because it selects
+/// between reading a ring and holding a production request for a full exact
+/// slice: left outside, an on-path attacker who cannot read the payload could
+/// still flip a sampled poll into that privileged capture, or downgrade an
+/// operator's exact request to sampled and hand back the wrong kind of answer.
+pub fn client_tag(key: &[u8], nonce_s: &[u8], nonce_c: &[u8], want: u8) -> [u8; TAG_LEN] {
+    let mut message = Vec::with_capacity(2 + nonce_s.len() + nonce_c.len());
     message.push(b'C');
     message.extend_from_slice(nonce_s);
     message.extend_from_slice(nonce_c);
+    message.push(want);
     hmac_sha256(key, &message)
 }
 
 /// Derives this connection's keys from the build key and both nonces.
+///
+/// The requested mode is bound in too, so the keys that seal the answer belong to
+/// the question that was actually proven — a payload sealed for one mode cannot
+/// be opened as the other.
 ///
 /// Binding to BOTH nonces is what makes the derived material specific to this
 /// connection: a recorded exchange cannot be replayed against a later one, and a
@@ -161,11 +172,17 @@ pub fn client_tag(key: &[u8], nonce_s: &[u8], nonce_c: &[u8]) -> [u8; TAG_LEN] {
 ///
 /// Two subkeys rather than one, because a key used both to generate a keystream
 /// and to authenticate it is one mistake away from a reused mask.
-pub fn session_keys(key: &[u8], nonce_c: &[u8], nonce_s: &[u8]) -> ([u8; TAG_LEN], [u8; TAG_LEN]) {
-    let mut message = Vec::with_capacity(23 + nonce_c.len() + nonce_s.len());
+pub fn session_keys(
+    key: &[u8],
+    nonce_c: &[u8],
+    nonce_s: &[u8],
+    want: u8,
+) -> ([u8; TAG_LEN], [u8; TAG_LEN]) {
+    let mut message = Vec::with_capacity(24 + nonce_c.len() + nonce_s.len());
     message.extend_from_slice(b"elephc-probe-session-v1");
     message.extend_from_slice(nonce_c);
     message.extend_from_slice(nonce_s);
+    message.push(want);
     let session = hmac_sha256(key, &message);
     (hmac_sha256(&session, b"enc"), hmac_sha256(&session, b"mac"))
 }
@@ -249,7 +266,7 @@ mod tests {
         let nonce_s = [2u8; NONCE_LEN];
         let profile = "elephc-probe: {main};hot 42\nelephc-probe-samples: 42\n";
 
-        let (k_enc, k_mac) = session_keys(&key, &nonce_c, &nonce_s);
+        let (k_enc, k_mac) = session_keys(&key, &nonce_c, &nonce_s, 0);
         let (sealed, tag) = seal(&k_enc, &k_mac, profile.as_bytes());
 
         assert_ne!(sealed.as_slice(), profile.as_bytes(), "the payload is in the clear");
@@ -269,14 +286,14 @@ mod tests {
     #[test]
     fn a_payload_from_another_session_does_not_open() {
         let key = [7u8; KEY_LEN];
-        let (k_enc, k_mac) = session_keys(&key, &[1u8; NONCE_LEN], &[2u8; NONCE_LEN]);
+        let (k_enc, k_mac) = session_keys(&key, &[1u8; NONCE_LEN], &[2u8; NONCE_LEN], 0);
         let (sealed, tag) = seal(&k_enc, &k_mac, b"elephc-probe: {main} 1\n");
 
         for (nonce_c, nonce_s) in [
             ([9u8; NONCE_LEN], [2u8; NONCE_LEN]),
             ([1u8; NONCE_LEN], [9u8; NONCE_LEN]),
         ] {
-            let (other_enc, other_mac) = session_keys(&key, &nonce_c, &nonce_s);
+            let (other_enc, other_mac) = session_keys(&key, &nonce_c, &nonce_s, 0);
             assert!(
                 open(&other_enc, &other_mac, &sealed, &tag).is_none(),
                 "a different session opened this payload"
@@ -284,7 +301,7 @@ mod tests {
         }
 
         let (wrong_enc, wrong_mac) =
-            session_keys(&[8u8; KEY_LEN], &[1u8; NONCE_LEN], &[2u8; NONCE_LEN]);
+            session_keys(&[8u8; KEY_LEN], &[1u8; NONCE_LEN], &[2u8; NONCE_LEN], 0);
         assert!(
             open(&wrong_enc, &wrong_mac, &sealed, &tag).is_none(),
             "a different build key opened this payload"
@@ -296,7 +313,7 @@ mod tests {
     #[test]
     fn a_tampered_payload_is_refused() {
         let key = [7u8; KEY_LEN];
-        let (k_enc, k_mac) = session_keys(&key, &[1u8; NONCE_LEN], &[2u8; NONCE_LEN]);
+        let (k_enc, k_mac) = session_keys(&key, &[1u8; NONCE_LEN], &[2u8; NONCE_LEN], 0);
         let (sealed, tag) = seal(&k_enc, &k_mac, b"elephc-probe: {main};hot 10\n");
 
         let mut flipped = sealed.clone();
@@ -317,7 +334,7 @@ mod tests {
     /// nothing yet — and must survive the frame like any other.
     #[test]
     fn an_empty_profile_seals_and_opens() {
-        let (k_enc, k_mac) = session_keys(&[7u8; KEY_LEN], &[1u8; NONCE_LEN], &[2u8; NONCE_LEN]);
+        let (k_enc, k_mac) = session_keys(&[7u8; KEY_LEN], &[1u8; NONCE_LEN], &[2u8; NONCE_LEN], 0);
         let (sealed, tag) = seal(&k_enc, &k_mac, b"");
         assert!(sealed.is_empty());
         assert_eq!(open(&k_enc, &k_mac, &sealed, &tag).as_deref(), Some(&b""[..]));
@@ -327,7 +344,7 @@ mod tests {
     /// digest would XOR two of its parts against the same mask.
     #[test]
     fn the_keystream_differs_between_blocks() {
-        let (k_enc, k_mac) = session_keys(&[7u8; KEY_LEN], &[1u8; NONCE_LEN], &[2u8; NONCE_LEN]);
+        let (k_enc, k_mac) = session_keys(&[7u8; KEY_LEN], &[1u8; NONCE_LEN], &[2u8; NONCE_LEN], 0);
         let plaintext = vec![0u8; TAG_LEN * 3];
         let (sealed, _) = seal(&k_enc, &k_mac, &plaintext);
         // Sealing zeroes yields the keystream itself, so the blocks are visible.
@@ -376,8 +393,8 @@ mod tests {
         let wrong = [8u8; KEY_LEN];
         assert!(!tags_equal(&s, &server_tag(&wrong, &nonce_c, &nonce_s)));
         // Client proves authority; server verifies.
-        let c = client_tag(&key, &nonce_s, &nonce_c);
-        assert!(tags_equal(&c, &client_tag(&key, &nonce_s, &nonce_c)));
+        let c = client_tag(&key, &nonce_s, &nonce_c, 0);
+        assert!(tags_equal(&c, &client_tag(&key, &nonce_s, &nonce_c, 0)));
         // Server tag and client tag differ (domain separation) — no replay.
         assert!(!tags_equal(&s, &c));
     }

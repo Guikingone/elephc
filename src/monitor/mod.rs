@@ -783,4 +783,3 @@ pub(crate) fn placed_bar(offset_pct: f64, pct: f64, width: usize) -> String {
     let rest = width.saturating_sub(lead + fill);
     format!("{}{}{}", "·".repeat(lead), "█".repeat(fill), "░".repeat(rest))
 }
-

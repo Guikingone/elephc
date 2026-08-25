@@ -449,4 +449,3 @@ pub(crate) fn why_table(display: &[(Vec<(String, Kind)>, u64)], processes: usize
     }
     out
 }
-

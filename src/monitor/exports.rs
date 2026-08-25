@@ -336,4 +336,3 @@ pub(crate) fn write_github_summary(display: &[(Vec<(String, Kind)>, u64)], proce
         let _ = writeln!(file, "{md}");
     }
 }
-

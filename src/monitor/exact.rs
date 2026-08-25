@@ -696,4 +696,3 @@ pub(crate) fn exact_walk(
     on_path[node] = false;
     path.pop();
 }
-

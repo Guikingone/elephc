@@ -560,4 +560,3 @@ pub(crate) fn live_frame(
     *previous = next_previous;
     out
 }
-

@@ -534,6 +534,18 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     if web && matches!(emit, Emit::Cdylib) {
         fail("--web cannot be combined with --emit cdylib");
     }
+    // A cdylib has no `main`, and `main` is where the profiling runtimes are
+    // initialized. Accepting this produced a library carrying an enter/exit hook
+    // at every call site with nothing able to arm them — the cost of the
+    // capability without the capability. Turning a library on would need an
+    // initialization ABI the host calls, which does not exist.
+    if matches!(emit, Emit::Cdylib) && !matches!(instrument, crate::codegen::Instrumentation::Off) {
+        fail(
+            "--with-monitoring cannot be combined with --emit cdylib: a library has no \
+             main, so the profiling runtime is never initialized and the hooks it \
+             embeds can never be activated",
+        );
+    }
     if web && emit_asm {
         fail("--web cannot be combined with --emit-asm");
     }

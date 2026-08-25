@@ -1131,6 +1131,7 @@ pub extern "C" fn elephc_instr_request(begin: u32) {
             STATE.with(|s| s.borrow_mut().reset());
             SLICE_OPEN.store(true, Ordering::Relaxed);
             CAPTURE_ONLY.store(begin == 2, Ordering::Relaxed);
+            publish_active(true);
             switch_on();
         }
         _ => {
@@ -1138,6 +1139,7 @@ pub extern "C" fn elephc_instr_request(begin: u32) {
                 return;
             }
             ENABLED.store(false, Ordering::Relaxed);
+            publish_active(false);
             elephc_instr_dump();
         }
     }
@@ -1157,27 +1159,59 @@ static SLICE_OPEN: AtomicBool = AtomicBool::new(false);
 /// every request in the window.
 static CAPTURE_ONLY: AtomicBool = AtomicBool::new(false);
 
-/// Reads the initial hook state from the environment, at program start.
+/// Reads the initial hook state at program start.
 ///
-/// `ELEPHC_MONITOR=1` asks a `--with-monitoring` binary to profile this whole
-/// run — which is what `monitor` sets when it spawns one. Without it the hooks
-/// stay dormant, so the decision moved from compile time to run time and one
-/// build serves both "profile this" and "just run".
+/// A run `monitor` spawned is asked for in full, through the control channel it
+/// inherits on fd 3 — the probe's init verifies that channel and publishes the
+/// answer here. Without it the hooks stay dormant, so the decision moved from
+/// compile time to run time and one build serves both "profile this" and "just
+/// run". (An earlier version of this comment named an `ELEPHC_MONITOR`
+/// environment variable; nothing has ever read one.)
 #[no_mangle]
 pub extern "C" fn elephc_instr_boot() {
     // Set by the probe's init, which runs first and owns the one check: the
     // control channel's marker can only be read once, so asking twice would give
     // the second reader nothing.
     let asked = unsafe { std::ptr::addr_of!(elephc_monitor_active).read() };
+    // Set by the probe's init only when `monitor` spawned this process, which
+    // asks for the whole run — so the slice that opens here is never closed and
+    // the word stays true for every PDO statement, as it should.
     if asked != 0 {
         switch_on();
     }
 }
 
-extern "C" {
-    /// Runtime `.comm` word: nonzero once this process has been asked to profile.
-    static elephc_monitor_active: u64;
+/// Publishes whether an exact slice is open right now.
+///
+/// The word is how a crate that must not depend on this one — PDO, which gates
+/// SQL-shape recovery and two clock reads per statement on it — asks whether
+/// anyone is recording. It used to be written only by the probe's init, and only
+/// to mean "was ever asked", which was wrong in both directions: a service with a
+/// configured endpoint had it set from boot with nobody profiling, and a request
+/// authorized by a signed `X-Elephc-Query` header had it CLEAR while its slice
+/// was open, so that capture lost its query shapes and its I/O wait entirely.
+fn publish_active(on: bool) {
+    // Safety: a `.comm` word of the runtime's own, present in every binary the
+    // instrumentation is linked into, and written from ordinary context only.
+    unsafe {
+        std::ptr::addr_of_mut!(elephc_monitor_active).write(u64::from(on));
+    }
 }
+
+#[cfg(not(test))]
+extern "C" {
+    /// Runtime `.comm` word: nonzero while an exact slice is being recorded.
+    static mut elephc_monitor_active: u64;
+}
+
+// Standalone `cargo test -p elephc-instr` has no compiled elephc program to
+// define the runtime word, and `publish_active` is reached from
+// `elephc_instr_request` on every test that opens a slice — so unlike the read in
+// `elephc_instr_boot`, it cannot be dead-stripped. Defined in the test binary
+// only, never in the staticlib, so a real program's `.comm` stays single.
+#[cfg(test)]
+#[no_mangle]
+static mut elephc_monitor_active: u64 = 0;
 
 /// Turns the hooks on, and fixes the reference the timings are measured against.
 ///
@@ -1911,6 +1945,50 @@ fn end_slice() {
 
 #[cfg(test)]
 mod tests {
+
+    /// Reads the runtime word the way another crate does — PDO's whole gate.
+    fn published_active() -> u64 {
+        unsafe { std::ptr::addr_of!(crate::elephc_monitor_active).read() }
+    }
+
+    /// The word PDO gates on follows the SLICE, in both directions.
+    ///
+    /// One test rather than three because there is one word per process and the
+    /// suite runs in parallel: split across tests these assertions raced each
+    /// other, passed alone and failed together.
+    #[test]
+    fn the_published_word_follows_the_open_slice() {
+        // The same lock the other bracket-driving test takes. The slice state is
+        // one word and one shadow stack per PROCESS, and the runner is parallel.
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        elephc_instr_request(0);
+        assert_eq!(published_active(), 0, "nothing open to begin with");
+
+        elephc_instr_request(1);
+        assert_eq!(
+            published_active(),
+            1,
+            "a signed-header request opens a slice, and PDO has to see it — this \
+             was the state where an authorized capture silently lost its query \
+             shapes and its I/O wait",
+        );
+
+        elephc_instr_request(0);
+        assert_eq!(
+            published_active(),
+            0,
+            "and the slice closing puts the process back to costing nothing",
+        );
+
+        // `2` offers the request: with no capture armed there is nothing to
+        // record, so no slice opens and nothing is published.
+        elephc_instr_request(2);
+        assert_eq!(
+            published_active(),
+            0,
+            "an unsigned request on an unasked service must stay dormant",
+        );
+    }
     /// A throw out of the dropped region must not swallow a tracked frame's exit.
     ///
     /// Past `MAX_STACK` activations are counted, not pushed, and their exits are

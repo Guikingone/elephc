@@ -198,4 +198,3 @@ pub(crate) fn resolve_probe_key(cmd: &MonitorCommand, socket: &str) -> Result<[u
          file next to {socket}"
     ))
 }
-

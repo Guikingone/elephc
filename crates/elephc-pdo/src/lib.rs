@@ -63,12 +63,17 @@ mod instr_io {
         }
     }
 
-    /// Whether this process was ever asked to profile.
+    /// Whether an exact slice is being recorded RIGHT NOW.
     ///
-    /// The runtime word the probe's init writes. Distinct from "the profiler is
-    /// linked", which is true of every `--with-monitoring` binary and was what
-    /// these hooks used to ask — so a dormant binary paid for a capture nobody
-    /// had requested.
+    /// The runtime word the instrumentation publishes when it opens and closes a
+    /// slice. Distinct from "the profiler is linked", which is true of every
+    /// `--with-monitoring` binary and was what these hooks used to ask — so a
+    /// dormant binary paid for a capture nobody had requested. It is also
+    /// distinct from "was ever asked", which is what this read used to get: that
+    /// was true from boot on any service with an endpoint configured, and false
+    /// throughout a request authorized by a signed header — the two states where
+    /// being wrong costs a dormant service real time, and costs an authorized
+    /// capture the SQL shapes and wait time it promises.
     fn asked() -> bool {
         unsafe { std::ptr::addr_of!(elephc_monitor_active).read() != 0 }
     }

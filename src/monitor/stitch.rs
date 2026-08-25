@@ -453,4 +453,3 @@ pub(crate) fn run_stitch(cmd: &MonitorCommand) -> i32 {
     }
     0
 }
-

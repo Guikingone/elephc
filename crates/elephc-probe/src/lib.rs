@@ -522,14 +522,18 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
 
     // Embedded but dormant. `--with-monitoring` makes a binary CAPABLE of being
     // profiled; it must otherwise run — and cost — like any other binary, or the
-    // flag would be a performance decision disguised as a capability. `monitor`
-    // sets ELEPHC_MONITOR when it wants a whole run, and a live endpoint
-    // (ELEPHC_PROBE_ADDR) implies the same.
-    // `monitor` spawned us, or an endpoint was configured for a long-running
-    // service. Publish the decision so the exact profiler, whose init runs after
-    // this one, does not have to repeat the check — and would consume the marker
-    // if it did.
-    if control_fd_present() || std::env::var_os("ELEPHC_PROBE_ADDR").is_some() {
+    // flag would be a performance decision disguised as a capability.
+    //
+    // `monitor` spawning us IS the asking, and it asks for the whole run: publish
+    // the decision so the exact profiler, whose init runs after this one, does not
+    // have to repeat the check — and would consume the control marker if it did.
+    //
+    // A configured ELEPHC_PROBE_ADDR is deliberately NOT the asking. It says an
+    // operator MAY connect later, which is a reachability decision, not a
+    // profiling one; treating the two as the same made a service profile itself
+    // from boot with nobody on the other end. The listener goes up below; what it
+    // collects starts when a client proves the key and says what it wants.
+    if control_fd_present() {
         let flag = std::ptr::addr_of_mut!(elephc_monitor_active);
         flag.write(1);
         ASKED.store(true, Ordering::Relaxed);
@@ -560,6 +564,29 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
             }
         }
     }
+}
+
+/// Starts sampled collection, because someone authenticated and asked for it.
+///
+/// The counterpart to init NOT arming on a configured address: the ring stays
+/// empty until a client proves the build key and requests the sampled answer, so
+/// a reachable service costs what an unreachable one costs until that happens.
+/// Idempotent — every later poll finds collection already running, which is why
+/// the first answer on a freshly-started service is thin and the next is not.
+pub(crate) fn begin_sampled() {
+    if ASKED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    // Same policy the forked worker uses: a request is not enough on its own,
+    // there has to be a ring to fill. Arming without one delivers SIGPROF to a
+    // process with nothing to record it in — and if the handler is not installed
+    // either, the default action for that signal is to terminate.
+    if !should_arm(true, REGION.load(Ordering::Relaxed)) {
+        return;
+    }
+    // Safety: arming is one `setitimer`; the handler and the ring were installed
+    // by `elephc_probe_init`, which has necessarily run for a client to reach us.
+    unsafe { arm_timer() };
 }
 
 /// Arms the CPU-time profiling timer at the sampling period. Idempotent and
@@ -949,6 +976,55 @@ fn symbolize<'a>(symbols: &[(u64, &'a str)], pc: u64) -> &'a str {
 
 #[cfg(test)]
 mod tests {
+    /// Configuring an endpoint is reachability, not a request to profile.
+    ///
+    /// The init used to arm whenever ELEPHC_PROBE_ADDR was set, which made a
+    /// service sample itself and — through the word the exact profiler boots on —
+    /// write exact profiles to its own log with nobody connected. Measured on a
+    /// factorial binary: 431 bytes of stderr with the address set and no client,
+    /// against none from the same program without it.
+    #[test]
+    fn a_configured_address_is_not_a_request_to_profile() {
+        let source = include_str!("lib.rs");
+        let at = source
+            .find("if control_fd_present()")
+            .expect("the init still gates arming on the control channel");
+        let branch = &source[at..at + 200];
+        assert!(
+            !branch.contains("ELEPHC_PROBE_ADDR"),
+            "arming must not depend on an address being configured:\n{branch}"
+        );
+        assert!(
+            branch.contains("arm_timer()"),
+            "and a run `monitor` spawned must still arm:\n{branch}"
+        );
+    }
+
+    /// Asking is what starts collection, and asking twice changes nothing.
+    #[test]
+    fn sampled_collection_starts_when_a_client_asks_for_it() {
+        let restore = super::ASKED.load(super::Ordering::Relaxed);
+        super::ASKED.store(false, super::Ordering::Relaxed);
+        assert!(
+            !super::should_arm(super::ASKED.load(super::Ordering::Relaxed), 0x1000),
+            "a reachable service fills nothing until someone asks",
+        );
+        // No ring is mapped in a test binary, so this decides and stops short of
+        // the syscall — which is the behaviour under test: the DECISION is what
+        // an authenticated client changes.
+        super::begin_sampled();
+        assert!(
+            super::should_arm(super::ASKED.load(super::Ordering::Relaxed), 0x1000),
+            "and starts filling once one has",
+        );
+        super::begin_sampled();
+        assert!(
+            super::ASKED.load(super::Ordering::Relaxed),
+            "a second poll finds collection already running",
+        );
+        super::ASKED.store(restore, super::Ordering::Relaxed);
+    }
+
     /// A worker only starts sampling because someone asked, never because the
     /// ring happens to be mapped.
     #[test]

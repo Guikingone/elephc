@@ -278,6 +278,30 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
     if serve.is_some() && (!live || html_out.is_none()) {
         return Err("--serve requires --live and --html (it serves the live graph)".to_string());
     }
+    // The exporters read the sampled capture, and `--exact` against a service
+    // returns the per-function table only. This used to warn and exit 0, which
+    // told automation it had an artifact it did not have.
+    if exact {
+        let unwritable: Vec<&str> = [
+            ("--out", out.is_some()),
+            ("--pprof", pprof_out.is_some()),
+            ("--dot", dot_out.is_some()),
+            ("--html", html_out.is_some()),
+        ]
+        .iter()
+        .filter(|(_, given)| *given)
+        .map(|(name, _)| *name)
+        .collect();
+        if !unwritable.is_empty() {
+            return Err(format!(
+                "--exact cannot be combined with {}: the exports are rendered from the \
+                 sampled capture, and an exact remote answer is the per-function table \
+                 only. Drop --exact to export the sampled view, or profile the program \
+                 locally, where an exact capture does export.",
+                unwritable.join(", ")
+            ));
+        }
+    }
     // Live windows default short so the display breathes; one-shot keeps 5s.
     let duration_explicit = duration_secs.is_some();
     let duration_secs = duration_secs.unwrap_or(if live { 3 } else { 5 });
@@ -380,4 +404,3 @@ pub(crate) fn find_project_file(target: &str) -> Option<PathBuf> {
         }
     }
 }
-
