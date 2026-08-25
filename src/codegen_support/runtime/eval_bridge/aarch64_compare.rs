@@ -5,7 +5,8 @@
 //! - The eval bridge runtime facade and sibling bridge emitters.
 //!
 //! Key details:
-//! - Loose comparison paths retain their target-specific control flow.
+//! - Equality uses its dedicated helpers; relational and spaceship operations share
+//!   the runtime PHP ordering table and preserve its unordered NaN flag.
 
 use super::*;
 
@@ -45,11 +46,20 @@ pub(super) fn emit_aarch64_compare(emitter: &mut Emitter) {
     emitter.instruction("b.eq __elephc_eval_value_compare_strict_eq");          // route === through the mixed strict-equality helper
     emitter.instruction("cmp x2, #7");                                          // is this strict inequality?
     emitter.instruction("b.eq __elephc_eval_value_compare_strict_ne");          // route !== through the mixed strict-equality helper
-    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the left boxed operand to a numeric comparison double
-    emitter.instruction("str d0, [sp, #24]");                                   // save the normalized left numeric operand
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for numeric casting
-    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the right boxed operand to a numeric comparison double
-    emitter.instruction("ldr d1, [sp, #24]");                                   // reload the left numeric operand for the float comparison
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the left boxed operand for runtime-tag unboxing
+    emitter.instruction("bl __rt_mixed_unbox");                                 // unbox the left eval operand into tag and payload words
+    emitter.instruction("stp x0, x1, [sp, #24]");                               // save the left runtime tag and low payload word
+    emitter.instruction("str x2, [sp, #40]");                                   // save the left high payload word
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for runtime-tag unboxing
+    emitter.instruction("bl __rt_mixed_unbox");                                 // unbox the right eval operand into tag and payload words
+    emitter.instruction("mov x3, x0");                                          // pass the right runtime tag to PHP ordering
+    emitter.instruction("mov x4, x1");                                          // pass the right low payload word to PHP ordering
+    emitter.instruction("mov x5, x2");                                          // pass the right high payload word to PHP ordering
+    emitter.instruction("ldp x0, x1, [sp, #24]");                               // reload the left runtime tag and low payload word
+    emitter.instruction("ldr x2, [sp, #40]");                                   // reload the left high payload word
+    emitter.instruction("bl __rt_php_compare");                                 // apply PHP ordering and report unordered NaN separately
+    emitter.instruction("mov x10, x0");                                         // preserve the normalized ordering result for opcode dispatch
+    emitter.instruction("mov x11, x1");                                         // preserve the unordered flag for relational predicates
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the eval comparison opcode for dispatch
     emitter.instruction("cmp x9, #2");                                          // is this a less-than comparison?
     emitter.instruction("b.eq __elephc_eval_value_compare_lt");                 // materialize left < right from float comparison flags
@@ -86,20 +96,27 @@ pub(super) fn emit_aarch64_compare(emitter: &mut Emitter) {
     emitter.instruction("eor x1, x0, #1");                                      // invert equality for the !== operator
     emitter.instruction("b __elephc_eval_value_compare_box");                   // box the strict-inequality result
     emitter.label("__elephc_eval_value_compare_lt");
-    emitter.instruction("fcmp d1, d0");                                         // compare numeric eval operands for <
-    emitter.instruction("cset x1, mi");                                         // ordered less-than becomes boolean true
+    emitter.instruction("cbnz x11, __elephc_eval_value_compare_unordered");     // every relational predicate is false for unordered NaN
+    emitter.instruction("cmp x10, #0");                                         // compare the PHP ordering result against zero for <
+    emitter.instruction("cset x1, lt");                                         // materialize signed less-than as a PHP boolean
     emitter.instruction("b __elephc_eval_value_compare_box");                   // box the less-than result
     emitter.label("__elephc_eval_value_compare_lte");
-    emitter.instruction("fcmp d1, d0");                                         // compare numeric eval operands for <=
-    emitter.instruction("cset x1, ls");                                         // ordered less-than-or-equal becomes boolean true
+    emitter.instruction("cbnz x11, __elephc_eval_value_compare_unordered");     // every relational predicate is false for unordered NaN
+    emitter.instruction("cmp x10, #0");                                         // compare the PHP ordering result against zero for <=
+    emitter.instruction("cset x1, le");                                         // materialize signed less-than-or-equal as a PHP boolean
     emitter.instruction("b __elephc_eval_value_compare_box");                   // box the less-than-or-equal result
     emitter.label("__elephc_eval_value_compare_gt");
-    emitter.instruction("fcmp d1, d0");                                         // compare numeric eval operands for >
-    emitter.instruction("cset x1, gt");                                         // ordered greater-than becomes boolean true
+    emitter.instruction("cbnz x11, __elephc_eval_value_compare_unordered");     // every relational predicate is false for unordered NaN
+    emitter.instruction("cmp x10, #0");                                         // compare the PHP ordering result against zero for >
+    emitter.instruction("cset x1, gt");                                         // materialize signed greater-than as a PHP boolean
     emitter.instruction("b __elephc_eval_value_compare_box");                   // box the greater-than result
     emitter.label("__elephc_eval_value_compare_gte");
-    emitter.instruction("fcmp d1, d0");                                         // compare numeric eval operands for >=
-    emitter.instruction("cset x1, ge");                                         // ordered greater-than-or-equal becomes boolean true
+    emitter.instruction("cbnz x11, __elephc_eval_value_compare_unordered");     // every relational predicate is false for unordered NaN
+    emitter.instruction("cmp x10, #0");                                         // compare the PHP ordering result against zero for >=
+    emitter.instruction("cset x1, ge");                                         // materialize signed greater-than-or-equal as a PHP boolean
+    emitter.instruction("b __elephc_eval_value_compare_box");                   // box the greater-than-or-equal result
+    emitter.label("__elephc_eval_value_compare_unordered");
+    emitter.instruction("mov x1, #0");                                          // unordered NaN makes every PHP relational predicate false
     emitter.label("__elephc_eval_value_compare_box");
     emitter.instruction("mov x0, #3");                                          // runtime tag 3 = bool
     emitter.instruction("mov x2, xzr");                                         // bool payloads do not use a high word
@@ -281,28 +298,27 @@ pub(super) fn emit_aarch64_compare(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the signed comparison result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_spaceship");
-    emitter.instruction("sub sp, sp, #32");                                     // allocate wrapper slots for the right operand and left double
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across helper calls
-    emitter.instruction("add x29, sp, #16");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("sub sp, sp, #64");                                     // allocate wrapper slots for boxed operands and the left runtime triple
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #48");                                    // establish a stable wrapper frame pointer
     emitter.instruction("str x1, [sp, #0]");                                    // save the right boxed operand while casting the left operand
-    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the left boxed operand to a PHP numeric double
-    emitter.instruction("str d0, [sp, #8]");                                    // save the left numeric spaceship operand
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for numeric casting
-    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the right boxed operand to a PHP numeric double
-    emitter.instruction("ldr d1, [sp, #8]");                                    // reload the left numeric spaceship operand
-    emitter.instruction("fcmp d1, d0");                                         // compare left and right numeric operands for spaceship
-    emitter.instruction("b.vs __elephc_eval_value_spaceship_gt");               // PHP treats unordered NaN spaceship comparisons as greater
-    emitter.instruction("cset x1, gt");                                         // set result to 1 when left is greater than right
-    emitter.instruction("csinv x1, x1, xzr, ge");                               // keep 1/0 for greater/equal, or produce -1 for less
-    emitter.instruction("b __elephc_eval_value_spaceship_box");                 // box the ordered spaceship result
-    emitter.label("__elephc_eval_value_spaceship_gt");
-    emitter.instruction("mov x1, #1");                                          // greater or unordered comparisons produce result 1
-    emitter.label("__elephc_eval_value_spaceship_box");
+    emitter.instruction("bl __rt_mixed_unbox");                                 // unbox the left eval operand into tag and payload words
+    emitter.instruction("stp x0, x1, [sp, #8]");                                // save the left runtime tag and low payload word
+    emitter.instruction("str x2, [sp, #24]");                                   // save the left high payload word
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for runtime-tag unboxing
+    emitter.instruction("bl __rt_mixed_unbox");                                 // unbox the right eval operand into tag and payload words
+    emitter.instruction("mov x3, x0");                                          // pass the right runtime tag to PHP ordering
+    emitter.instruction("mov x4, x1");                                          // pass the right low payload word to PHP ordering
+    emitter.instruction("mov x5, x2");                                          // pass the right high payload word to PHP ordering
+    emitter.instruction("ldp x0, x1, [sp, #8]");                                // reload the left runtime tag and low payload word
+    emitter.instruction("ldr x2, [sp, #24]");                                   // reload the left high payload word
+    emitter.instruction("bl __rt_php_compare");                                 // compute PHP's normalized spaceship ordering
+    emitter.instruction("mov x1, x0");                                          // move the ordering result into the Mixed integer payload
     emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a high word
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
     emitter.instruction("bl __rt_mixed_from_value");                            // box the spaceship result into a Mixed cell
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the spaceship wrapper frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the spaceship wrapper frame
     emitter.instruction("ret");                                                 // return the boxed spaceship result to Rust
 
 }

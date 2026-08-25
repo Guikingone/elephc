@@ -314,6 +314,7 @@ pub enum Op {
     StrictNotEq,
     LooseEq,
     LooseNotEq,
+    PhpRelCmp,
     Spaceship,
     IsNull,
     IsTruthy,
@@ -721,7 +722,8 @@ impl Op {
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
             | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
             | DynamicObjectNewWithoutConstructorMixed | MethodLookup | StaticMethodCall
-            | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | Spaceship => {
+            | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | PhpRelCmp
+            | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
             // `++`/`--` on a string reads the operand's payload, may write the shared
@@ -894,6 +896,7 @@ impl Op {
             StrictNotEq => "strict_not_eq",
             LooseEq => "loose_eq",
             LooseNotEq => "loose_not_eq",
+            PhpRelCmp => "php_rel_cmp",
             Spaceship => "spaceship",
             IsNull => "is_null",
             IsTruthy => "is_truthy",

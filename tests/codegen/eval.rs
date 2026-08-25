@@ -8219,6 +8219,33 @@ echo ":"; echo function_exists("disk_free_space"); echo function_exists("disk_to
     assert_eq!(out, "free:total:ordered:missing:call:spread:11");
 }
 
+/// Verifies dynamic eval uses PHP runtime ordering for false and preserves unordered NaN
+/// semantics separately for relational and spaceship operators.
+#[test]
+fn test_dynamic_eval_relational_and_spaceship_use_php_ordering() {
+    let out = compile_and_run(
+        r#"<?php
+$code = $argc > 1 ? $argv[1] : '$missing = disk_free_space("no/such/path/elephc-magician-ordering");
+var_dump($missing > -1);
+var_dump($missing < -1);
+var_dump($missing <=> -1);
+var_dump(-1 <=> $missing);
+$nan = NAN;
+var_dump($nan < 0);
+var_dump($nan <= 0);
+var_dump($nan > 0);
+var_dump($nan >= 0);
+var_dump($nan <=> 0);';
+eval($code);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(true)\nint(-1)\nint(1)\nbool(false)\nbool(false)\n\
+         bool(false)\nbool(false)\nint(1)\n"
+    );
+}
+
 /// Verifies eval stat metadata builtins return scalar metadata and dispatch dynamically.
 #[test]
 fn test_eval_dispatches_stat_metadata_builtin_calls() {

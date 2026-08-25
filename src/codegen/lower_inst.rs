@@ -214,6 +214,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FNeg => floats::lower_float_neg(ctx, &inst),
         Op::ICmp => lower_int_compare(ctx, &inst),
         Op::FCmp => floats::lower_float_compare(ctx, &inst),
+        Op::PhpRelCmp => comparisons::lower_php_rel_cmp(ctx, &inst),
         Op::Spaceship => comparisons::lower_spaceship(ctx, &inst),
         Op::StrCmp => comparisons::lower_str_cmp(ctx, &inst),
         Op::StrictEq => comparisons::lower_strict_eq(ctx, &inst, true),

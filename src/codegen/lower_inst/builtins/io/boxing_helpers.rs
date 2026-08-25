@@ -313,9 +313,8 @@ pub(super) fn box_owned_pathinfo_array_as_mixed(ctx: &mut FunctionContext<'_>) {
 /// result register (`d0`/`xmm0`) and the success flag in the INT one (`x0`/`rax`), which is why
 /// this reads a different register pair than its integer sibling — the two never contend.
 ///
-/// `0.0` is a legitimate byte count (a full filesystem reports zero bytes available), so a
-/// helper that signalled failure by returning `0.0` could not be told apart from success. The
-/// flag is what makes PHP's `false` reachable at all.
+/// A set success flag boxes the floating payload even when it is `0.0`; an unset flag boxes
+/// boolean `false`.
 pub(super) fn box_float_or_false_result(ctx: &mut FunctionContext<'_>) {
     let false_label = ctx.next_label("float_false");
     let done_label = ctx.next_label("float_done");
@@ -492,4 +491,3 @@ pub(super) fn box_stat_string_or_false_result(ctx: &mut FunctionContext<'_>) {
         }
     }
 }
-

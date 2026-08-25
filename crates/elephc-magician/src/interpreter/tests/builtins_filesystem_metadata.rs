@@ -166,6 +166,8 @@ echo disk_total_space(".") >= disk_free_space(".") ? "ordered" : "bad"; echo ":"
 echo disk_free_space("no/such/path/elephc-magician") === false ? "missing" : "bad"; echo ":";
 echo call_user_func("disk_free_space", ".") > 0 ? "call" : "bad"; echo ":";
 echo call_user_func_array("disk_total_space", ["directory" => "."]) > 0 ? "spread" : "bad"; echo ":";
+echo disk_free_space("no/such/path/elephc-magician-ordering") > -1 ? "bad" : "false-order"; echo ":";
+echo disk_free_space("no/such/path/elephc-magician-ordering") <=> -1; echo ":";
 echo function_exists("disk_free_space");
 return function_exists("disk_total_space");"#,
         )
@@ -175,7 +177,7 @@ return function_exists("disk_total_space");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "free:total:ordered:missing:call:spread:1");
+    assert_eq!(values.output, "free:total:ordered:missing:call:spread:false-order:-1:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval stat metadata builtins expose scalar file metadata and link probes.

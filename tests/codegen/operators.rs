@@ -476,6 +476,31 @@ var_dump($failure >= 0);
 }
 
 
+/// Regression: boxed float unions preserve PHP's distinction between relational and
+/// spaceship handling of unordered NaN comparisons.
+#[test]
+fn test_float_or_false_union_relational_nan_is_unordered() {
+    let out = compile_and_run(
+        r#"<?php
+function nan_or_false(bool $ok): float|false {
+    return $ok ? NAN : false;
+}
+
+$nan = nan_or_false(true);
+var_dump($nan < 0);
+var_dump($nan <= 0);
+var_dump($nan > 0);
+var_dump($nan >= 0);
+var_dump($nan <=> 0);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\nint(1)\n"
+    );
+}
+
+
 /// Verifies runtime loose equality of two non-numeric strings compares by byte sequence.
 #[test]
 fn test_runtime_loose_eq_non_numeric_strings_compare_by_bytes() {

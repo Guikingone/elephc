@@ -164,16 +164,10 @@ impl Checker {
         matches!(ty, PhpType::Union(_)) && self.type_supports_mixed_int_dispatch(ty)
     }
 
-    /// Returns true if every member of `ty` can take part in a NUMERIC comparison once boxed.
+    /// Returns true if every member of `ty` can take part in a numeric comparison once boxed.
     ///
-    /// The int-dispatch predicate above deliberately excludes `Float`, because the machinery it
-    /// gates is integer-shaped. Relational operators are not: PHP compares `float|false` as
-    /// happily as `int|false`, and ordering lowers boxed operands through the runtime PHP
-    /// comparison table so fractional floats and boolean truthiness remain distinct.
-    ///
-    /// Without this, widening a builtin's return to `float|false` turns idiomatic calling code
-    /// such as `disk_free_space(".") > 0` into a compile error, trading a wrong value for a
-    /// refusal to build. `int|false` never hit that because `Int` is in the int-dispatch set.
+    /// Runtime ordering inspects each boxed tag, preserving float payloads and PHP's boolean
+    /// truthiness rules. Integer-only dispatch remains intentionally narrower.
     fn type_supports_mixed_numeric_dispatch(&self, ty: &PhpType) -> bool {
         match ty {
             PhpType::Float => true,

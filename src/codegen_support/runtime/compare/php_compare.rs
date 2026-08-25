@@ -23,6 +23,9 @@
 //! - Number-to-string conversion goes through `__rt_itoa` / `__rt_ftoa`, which append
 //!   to the shared `_concat_buf` scratch. The cursor is saved before and restored
 //!   after the comparison, so a reduction loop cannot exhaust the buffer.
+//! - The primary result remains the spaceship ordering value. A secondary flag reports
+//!   unordered IEEE comparisons so relational consumers can return `false` for every NaN
+//!   predicate without changing spaceship's PHP result of `1`.
 //! - Known deviations: comparisons that involve a numeric *string* are resolved as
 //!   `double`s, so two integer strings beyond 2^53 can compare equal where PHP
 //!   compares them exactly (the same simplification `__rt_mixed_loose_eq` already
@@ -36,6 +39,7 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// `__rt_php_compare` inputs are two runtime value triples — AArch64
 /// `x0`/`x1`/`x2` and `x3`/`x4`/`x5`, x86_64 `rdi`/`rsi`/`rdx` and
 /// `rcx`/`r8`/`r9` — and the result is `-1`, `0` or `1` in `x0`/`rax`.
+/// `x1`/`rdx` returns 1 when the comparison encountered unordered NaN and 0 otherwise.
 /// String payloads stay borrowed: the helper never releases or persists them.
 pub fn emit_php_compare(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -103,7 +107,8 @@ fn emit_php_truthy_aarch64(emitter: &mut Emitter) {
 /// tag/lo/hi, `[sp,#48]` a parsed-double scratch slot, `[sp,#56]` the
 /// "operands were swapped" flag used by the number-versus-string leg,
 /// `[sp,#64..#88]` the normalized number/string operands of that leg,
-/// `[sp,#96]` the saved `_concat_off` cursor, `[sp,#112]` saved `x29`/`x30`.
+/// `[sp,#96]` the saved `_concat_off` cursor, `[sp,#104]` the unordered flag,
+/// and `[sp,#112]` saved `x29`/`x30`.
 fn emit_php_compare_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: php_compare ---");
@@ -116,6 +121,7 @@ fn emit_php_compare_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #16]");                                   // save the left high payload word
     emitter.instruction("stp x3, x4, [sp, #24]");                               // save the right runtime tag and low payload word
     emitter.instruction("str x5, [sp, #40]");                                   // save the right high payload word
+    emitter.instruction("str xzr, [sp, #104]");                                 // initialize the unordered IEEE result flag
 
     // -- PHP rule 1: a bool operand converts BOTH sides to bool --
     emitter.instruction("cmp x0, #3");                                          // is the left operand a bool?
@@ -221,9 +227,15 @@ fn emit_php_compare_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_pcmp_fcmp");
     emitter.instruction("fcmp d0, d1");                                         // compare both numeric operands as doubles
+    emitter.instruction("b.vs __rt_pcmp_unordered");                            // report unordered NaN separately from signed ordering
     emitter.instruction("b.mi __rt_pcmp_neg");                                  // an ordered less-than result
     emitter.instruction("b.eq __rt_pcmp_zero");                                 // an ordered equal result
-    emitter.instruction("b __rt_pcmp_pos");                                     // greater-than, and unordered NaN like PHP's three-way compare
+    emitter.instruction("b __rt_pcmp_pos");                                     // an ordered greater-than result
+
+    emitter.label("__rt_pcmp_unordered");
+    emitter.instruction("mov x9, #1");                                          // mark the comparison as IEEE unordered
+    emitter.instruction("str x9, [sp, #104]");                                  // expose unordered state to relational consumers
+    emitter.instruction("b __rt_pcmp_pos");                                     // PHP spaceship orders unordered NaN as greater
 
     // -- string versus string --
     emitter.label("__rt_pcmp_strings");
@@ -277,9 +289,14 @@ fn emit_php_compare_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_pcmp_num_str_cmp");
     emitter.instruction("ldr d1, [sp, #48]");                                   // reload the parsed string value
     emitter.instruction("fcmp d0, d1");                                         // compare the number against the numeric string
+    emitter.instruction("b.vs __rt_pcmp_num_str_unordered");                    // report unordered NaN separately from signed ordering
     emitter.instruction("b.mi __rt_pcmp_maybe_neg");                            // the number is smaller, before any swap correction
     emitter.instruction("b.eq __rt_pcmp_zero");                                 // both values are numerically equal
     emitter.instruction("b __rt_pcmp_maybe_pos");                               // the number is larger, before any swap correction
+    emitter.label("__rt_pcmp_num_str_unordered");
+    emitter.instruction("mov x9, #1");                                          // mark the number/string comparison as IEEE unordered
+    emitter.instruction("str x9, [sp, #104]");                                  // expose unordered state to relational consumers
+    emitter.instruction("b __rt_pcmp_maybe_pos");                               // preserve the existing spaceship ordering result
 
     emitter.label("__rt_pcmp_num_str_bytes");
     abi::emit_symbol_address(emitter, "x9", "_concat_off");
@@ -326,6 +343,7 @@ fn emit_php_compare_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // both operands compare equal
 
     emitter.label("__rt_pcmp_done");
+    emitter.instruction("ldr x1, [sp, #104]");                                  // return whether the comparison was IEEE unordered
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
     emitter.instruction("add sp, sp, #128");                                    // release the ordering-comparison frame
     emitter.instruction("ret");                                                 // return the three-way comparison result
@@ -391,7 +409,8 @@ fn emit_php_truthy_x86_64(emitter: &mut Emitter) {
 /// Frame (112 bytes below `rbp`): `[rbp-8..-24]` left tag/lo/hi,
 /// `[rbp-32..-48]` right tag/lo/hi, `[rbp-56]` a parsed-double scratch slot,
 /// `[rbp-64]` the "operands were swapped" flag, `[rbp-72..-96]` the normalized
-/// number/string operands, `[rbp-104]` the saved `_concat_off` cursor. The
+/// number/string operands, `[rbp-104]` the saved `_concat_off` cursor, and
+/// `[rbp-112]` the unordered flag. The
 /// `push rbp` plus the 112-byte reservation keep `rsp` 16-byte aligned for the
 /// nested libc-backed calls.
 fn emit_php_compare_x86_64(emitter: &mut Emitter) {
@@ -408,6 +427,7 @@ fn emit_php_compare_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the right runtime tag
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the right low payload word
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the right high payload word
+    emitter.instruction("mov QWORD PTR [rbp - 112], 0");                        // initialize the unordered IEEE result flag
 
     // -- PHP rule 1: a bool operand converts BOTH sides to bool --
     emitter.instruction("cmp rdi, 3");                                          // is the left operand a bool?
@@ -522,10 +542,14 @@ fn emit_php_compare_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_pcmp_fcmp");
     emitter.instruction("ucomisd xmm0, xmm1");                                  // compare both numeric operands as doubles
-    emitter.instruction("jp __rt_pcmp_pos");                                    // unordered NaN sorts last, like PHP's three-way compare
+    emitter.instruction("jp __rt_pcmp_unordered");                              // report unordered NaN separately from signed ordering
     emitter.instruction("jb __rt_pcmp_neg");                                    // an ordered less-than result
     emitter.instruction("je __rt_pcmp_zero");                                   // an ordered equal result
     emitter.instruction("jmp __rt_pcmp_pos");                                   // an ordered greater-than result
+
+    emitter.label("__rt_pcmp_unordered");
+    emitter.instruction("mov QWORD PTR [rbp - 112], 1");                        // expose unordered state to relational consumers
+    emitter.instruction("jmp __rt_pcmp_pos");                                   // PHP spaceship orders unordered NaN as greater
 
     // -- string versus string --
     emitter.label("__rt_pcmp_strings");
@@ -587,10 +611,13 @@ fn emit_php_compare_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_pcmp_num_str_cmp");
     emitter.instruction("movsd xmm1, QWORD PTR [rbp - 56]");                    // reload the parsed string value
     emitter.instruction("ucomisd xmm0, xmm1");                                  // compare the number against the numeric string
-    emitter.instruction("jp __rt_pcmp_maybe_pos");                              // unordered NaN sorts last, before any swap correction
+    emitter.instruction("jp __rt_pcmp_num_str_unordered");                      // report unordered NaN separately from signed ordering
     emitter.instruction("jb __rt_pcmp_maybe_neg");                              // the number is smaller, before any swap correction
     emitter.instruction("je __rt_pcmp_zero");                                   // both values are numerically equal
     emitter.instruction("jmp __rt_pcmp_maybe_pos");                             // the number is larger, before any swap correction
+    emitter.label("__rt_pcmp_num_str_unordered");
+    emitter.instruction("mov QWORD PTR [rbp - 112], 1");                        // expose unordered state to relational consumers
+    emitter.instruction("jmp __rt_pcmp_maybe_pos");                             // preserve the existing spaceship ordering result
 
     emitter.label("__rt_pcmp_num_str_bytes");
     abi::emit_symbol_address(emitter, "r10", "_concat_off");
@@ -639,7 +666,32 @@ fn emit_php_compare_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // both operands compare equal
 
     emitter.label("__rt_pcmp_done");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 112]");                      // return whether the comparison was IEEE unordered
     emitter.instruction("add rsp, 112");                                        // release the ordering-comparison frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the three-way comparison result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Verifies both target ABIs expose unordered NaN without changing the ordering result.
+    #[test]
+    fn php_compare_returns_unordered_flag_on_both_targets() {
+        let mut aarch64 = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_php_compare(&mut aarch64);
+        let aarch64 = aarch64.output();
+        assert!(aarch64.contains("str xzr, [sp, #104]"), "{aarch64}");
+        assert!(aarch64.contains("b.vs __rt_pcmp_unordered"), "{aarch64}");
+        assert!(aarch64.contains("ldr x1, [sp, #104]"), "{aarch64}");
+
+        let mut x86_64 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_php_compare(&mut x86_64);
+        let x86_64 = x86_64.output();
+        assert!(x86_64.contains("mov QWORD PTR [rbp - 112], 0"), "{x86_64}");
+        assert!(x86_64.contains("jp __rt_pcmp_unordered"), "{x86_64}");
+        assert!(x86_64.contains("mov rdx, QWORD PTR [rbp - 112]"), "{x86_64}");
+    }
 }

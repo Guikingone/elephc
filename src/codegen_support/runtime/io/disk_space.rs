@@ -8,10 +8,8 @@
 //! Key details:
 //! - Calls `statfs` on the null-terminated path and multiplies the fundamental
 //!   block size by the available or total block count.
-//! - Failure is reported through a SEPARATE FLAG, not through the payload. `0.0` is a
-//!   legitimate byte count — a full filesystem has zero bytes available — so returning it on
-//!   failure made "could not stat this path" indistinguishable from "no space left", and PHP's
-//!   `false` could never be produced.
+//! - Returns the byte-count payload and an independent success flag so a successful `0.0`
+//!   remains distinct from PHP `false`.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -67,7 +65,7 @@ pub fn emit_disk_space(emitter: &mut Emitter) {
     emitter.label("__rt_disk_space_done");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // release the stack frame
-    emitter.instruction("ret");                                                 // return the byte count in d0
+    emitter.instruction("ret");                                                 // return the byte count and success flag in d0 and x0
 }
 
 /// Emits the Linux x86_64 stream runtime helper for disk space.
@@ -125,5 +123,5 @@ fn emit_disk_space_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_disk_space_done_x86");
     emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the stack frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the byte count in xmm0
+    emitter.instruction("ret");                                                 // return the byte count and success flag in xmm0 and rax
 }

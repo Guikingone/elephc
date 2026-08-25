@@ -24,10 +24,6 @@ builtin! {
 
 /// Returns `Union(Float, False)` reflecting that `disk_free_space` can return bytes or `false`.
 ///
-/// This used to declare a plain `Float` — described as "fully determined by its declaration",
-/// which it was not: the declaration is what DISCARDED the failure, so an unstatable path
-/// answered `0.0`, which is exactly what a full filesystem reports.
-///
 /// The registry pre-infers arguments before calling this hook.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(cx.checker.normalize_union_type(vec![PhpType::Float, PhpType::False]))

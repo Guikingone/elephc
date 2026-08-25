@@ -55,10 +55,8 @@ pub(in crate::interpreter) fn eval_builtin_disk_space(
 
 /// Reports available or total filesystem bytes as a PHP float, or `false` on failure.
 ///
-/// Both failure exits used to answer `0.0` — and said so in this very doc comment. `0.0` is a
-/// legitimate byte count: a full filesystem reports zero bytes available, so a caller could not
-/// tell "out of space" from "this path does not exist", and `=== false` never matched. PHP
-/// returns `false`, and the compiled path now does too.
+/// A zero-byte result remains a successful float; path conversion or `statvfs` failure returns
+/// a boolean false cell.
 pub(in crate::interpreter) fn eval_disk_space_result(
     name: &str,
     directory: RuntimeCellHandle,

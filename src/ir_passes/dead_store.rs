@@ -210,7 +210,7 @@ fn op_is_value_only_consumer(op: Op) -> bool {
             | IBitNot | IShl | IShrA | FAdd | FSub | FMul | FDiv | FPow | FNeg | MixedNumericBinop
             // Comparisons.
             | ICmp | FCmp | StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | LooseEq
-            | LooseNotEq | Spaceship
+            | LooseNotEq | PhpRelCmp | Spaceship
             // Scalar predicates and type queries.
             | IsNull | IsTruthy | IsEmpty | MixedTagOf
             // Numeric/string/mixed conversions.
