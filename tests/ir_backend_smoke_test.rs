@@ -5296,6 +5296,12 @@ fn ir_backend_handles_array_truthiness() {
 }
 
 /// Verifies iterable and concrete array echo lower to PHP's "Array" string payload.
+///
+/// And that each one WARNS. `echo` on an `iterable`-typed parameter printed `Array` in silence:
+/// the EIR admitted `may_warn` and the runtime writer already knew the payload was an array —
+/// it just never raised the diagnostic on that arm, while the same `echo` on a local array did.
+/// php raises one per conversion, at the line of the `echo` itself, so the two calls to `show()`
+/// both name line 3 — MEASURED on `php -n` 8.5.6, whose output this reproduces byte for byte.
 #[test]
 fn ir_backend_handles_iterable_echo() {
     let source = r#"<?php
@@ -5310,10 +5316,16 @@ $direct = [1];
 echo $direct;
 echo "done";
 "#;
-    assert_eq!(
-        compile_and_run_ir_backend("iterable_echo", source),
-        "Array|Array|Arraydone"
-    );
+    let out = compile_and_run_ir_backend("iterable_echo", source);
+    assert_eq!(program_output_only(&out), "Array|Array|Arraydone");
+    let lines: Vec<&str> = out
+        .lines()
+        .filter(|line| line.starts_with("Warning: Array to string conversion"))
+        .collect();
+    assert_eq!(lines.len(), 3, "expected one warning per conversion: {out}");
+    assert!(lines[0].ends_with(" on line 3"), "{}", lines[0]);
+    assert!(lines[1].ends_with(" on line 3"), "{}", lines[1]);
+    assert!(lines[2].ends_with(" on line 10"), "{}", lines[2]);
 }
 
 /// Verifies `gettype()` reports iterable array/hash payloads as PHP arrays.
