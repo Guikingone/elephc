@@ -100,6 +100,18 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(ir_backend_handles_scalar_builtins)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# Measured isolated at ~51s on both this branch and `main` — 85% of the global
+# guard, so it terminates whenever a shard schedules anything else beside it. It
+# timed out twice in one CI run, which is the signature of a test at the edge of
+# its budget rather than a flaky one.
+[[profile.default.overrides]]
+filter = 'test(test_eval_bridge_failure_paths_do_not_leak_rust_panics)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_bridge_failure_paths_do_not_leak_rust_panics)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
 [[profile.default.overrides]]
 filter = 'test(test_eval_rejects_invalid_property_and_parameter_type_atoms)'
 slow-timeout = { period = "180s", terminate-after = 1 }
