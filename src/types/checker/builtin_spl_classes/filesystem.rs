@@ -246,6 +246,13 @@ fn spl_file_object_properties() -> Vec<ClassProperty> {
         // four-line file (five elements): `seek(4)` answers key 4, current `""`, valid FALSE;
         // `seek(99)` answers key 4, current FALSE, valid FALSE. 0 = neither happened.
         protected_storage_property("seekState", TypeExpr::Int),
+        // Whether the ITERATOR has positioned this object. php's iteration reads one line AHEAD,
+        // so `eof()` turns true while the LAST element is still current, and stays false for a
+        // fresh object that has only been constructed. Reading lines by hand does not read ahead
+        // at all — MEASURED, two `fgets()` over `"a\nb\n"` leave `eof()` false on a plain file —
+        // so only `rewind()` and `next()` set this, and `eof()` falls back to the stream when it
+        // is unset.
+        protected_storage_property("iterStarted", TypeExpr::Bool),
         // READ_CSV records, and whether they still describe `lines` under the current controls.
         // A RECORD is not a line: a quoted field may hold newlines, so one record can span
         // several entries of `lines`, and the mapping has to be built once rather than guessed
@@ -502,7 +509,7 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
         method_with_body("next", Vec::new(), Some(TypeExpr::Void), spl_file_object_next_body()),
         method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), spl_file_object_rewind_body()),
         method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), spl_file_object_valid_body()),
-        method_with_body("eof", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("feof", vec![file_stream_expr()]))),
+        method_with_body("eof", Vec::new(), Some(TypeExpr::Bool), spl_file_object_eof_body()),
         method_with_body("fgets", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),
         method_with_body(
             "fscanf",
@@ -516,12 +523,12 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
         // left the stream where it was, so `getCurrentLine()` then `fgetc()` read `a` where
         // php reads `b`.
         method_with_body("getCurrentLine", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),
-        method_with_body("fgetc", Vec::new(), Some(mixed_type()), return_body(function_call("fgetc", vec![file_stream_expr()]))),
+        method_with_body("fgetc", Vec::new(), Some(mixed_type()), spl_file_object_manual_read_body(function_call("fgetc", vec![file_stream_expr()]))),
         method_with_body(
             "fread",
             vec![param("length", TypeExpr::Int)],
             Some(TypeExpr::Str),
-            return_body(function_call("fread", vec![file_stream_expr(), var_expr("length")])),
+            spl_file_object_manual_read_body(function_call("fread", vec![file_stream_expr(), var_expr("length")])),
         ),
         method_with_body("fwrite", vec![param("data", TypeExpr::Str)], Some(TypeExpr::Int), spl_file_object_fwrite_body()),
         method_with_body("fflush", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("fflush", vec![file_stream_expr()]))),
@@ -645,15 +652,15 @@ fn spl_temp_file_object_methods() -> Vec<ClassMethod> {
 /// the same expression `spl_file_object_methods` uses, so there is one behaviour, not two.
 fn spl_temp_file_object_stream_methods() -> Vec<ClassMethod> {
     vec![
-        method_with_body("eof", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("feof", vec![file_stream_expr()]))),
+        method_with_body("eof", Vec::new(), Some(TypeExpr::Bool), spl_file_object_eof_body()),
         method_with_body("fgets", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),
         method_with_body("getCurrentLine", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),
-        method_with_body("fgetc", Vec::new(), Some(mixed_type()), return_body(function_call("fgetc", vec![file_stream_expr()]))),
+        method_with_body("fgetc", Vec::new(), Some(mixed_type()), spl_file_object_manual_read_body(function_call("fgetc", vec![file_stream_expr()]))),
         method_with_body(
             "fread",
             vec![param("length", TypeExpr::Int)],
             Some(TypeExpr::Str),
-            return_body(function_call("fread", vec![file_stream_expr(), var_expr("length")])),
+            spl_file_object_manual_read_body(function_call("fread", vec![file_stream_expr(), var_expr("length")])),
         ),
         method_with_body("fwrite", vec![param("data", TypeExpr::Str)], Some(TypeExpr::Int), spl_file_object_fwrite_body()),
         method_with_body("fflush", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("fflush", vec![file_stream_expr()]))),
@@ -1020,6 +1027,11 @@ fn spl_file_object_construct_body_with_backing(path: Expr, backing_path: Expr, m
         property_assign_stmt(this_expr(), "infoClass", string_expr("SplFileInfo")),
         property_assign_stmt(this_expr(), "lineNumber", int_expr(0)),
         property_assign_stmt(this_expr(), "hasReadLine", bool_expr(false)),
+        property_assign_stmt(this_expr(), "iterStarted", bool_expr(false)),
+        // `seekState` was read by `current()` and `valid()` but only WRITTEN by `rewind()` and
+        // `seek()`, so `(new SplFileObject($p))->current()` — php's own first-line idiom, with no
+        // rewind — died on an uninitialized typed property.
+        property_assign_stmt(this_expr(), "seekState", int_expr(0)),
         property_assign_stmt(this_expr(), "flags", int_expr(0)),
         property_assign_stmt(this_expr(), "delimiter", string_expr(",")),
         property_assign_stmt(this_expr(), "enclosure", string_expr("\"")),
@@ -1049,13 +1061,20 @@ fn file_object_load_lines_body(_path: Expr) -> Vec<Stmt> {
         property_assign_stmt(this_expr(), "lines", empty_array_expr()),
         assign_stmt("__splPos", function_call("ftell", vec![file_stream_expr()])),
         expr_stmt(function_call("rewind", vec![file_stream_expr()])),
+        // Whether the stream was already at its end when the LAST line came back. That is the
+        // question php's iteration asks, and the answer is not a property of the bytes: the same
+        // `"a\nb\n"` leaves a plain file short of the end and a `php://temp` stream past it.
+        assign_stmt("__splAtEnd", bool_expr(false)),
         while_stmt(
             binary_expr(
                 assign_expr("__splLine", function_call("fgets", vec![file_stream_expr()])),
                 BinOp::StrictNotEq,
                 bool_expr(false),
             ),
-            vec![property_array_push_stmt(this_expr(), "lines", var_expr("__splLine"))],
+            vec![
+                property_array_push_stmt(this_expr(), "lines", var_expr("__splLine")),
+                assign_stmt("__splAtEnd", function_call("feof", vec![file_stream_expr()])),
+            ],
         ),
         expr_stmt(function_call(
             "fseek",
@@ -1138,6 +1157,12 @@ fn assign_expr(name: &str, value: Expr) -> Expr {
 /// So the rule is: a file that is EMPTY, or whose last byte is a newline, has one more line than
 /// `file()` reports. The last stored line is tested rather than the file re-read, because these
 /// lines keep their newline — `DROP_NEW_LINE` is applied by `current()`, not by the loader.
+///
+/// "after the last `\n` the stream is not yet at end of file" is a claim about the STREAM, and
+/// one kind of stream disagrees. `php://temp` reports EOF the moment a line read drains it, so
+/// an `SplTempFileObject` holding that same `"a\nb\n"` yields TWO elements, not three, and
+/// `"a\n"` yields one. Hence the loader's own reading of `feof()`, taken after the last line
+/// arrived rather than after the read that failed — by then every kind of stream says true.
 fn spl_file_object_trailing_line_stmt() -> Stmt {
     let last_line = array_access(
         file_lines_expr(),
@@ -1145,12 +1170,16 @@ fn spl_file_object_trailing_line_stmt() -> Stmt {
     );
     if_stmt(
         binary_expr(
-            binary_expr(count_expr(file_lines_expr()), BinOp::StrictEq, int_expr(0)),
-            BinOp::Or,
+            not_expr(var_expr("__splAtEnd")),
+            BinOp::And,
             binary_expr(
-                function_call("substr", vec![last_line, int_expr(-1)]),
-                BinOp::StrictEq,
-                string_expr("\n"),
+                binary_expr(count_expr(file_lines_expr()), BinOp::StrictEq, int_expr(0)),
+                BinOp::Or,
+                binary_expr(
+                    function_call("substr", vec![last_line, int_expr(-1)]),
+                    BinOp::StrictEq,
+                    string_expr("\n"),
+                ),
             ),
         ),
         vec![property_array_push_stmt(this_expr(), "lines", string_expr(""))],
@@ -1530,6 +1559,60 @@ fn spl_file_object_csv_refresh_stmt() -> Stmt {
     )
 }
 
+/// Builds the note a HAND-DRIVEN read leaves: this object is back on the stream's own answer.
+///
+/// php's `eof()` is the stream's, and only the ITERATOR reads a line ahead of the one it yields.
+/// MEASURED on `php -n` 8.5.6: `rewind()` then one `fgets()` over `"a\nb\n"` in an
+/// `SplTempFileObject` reports `eof()` FALSE — the stream has read two of its four bytes — while
+/// the same object one `next()` into its iteration reports TRUE. Without this the earlier
+/// `rewind()` was still speaking for a cursor the caller had stopped using.
+fn spl_file_object_manual_read_stmt() -> Stmt {
+    property_assign_stmt(this_expr(), "iterStarted", bool_expr(false))
+}
+
+/// Builds a one-expression method body that reads the stream by hand.
+fn spl_file_object_manual_read_body(call: Expr) -> Vec<Stmt> {
+    vec![spl_file_object_manual_read_stmt(), return_stmt(call)]
+}
+
+/// Builds SplFileObject eof(), which answers the ITERATION's read-ahead before the stream.
+///
+/// php drives its iteration from the stream and reads one line AHEAD, so `eof()` is already true
+/// while the last element is still current. MEASURED on `php -n` 8.5.6 over `"a\nb\n"`: a plain
+/// file yields three elements and reports `eof()` false, false, TRUE; the same content in an
+/// `SplTempFileObject` yields two and reports false, TRUE. elephc iterates a line ARRAY, whose
+/// cursor cannot see the stream, and answered `false` at every step of both.
+///
+/// Reading by hand is the case that keeps the stream in the answer: `fgets()` does not read
+/// ahead, and two of them over that same plain file leave `eof()` FALSE — so the fallback is not
+/// a default, it is the other half of the rule. `iterStarted` is what tells the two apart, which
+/// is also why a freshly constructed object reports `false` even for an EMPTY file.
+fn spl_file_object_eof_body() -> Vec<Stmt> {
+    let at_last = |collection: Expr| {
+        return_stmt(binary_expr(
+            file_line_number_expr(),
+            BinOp::GtEq,
+            binary_expr(count_expr(collection), BinOp::Sub, int_expr(1)),
+        ))
+    };
+    vec![
+        if_stmt(
+            not_expr(property_access(this_expr(), "iterStarted")),
+            vec![return_stmt(function_call("feof", vec![file_stream_expr()]))],
+            None,
+        ),
+        // `valid()` and `current()` already branch this way, and `eof()` has to make the same
+        // choice: counting lines while the cursor counts RECORDS goes wrong as soon as one
+        // quoted field holds a newline.
+        if_stmt(
+            flag_enabled_expr(file_object_flags_expr(), SPL_FILE_READ_CSV),
+            vec![at_last(property_access(this_expr(), "csvRecords"))],
+            None,
+        ),
+        at_last(file_lines_expr()),
+    ]
+}
+
 /// Builds SplFileObject next().
 fn spl_file_object_next_body() -> Vec<Stmt> {
     vec![
@@ -1538,6 +1621,7 @@ fn spl_file_object_next_body() -> Vec<Stmt> {
             "lineNumber",
             binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
         ),
+        property_assign_stmt(this_expr(), "iterStarted", bool_expr(true)),
         spl_file_object_csv_skip_blank_stmt(),
     ]
 }
@@ -1548,6 +1632,7 @@ fn spl_file_object_rewind_body() -> Vec<Stmt> {
         expr_stmt(function_call("rewind", vec![file_stream_expr()])),
         property_assign_stmt(this_expr(), "lineNumber", int_expr(0)),
         property_assign_stmt(this_expr(), "seekState", int_expr(0)),
+        property_assign_stmt(this_expr(), "iterStarted", bool_expr(true)),
         spl_file_object_csv_skip_blank_stmt(),
     ]
 }
@@ -1732,7 +1817,7 @@ fn spl_file_object_fgets_body() -> Vec<Stmt> {
 /// union instead left `fscanf()` handing a boxed Mixed to `sscanf()`'s declared `string`
 /// parameter.
 fn spl_file_object_read_line_stmts() -> Vec<Stmt> {
-    vec![assign_stmt(
+    vec![spl_file_object_manual_read_stmt(), assign_stmt(
         "line",
         spl_file_object_drop_new_line_expr(cast_expr(
             CastType::String,
