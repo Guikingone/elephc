@@ -335,6 +335,19 @@ mod tests {
                 );
             }
         }
+
+        let x86_64 = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        let compare = body_of(&x86_64, "__elephc_eval_value_compare");
+        let compare_prefix = compare
+            .split("__elephc_eval_value_compare_eq:")
+            .next()
+            .expect("split yields the x86_64 ordering wrapper prefix");
+        assert!(compare.contains("mov r10, rax"), "{compare}");
+        assert!(compare.contains("mov rcx, QWORD PTR [rbp - 24]"), "{compare}");
+        assert!(
+            !compare_prefix.contains("mov r10, QWORD PTR [rbp - 24]"),
+            "the x86_64 opcode dispatch must preserve the ordering result:\n{compare}"
+        );
     }
 
     /// Returns the instruction lines following `label` up to the next exported helper.

@@ -67,15 +67,15 @@ pub(super) fn emit_x86_64_compare(emitter: &mut Emitter) {
     emitter.instruction("call __rt_php_compare");                               // apply PHP ordering and report unordered NaN separately
     emitter.instruction("mov r10, rax");                                        // preserve the normalized ordering result for opcode dispatch
     emitter.instruction("mov r11, rdx");                                        // preserve the unordered flag for relational predicates
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the eval comparison opcode for dispatch
-    emitter.instruction("cmp r10, 2");                                          // is this a less-than comparison?
-    emitter.instruction("je __elephc_eval_value_compare_lt");                   // materialize left < right from float comparison flags
-    emitter.instruction("cmp r10, 3");                                          // is this a less-than-or-equal comparison?
-    emitter.instruction("je __elephc_eval_value_compare_lte");                  // materialize left <= right from float comparison flags
-    emitter.instruction("cmp r10, 4");                                          // is this a greater-than comparison?
-    emitter.instruction("je __elephc_eval_value_compare_gt");                   // materialize left > right from float comparison flags
-    emitter.instruction("cmp r10, 5");                                          // is this a greater-than-or-equal comparison?
-    emitter.instruction("je __elephc_eval_value_compare_gte");                  // materialize left >= right from float comparison flags
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // reload the eval comparison opcode without clobbering ordering
+    emitter.instruction("cmp rcx, 2");                                          // is this a less-than comparison?
+    emitter.instruction("je __elephc_eval_value_compare_lt");                   // materialize left < right from normalized PHP ordering
+    emitter.instruction("cmp rcx, 3");                                          // is this a less-than-or-equal comparison?
+    emitter.instruction("je __elephc_eval_value_compare_lte");                  // materialize left <= right from normalized PHP ordering
+    emitter.instruction("cmp rcx, 4");                                          // is this a greater-than comparison?
+    emitter.instruction("je __elephc_eval_value_compare_gt");                   // materialize left > right from normalized PHP ordering
+    emitter.instruction("cmp rcx, 5");                                          // is this a greater-than-or-equal comparison?
+    emitter.instruction("je __elephc_eval_value_compare_gte");                  // materialize left >= right from normalized PHP ordering
     emitter.instruction("xor eax, eax");                                        // unknown comparison opcodes fail closed as false
     emitter.instruction("jmp __elephc_eval_value_compare_box");                 // box the fallback false result
     emitter.label("__elephc_eval_value_compare_eq");
