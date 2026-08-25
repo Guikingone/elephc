@@ -389,6 +389,22 @@ pub(crate) fn attach_exact_source(graph: &mut crate::call_graph::CallGraph, targ
     });
 }
 
+/// Shortens `name` to `width` columns, ending it with `…` when it did not fit.
+///
+/// Truncates by CHARACTER, not by byte. Both callers used to slice `&name[..n]`
+/// after testing `name.len()`, which counts bytes: when byte `n` landed inside a
+/// multi-byte character, `str` slicing panicked and took the command down while
+/// rendering a table. No hostile peer was needed — a function or closure named
+/// in a source file with an accented character reaches it, and the names come
+/// from the profiled program.
+pub(crate) fn ellipsize(name: &str, width: usize) -> String {
+    if name.chars().count() <= width {
+        return name.to_string();
+    }
+    let kept: String = name.chars().take(width.saturating_sub(1)).collect();
+    format!("{kept}…")
+}
+
 /// Prints a per-function delta table of the exact capture against a baseline:
 /// inclusive time share and call count, before → after, most-changed first.
 pub(crate) fn instrument_delta_table(
@@ -425,11 +441,7 @@ pub(crate) fn instrument_delta_table(
         let b_pct = base_by.get(name).map_or(0.0, |n| pct(n.inclusive, base_root));
         let c_calls = cur_by.get(name).and_then(|n| n.call_count).unwrap_or(0);
         let b_calls = base_by.get(name).and_then(|n| n.call_count).unwrap_or(0);
-        let short = if name.len() > 24 {
-            format!("{}…", &name[..23])
-        } else {
-            name.to_string()
-        };
+        let short = ellipsize(name, 24);
         out.push_str(&format!(
             "{short:<25} time {b_pct:>5.1}% -> {c_pct:>5.1}% ({:+5.1})  calls {b_calls} -> {c_calls} ({:+})\n",
             c_pct - b_pct,
@@ -461,11 +473,7 @@ pub(crate) fn instrument_table(graph: &crate::call_graph::CallGraph) -> String {
         let incl = 100.0 * node.inclusive as f64 / root as f64;
         let excl = 100.0 * node.exclusive as f64 / root as f64;
         let calls = node.call_count.unwrap_or(0);
-        let name = if node.name.len() > 26 {
-            format!("{}…", &node.name[..25])
-        } else {
-            node.name.clone()
-        };
+        let name = ellipsize(&node.name, 26);
         let queries = if has_io {
             format!("  queries {}", node.io_exclusive)
         } else {

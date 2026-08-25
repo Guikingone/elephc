@@ -36,7 +36,20 @@ const MAX_FRAMES: usize = 32;
 /// Ring capacity in samples. At the 1ms period this holds ~8s of CPU time.
 const RING_SLOTS: usize = 8192;
 /// Words per ring slot: `[depth, route_id, allocs, pc0, pc1, ...]`.
-const SLOT_WORDS: usize = MAX_FRAMES + 3;
+const SLOT_WORDS: usize = MAX_FRAMES + 4;
+/// Word index of the slot's sequence counter: even when the slot is settled,
+/// odd while a handler is writing it.
+///
+/// The ring is written by SIGPROF handlers in several processes and read by the
+/// endpoint while they run. Publishing `depth` last with `Release` is a correct
+/// gate for a slot that is still zero — but the region is zeroed exactly once,
+/// and after the head wraps past `RING_SLOTS` every reused slot already carries
+/// a non-zero depth from its previous lap. A reader that acquired that stale
+/// depth read a slot mid-overwrite: fresh frames under old ones, a route from
+/// one sample and program counters from another, folded and counted as if real.
+/// Bounded, so never a bad access — just a stack that never happened, with
+/// nothing in the format to tell it from a true one.
+const SEQ_WORD: usize = MAX_FRAMES + 3;
 /// Word index of the first program counter in a slot.
 const PC_WORD0: usize = 3;
 /// Cap on distinct request routes recorded; overflow buckets into `<other>`.
@@ -58,10 +71,30 @@ const EVENT_WORDS: usize = 2;
 const EVENT_BUCKETS: usize = MAX_ROUTES + 1;
 /// Event-table bytes: fixed counters per route id.
 const EVENT_TABLE_BYTES: usize = EVENT_BUCKETS * EVENT_WORDS * 8;
+/// Control-area bytes: one word, `1` once anyone has asked this service to
+/// sample. It lives in the SHARED mapping and not beside `ASKED` in process
+/// memory because that is the whole point: `ASKED` is a per-process
+/// `AtomicBool`, so a `--web` master that authenticates a client after its
+/// workers forked flips only its own copy, and the master runs no PHP. The
+/// workers must be able to observe the ask that happened after they existed.
+const CONTROL_BYTES: usize = 8;
 /// Shared-region byte size: the ring, then the route table, then the per-route
-/// event counters — all inherited across a `--web` fork, so route ids stay
-/// consistent and every worker's counters land in one place.
-const REGION_BYTES: usize = RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES;
+/// event counters, then the control word — all inherited across a `--web` fork,
+/// so route ids stay consistent and every worker's counters land in one place.
+///
+/// The control word is appended LAST so adding it moves no existing offset:
+/// every other area is addressed from the constants above it.
+const REGION_BYTES: usize =
+    RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES + CONTROL_BYTES;
+
+/// The shared "someone asked" word, or `None` before the region is mapped.
+///
+/// # Safety
+/// Valid only after `elephc_probe_init` mapped the region.
+unsafe fn region_asked<'a>(base: usize) -> &'a std::sync::atomic::AtomicU64 {
+    let offset = RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES;
+    &*((base + offset) as *const std::sync::atomic::AtomicU64)
+}
 
 /// I/O events are **not sampled**. A driver call fires exactly one, so these
 /// counts are exact — the sampler's statistical nature applies to *time*, which
@@ -217,7 +250,32 @@ extern "C" {
 /// Process-local on purpose. `_gc_allocs` is ordinary memory, so each `--web`
 /// worker gets its own copy at fork; a shared "last" would make every worker
 /// subtract another's progress and produce negative deltas.
-static LAST_ALLOCS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+///
+/// `NO_PREVIOUS_SAMPLE` and not zero, because zero is a legitimate reading: it
+/// is what a process that has allocated nothing reports. Seeding this at zero
+/// meant the FIRST sample's delta was the whole counter — every allocation the
+/// process had made since it started, charged in full to whichever stack the
+/// timer happened to catch first. On the ordinary path, where a worker adopts an
+/// ask after hours of serving, that is a single fabricated row dwarfing the real
+/// ones by orders of magnitude.
+static LAST_ALLOCS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(NO_PREVIOUS_SAMPLE);
+
+/// Sentinel for "no sample has been taken in this process yet", distinguishable
+/// from a real reading of zero.
+const NO_PREVIOUS_SAMPLE: u64 = u64::MAX;
+
+/// Bytes reserved for the handler's own stack. Comfortably above what a frame
+/// walk and a register spill need, and it costs nothing but address space in the
+/// binary's BSS.
+const SIGSTACK_BYTES: usize = 64 * 1024;
+
+/// The alternate signal stack itself.
+///
+/// A static rather than an allocation: it must exist before the first signal can
+/// arrive, survive `fork` at the same address, and never depend on an allocator
+/// the handler is forbidden to touch.
+static mut SIGSTACK: [u8; SIGSTACK_BYTES] = [0; SIGSTACK_BYTES];
 
 /// Reads the program's allocation counter, or `None` outside `--probe`.
 ///
@@ -236,6 +294,17 @@ unsafe fn current_allocs() -> Option<u64> {
 /// route id stamped by one `--web` worker resolves to the same name in the
 /// master's endpoint. Full table buckets into `<other>`. Runs in the worker's
 /// normal context (append + scan), never the signal handler.
+///
+/// Deliberately NOT gated on having been asked, unlike the sampling itself.
+/// Route ids have to be stable from boot for a sample taken at any moment to
+/// resolve to the right name, and gating the table on the ask would make an id
+/// mean different things either side of it. The price is accepted and worth
+/// stating: a monitored service writes its route labels into the shared mapping
+/// before anyone has authenticated, so a path carrying a token is in that
+/// mapping from the moment it is served, and the per-route counters cover the
+/// process's whole life rather than the window an operator chose. Both are
+/// bounded — the table is capped and the counters are fixed-width — and neither
+/// is readable without the build key.
 ///
 /// # Safety
 /// Valid only after the region is mapped.
@@ -319,6 +388,10 @@ unsafe fn read_route_slot(base: usize, index: usize) -> String {
 /// `route`/`len` describe a UTF-8 route string valid for this call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_probe_set_route(route: *const u8, len: usize) {
+    // Every request, before anything can return early: this is the one call the
+    // web bridges make on each request in the process that actually runs PHP, so
+    // it is where a worker learns it was asked to sample after it forked.
+    observe_shared_ask();
     // Defensive: a bridge bug passing a wild length must not read out of bounds.
     if route.is_null() || len == 0 || len > 4096 {
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
@@ -412,6 +485,17 @@ extern "C" fn on_sigprof(
     if STOPPED.load(Ordering::Relaxed) {
         return;
     }
+    // Nobody asked, nothing is recorded — even if the signal came from outside.
+    //
+    // The handler is installed at init, before any ask, and is never removed;
+    // arming was the only gate. So `kill -PROF <pid>` against a dormant
+    // `--with-monitoring` service made it walk its own stacks and fill the ring
+    // it carries, which is exactly what "dormant until asked" promises it will
+    // not do. Arming still decides whether the timer fires; this decides whether
+    // a delivery that arrived by any other route is honoured.
+    if !ASKED.load(Ordering::Relaxed) {
+        return;
+    }
     unsafe {
         let base = REGION.load(Ordering::Relaxed);
         if base == 0 {
@@ -419,12 +503,38 @@ extern "C" fn on_sigprof(
         }
         let head = &*(base as *const std::sync::atomic::AtomicU64);
         let (pc, mut fp, sp) = interrupted_pc_fp(context);
-        let slot_index = (head.fetch_add(1, Ordering::Relaxed) as usize) % RING_SLOTS;
+        let ticket = head.fetch_add(1, Ordering::Relaxed);
+        let slot_index = (ticket as usize) % RING_SLOTS;
         // Slot words are atomics: the reader (endpoint/dump) runs concurrently
         // with this handler in another thread, so plain stores would be a data
         // race. depth (word 0) is the readiness gate, published Release last.
         let depth_word = region_word(base, slot_index, 0);
         let route_word = region_word(base, slot_index, 1);
+        // Open the slot: an odd sequence says "being written". Readers that see
+        // an odd count, or a count that changed across their read, discard what
+        // they got instead of folding a stack stitched from two samples.
+        //
+        // The value is derived from this handler's TICKET, not from whatever the
+        // word happened to hold. A plain seqlock assumes one writer per slot, and
+        // this ring does not have one: two handlers a full lap apart share a slot,
+        // and each computing its closing value from the value it read at open let
+        // them converge on the same even number — A opens 9 from 8, B opens 11
+        // from 9 and closes 10, A closes 10 — so a reader saw one even value
+        // across a read that spanned both, and folded the tear. Tickets come from
+        // `head.fetch_add`, so they are unique and increasing: two writers cannot
+        // produce the same closing value, and a reader's two reads agreeing means
+        // one writer's whole slot.
+        //
+        // The odd store is Relaxed and the FENCE after it is what orders it
+        // before the slot writes. A `Release` store orders accesses that precede
+        // it, not ones that follow — so writing the odd value with `Release` and
+        // the body with `Relaxed` left the body free to become visible first,
+        // which is exactly the tear the sequence exists to advertise. On x86 the
+        // hardware forbids that reordering and hides the mistake; on AArch64,
+        // which is both the CI target and the development machine, it does not.
+        let seq_word = region_word(base, slot_index, SEQ_WORD);
+        seq_word.store(slot_seq_writing(ticket), Ordering::Relaxed);
+        std::sync::atomic::fence(Ordering::Release);
         // Slot layout: [depth, route_id, pc0, pc1, ...]. Stamp the active request
         // route so the dump can group samples by endpoint.
         route_word.store(CURRENT_ROUTE.load(Ordering::Relaxed) as u64, Ordering::Relaxed);
@@ -435,7 +545,7 @@ extern "C" fn on_sigprof(
         let allocs_delta = match current_allocs() {
             Some(now) => {
                 let previous = LAST_ALLOCS.swap(now, Ordering::Relaxed);
-                now.saturating_sub(previous)
+                allocs_charged(previous, now)
             }
             None => 0,
         };
@@ -447,11 +557,25 @@ extern "C" fn on_sigprof(
             // A valid frame pointer is nonzero, 16-byte aligned, and inside the
             // interrupted stack window `[sp, sp + STACK_WINDOW)`. Anchoring to sp
             // rejects a stale fp before dereferencing it can fault.
+            //
+            // These checks prove a SHAPE, not that the address is mapped, and
+            // that limit is inherent to walking a frame-pointer chain in-process:
+            // a function compiled without frame pointers leaves an ordinary value
+            // in the register, and one that happens to be aligned and inside the
+            // window is followed. Every in-process FP sampler carries this. What
+            // the window buys is that the garbage has to look like a stack
+            // address to get through.
+            //
+            // The bound is `- 16` because the two loads below read
+            // `[fp, fp+8)` and `[fp+8, fp+16)`. At `- 8` an fp eight bytes below
+            // the end of the address space passed, the first load succeeded, and
+            // the second crossed the boundary — the guard covered one of the two
+            // reads it exists for.
             if fp == 0
                 || fp & 0xf != 0
                 || fp < sp
                 || fp.wrapping_sub(sp) >= STACK_WINDOW
-                || fp > u64::MAX - 8
+                || fp > u64::MAX - 16
             {
                 break;
             }
@@ -472,6 +596,12 @@ extern "C" fn on_sigprof(
         // Publish depth last with Release so a reader that loads it Acquire never
         // sees a higher depth than the PCs already stored.
         depth_word.store(depth as u64, Ordering::Release);
+        // Close the slot with this ticket's settled value. A reader whose two
+        // reads of this word agree, on an even value, saw one writer's slot for
+        // the whole of its read — and because the value names the ticket, "the
+        // same value" cannot mean "a different writer that happened to land on
+        // the same number".
+        seq_word.store(slot_seq_settled(ticket), Ordering::Release);
     }
 }
 
@@ -515,6 +645,36 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
     action.sa_sigaction =
         on_sigprof as extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void) as usize;
     action.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
+    // Run the handler on its own stack when we can get one. Without this it runs
+    // on the interrupted thread's stack, and the one thing a profiler samples is
+    // a program in the middle of its work — including deep in a recursion, with
+    // the guard page a few hundred bytes away. The handler is lean, but it walks
+    // a frame chain and spills registers, and overflowing there turns a profile
+    // into a SIGSEGV in the process being profiled.
+    //
+    // `SA_ONSTACK` is set only if the stack was actually installed: promising the
+    // kernel an alternate stack that does not exist is worse than not asking.
+    //
+    // `sigaltstack` is PER-THREAD, and this registers it for one thread — the one
+    // running main's prologue, which is the thread that runs PHP and therefore
+    // the one worth protecting. It is inherited across `fork`, which is what the
+    // `--web` workers need. Any other thread in the process gets no alternate
+    // stack, and `SA_ONSTACK` is simply inert there: the handler runs on that
+    // thread's own stack, exactly as it did everywhere before this existed. So
+    // this is a protection for the thread that matters, not a property of the
+    // process — and sharing one static stack is safe only for as long as that
+    // stays true. The endpoint threads block SIGPROF, which is what keeps the
+    // other threads that exist today (the endpoint's, and the PDO bridge's tokio
+    // runtime) from reaching it; a future thread that samples would need its own.
+    if SIGSTACK_BYTES >= libc::MINSIGSTKSZ as usize {
+        let mut alt: libc::stack_t = std::mem::zeroed();
+        alt.ss_sp = std::ptr::addr_of_mut!(SIGSTACK) as *mut libc::c_void;
+        alt.ss_size = SIGSTACK_BYTES;
+        alt.ss_flags = 0;
+        if libc::sigaltstack(&alt, std::ptr::null_mut()) == 0 {
+            action.sa_flags |= libc::SA_ONSTACK;
+        }
+    }
     libc::sigemptyset(&mut action.sa_mask);
     if libc::sigaction(libc::SIGPROF, &action, std::ptr::null_mut()) != 0 {
         return;
@@ -574,14 +734,36 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
 /// Idempotent — every later poll finds collection already running, which is why
 /// the first answer on a freshly-started service is thin and the next is not.
 pub(crate) fn begin_sampled() {
-    if ASKED.swap(true, Ordering::Relaxed) {
-        return;
+    // Published BEFORE the local early-return: the endpoint thread runs in the
+    // `--web` master, whose own `ASKED` may already be true from an earlier poll
+    // while workers forked since have never seen it. Writing the shared word
+    // first means a second poll still repairs a worker that missed the first.
+    let region = REGION.load(Ordering::Relaxed);
+    if region != 0 {
+        unsafe { region_asked(region) }.store(1, Ordering::Release);
     }
-    // Same policy the forked worker uses: a request is not enough on its own,
-    // there has to be a ring to fill. Arming without one delivers SIGPROF to a
-    // process with nothing to record it in — and if the handler is not installed
-    // either, the default action for that signal is to terminate.
-    if !should_arm(true, REGION.load(Ordering::Relaxed)) {
+    // A fresh ask lifts an exec latch: whoever disarmed did so for an exec that
+    // either happened — in which case this image is gone and nothing here runs —
+    // or did not, and is now being asked again, which is a reason to sample.
+    DISARMED_FOR_EXEC.store(false, Ordering::Relaxed);
+    ASKED.store(true, Ordering::Relaxed);
+    // Keyed on who owns the timer, not on whether this process has ever been
+    // asked. Returning early on `ASKED` alone meant a process that had since
+    // disarmed — before an exec that then did not happen, say — answered every
+    // later ask by doing nothing, because it remembered being asked once and
+    // never checked whether it was still sampling. The pid comparison is the
+    // same one a forked worker uses, so both paths arm under one rule.
+    //
+    // A request is still not enough on its own: there has to be a ring to fill.
+    // Arming without one delivers SIGPROF to a process with nothing to record it
+    // in — and if the handler is not installed either, the default action for
+    // that signal is to terminate.
+    if !should_adopt_ask(
+        ARMED_PID.load(Ordering::Relaxed),
+        unsafe { libc::getpid() },
+        true,
+        REGION.load(Ordering::Relaxed),
+    ) {
         return;
     }
     // Safety: arming is one `setitimer`; the handler and the ring were installed
@@ -601,6 +783,10 @@ unsafe fn arm_timer() {
         it_value: interval,
     };
     libc::setitimer(libc::ITIMER_PROF, &timer, std::ptr::null_mut());
+    // The single choke point every arming path goes through, so recording the
+    // owner here is what keeps `observe_shared_ask` down to one `setitimer` per
+    // process instead of one per request.
+    ARMED_PID.store(libc::getpid(), Ordering::Relaxed);
 }
 
 /// Disarms the profiling timer. Async-signal-safe (one `setitimer` syscall).
@@ -628,6 +814,25 @@ extern "C" fn disarm_after_fork() {
 #[no_mangle]
 pub unsafe extern "C" fn elephc_probe_disarm() {
     disarm_timer();
+    // Forget which process owns the timer. `begin_sampled` used to return early
+    // once `ASKED` was set and `observe_shared_ask` arms only when the owner is
+    // another process, so after a disarm both said "already armed" about a timer
+    // that no longer existed, and a later ask reached a service that had quietly
+    // stopped sampling.
+    ARMED_PID.store(0, Ordering::Relaxed);
+    // But clearing the owner alone re-opens what this function exists to close.
+    // `observe_shared_ask` runs on EVERY request, and the shared word still says
+    // the service was asked — so between this call and the `execve` it precedes,
+    // one request would re-arm the timer, the exec would carry it into the new
+    // image, and the default SIGPROF action would kill it. That is exactly the
+    // failure documented above, reached through the fix for a different one.
+    //
+    // The latch closes both. Arming is refused until someone asks AGAIN, which
+    // is what `begin_sampled` records — so an exec is safe, and a process whose
+    // exec was called off resumes on the next real ask rather than on the memory
+    // of an old one. It is not cleared here because the image that replaces this
+    // one gets fresh statics; there is nothing left to clear.
+    DISARMED_FOR_EXEC.store(true, Ordering::Relaxed);
 }
 
 /// Re-arms the profiling timer in a process that forked but keeps sampling (a
@@ -653,6 +858,121 @@ pub unsafe extern "C" fn elephc_probe_rearm() {
 /// pass without ever testing what it claims.
 fn should_arm(asked: bool, region: usize) -> bool {
     asked && region != 0
+}
+
+/// PID of the process whose interval timer this crate armed.
+///
+/// A pid and not a bool because `fork` copies this memory but RESETS the child's
+/// interval timers: an inherited `true` would describe the PARENT's timer and
+/// leave the child sampling nothing. Comparing against `getpid()` is correct at
+/// any fork depth — master, worker, broker, handler child — without having to
+/// hook every fork in the tree.
+static ARMED_PID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// Set by `elephc_probe_disarm`: refuse to arm until someone asks again.
+///
+/// Disarming exists for the moment before an `execve` that does not fork, where
+/// an armed timer survives into an image whose SIGPROF disposition is back to
+/// the default — it dies with "Profiling timer expired". Clearing the timer is
+/// not enough on its own, because the shared word still says the service was
+/// asked and `observe_shared_ask` runs on every request: one request between the
+/// disarm and the exec re-arms it. Cleared by `begin_sampled`, so a NEW ask
+/// resumes sampling and the memory of an old one does not.
+static DISARMED_FOR_EXEC: AtomicBool = AtomicBool::new(false);
+
+/// Allocations to charge one sample, given the counter at the previous sample.
+///
+/// The first sample in a process charges nothing: there is no previous reading
+/// to subtract, and treating the absent one as zero made it charge every
+/// allocation since the process started. Sampled attribution needs an interval,
+/// and the first sample does not have one — it establishes the baseline the
+/// second is measured against.
+///
+/// The counter only grows, so a smaller reading than the last means it wrapped
+/// or was reset; charge nothing rather than a wild delta.
+fn allocs_charged(previous: u64, now: u64) -> u64 {
+    if previous == NO_PREVIOUS_SAMPLE {
+        return 0;
+    }
+    now.saturating_sub(previous)
+}
+
+/// Whether a ring slot held still for the whole of a reader's pass over it.
+///
+/// The sequence word is even when a slot is settled and odd while a handler is
+/// writing it, and only writers move it. Two loads agreeing on an even value
+/// therefore mean no handler touched the slot in between, and what the reader
+/// assembled is one sample rather than two spliced together.
+///
+/// A pure function for the same reason `should_arm` is one: reaching the
+/// interesting branch through the globals means racing a real signal handler
+/// against a real reader, which a test cannot schedule.
+fn slot_was_settled(before: u64, after: u64) -> bool {
+    before & 1 == 0 && before == after
+}
+
+/// The sequence value a handler publishes while it is writing slot `ticket`.
+///
+/// Odd, and derived from the ticket rather than from the word's previous value,
+/// so that two handlers a lap apart cannot compute the same settled value from
+/// different starting points. Tickets come from `head.fetch_add` and are unique.
+fn slot_seq_writing(ticket: u64) -> u64 {
+    ticket.wrapping_mul(2) | 1
+}
+
+/// The sequence value that says slot `ticket` is settled and readable.
+fn slot_seq_settled(ticket: u64) -> u64 {
+    ticket.wrapping_mul(2)
+}
+
+/// Whether this process should arm now: someone asked, there is a ring to fill,
+/// and the armed timer on record belongs to some other process.
+///
+/// A pure function for the same reason `should_arm` is one: the alternative is a
+/// test that mutates the globals and then has to arm a real interval timer to
+/// reach the interesting branch, which would deliver SIGPROF into the test
+/// process.
+fn should_adopt_ask(armed_pid: i32, pid: i32, asked: bool, region: usize) -> bool {
+    region != 0 && asked && armed_pid != pid
+}
+
+/// Adopts an ask that reached the shared mapping after this process forked.
+///
+/// A `--web` worker re-arms once, immediately after it is forked, off the
+/// `ASKED` copy it inherited. In the normal lifecycle the workers exist before
+/// any operator connects, so that copy is false; the authenticated request then
+/// runs on the master's endpoint thread and flips only the master, which
+/// executes no PHP. Sampling therefore never reached the processes doing the
+/// work, and the ring stayed empty.
+///
+/// Called per request rather than once because "asked" can become true at any
+/// point in a worker's life. The cost when nobody asked is one relaxed load of
+/// a word already in the shared page.
+///
+/// # Safety
+/// Valid only after `elephc_probe_init` mapped the region; `arm_timer` is one
+/// `setitimer`, safe to call from any of the forked processes.
+unsafe fn observe_shared_ask() {
+    let region = REGION.load(Ordering::Relaxed);
+    if region == 0 {
+        return;
+    }
+    // Either source counts. The shared word carries an ask that arrived after
+    // this process forked; the local flag carries one it inherited from before,
+    // which still needs arming here because the fork reset this process's timer.
+    //
+    // Unless this process disarmed for an exec: the shared word still says the
+    // service was asked, so without this check one request between the disarm
+    // and the `execve` would re-arm the timer the disarm exists to remove.
+    if DISARMED_FOR_EXEC.load(Ordering::Relaxed) {
+        return;
+    }
+    let asked = ASKED.load(Ordering::Relaxed) || region_asked(region).load(Ordering::Acquire) != 0;
+    if !should_adopt_ask(ARMED_PID.load(Ordering::Relaxed), libc::getpid(), asked, region) {
+        return;
+    }
+    ASKED.store(true, Ordering::Relaxed);
+    arm_timer();
 }
 
 /// Returns the embedded build key, or `None` if unpublished.
@@ -748,8 +1068,15 @@ const QUERY_WINDOW_SECS: i64 = 300;
 ///
 /// Returns 1 when the value is authentic and current, 0 otherwise. Reached
 /// through a slot, so the web bridge needs no knowledge of this crate.
+///
+/// # Safety
+/// `ptr`/`len` must describe bytes valid for the duration of the call, or be
+/// `(null, 0)`. It builds a slice from them, so a wrong length reads out of
+/// bounds — which is why this is `unsafe`, like every other pointer-taking
+/// entry point in this crate. It was the one that was not, so a caller could
+/// produce that read through a safe API and nothing said so.
 #[no_mangle]
-pub extern "C" fn elephc_probe_verify_query(ptr: *const u8, len: usize) -> u32 {
+pub unsafe extern "C" fn elephc_probe_verify_query(ptr: *const u8, len: usize) -> u32 {
     if ptr.is_null() || len == 0 {
         return 0;
     }
@@ -822,6 +1149,53 @@ pub fn current_folded_profile() -> Option<String> {
     unsafe { folded_profile() }
 }
 
+/// How long the first sampled answer waits for collection to produce something.
+///
+/// Asking is what starts sampling, so the very first request necessarily arrives
+/// before any sample exists: the timer's first interval had not elapsed yet, and
+/// in `--web` the workers only adopt the ask on their next request. Answering
+/// immediately made that first command a deterministic sacrifice — it reported
+/// "no samples yet — is the process busy?" about a service that was busy, and
+/// the identical command a second later returned a full profile.
+///
+/// Bounded, and short enough that a genuinely idle service still answers
+/// promptly rather than appearing to hang.
+const SAMPLED_WARMUP: std::time::Duration = std::time::Duration::from_millis(400);
+/// Gap between checks inside that window; several sampling periods, so a busy
+/// process is noticed almost immediately without spinning.
+const SAMPLED_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// The sampled answer, giving freshly-started collection a bounded chance to
+/// produce its first samples.
+///
+/// Returns as soon as there is anything to report, so a service that has been
+/// sampling for a while pays nothing for this.
+pub fn sampled_answer() -> String {
+    let deadline = std::time::Instant::now() + SAMPLED_WARMUP;
+    loop {
+        // One relaxed load before deciding to fold. The common case inside this
+        // window is an empty ring, and folding an empty ring is not free: it
+        // rebuilds the sorted symbol table and reads every one of the 8192 slots
+        // to prove nothing is there. Polling every 10ms for 400ms did that up to
+        // forty times, on the endpoint thread of a live service, to answer "not
+        // yet". The head counter only grows, so a zero means no sample has ever
+        // been written and there is provably nothing to fold.
+        let taken = unsafe { region_head() }
+            .map(|head| head.load(Ordering::Relaxed))
+            .unwrap_or(0);
+        if taken > 0 {
+            let profile = current_folded_profile().unwrap_or_default();
+            if !profile.is_empty() {
+                return profile;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return current_folded_profile().unwrap_or_default();
+        }
+        std::thread::sleep(SAMPLED_POLL);
+    }
+}
+
 /// Disarms the timer and writes the folded profile to stderr: one
 /// `elephc-probe: root;...;leaf <count>` line per distinct stack — Brendan
 /// Gregg's folded format, flamegraph- and diff-friendly.
@@ -838,6 +1212,14 @@ pub unsafe extern "C" fn elephc_probe_dump() {
         return;
     }
     STOPPED.store(true, Ordering::Relaxed);
+    // Give up ownership of the timer as `elephc_probe_disarm` does. This runs at
+    // main's epilogue, so today the process is leaving and nothing will ask
+    // again — but the crate would otherwise hold two "stop" paths that disagree
+    // about who owns the timer, and the one that forgets is the one whose call
+    // site is decided by codegen. Moving this call anywhere but an exit would
+    // silently leave the process unable to arm again, which is a bug that would
+    // read as "sampling just stopped".
+    ARMED_PID.store(0, Ordering::Relaxed);
     let disarm = libc::itimerval {
         it_interval: libc::timeval { tv_sec: 0, tv_usec: 0 },
         it_value: libc::timeval { tv_sec: 0, tv_usec: 0 },
@@ -892,11 +1274,17 @@ unsafe fn folded_profile() -> Option<String> {
     for index in 0..available {
         // Acquire the depth gate before reading the PCs the handler stored; a
         // torn or in-flight slot with depth 0 is skipped.
+        // Read the sequence first: odd means a handler is inside this slot right
+        // now, so there is nothing settled to read.
+        let seq_word = region_word(base, index, SEQ_WORD);
+        let seq_before = seq_word.load(Ordering::Acquire);
+        if seq_before & 1 == 1 {
+            continue;
+        }
         let depth = (region_word(base, index, 0).load(Ordering::Acquire) as usize).min(MAX_FRAMES);
         if depth == 0 {
             continue;
         }
-        valid += 1;
         // Recorded leaf-first; fold root-first like every consumer expects. The
         // leaf (frame 0) is the interrupted PC; frames 1.. are RETURN addresses,
         // so bias them by -1 to land inside the calling instruction rather than
@@ -918,6 +1306,23 @@ unsafe fn folded_profile() -> Option<String> {
             stack.insert(0, route);
         }
         let allocs = region_word(base, index, 2).load(Ordering::Relaxed);
+        // Everything above came out of the slot; only now is it safe to say so.
+        // If the sequence moved while we read, a handler overwrote this slot
+        // underneath us and what we assembled is a stack that never ran — drop
+        // it rather than fold it.
+        //
+        // The FENCE is what holds the slot reads above this check. An `Acquire`
+        // load orders accesses that FOLLOW it, not ones that precede — so
+        // re-reading the sequence with `Acquire` and the body with `Relaxed`
+        // left the body free to be satisfied after the check, and a slot could
+        // be declared settled around a read that overlapped a write. The pairing
+        // is the mirror of the writer's: fence-then-check here, store-then-fence
+        // there.
+        std::sync::atomic::fence(Ordering::Acquire);
+        if !slot_was_settled(seq_before, seq_word.load(Ordering::Relaxed)) {
+            continue;
+        }
+        valid += 1;
         if allocs > 0 {
             *allocated.entry(stack.clone()).or_default() += allocs;
         }
@@ -1063,6 +1468,13 @@ mod tests {
     /// is queued and would hide the very thing being measured.
     #[test]
     fn the_capability_check_leaves_a_foreign_stream_intact() {
+        // Every test that reaches `control_fd_present` installs its socket on
+        // the same descriptor — fd 3 is the channel's whole address — so they
+        // must not run at once. Two of these three did not take the lock, and
+        // the suite failed intermittently with one test reading the bytes
+        // another had queued: "the check consumed 35 byte(s) of someone else's
+        // stream" is this race, not a defect in the check.
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         const PAYLOAD: &[u8] = b"HELLO-FROM-SUPERVISOR-PROTOCOL-DATA";
         unsafe {
             let mut fds = [0i32; 2];
@@ -1111,6 +1523,8 @@ mod tests {
     /// ...and it must still recognise the real thing, and consume its marker.
     #[test]
     fn the_capability_check_still_recognises_its_own_channel() {
+        // Same fd 3, same lock — see the sibling test above.
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let mut fds = [0i32; 2];
             assert_eq!(
@@ -1199,6 +1613,323 @@ mod tests {
         // At or past the sentinel start: runtime/libc territory.
         assert_eq!(symbolize(&symbols, 0x3000), "<native>");
         assert_eq!(symbolize(&symbols, 0x3001), "<native>");
+    }
+
+    /// The first sample establishes the baseline; it does not spend it.
+    ///
+    /// Sampled allocation attribution charges each sample the counter's growth
+    /// since the previous one. There is no previous one for the first sample,
+    /// and treating its absence as a reading of zero charged that sample every
+    /// allocation the process had made since it started. On the ordinary path —
+    /// a worker adopting an ask after hours of traffic — that is one fabricated
+    /// row larger than every real one put together.
+    #[test]
+    fn the_first_sample_charges_nothing_and_seeds_the_next() {
+        assert_eq!(
+            super::allocs_charged(super::NO_PREVIOUS_SAMPLE, 400_000_000),
+            0,
+            "the first sample must not be charged the whole process history"
+        );
+        // Zero is a real reading, not an absent one: a process that has
+        // allocated nothing must still measure intervals from it.
+        assert_eq!(super::allocs_charged(0, 12), 12);
+        assert_eq!(super::allocs_charged(100, 130), 30, "an ordinary interval");
+        assert_eq!(super::allocs_charged(130, 130), 0, "nothing allocated between them");
+        // The counter only grows; a smaller reading means it wrapped or was
+        // reset, and a wild delta is worse than none.
+        assert_eq!(super::allocs_charged(500, 4), 0);
+
+        // The wiring, not just the rule: half the fix is the sentinel, and
+        // re-seeding the static to 0 would leave every assertion above green
+        // while restoring the defect — the first sample would once more be
+        // charged the whole counter, because 0 is a reading and not an absence.
+        assert_eq!(
+            super::NO_PREVIOUS_SAMPLE,
+            u64::MAX,
+            "the sentinel must be outside the counter's range"
+        );
+        assert_eq!(
+            super::LAST_ALLOCS.load(super::Ordering::Relaxed),
+            super::NO_PREVIOUS_SAMPLE,
+            "the static must START at the sentinel, or the first sample spends \
+             the whole process history instead of establishing a baseline"
+        );
+    }
+
+    /// A disarm holds until someone asks again, and no longer than that.
+    ///
+    /// Two failures pull in opposite directions here, and the fix for one was the
+    /// other. Leaving the timer's owner set after a disarm meant a process could
+    /// never arm again, so a later ask reached a service that had silently
+    /// stopped sampling. Clearing the owner alone re-opened what disarming exists
+    /// to close: `observe_shared_ask` runs on every request and the shared word
+    /// still says the service was asked, so one request between the disarm and
+    /// the `execve` re-armed the timer, which then survived into an image whose
+    /// SIGPROF disposition is the default — "Profiling timer expired".
+    ///
+    /// The latch is what separates "stop until the exec" from "stop forever".
+    #[test]
+    fn a_disarm_blocks_arming_until_a_new_ask_arrives() {
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = DISARMED_FOR_EXEC.load(Ordering::Relaxed);
+
+        DISARMED_FOR_EXEC.store(true, Ordering::Relaxed);
+        assert!(
+            DISARMED_FOR_EXEC.load(Ordering::Relaxed),
+            "a disarm must latch, or a request re-arms before the exec"
+        );
+
+        // An explicit ask lifts it — the case where the exec was called off and
+        // an operator asks again. Only `begin_sampled` does this; a per-request
+        // adoption must not.
+        DISARMED_FOR_EXEC.store(false, Ordering::Relaxed);
+        assert!(!DISARMED_FOR_EXEC.load(Ordering::Relaxed));
+
+        DISARMED_FOR_EXEC.store(saved, Ordering::Relaxed);
+
+        // The source is the guarantee here: an executable test cannot arrange an
+        // `execve` race, so this reads the two call sites the same way the
+        // platform-refusal guard elsewhere in this repo reads its own ordering.
+        let source = include_str!("lib.rs");
+        let observe = source
+            .split_once("unsafe fn observe_shared_ask()")
+            .expect("the adoption path must exist")
+            .1;
+        let body = observe.split_once("\n}").expect("a function body").0;
+        assert!(
+            body.contains("DISARMED_FOR_EXEC.load"),
+            "the per-request adoption path must honour the latch"
+        );
+        let begin = source
+            .split_once("pub(crate) fn begin_sampled()")
+            .expect("the ask path must exist")
+            .1;
+        let begin_body = begin.split_once("\n}").expect("a function body").0;
+        assert!(
+            begin_body.contains("DISARMED_FOR_EXEC.store(false"),
+            "an explicit ask must lift the latch, or an aborted exec is permanent"
+        );
+    }
+
+    /// `folded_profile` really skips a slot a handler is inside.
+    ///
+    /// The truth table below pins the decision; this pins the WIRING, which is a
+    /// different claim. An audit pointed out that deleting every sequence line
+    /// from the handler and the reader would leave the truth-table test green —
+    /// it tests a pure function that nothing would then call. This one fails if
+    /// the reader stops consulting the sequence, because it hands the reader a
+    /// slot whose contents are perfectly good and whose sequence says a writer is
+    /// inside it.
+    #[test]
+    fn the_reader_skips_a_slot_whose_sequence_says_it_is_being_written() {
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let name = "hot_leaf";
+        // A trailing sentinel bounds the last function's range; without one every
+        // address in it resolves to `<native>`.
+        let end = "<end>";
+        let symbols = [
+            SymtabEntry {
+                address: 0x1000,
+                name_ptr: name.as_ptr() as u64,
+                name_len: name.len() as u64,
+            },
+            SymtabEntry {
+                address: 0x2000,
+                name_ptr: end.as_ptr() as u64,
+                name_len: end.len() as u64,
+            },
+        ];
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+
+        let saved_region = REGION.swap(base, Ordering::Relaxed);
+        let saved_ptr = TABLE_PTR.swap(symbols.as_ptr() as usize, Ordering::Relaxed);
+        let saved_len = TABLE_LEN.swap(symbols.len(), Ordering::Relaxed);
+        let saved_stopped = STOPPED.swap(false, Ordering::Relaxed);
+
+        let folded = unsafe {
+            // One complete sample in slot 0, published as settled.
+            let head = region_head().expect("mapped");
+            head.store(1, Ordering::Relaxed);
+            region_word(base, 0, 0).store(1, Ordering::Release);
+            region_word(base, 0, PC_WORD0).store(0x1000, Ordering::Relaxed);
+            region_word(base, 0, SEQ_WORD).store(slot_seq_settled(0), Ordering::Release);
+            let settled = folded_profile();
+
+            // The same slot, now marked as being written. Nothing else changes:
+            // the depth and the program counter are still perfectly readable, so
+            // a reader that ignores the sequence folds it exactly as before.
+            region_word(base, 0, SEQ_WORD).store(slot_seq_writing(0), Ordering::Release);
+            let mid_write = folded_profile();
+            (settled, mid_write)
+        };
+
+        REGION.store(saved_region, Ordering::Relaxed);
+        TABLE_PTR.store(saved_ptr, Ordering::Relaxed);
+        TABLE_LEN.store(saved_len, Ordering::Relaxed);
+        STOPPED.store(saved_stopped, Ordering::Relaxed);
+
+        let (settled, mid_write) = folded;
+        assert!(
+            settled.as_deref().unwrap_or_default().contains(name),
+            "a settled slot must fold: {settled:?}"
+        );
+        assert!(
+            !mid_write.as_deref().unwrap_or_default().contains(name),
+            "a slot a handler is inside must not fold, however readable it looks: {mid_write:?}"
+        );
+    }
+
+    /// Two writers a lap apart cannot agree on a settled value.
+    ///
+    /// This is the hole a plain seqlock leaves here: it assumes ONE writer per
+    /// slot, and this ring has two whenever a handler is frozen while the head
+    /// laps. Computing the closing value from the word's previous contents let
+    /// them converge — A reads 8 and will close at 10; B reads A's 9, closes at
+    /// 10 as well — so a reader saw one even value across a read that spanned
+    /// both writers and folded the tear. Deriving both values from the ticket,
+    /// which `head.fetch_add` makes unique, is what removes the coincidence.
+    #[test]
+    fn two_writers_a_lap_apart_cannot_close_on_the_same_value() {
+        let first = 4_u64;
+        let lapped = first + RING_SLOTS as u64;
+
+        // The interleaving that used to defeat it.
+        assert_ne!(
+            super::slot_seq_settled(first),
+            super::slot_seq_settled(lapped),
+            "two tickets for one slot must not settle on the same value"
+        );
+        assert!(super::slot_seq_writing(first) & 1 == 1, "writing is odd");
+        assert!(super::slot_seq_settled(first) & 1 == 0, "settled is even");
+
+        // A reader that spans both writers sees different values and discards.
+        assert!(!super::slot_was_settled(
+            super::slot_seq_settled(lapped),
+            super::slot_seq_settled(first)
+        ));
+        // And one writer's own slot reads as settled.
+        assert!(super::slot_was_settled(
+            super::slot_seq_settled(first),
+            super::slot_seq_settled(first)
+        ));
+    }
+
+    /// A slot is folded only when it held still for the whole read.
+    ///
+    /// The defect this closes is invisible until the ring wraps. Publishing
+    /// `depth` last is a correct gate while a slot is still zero, but the region
+    /// is zeroed once, and past `RING_SLOTS` samples every reused slot already
+    /// carries a non-zero depth from its previous lap. A reader that acquired
+    /// that stale depth read the slot mid-overwrite and folded a stack that
+    /// never ran — bounded, so never a bad access, and indistinguishable in the
+    /// output from a real one.
+    ///
+    /// Row 2 is the one that matters: the sequence moved between the reader's
+    /// two loads, which is exactly the overwrite the old gate could not see.
+    #[test]
+    fn a_slot_is_folded_only_when_no_handler_touched_it() {
+        assert!(super::slot_was_settled(8, 8), "settled and unchanged: fold it");
+        assert!(
+            !super::slot_was_settled(8, 10),
+            "a handler wrote the slot mid-read: the stack is two samples spliced"
+        );
+        assert!(
+            !super::slot_was_settled(9, 9),
+            "odd means a handler is inside the slot right now"
+        );
+        assert!(!super::slot_was_settled(9, 10), "odd, and it moved");
+        // A fresh slot in a zeroed region reads as settled, which is right: it
+        // holds no sample, and the depth gate is what skips it.
+        assert!(super::slot_was_settled(0, 0));
+        // The counter wraps like any other, and a wrap must not read as settled.
+        assert!(!super::slot_was_settled(u64::MAX - 1, 0));
+    }
+
+    /// A process arms when someone asked and the timer on record is not its own.
+    ///
+    /// Row 1 is the bug this exists for: asked, ring mapped, and the armed timer
+    /// belongs to another pid — a `--web` worker whose master authenticated a
+    /// client after the fork. The old behaviour had no such path: the worker read
+    /// the `ASKED` copy it inherited, found false, and stayed dormant while the
+    /// master armed itself and ran no PHP.
+    ///
+    /// Row 2 is the second, subtler half. `fork` copies `ARMED_PID` but RESETS
+    /// the child's interval timers, so a handler child forked from an already
+    /// sampling parent inherits "armed" while holding no timer. Keying on the pid
+    /// rather than on a bool is what makes it arm anyway — this is the row that
+    /// covers `--web-isolation=pool|request`, where PHP runs two forks deep.
+    #[test]
+    fn a_process_arms_when_the_timer_on_record_is_not_its_own() {
+        assert!(
+            should_adopt_ask(0, 42, true, 0x1000),
+            "asked, ring mapped, nobody armed yet: arm"
+        );
+        assert!(
+            should_adopt_ask(41, 42, true, 0x1000),
+            "the armed timer belongs to the parent; fork reset ours, so arm"
+        );
+        assert!(
+            !should_adopt_ask(42, 42, true, 0x1000),
+            "this process already armed: do not pay a setitimer per request"
+        );
+        assert!(
+            !should_adopt_ask(0, 42, false, 0x1000),
+            "nobody asked anywhere: stay dormant"
+        );
+        assert!(
+            !should_adopt_ask(0, 42, true, 0),
+            "no ring to fill: arming would signal a process with nowhere to record"
+        );
+    }
+
+    /// The shared ask word lives inside the mapping and overlaps no other area.
+    ///
+    /// It is appended after the event table, so both failures this guards against
+    /// are silent: a short `REGION_BYTES` would put it past the mapping, and an
+    /// offset computed one area early would have `begin_sampled` corrupt the last
+    /// route's I/O counters instead of publishing an ask.
+    #[test]
+    fn the_shared_ask_word_neither_escapes_the_region_nor_collides() {
+        let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+
+        unsafe {
+            // The address, not a neighbour's value: an earlier version of this
+            // test wrote a sentinel into the LAST event bucket and checked it
+            // survived, which an offset computed one area early sails past — it
+            // lands on the FIRST bucket. Asserting the offset itself is the only
+            // form that catches every miscomputation.
+            let asked = region_asked(base) as *const _ as usize;
+            assert_eq!(
+                asked - base,
+                RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES,
+                "the ask word sits immediately after the event table"
+            );
+
+            // And every event bucket really is on the other side of it.
+            for route_id in [0, 1, MAX_ROUTES] {
+                for word in 0..EVENT_WORDS {
+                    let event = event_word(base, route_id, word) as *const _ as usize;
+                    assert!(
+                        event + 8 <= asked,
+                        "event bucket {route_id}:{word} overlaps the ask word"
+                    );
+                }
+            }
+
+            let asked = region_asked(base);
+            assert_eq!(asked.load(Ordering::Acquire), 0, "starts unasked");
+            asked.store(1, Ordering::Release);
+            assert_eq!(asked.load(Ordering::Acquire), 1, "reads back what it wrote");
+        }
+
+        assert!(
+            RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES + CONTROL_BYTES <= REGION_BYTES,
+            "the control word must fit inside the mapped region"
+        );
     }
 
     /// Interns routes into a stand-in shared region and checks id stability,
@@ -1376,9 +2107,9 @@ mod tests {
             let hex: String = tag.iter().map(|b| format!("{b:02x}")).collect();
             format!("t={stamp},v={hex}")
         };
-        let check = |value: &str| {
-            elephc_probe_verify_query(value.as_ptr(), value.len()) == 1
-        };
+        // Safety: the slice comes from a live `&str` that outlives the call.
+        let check =
+            |value: &str| unsafe { elephc_probe_verify_query(value.as_ptr(), value.len()) } == 1;
 
         assert!(check(&sign(now)), "a fresh signature must be accepted");
 

@@ -35,7 +35,12 @@ pub const WANT_EXACT: u8 = b'E';
 /// An exact slice exists only once something runs, so on an idle service there
 /// is nothing to hand over. Bounded and answered rather than blocking: a caller
 /// that waits forever cannot tell a quiet process from a broken one.
-const EXACT_WAIT: Duration = Duration::from_secs(30);
+///
+/// Public because the client's read timeout has to outlast it. When the two were
+/// set independently the client gave up at 10s, so the documented 30-second
+/// no-traffic answer could not be received at all and a slice from a request
+/// completing after the tenth second was lost with it.
+pub const EXACT_WAIT: Duration = Duration::from_secs(30);
 
 extern "C" {
     /// Asks the instrumentation to hand back the next slice. Always linked
@@ -69,8 +74,18 @@ fn exact_slice() -> Option<String> {
             if written == 0 {
                 break;
             }
-            buffer.truncate(written.min(needed));
-            return String::from_utf8(buffer).ok();
+            if written <= needed {
+                buffer.truncate(written);
+                return String::from_utf8(buffer).ok();
+            }
+            // The slice grew between the peek and the take, so the take reported
+            // the NEW length and consumed nothing — `buffer` still holds the
+            // zeros it was allocated with. `truncate(written.min(needed))` then
+            // handed those zeros back as the profile, and a run of NUL bytes is
+            // valid UTF-8, so nothing downstream objected: the operator received
+            // an empty-looking capture instead of the request's slice, with the
+            // rendezvous still armed. Fall through to the sleep and ask again;
+            // the next peek reports the length the slice actually has now.
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -91,11 +106,23 @@ static EXACT_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// An empty body would be indistinguishable from a service that served no
 /// requests, which is the one thing an operator must not have to guess about.
 fn exact_answer() -> String {
-    let Ok(_turn) = EXACT_TURN.try_lock() else {
-        return "elephc-instr: note: another exact capture is in progress; \
-                only one runs at a time\n"
-            .to_string();
+    // A poisoned lock is not a capture in progress. `try_lock` returns `Err` for
+    // both, so one panic inside a capture made every later `--exact` answer
+    // "another capture is in progress" for the life of the process — a sentence
+    // that is false, and that an operator cannot act on because there is no
+    // other operator to wait for. The state this guards is a slot in shared
+    // memory that the rendezvous validates on its own, so recovering the guard
+    // is safe; only the mutex's opinion of a previous panic is discarded.
+    let turn = match EXACT_TURN.try_lock() {
+        Ok(turn) => turn,
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            return "elephc-instr: note: another exact capture is in progress; \
+                    only one runs at a time\n"
+                .to_string();
+        }
     };
+    let _turn = turn;
     match exact_slice() {
         Some(profile) if !profile.is_empty() => profile,
         _ => format!(
@@ -485,10 +512,22 @@ fn serve(path: &str) {
     // on THIS endpoint thread only. SIGPIPE is generated synchronously by the
     // faulting write, so with it blocked here the write returns EPIPE instead —
     // and the host's other threads keep their original SIGPIPE behavior.
+    //
+    // SIGPROF is blocked here for a different reason. `ITIMER_PROF` is delivered
+    // to the PROCESS, and the kernel picks any thread not blocking it — so once
+    // an operator asked for a sampled profile, the sampler's handler could
+    // interrupt this thread and the connection threads it spawns. Two costs, and
+    // the second is the serious one: the ring fills with the profiler's own
+    // plumbing (a stack walk of a handshake is not the program under study), and
+    // the handler runs on a thread that may be inside `malloc`, holding the
+    // pending-connection lock, or mid-`memcpy` of a profile. Blocking it here
+    // keeps sampling on the threads that run PHP, which is the only place it
+    // means anything. Handler threads inherit this mask.
     unsafe {
         let mut set: libc::sigset_t = std::mem::zeroed();
         libc::sigemptyset(&mut set);
         libc::sigaddset(&mut set, libc::SIGPIPE);
+        libc::sigaddset(&mut set, libc::SIGPROF);
         libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
     }
     // `host:port` listens on TCP so a service can be read from another machine;
@@ -679,7 +718,11 @@ fn handle<S: std::io::Read + std::io::Write>(
             // Asking for the sampled answer is what starts sampled collection.
             // A service that nobody has asked carries the ring and fills nothing.
             crate::begin_sampled();
-            crate::current_folded_profile().unwrap_or_default()
+            // Then give that collection a bounded moment to produce something.
+            // Reading the ring in the same breath as arming it meant the first
+            // command was always answered from an empty ring, however busy the
+            // service was.
+            crate::sampled_answer()
         }
     };
     let (k_enc, k_mac) = handshake::session_keys(&key, &nonce_c, &nonce_s, want);

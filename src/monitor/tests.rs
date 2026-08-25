@@ -476,6 +476,201 @@ Total number in stack (recursive counted multiple, when >=5):
         assert!(probe_alloc_summary("elephc-probe: a 1\n").is_empty());
     }
 
+    /// The client outlasts the server it is waiting on, in `--exact`.
+    ///
+    /// The two deadlines were written independently and disagreed: the client
+    /// gave up at 10s while the server held the connection for `EXACT_WAIT`, so
+    /// the documented no-traffic answer could never be received, and a slice from
+    /// a request completing after the tenth second was lost with it. Asserting
+    /// the relation rather than the number is the point — a later change to
+    /// either constant has to keep them ordered.
+    #[test]
+    fn the_exact_client_waits_longer_than_the_server_it_asks() {
+        let server = elephc_probe::endpoint::EXACT_WAIT;
+        assert!(
+            read_timeout(true) > server,
+            "exact client timeout {:?} must outlast the server's {:?}",
+            read_timeout(true),
+            server
+        );
+        // The sampled answer is rendered immediately, so it must NOT inherit the
+        // long deadline: a dead peer would hold the command for half a minute.
+        assert!(
+            read_timeout(false) < server,
+            "the sampled timeout should stay short"
+        );
+    }
+
+    /// A budget that is not a number is refused, not accepted as one.
+    ///
+    /// `f64::from_str` accepts "nan" and "inf", and either silently disables the
+    /// check it belongs to: every comparison against NaN is false, so an
+    /// assertion reports a failure it never measured, and `inf` with `<=` passes
+    /// whatever the program did. `--fail-on-regression nan` is the dangerous
+    /// one — a threshold a pipeline passes through a variable, arriving empty or
+    /// misspelled, leaves a gate that can never trip and a run that exits 0
+    /// through any regression.
+    #[test]
+    fn a_budget_that_is_not_a_number_is_refused() {
+        for bad in ["nan", "NaN", "inf", "-inf", "infinity"] {
+            assert!(
+                parse_assert(&format!("calls:build<={bad}")).is_none(),
+                "{bad} must not be accepted as a budget"
+            );
+            let argv = vec![
+                "app.php".to_string(),
+                "--fail-on-regression".to_string(),
+                bad.to_string(),
+            ];
+            assert!(
+                parse_monitor_args(&argv).is_err(),
+                "--fail-on-regression {bad} must be refused, not left un-trippable"
+            );
+        }
+        // Real thresholds keep working, including the boundary ones.
+        assert!(parse_assert("calls:build<=10").is_some());
+        assert!(parse_assert("time_pct:build<=0").is_some());
+        let argv = vec![
+            "app.php".to_string(),
+            "--fail-on-regression".to_string(),
+            "5.5".to_string(),
+        ];
+        assert!(parse_monitor_args(&argv).is_ok());
+    }
+
+    /// A gate a service target cannot run is refused, not silently skipped.
+    ///
+    /// `run_probe_host` reads `--exact`, `--out` and `--pprof` and nothing else,
+    /// so `--assert` or `--baseline` against a service was parsed, stored, and
+    /// never evaluated: the command exited 0 and the pipeline believed it had a
+    /// gate. The refusal that already existed for `--exact` plus the exporters
+    /// was written for this exact failure and covered only those flags.
+    ///
+    /// The second half matters as much as the first: the flags a service DOES
+    /// honour must keep working, or the fix trades a silent pass for a refusal
+    /// of legitimate use.
+    #[test]
+    fn a_budget_a_service_cannot_evaluate_is_refused() {
+        // Through the real parser rather than a hand-built struct, so the test
+        // breaks if a flag stops reaching the field it is checked on.
+        let flags = |extra: &[&str]| {
+            let mut argv = vec!["127.0.0.1:9411".to_string()];
+            argv.extend(extra.iter().map(|a| a.to_string()));
+            let cmd = parse_monitor_args(&argv).expect("these argv must parse");
+            unhonoured_service_flags(&cmd)
+        };
+
+        assert_eq!(flags(&[]), None, "a bare read of a service is fine");
+
+        assert_eq!(
+            flags(&["--assert", "calls:build<=10"]).as_deref(),
+            Some("--assert"),
+            "a budget must be named as unhonoured"
+        );
+
+        assert_eq!(
+            flags(&["--baseline", "base.json", "--fail-on-regression", "5"]).as_deref(),
+            Some("--baseline, --fail-on-regression"),
+            "every unhonoured flag is listed, so the message can name them all"
+        );
+
+        // The same budget by its other name. The first version of this refusal
+        // listed `--assert` and not `--assert-file`, so the very defect it was
+        // written to close stayed open through the second spelling.
+        assert_eq!(
+            flags(&["--assert-file", "budgets.elephc"]).as_deref(),
+            Some("--assert-file"),
+            "a budget file is a budget"
+        );
+
+        // Exports the service path does not write, and modes it cannot honour.
+        assert_eq!(flags(&["--dot", "g.dot"]).as_deref(), Some("--dot"));
+        assert_eq!(flags(&["--html", "g.html"]).as_deref(), Some("--html"));
+        assert_eq!(flags(&["--live"]).as_deref(), Some("--live"));
+
+        // The decider is only half of it: an audit pointed out that deleting the
+        // refusal from `run` leaves everything above green, because nothing here
+        // reaches the call site. The source is the guarantee — the routing branch
+        // must consult this before it hands the target to `run_probe_host`, and
+        // must do so with a non-zero exit, since the whole defect was exiting 0.
+        let routing = include_str!("mod.rs")
+            .split_once("if remote_target(&cmd.target).is_some() || is_socket_path(&cmd.target) {")
+            .expect("the service routing branch must exist")
+            .1;
+        // Split on the CALL, not the name: the comment above the refusal mentions
+        // `run_probe_host`, and splitting on the name cut the branch before the
+        // code it was meant to inspect.
+        let branch = routing
+            .split_once("return run_probe_host(")
+            .expect("the branch must reach the service reader")
+            .0;
+        assert!(
+            branch.contains("unhonoured_service_flags(&cmd)"),
+            "the refusal must run BEFORE the service is read, or the gate is decorative"
+        );
+        assert!(
+            branch.contains("return 2"),
+            "and it must exit non-zero: exiting 0 with no gate run is the defect itself"
+        );
+
+        // What the service path really does honour must stay accepted, or the
+        // fix trades a silent pass for a refusal of legitimate use.
+        assert_eq!(
+            flags(&["--exact"]),
+            None,
+            "--exact is read by run_probe_host and must not be refused here"
+        );
+        assert_eq!(
+            flags(&["--out", "out.json", "--pprof", "p.pb"]),
+            None,
+            "the exporters the sampled path writes must not be refused here"
+        );
+    }
+
+    /// A long non-ASCII function name shortens instead of killing the command.
+    ///
+    /// The two table renderers tested `name.len()` — bytes — and then sliced
+    /// `&name[..n]`. When byte `n` fell inside a multi-byte character, `str`
+    /// slicing panicked. The names come from the profiled program, so no hostile
+    /// peer was required: a closure declared in a file with an accented name
+    /// reaches it. The cases below place the accent exactly on the old cut point
+    /// for each of the two widths, which is what the byte version could not
+    /// survive.
+    #[test]
+    fn a_long_non_ascii_name_is_shortened_not_a_panic() {
+        // The regression itself: 26 characters but 27 BYTES, with the accent
+        // straddling byte 25. The old code compared bytes against the width, so
+        // it decided this needed shortening and sliced mid-character. It fits by
+        // the measure that matters — columns — so it comes back whole.
+        let fits_by_chars_not_bytes = format!("{}éx", "a".repeat(24));
+        assert_eq!(fits_by_chars_not_bytes.chars().count(), 26);
+        assert_eq!(fits_by_chars_not_bytes.len(), 27, "27 bytes is what fooled it");
+        assert_eq!(
+            ellipsize(&fits_by_chars_not_bytes, 26),
+            fits_by_chars_not_bytes,
+            "a name that fits the column must survive intact"
+        );
+
+        // Same shape at the other renderer's width.
+        let fits_at_24 = format!("{}éx", "b".repeat(22));
+        assert_eq!(ellipsize(&fits_at_24, 24), fits_at_24);
+
+        // Genuinely too long: shortened, and the result still fits the column.
+        let too_long = format!("{}é_traiter_les_données", "c".repeat(30));
+        let short = ellipsize(&too_long, 26);
+        assert!(short.ends_with('…'), "it must say it was shortened: {short:?}");
+        assert_eq!(short.chars().count(), 26, "shortened to the column width");
+
+        // Multi-byte throughout, and an emoji outside the BMP — the cut lands on
+        // a character boundary in both, which is the whole point.
+        assert_eq!(ellipsize(&"é".repeat(40), 5).chars().count(), 5);
+        assert_eq!(ellipsize(&"🦀".repeat(40), 5).chars().count(), 5);
+
+        // Short names are untouched, accents included.
+        assert_eq!(ellipsize("traiter_données", 26), "traiter_données");
+        assert_eq!(ellipsize("", 26), "");
+    }
+
     /// A path must never be read as a host, or a local socket silently becomes a
     /// network connection attempt — and the reverse would make `monitor host:port`
     /// try to open a file that does not exist.

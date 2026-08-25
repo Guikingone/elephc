@@ -45,6 +45,50 @@ pub(crate) use stitch::*;
 #[cfg(test)]
 mod tests;
 
+/// Names the flags a service target cannot honour, or `None` when none were given.
+///
+/// `run_probe_host` reads `--exact`, `--out` and `--pprof` and nothing else, so
+/// everything listed here was parsed, stored, and silently never evaluated. A
+/// budget handed to a service is the dangerous one: the command exited 0 and the
+/// pipeline believed a gate had run.
+///
+/// Lives here rather than in the argument parser because the parser cannot tell a
+/// service from a program — a socket target is recognised by asking the
+/// filesystem, not by its spelling.
+pub(crate) fn unhonoured_service_flags(cmd: &MonitorCommand) -> Option<String> {
+    let given: Vec<&str> = [
+        ("--assert", !cmd.asserts.is_empty()),
+        // The same budget, spelled as a file. Left out of the first version of
+        // this list, so the defect it was written to close — "a budget handed to
+        // a service was never evaluated" — stayed open through its other name.
+        ("--assert-file", cmd.assert_file.is_some()),
+        ("--baseline", cmd.baseline.is_some()),
+        ("--fail-on-regression", cmd.fail_on_regression.is_some()),
+        ("--save", cmd.save.is_some()),
+        ("--trace", cmd.trace.is_some()),
+        ("--prometheus", cmd.prom_out.is_some()),
+        ("--otlp", cmd.otlp.is_some()),
+        // Exports the service path does not write. `--out` and `--pprof` ARE
+        // written there and must stay off this list; these two are not, and the
+        // usage text advertised `--html` for a `host:port` target, so an
+        // operator following the help got an exit code and no file.
+        ("--dot", cmd.dot_out.is_some()),
+        ("--html", cmd.html_out.is_some()),
+        // Modes with no meaning against a service: it answers once, through its
+        // endpoint. Accepting them ran a one-shot read and called it success.
+        ("--live", cmd.live),
+        ("--serve", cmd.serve.is_some()),
+    ]
+    .iter()
+    .filter(|(_, given)| *given)
+    .map(|(name, _)| *name)
+    .collect();
+    if given.is_empty() {
+        return None;
+    }
+    Some(given.join(", "))
+}
+
 /// Runs the full capture-and-render pipeline; returns the process exit code.
 pub(crate) fn run(cmd: MonitorCommand) -> i32 {
     if !cmd.stitch.is_empty() {
@@ -71,6 +115,22 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
     // `monitor /home/me/shop.php` answered with a complaint about a missing build
     // key — an absolute path being the most ordinary thing a user can type.
     if remote_target(&cmd.target).is_some() || is_socket_path(&cmd.target) {
+        // Refuse the flags this path cannot honour, rather than accepting them
+        // and exiting 0. `run_probe_host` reads `--exact`, `--out` and `--pprof`
+        // and nothing else, so a budget or a baseline handed to a service was
+        // parsed, stored, and never evaluated — a CI gate that always passes.
+        // The existing `--exact` refusal below was written for exactly this
+        // failure ("this used to warn and exit 0, which told automation it had
+        // an artifact it did not have"); it covered the exporters and not these.
+        if let Some(unhonoured) = unhonoured_service_flags(&cmd) {
+            eprintln!(
+                "elephc monitor: {unhonoured} cannot be honoured against a running service: \
+                 that target answers with a profile, and nothing here evaluates a budget or \
+                 writes a baseline. Profile the program locally to use them, or drop them to \
+                 read the service."
+            );
+            return 2;
+        }
         let target = cmd.target.clone();
         return run_probe_host(&cmd, &target);
     }

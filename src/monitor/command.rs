@@ -262,11 +262,18 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
                 let value = it
                     .next()
                     .ok_or("--fail-on-regression needs a percentage-point threshold")?;
-                fail_on_regression = Some(
-                    value
-                        .parse()
-                        .map_err(|_| format!("invalid --fail-on-regression '{value}'"))?,
-                );
+                // Rejected here rather than let through as a number, because
+                // "nan" and "inf" parse: a NaN threshold makes every
+                // `growth > threshold` false, so the gate a pipeline believes it
+                // set never trips, and the run exits 0 through any regression.
+                // A parameterised threshold that arrives empty or misspelled is
+                // exactly how that happens.
+                let threshold: f64 = value
+                    .parse()
+                    .ok()
+                    .filter(|parsed: &f64| parsed.is_finite())
+                    .ok_or_else(|| format!("invalid --fail-on-regression '{value}'"))?;
+                fail_on_regression = Some(threshold);
             }
             other if other.starts_with('-') => {
                 return Err(format!("unknown monitor option '{other}'"));
@@ -351,6 +358,14 @@ pub(crate) fn parse_assert(spec: &str) -> Option<(String, String, String, f64)> 
             let fname = rest[..pos].trim();
             let value = rest[pos + op.len()..].trim();
             let value = value.parse::<f64>().ok()?;
+            // `f64::from_str` accepts "nan" and "inf", and a budget of either
+            // silently disables the assertion it belongs to: every comparison
+            // against NaN is false, so the check reports a failure it did not
+            // measure, and `inf` with `<=` passes whatever the program did.
+            // A budget has to be a number to be a budget.
+            if !value.is_finite() {
+                return None;
+            }
             if fname.is_empty() {
                 return None;
             }

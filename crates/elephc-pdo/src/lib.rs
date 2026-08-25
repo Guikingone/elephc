@@ -1260,8 +1260,14 @@ pub unsafe extern "C" fn elephc_pdo_exec(conn_id: i64, sql: *const c_char) -> i6
         // Every remaining arm is a driver call, so the dispatch is timed as a
         // whole rather than arm by arm: a driver added later is then covered by
         // construction, instead of silently reporting zero wait.
-        instr_io::timed(|| {
+        //
+        // The map lock is taken OUTSIDE that span, as on the SQLite path above:
+        // time spent acquiring it is not time the database spent, so billing it
+        // as I/O wait would inflate driver time with the bridge's own
+        // bookkeeping. The guard stays alive across the call — the connection is
+        // never taken out of the map, so no error path can strand it.
         let mut guard = lock_recover(conns());
+        instr_io::timed(|| {
         match guard.get_mut(&conn_id) {
             #[cfg(feature = "cubrid")]
             Some(Conn::Cubrid(c)) => match cstr_arg(sql) {
@@ -4011,6 +4017,30 @@ pub extern "C" fn elephc_pdo_clear_bindings(stmt_id: i64) -> i64 {
     })
 }
 
+/// Returns a statement to the map when it goes out of scope, panic or not.
+///
+/// The SQLite arm of `elephc_pdo_step` takes its statement OUT of the map so the
+/// driver call does not run under the map lock. The plain re-insert that followed
+/// that call never ran when `step` panicked: `ffi_guard` catches the unwind and
+/// returns `-1`, so the statement was gone from the map while PHP still held its
+/// id, and every later call on it answered "not found" for the life of the
+/// process — the underlying `sqlite3_stmt` finalized without PHP ever knowing.
+/// A drop guard runs on the unwind path too, which a trailing statement cannot.
+struct ReturnedStatement {
+    id: i64,
+    statement: Option<sqlite::SqliteStmt>,
+}
+
+impl Drop for ReturnedStatement {
+    /// Puts the statement back under the map lock, on the normal path and on the
+    /// unwind path alike.
+    fn drop(&mut self) {
+        if let Some(statement) = self.statement.take() {
+            lock_recover(stmts()).insert(self.id, Stmt::Sqlite(statement));
+        }
+    }
+}
+
 /// Advances the statement one row: `1` for a row, `0` when exhausted, `-1` on
 /// error — the same `-1` a caught panic degrades to (the client crates are the most
 /// likely source of an unexpected panic, and this is where they run).
@@ -4029,16 +4059,29 @@ pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
             }
         };
         if let Some(statement) = sqlite_statement {
+            // Held by a guard rather than re-inserted after the call: `step` runs
+            // outside the map lock on purpose, and a panic there is caught by
+            // `ffi_guard`, so a trailing re-insert is exactly the line that does
+            // not run when it matters.
+            let mut slot = ReturnedStatement {
+                id: stmt_id,
+                statement: Some(statement),
+            };
             // The step is where SQLite actually runs the query, so this is the
             // span that counts as I/O wait for the exact profiler.
-            let result = instr_io::timed(|| statement.step());
-            lock_recover(stmts()).insert(stmt_id, Stmt::Sqlite(statement));
-            return result;
+            return match slot.statement.as_mut() {
+                Some(statement) => instr_io::timed(|| statement.step()),
+                None => -1,
+            };
         }
         // As in exec: every remaining arm is a driver call, so the dispatch is
-        // timed as a whole and a driver added later is covered by construction.
-        instr_io::timed(|| {
+        // timed as a whole and a driver added later is covered by construction,
+        // and the statement-map lock is taken outside the timed span so lock time
+        // is not billed as I/O wait. Arms that also need a connection take that
+        // second lock inside the span; it is a different mutex, so this cannot
+        // deadlock, and holding it is genuine driver-call setup.
         let mut sguard = lock_recover(stmts());
+        instr_io::timed(|| {
         match sguard.get_mut(&stmt_id) {
             #[cfg(feature = "cubrid")]
             Some(Stmt::Cubrid(s)) => {
@@ -5603,6 +5646,92 @@ mod tests {
     /// promises for an unknown handle (`-1`/`0`/`"00000"`/…), which the prelude turns
     /// into a normal error. Pinned here directly, since forcing a real panic inside a
     /// specific extern is not reproducible from a test.
+    /// A statement taken out of the map comes back even when the step panics.
+    ///
+    /// `elephc_pdo_step` removes the SQLite statement so the driver call does not
+    /// run under the map lock, and used to re-insert it on the line after the
+    /// call. `ffi_guard` catches a panic from `step`, so that line never ran: the
+    /// id was gone from the map while PHP still held it, and every later call on
+    /// it answered "not found" for the rest of the process.
+    ///
+    /// Coverage splits in two, and only half of it is here: the NORMAL path is
+    /// already pinned by the in-memory SQLite round-trips below, which step and
+    /// then read columns and finalize — all of which fail if the statement was
+    /// not put back. The real `step` cannot be made to panic from a test, so the
+    /// PANIC path is pinned here as the property the fix rests on: a guard's
+    /// `Drop` runs while unwinding, a trailing statement does not.
+    #[test]
+    fn a_value_taken_out_of_a_map_is_put_back_when_the_body_panics() {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        static TABLE: Mutex<Option<HashMap<i64, &'static str>>> = Mutex::new(None);
+        *TABLE.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(HashMap::from([(7_i64, "stmt")]));
+
+        struct Returned(i64, Option<&'static str>);
+        impl Drop for Returned {
+            fn drop(&mut self) {
+                if let Some(value) = self.1.take() {
+                    if let Some(map) = TABLE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                        map.insert(self.0, value);
+                    }
+                }
+            }
+        }
+
+        let answer = ffi_guard(-1_i64, || -> i64 {
+            let taken = TABLE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_mut()
+                .and_then(|map| map.remove(&7))
+                .expect("the fixture inserted it");
+            let _slot = Returned(7, Some(taken));
+            // Stands in for a panic inside the driver's `step`.
+            panic!("the driver blew up mid-step");
+        });
+
+        assert_eq!(answer, -1, "the caught panic still degrades to the sentinel");
+
+        // The wiring, which the map above does not touch: `elephc_pdo_step` must
+        // hold its statement in a guard rather than re-inserting after the call,
+        // because the re-insert is the line a caught panic skips. An audit
+        // pointed out that this test builds its own map and its own guard, so
+        // deleting `ReturnedStatement` from the real function leaves it green.
+        // Reading the source is what closes that gap: an executable test cannot
+        // make the real SQLite `step` panic.
+        let source = include_str!("lib.rs");
+        let step = source
+            .split_once("pub extern \"C\" fn elephc_pdo_step(stmt_id: i64) -> i64 {")
+            .expect("the step entry point must exist")
+            .1;
+        let sqlite_arm = step
+            .split_once("// As in exec:")
+            .expect("the sqlite arm precedes the generic dispatch")
+            .0;
+        assert!(
+            sqlite_arm.contains("ReturnedStatement"),
+            "the statement must be held by a guard: a trailing re-insert is the \
+             line that does not run when the driver panics"
+        );
+        assert!(
+            !sqlite_arm.contains("lock_recover(stmts()).insert("),
+            "a trailing re-insert is exactly the shape the guard replaced"
+        );
+        let present = TABLE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|map| map.contains_key(&7))
+            .unwrap_or(false);
+        assert!(
+            present,
+            "the statement must be back in the map: without the guard its id is \
+             dead for the rest of the process while PHP still holds it"
+        );
+    }
+
     #[test]
     fn ffi_guard_converts_a_panic_into_the_documented_sentinel() {
         let minus_one = ffi_guard(-1_i64, || -> i64 {

@@ -23,26 +23,38 @@ changes is what you point it at:
 | a running service | `elephc monitor host:9411` | read through its endpoint, sampled or `--exact` |
 | a local socket | `elephc monitor /run/app.sock` | the same, on the same machine |
 
-All four measure the same way and report the same table: per-function calls,
-inclusive and self time, allocations, retained objects, queries and I/O wait.
-A profile taken on a laptop and one taken on a production host differ in what the
-program did, not in what the profiler could see.
+All four read the same instrumentation, but they do not all answer the same
+question, and which one you get depends on whether the command launches the
+program or connects to one already running.
 
-One distinction is worth knowing before you rely on it. A target this command
-LAUNCHES is measured for its whole run, and every export follows —
+A target this command **launches** — a source or a binary — is measured for its
+whole run and reports the full table: per-function calls, inclusive and self
+time, allocations, retained objects, queries and I/O wait. Every export follows:
 [Speedscope](https://www.speedscope.app), [pprof](https://github.com/google/pprof),
-Graphviz, the HTML call graph. A service already running answers through its
-endpoint, where the default is the sampler — always available, since a timer
-fills it — and `--exact` returns the exact table of the next request that
-completes. That exact remote answer is the table itself today; the exporters read
-the sampled capture, and the command says so rather than accepting a flag and
-writing nothing.
+Graphviz, the HTML call graph.
 
-That is the point of the design, and it is worth stating plainly: profiling in
-production is normally a *different tool* answering a *smaller question* — an
-approximation you learn to read differently from the exact numbers you get on a
-laptop. Here it is the same mechanism, so there is nothing to learn twice and
-nothing to reconcile.
+A service **already running** answers through its endpoint, and there the default
+is the sampler: folded stacks with their sample counts, plus allocations per
+stack. That is a statistical view of where CPU time goes, not a per-function
+table. `--exact` asks instead for the measured table of the next request that
+completes — the same numbers a launched run gives, scoped to one request. That
+exact remote answer is the table itself today; the exporters read the sampled
+capture, and the command says so rather than accepting a flag and writing
+nothing.
+
+So before you rely on the sampled answer, know what it does not carry: no
+per-function call counts, no retained objects, and — in a binary built with the
+combined `--with-monitoring` — no per-route query or I/O wait summary either,
+because the exact runtime claims those slots (there is a note on this near the
+end of this page). Ask for those with `--exact`, or with a signed
+`X-Elephc-Query` header.
+
+What *is* the same across all four is the mechanism. Profiling in production is
+normally a *different tool* answering a *smaller question*, an approximation you
+learn to read differently from the exact numbers you get on a laptop. Here the
+sampled and exact answers come from one instrumentation and agree with each
+other, so the smaller question is a narrower slice of the same picture rather
+than a second thing to reconcile.
 
 ## Building a program that can be profiled
 
@@ -467,9 +479,18 @@ elephc monitor host:9411 --key app.key           # sampled: what the process is 
 elephc monitor host:9411 --key app.key --exact   # exact: the next request that completes
 ```
 
-The **sampled** answer is always available — a timer fills a ring, so a process
-doing anything has something to hand over, and the ring is shared across every
-`--web` worker. The **exact** answer is the same measurement a local run gives:
+The **sampled** answer needs no request to complete: a timer fills a ring, so a
+process doing anything has something to hand over, and the ring is shared across
+every `--web` worker — including the pool and request isolation models, where
+PHP runs in a handler child rather than in the worker itself.
+
+It is not, however, instant. Collection starts when you first ask for it, so the
+very first answer on a service nobody had asked yet can be thin or empty — the
+timer has not fired since you asked. Ask again and it is there. This is the one
+place the sampler is not simply "already running": the alternative was a service
+that samples itself from boot whether or not anyone ever looks.
+
+The **exact** answer is the same measurement a local run gives:
 per-function calls, self and inclusive time, allocations, retained objects,
 queries and I/O wait, for one request. It exists only once a request completes,
 so `--exact` waits up to thirty seconds for the next one.
@@ -513,17 +534,20 @@ program a **control channel** — a socket on fd 3 — and possession of that ch
 is the credential: there is nothing to copy, leak, or replay, because it exists
 only for as long as the two processes are connected.
 
-`ELEPHC_PROBE_ADDR` does two things, and only one of them is obvious. It opens
-the endpoint — which still refuses everyone who cannot prove the build key, so
-that half is a deployment decision like binding a port. But it also **arms the
-sampler**, and a run started with it writes a profile to stderr at exit whether
-or not anyone ever connects. Measured, not inferred: a program run with the
-variable set prints `elephc-probe:` lines on its way out.
+`ELEPHC_PROBE_ADDR` does one thing: it opens the endpoint, which still refuses
+everyone who cannot prove the build key. That makes it a deployment decision like
+binding a port, and nothing more.
 
-So it is the one switch that turns collection on without a key. It cannot read
-anything back — that still takes the handshake — but if a stray profile on stderr
-would surprise you, do not set it and use `elephc monitor <binary>` instead, which
-asks over the control channel and leaves the environment alone.
+It does **not** start collection. Setting it costs what leaving it unset costs
+until a client proves the key and asks for the sampled answer; a service nobody
+has asked arms no timer, fills no ring, and prints nothing on its way out.
+
+This changed. Configuring an endpoint used to arm the sampler as a side effect,
+so a run started with the variable wrote a profile to stderr at exit whether or
+not anyone ever connected — a service that was merely *reachable* profiled and
+logged itself. Two words for one decision, and the wrong one by default. If you
+relied on that to get a profile out of a run without a key, launch it under
+`elephc monitor <binary>` instead, which asks over the control channel.
 
 If the address is a path and the bind fails, the program says so on stderr. The
 commonest cause is invisible otherwise: a `sockaddr_un` holds about 104 bytes, so

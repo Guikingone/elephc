@@ -46,6 +46,26 @@ pub(crate) fn remote_target(spec: &str) -> Option<RemoteTarget> {
     Some(RemoteTarget { host, port, tls })
 }
 
+/// How long the client waits on a socket read, by mode.
+///
+/// `--exact` asks the server to hold the connection until the next request
+/// completes, so the client must outlast the server's own `EXACT_WAIT` — derived
+/// from that constant rather than written out again, because the two drifting
+/// apart is the bug: a 10-second client against a 30-second server could not
+/// receive the documented no-traffic answer, and lost any slice from a request
+/// completing after the tenth second. The margin covers the round trip and the
+/// server's own rendering after its wait expires.
+///
+/// The sampled answer is produced immediately, so it keeps the short timeout: a
+/// dead peer should not hold the command for half a minute.
+pub(crate) fn read_timeout(exact: bool) -> std::time::Duration {
+    if exact {
+        elephc_probe::endpoint::EXACT_WAIT + std::time::Duration::from_secs(10)
+    } else {
+        std::time::Duration::from_secs(10)
+    }
+}
+
 /// A running service `monitor` can read, and how to reach it.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RemoteTarget {
@@ -69,8 +89,8 @@ impl RemoteTarget {
     /// without it, an attacker in the path answers the handshake and receives a
     /// profile — the shape of the code and the URLs it serves. Refusing an
     /// unverifiable certificate is therefore a hard failure, never a prompt.
-    fn connect(&self) -> Result<Box<dyn ReadWrite>, String> {
-        let timeout = std::time::Duration::from_secs(10);
+    fn connect(&self, exact: bool) -> Result<Box<dyn ReadWrite>, String> {
+        let timeout = read_timeout(exact);
         let tcp = std::net::TcpStream::connect(self.authority())
             .map_err(|error| format!("cannot reach {}: {error}", self.authority()))?;
         let _ = tcp.set_read_timeout(Some(timeout));
@@ -116,7 +136,7 @@ pub(crate) fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
     // which is what lets one command read a binary on this machine and a service
     // on another.
     let mut stream: Box<dyn ReadWrite> = match remote_target(socket) {
-        Some(target) => match target.connect() {
+        Some(target) => match target.connect(cmd.exact) {
             Ok(stream) => stream,
             Err(error) => {
                 eprintln!("elephc monitor: {error}");
@@ -124,7 +144,17 @@ pub(crate) fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
             }
         },
         None => match UnixStream::connect(socket) {
-            Ok(stream) => Box::new(stream),
+            Ok(stream) => {
+                // The same deadline the TCP path uses. Left unset, a local socket
+                // waited forever where a remote one gave up, so the same command
+                // against the same server had a different contract depending on
+                // the transport — and a wedged peer hung the command with no way
+                // to tell that from a quiet service.
+                let timeout = read_timeout(cmd.exact);
+                let _ = stream.set_read_timeout(Some(timeout));
+                let _ = stream.set_write_timeout(Some(timeout));
+                Box::new(stream)
+            }
             Err(error) => {
                 eprintln!("elephc monitor: cannot connect to probe at {socket}: {error}");
                 return 1;
@@ -193,7 +223,17 @@ pub(crate) fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
     }
     let display = folded_text_to_display(&folded);
     if display.is_empty() {
-        eprintln!("elephc monitor: the probe returned no samples yet — is the process busy?");
+        // "Collection has started" is a state of its own, not a synonym for
+        // "the process looks idle". Asking is what starts sampling, so the first
+        // command necessarily arrives before any sample exists; the server now
+        // waits briefly for one, and reaching here after that wait means either
+        // a genuinely quiet process or one that has only just begun. Saying so
+        // is the difference between a user retrying and a user concluding the
+        // profiler does not work.
+        eprintln!(
+            "elephc monitor: no samples yet. Collection starts when you first ask, so \
+             run the same command again — if it stays empty, the process is idle."
+        );
         return 1;
     }
     if let Some(out_path) = &cmd.out {

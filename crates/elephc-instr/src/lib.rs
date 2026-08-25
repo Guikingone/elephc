@@ -1647,22 +1647,72 @@ const CAPTURE_HEADER: usize = 16;
 /// bigger than this is refused rather than cut, since a truncated profile is
 /// indistinguishable from a complete one.
 const CAPTURE_BYTES: usize = 1 << 20;
-/// The three states of the rendezvous' `filled` word.
+/// The states of the rendezvous' `filled` word: `EMPTY`, `READY`, or the pid of
+/// the process currently writing the payload.
 ///
-/// `CLAIMED` exists so that "a slice is being written" is distinguishable from
-/// "a slice is here": with only the two states, the writer had to publish the
-/// slot before it could fill it, or fill a slot it had not reserved.
+/// A distinguishable "being written" state exists because with only two, a
+/// writer had to publish the slot before it could fill it, or fill a slot it had
+/// not reserved. It carries the claimer's PID rather than a flag because the
+/// identity has to be established by the SAME atomic that establishes the claim.
+/// A separate identity word could not: every offer wrote it before its CAS, so a
+/// racer that LOST still stamped, and the winner's slot named the loser. When the
+/// winner then died mid-copy the reclaimer asked the kernel about the loser —
+/// alive, so the slot wedged for the whole backstop; or dead, so a LIVE writer's
+/// slot was freed at once and a second writer copied over it. That is the exact
+/// corruption this state exists to prevent, reachable through the mechanism
+/// meant to prevent it. Winning the compare-exchange now IS writing one's name
+/// on the slot: there is no window between the two, because they are one store.
 const EMPTY: u32 = 0;
-const READY: u32 = 1;
-const CLAIMED: u32 = 2;
-/// How long a claim may stand before the worker that made it is presumed gone.
+/// A rendered slice is waiting. `u32::MAX` rather than a small number because
+/// every value that is not `EMPTY` or this one is a pid, and pid 1 is a real
+/// process — the main one, in a container.
+const READY: u32 = u32::MAX;
+
+/// How long a claim by a process that is still alive may stand before it is
+/// taken anyway.
 ///
-/// A claim is a memcpy of at most a mebibyte, so any claim this old belongs to a
-/// process that died holding it. Without this the slot would stay claimed for the
-/// life of the parent and no profile could ever be captured again — the arm used
-/// to clear it unconditionally, which healed that at the cost of corrupting a
-/// copy in progress.
-const STALE_CLAIM_SECS: u32 = 5;
+/// The pid check is the primary rule; this is the backstop for the one case it
+/// cannot cover — a dead worker's pid reused by an unrelated process, which
+/// would otherwise read as "still alive" forever and wedge the rendezvous. Far
+/// above any real claim, which spans a bounded `memcpy` of at most a mebibyte,
+/// so reaching it means the writer is not coming back whatever the pid says.
+const ABANDONED_CLAIM_SECS: u32 = 60;
+
+/// Whether `pid` still names a live process.
+///
+/// `kill(pid, 0)` sends no signal; it asks the kernel whether the process exists
+/// and whether we could signal it. `EPERM` means it exists and belongs to
+/// someone else, which for this question is still "alive" — only `ESRCH` says
+/// the process is gone. Erring toward alive is the safe direction: it leaves a
+/// slot claimed a little longer rather than handing it to a second writer.
+fn process_is_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Whether a claim may be taken from the process that made it.
+///
+/// Three rules, in order. A claimer we cannot identify falls back to the old
+/// timeout, which is what a slot claimed before this word existed carries. A
+/// claimer the kernel says is gone is taken at once — that is the recovery this
+/// exists for, and it no longer has to wait out a timeout. A claimer that is
+/// still there keeps its slot until `ABANDONED_CLAIM_SECS`, which is only
+/// reachable when its pid has been reused by something else.
+///
+/// Split out as a pure function because the interesting rows need a writer that
+/// is frozen, or dead, or a pid that has been reused — none of which a test can
+/// arrange against a live process.
+fn claim_may_be_taken(claimer_alive: bool, age_secs: u32) -> bool {
+    if !claimer_alive {
+        return true;
+    }
+    age_secs > ABANDONED_CLAIM_SECS
+}
 
 /// Wall-clock seconds, for deciding whether a claim was abandoned. Coarse on
 /// purpose: it is compared against five seconds, never used as a measurement.
@@ -1684,10 +1734,24 @@ fn release_stale_slice(filled: &AtomicU32, claimed_at: &AtomicU32) {
     {
         return;
     }
-    if filled.load(Ordering::Acquire) == CLAIMED {
+    let state = filled.load(Ordering::Acquire);
+    if state != EMPTY && state != READY {
+        // Anything else is the claimer's pid, written by the compare-exchange
+        // that made the claim, so it cannot name anyone but the process that
+        // actually holds the slot.
+        let claimer = state as i32;
         let age = wall_seconds().saturating_sub(claimed_at.load(Ordering::Relaxed));
-        if age > STALE_CLAIM_SECS {
-            let _ = filled.compare_exchange(CLAIMED, EMPTY, Ordering::AcqRel, Ordering::Relaxed);
+        // The timeout alone used to decide this, and it cannot: a writer frozen
+        // by a cgroup, a `SIGSTOP` or a paused VM is indistinguishable from a
+        // dead one, so its slot was handed to a second writer and both copied
+        // into the same payload. Ask the kernel whether the claimer is still
+        // there instead; the age only decides the case the pid cannot, which is
+        // a dead worker's pid reused by something else.
+        if claim_may_be_taken(process_is_alive(claimer), age) {
+            // Against `state`, not a constant: only the claim we judged may be
+            // released, so a claimer that finished and a successor that took the
+            // slot in the meantime are both left alone.
+            let _ = filled.compare_exchange(state, EMPTY, Ordering::AcqRel, Ordering::Relaxed);
         }
     }
 }
@@ -1701,6 +1765,14 @@ fn capture_word(index: usize) -> Option<&'static AtomicU32> {
     if base == 0 {
         return None;
     }
+    // The header is a fixed set of words and every caller passes a constant, so
+    // an out-of-range index is a coding error rather than a runtime condition —
+    // but it would read into the payload silently, and the words are addressed
+    // by bare integers. Growing the header once already made that a live risk.
+    debug_assert!(
+        index * 4 < CAPTURE_HEADER,
+        "header word {index} is past the {CAPTURE_HEADER}-byte header"
+    );
     // Safety: the mapping is at least CAPTURE_HEADER bytes, established once at
     // init and never unmapped, and `AtomicU32` has the layout of `u32`.
     Some(unsafe { &*((base + index * 4) as *const AtomicU32) })
@@ -1799,7 +1871,13 @@ pub unsafe extern "C" fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> 
     }
     let base = CAPTURE_REGION.load(Ordering::Relaxed);
     std::ptr::copy_nonoverlapping((base + CAPTURE_HEADER) as *const u8, out, len);
-    filled.store(EMPTY, Ordering::Relaxed);
+    // Release, not Relaxed: this store is what frees the payload for the next
+    // writer, and the writers are OTHER PROCESSES sharing this mapping. Relaxed
+    // does not order the copy above against it, so on a weakly ordered machine a
+    // worker could observe EMPTY, claim the slot, and start overwriting the bytes
+    // this call is still reading — a profile stitched from two slices, with
+    // nothing to detect it.
+    filled.store(EMPTY, Ordering::Release);
     armed.store(0, Ordering::Relaxed);
     len
 }
@@ -1836,15 +1914,34 @@ fn offer_capture(text: &str) -> bool {
     // a request while a capture is armed reaches here: testing `filled` and then
     // setting it let two of them pass the test and copy two profiles over each
     // other, which the reader then served as one — valid UTF-8 often enough to
-    // be believed. `CLAIMED` is the state between, and is not readable.
+    // be believed.
+    //
+    // Stamp the time BEFORE the claim, so a slot that reads as claimed always
+    // carries a time at least as fresh as its claim. Stamping after left a
+    // window: a claimer preempted in it published its claim over a stale time —
+    // zero on the first ever claim, the mapping being zeroed — and
+    // `release_stale_slice`, which the endpoint runs whenever an operator arms,
+    // judged that fresh claim ancient and handed the slot to a second writer.
+    //
+    // A loser of the race stamps a slightly later time onto the winner's claim,
+    // which only makes it look FRESHER — reclamation waits a moment longer. The
+    // dangerous direction, a live claim looking old, is the one this removes.
+    // Time is safe to publish this way precisely because it is monotonic;
+    // identity is not, which is why the pid rides inside the claim below rather
+    // than in a word of its own.
+    if let Some(claimed_at) = capture_word(3) {
+        claimed_at.store(wall_seconds(), Ordering::Relaxed);
+    }
+    // The claim and the claimer's name are ONE store. Winning this is what makes
+    // the slot ours, and it carries our pid in the same instant — so there is no
+    // interval in which the slot reads as claimed while naming somebody else,
+    // which is precisely what a separate identity word could not avoid.
+    let mine = std::process::id();
     if filled
-        .compare_exchange(EMPTY, CLAIMED, Ordering::AcqRel, Ordering::Relaxed)
+        .compare_exchange(EMPTY, mine, Ordering::AcqRel, Ordering::Relaxed)
         .is_err()
     {
         return false;
-    }
-    if let Some(claimed_at) = capture_word(3) {
-        claimed_at.store(wall_seconds(), Ordering::Relaxed);
     }
     // The question has its answer, so stop asking it of everything else still
     // running. Leaving it armed kept every later request paying for a slice that
@@ -1860,8 +1957,14 @@ fn offer_capture(text: &str) -> bool {
         // own mapping could not back, and the reader allocated that much and
         // copied it straight past the end of the region. A sentence fits, says
         // what happened, and is the size it claims to be.
+        // `note:`, like every other non-metric reason this crate publishes. Both
+        // readers recognise a reason by that prefix and drop anything else as a
+        // row they could not parse, so without it this sentence was discarded and
+        // the operator was told the generic "no slice arrived within the wait" —
+        // the one reason it was not. Three distinguishable outcomes, one of them
+        // silently collapsed into another.
         note = format!(
-            "elephc-instr: the exact profile is {} bytes, larger than the {} the \
+            "elephc-instr: note: the exact profile is {} bytes, larger than the {} the \
              rendezvous carries; profile a narrower slice\n",
             bytes.len(),
             CAPTURE_BYTES - CAPTURE_HEADER,
@@ -2164,6 +2267,155 @@ mod tests {
     /// It used to publish its true length and no bytes, so the reader — which
     /// allocates what it is told and asks again — copied that many bytes out of a
     /// one mebibyte mapping.
+    /// Claiming the slot and naming its claimer are one indivisible act.
+    ///
+    /// The identity used to live in a header word each offer wrote BEFORE its
+    /// compare-exchange, so a racer that lost still stamped and the winner's slot
+    /// named the loser. Both directions of that were wrong: a loser that was
+    /// alive wedged the slot for the whole backstop when the real writer died,
+    /// and a loser that had exited — a `--web-isolation=request` child does that
+    /// every request — freed a LIVE writer's slot instantly, which is the
+    /// corruption the claimed state exists to prevent, reached through the
+    /// machinery meant to prevent it.
+    ///
+    /// This pins the property that removes the window rather than narrowing it:
+    /// there is no instant at which the slot is claimed by anyone other than
+    /// whoever the word names, because becoming claimed and being named are the
+    /// same store.
+    #[test]
+    fn a_claim_names_its_claimer_because_they_are_one_store() {
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        reset_capture();
+        elephc_instr_capture_arm();
+
+        let filled = capture_word(1).expect("mapped");
+        assert_eq!(filled.load(Ordering::Acquire), EMPTY, "nothing claimed yet");
+
+        // A slot another process holds cannot be claimed, whatever its pid.
+        let other = std::process::id() + 1;
+        filled.store(other, Ordering::Release);
+        assert!(
+            !super::offer_capture("a second worker's profile"),
+            "a claimed slot must refuse a second writer"
+        );
+        assert_eq!(
+            filled.load(Ordering::Acquire),
+            other,
+            "and the refusal must leave the holder's name untouched"
+        );
+
+        // Released, our own offer claims it — and the payload is published, so
+        // the end state is READY rather than a lingering pid.
+        filled.store(EMPTY, Ordering::Release);
+        assert!(super::offer_capture("elephc-instr: probe calls=1 incl_ns=5\n"));
+        assert_eq!(
+            filled.load(Ordering::Acquire),
+            READY,
+            "a finished offer publishes the slice"
+        );
+
+        // READY is outside the pid space on purpose: pid 1 is a real process in
+        // a container, so a small sentinel would be indistinguishable from it.
+        assert_eq!(READY, u32::MAX);
+        assert!(EMPTY != READY);
+    }
+
+    /// A live writer keeps its slot; a dead one loses it at once.
+    ///
+    /// The rendezvous used to decide this on a five-second timeout alone, and a
+    /// timeout cannot tell a dead writer from a suspended one — a cgroup freeze,
+    /// a `SIGSTOP`, a paused VM and plain starvation all look like "took too
+    /// long". So a live writer's slot was handed to a second writer and both
+    /// copied into the same payload, which is the corruption `CLAIMED` exists to
+    /// prevent. Asking the kernel whether the claimer is still there turns that
+    /// guess into a question with an answer.
+    ///
+    /// Row 2 is the recovery this is for, and it is now immediate rather than
+    /// timeout-bound. Row 3 is the only case the pid cannot settle — a dead
+    /// worker's pid reused by an unrelated process — which the long backstop
+    /// covers so the rendezvous cannot wedge forever.
+    #[test]
+    fn a_claim_is_taken_from_the_dead_and_left_to_the_living() {
+        // Frozen mid-copy for a minute: still its slot. This is the row the old
+        // timeout got wrong.
+        assert!(
+            !super::claim_may_be_taken(true, 30),
+            "a live writer keeps its claim, however slow it is"
+        );
+        assert!(
+            super::claim_may_be_taken(false, 0),
+            "a dead writer's slot is free immediately, with no timeout to serve"
+        );
+        assert!(
+            super::claim_may_be_taken(true, super::ABANDONED_CLAIM_SECS + 1),
+            "past the backstop the slot is taken anyway: the pid was reused"
+        );
+        // There is no "unknown claimer" row any more: the claim IS the pid, so a
+        // slot that is claimed at all names the process holding it.
+    }
+
+    /// `process_is_alive` answers about this process and about no process.
+    ///
+    /// Only the two ends are testable: a test cannot hold a pid that is
+    /// reliably dead and unreused, and must not signal an unrelated one.
+    #[test]
+    fn liveness_recognises_this_process_and_rejects_a_non_pid() {
+        assert!(
+            super::process_is_alive(std::process::id() as i32),
+            "the running test is alive by any definition"
+        );
+        assert!(!super::process_is_alive(0), "0 is not a pid this asks about");
+        assert!(!super::process_is_alive(-1), "nor is a negative, which kill() reads as a group");
+    }
+
+    /// A take that cannot fit reports the length and consumes NOTHING.
+    ///
+    /// This is the contract the endpoint's reader leans on. It peeks the length,
+    /// allocates that much, and takes; if the published length has grown in
+    /// between, the take reports the new one and leaves the slice in place. The
+    /// reader used to `truncate(written.min(needed))` and return the buffer
+    /// regardless — which in that case is the zeros it was allocated with, and a
+    /// run of NUL bytes is valid UTF-8, so it was served as the profile. The
+    /// reader now retries instead, and that only works if the slice really is
+    /// still there afterwards, which is what this pins.
+    ///
+    /// A length that moves while the slot reads READY takes a misbehaving or
+    /// corrupted header — the region is shared and writable, which is why the
+    /// take validates rather than trusts it. This is hardening, not a path a
+    /// well-behaved writer reaches.
+    #[test]
+    fn a_take_that_does_not_fit_leaves_the_slice_where_it_was() {
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        reset_capture();
+        elephc_instr_capture_arm();
+
+        let slice = "elephc-instr: probe calls=1 incl_ns=5\n";
+        assert!(super::offer_capture(slice), "an armed capture refused a slice");
+
+        let needed = unsafe { elephc_instr_capture_take(std::ptr::null_mut(), 0) };
+        assert_eq!(needed, slice.len(), "the peek reports the slice's length");
+
+        // Ask with one byte less than the slice needs, the shape a reader whose
+        // peek is now out of date presents.
+        let mut small = vec![0u8; needed - 1];
+        let written = unsafe { elephc_instr_capture_take(small.as_mut_ptr(), needed - 1) };
+        assert_eq!(written, needed, "it reports what the slice actually needs");
+        assert!(
+            small.iter().all(|byte| *byte == 0),
+            "nothing may be copied into a buffer that cannot hold the slice"
+        );
+
+        // And the slice survived, so the retry the reader now performs finds it.
+        let mut big = vec![0u8; needed];
+        let written = unsafe { elephc_instr_capture_take(big.as_mut_ptr(), needed) };
+        assert_eq!(written, needed);
+        assert_eq!(
+            String::from_utf8(big).expect("the slice is text"),
+            slice,
+            "the retry must get the slice itself, not a buffer of zeros"
+        );
+    }
+
     #[test]
     fn a_profile_too_large_to_carry_does_not_publish_a_length_it_cannot_back() {
         let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
@@ -2187,6 +2439,15 @@ mod tests {
         assert!(
             text.contains("larger than"),
             "the reader got no explanation, only silence: {text:?}"
+        );
+        // The framing, not just the sentence. Both readers recognise a reason by
+        // this prefix and drop everything else as an unparseable metric row, so a
+        // correct explanation without it never reaches the operator: they were
+        // told "no slice arrived within the wait", the one reason it was not.
+        // Asserting only `contains("larger than")` is what let that ship.
+        assert!(
+            text.starts_with("elephc-instr: note: "),
+            "the explanation must carry the prefix the readers strip: {text:?}"
         );
     }
 
@@ -2240,8 +2501,10 @@ mod tests {
         reset_capture();
         elephc_instr_capture_arm();
 
-        // A worker has claimed the slot and is still copying into it.
-        capture_word(1).expect("mapped").store(CLAIMED, Ordering::Relaxed);
+        // A worker has claimed the slot and is still copying into it. A claim IS
+        // the claimer's pid now, so this stands in for another worker's.
+        let other_worker = std::process::id() + 1;
+        capture_word(1).expect("mapped").store(other_worker, Ordering::Relaxed);
 
         assert!(
             !super::offer_capture("a second worker's profile"),
