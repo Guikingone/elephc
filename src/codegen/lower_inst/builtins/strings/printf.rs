@@ -305,19 +305,50 @@ pub(super) fn pack_static_sprintf_arg(
     value: ValueId,
     owner: &str,
 ) -> Result<()> {
-    if matches!(
-        ctx.raw_value_php_type(value)?.codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ) {
-        load_value_to_first_int_arg(ctx, value)?;
-        abi::emit_call_label(ctx.emitter, "__rt_sprintf_pack_mixed");
-        return pack_sprintf_prepacked_arg(ctx);
+    match ctx.raw_value_php_type(value)?.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_sprintf_pack_mixed");
+            return pack_sprintf_prepacked_arg(ctx);
+        }
+        PhpType::TaggedScalar => {
+            return pack_sprintf_tagged_scalar_arg(ctx, value, owner);
+        }
+        _ => {}
     }
     let ty = ctx.load_value_to_result(value)?.codegen_repr();
     match ctx.emitter.target.arch {
         Arch::AArch64 => pack_sprintf_arg_aarch64(ctx, &ty, owner),
         Arch::X86_64 => pack_sprintf_arg_x86_64(ctx, &ty, owner),
     }
+}
+
+/// Packs a default-mode nullable integer without discarding either its payload or null tag.
+///
+/// `TaggedScalar` is an inline `{payload, tag}` pair, not a boxed Mixed pointer. A non-null
+/// value becomes a normal integer record; null becomes the same zero-length string record used
+/// for statically known null so `%s` renders `""` while numeric conversions render zero.
+fn pack_sprintf_tagged_scalar_arg(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    owner: &str,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    let null_label = ctx.next_label("sprintf_tagged_scalar_null");
+    let done_label = ctx.next_label("sprintf_tagged_scalar_done");
+    crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &null_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => pack_sprintf_arg_aarch64(ctx, &PhpType::Int, owner)?,
+        Arch::X86_64 => pack_sprintf_arg_x86_64(ctx, &PhpType::Int, owner)?,
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => pack_sprintf_arg_aarch64(ctx, &PhpType::Void, owner)?,
+        Arch::X86_64 => pack_sprintf_arg_x86_64(ctx, &PhpType::Void, owner)?,
+    }
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Pushes a 16-byte record whose payload and tag words a helper already built.

@@ -292,6 +292,105 @@ echo "|n=" . $n;
     assert_eq!(out, "[x=42]|n=6");
 }
 
+/// A runtime format must defer non-scalar Mixed coercion until the conversion character is
+/// known. This covers every heap/native tag that previously fell through as a raw pointer or
+/// handle: arrays, objects, resources, and callable descriptors.
+#[test]
+fn test_sprintf_runtime_format_preserves_non_scalar_mixed_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+class SprintfLabel {
+    public function __toString(): string { return "OBJ"; }
+}
+function format_mixed(string $format, mixed $value): string {
+    return sprintf($format, $value);
+}
+$nonempty = [7];
+$empty = [];
+$object = new SprintfLabel();
+$resource = fopen("php://temp", "w+");
+$callable = fn(): int => 1;
+echo format_mixed("%s", $nonempty), "|", format_mixed("%d", $nonempty), "|", format_mixed("%f", $nonempty), "|";
+echo format_mixed("%d", $empty), "|", format_mixed("%f", $empty), "|";
+echo format_mixed("[x=%8s]", $object), "|", format_mixed("%d", $object), "|", format_mixed("%f", $object), "|";
+echo format_mixed("%s", $resource), "|", format_mixed("%d", $resource), "|", format_mixed("%f", $resource), "|";
+echo format_mixed("%d", $callable), "|", format_mixed("%f", $callable);
+"#,
+    );
+    let parts = out.split('|').collect::<Vec<_>>();
+    assert_eq!(
+        &parts[..8],
+        &["Array", "1", "1.000000", "0", "0.000000", "[x=     OBJ]", "1", "1.000000"]
+    );
+    let resource_id = parts[8]
+        .strip_prefix("Resource id #")
+        .unwrap_or_else(|| panic!("unexpected resource rendering: {}", parts[8]));
+    assert_eq!(parts[9], resource_id);
+    assert_eq!(parts[10], format!("{resource_id}.000000"));
+    assert_eq!(&parts[11..], &["1", "1.000000"]);
+}
+
+/// A callable under a dynamic `%s` conversion must fail in a controlled way instead of
+/// formatting its descriptor address as a decimal integer.
+#[test]
+fn test_sprintf_runtime_format_rejects_non_stringable_callable_without_pointer_output() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+function format_mixed(string $format, mixed $value): string {
+    return sprintf($format, $value);
+}
+$callable = fn(): int => 1;
+echo format_mixed("%s", $callable);
+"#,
+    );
+    assert!(
+        err.contains("Object could not be converted to string"),
+        "{err}"
+    );
+}
+
+/// The array-backed bridge shares the same deferred non-scalar records as direct sprintf;
+/// object, array, resource, and callable elements must therefore retain identical semantics.
+#[test]
+fn test_vsprintf_preserves_non_scalar_mixed_records() {
+    let out = compile_and_run(
+        r#"<?php
+class VsprintfLabel {
+    public function __toString(): string { return "VOBJ"; }
+}
+$object = new VsprintfLabel();
+$array = [7];
+$resource = fopen("php://temp", "w+");
+$callable = fn(): int => 1;
+echo vsprintf("[v=%s]", [$object, 0]), "|";
+echo vsprintf("%d", [$array, 0]), "|";
+echo vsprintf("%s", [$resource, 0]), "|", vsprintf("%d", [$resource, 0]), "|";
+echo vsprintf("%d", [$callable, 0]);
+"#,
+    );
+    let parts = out.split('|').collect::<Vec<_>>();
+    assert_eq!(&parts[..2], &["[v=VOBJ]", "1"]);
+    let resource_id = parts[2]
+        .strip_prefix("Resource id #")
+        .unwrap_or_else(|| panic!("unexpected resource rendering: {}", parts[2]));
+    assert_eq!(parts[3], resource_id);
+    assert_eq!(parts[4], "1");
+}
+
+/// Nullable integers use a two-word `TaggedScalar` under the default null representation;
+/// runtime formats must keep 42 and distinguish null for `%s`/`%d`.
+#[test]
+fn test_sprintf_runtime_format_preserves_default_tagged_nullable_int() {
+    let source = r#"<?php
+function format_nullable(string $format, ?int $value): string {
+    return sprintf($format, $value);
+}
+echo format_nullable("%d", 42), "|", format_nullable("%s", 42), "|";
+echo format_nullable("%d", null), "|[", format_nullable("%s", null), "]";
+"#;
+    assert_eq!(compile_and_run_tagged(source), "42|42|0|[]");
+}
+
 // --- printf-family memory safety and PHP conversion parity ---
 
 /// A field width wider than the per-conversion scratch buffer must produce padding bytes

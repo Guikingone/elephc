@@ -219,6 +219,9 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_md5` | MD5 hash | `x1`/`x2` | `x1`/`x2` |
 | `__rt_sha1` | SHA1 hash | `x1`/`x2` | `x1`/`x2` |
 | `__rt_sprintf` | Format string | format + args on stack | `x1`/`x2` |
+| `__rt_sprintf_pack_mixed` | Pack a boxed scalar or preserve a boxed non-scalar for deferred formatting | boxed `Mixed` in `x0` | record payload/tag in `x0`/`x1` |
+| `__rt_sprintf_mixed_to_int` | Apply PHP numeric formatting rules to a boxed array, object, callable, or resource | boxed `Mixed` in `x0` | `x0` |
+| `__rt_sprintf_mixed_to_string` | Render a boxed array/resource or dispatch an object's `__toString()` | boxed `Mixed` in `x0` | `x1`/`x2` (null pair when non-stringable) |
 | `__rt_base64_encode` | Base64 encode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_base64_decode` | Base64 decode (php-src semantics, `$strict` in `x3`) | `x1`/`x2`/`x3` | `x0` ok flag + `x1`/`x2` |
 | `__rt_quoted_printable_encode` | MIME quoted-printable encode | `x1`/`x2` | `x1`/`x2` |

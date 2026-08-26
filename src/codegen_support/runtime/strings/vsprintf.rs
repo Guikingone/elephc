@@ -12,7 +12,7 @@
 //!
 //! Key details:
 //! - Record tags match `__rt_sprintf`: int=0, string=1|(len<<8), float=2,
-//!   bool=3. Records are pushed in reverse element order so element 0 lands at
+//!   bool=3, deferred boxed Mixed=7. Records are pushed in reverse element order so element 0 lands at
 //!   the lowest address (the first argument), as `__rt_sprintf` expects.
 //! - The arguments array is read by its runtime value_type (kind word at
 //!   `[arr-8]`, bits 8..14): a Mixed array (7) holds boxed-cell pointers that
@@ -94,8 +94,8 @@ pub fn emit_vsprintf(emitter: &mut Emitter) {
     // This ladder used to live here inline. It now lives once, in `__rt_sprintf_pack_mixed`,
     // because `sprintf()` needs exactly the same conversion for a Mixed operand whose format
     // string is not a compile-time literal — and a second hand-written copy of an assembly
-    // ladder is a copy that drifts. Loop state lives in memory off `x29`, and the helper is a
-    // leaf that touches neither, so calling it from inside the loop is safe.
+    // ladder is a copy that drifts. Loop state lives in memory off `x29`, and the helper owns
+    // its own ABI-aligned frame, so calling it from inside the loop is safe.
     //
     // One behaviour changes with the move: a cell holding PHP null now packs as a ZERO-LENGTH
     // STRING rather than falling into the "anything else → integer" arm, which used to hand

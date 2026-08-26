@@ -164,6 +164,12 @@ pub(crate) const SPRINTF_ARGCOUNT_MSG: &str =
 /// `snprintf` (that would expose `%n` and friends), so it reports PHP's `ValueError` instead.
 pub(crate) const SPRINTF_UNKNOWN_SPEC_MSG: &str =
     "Fatal error: Uncaught ValueError: Unknown format specifier\n";
+/// Fatal error message when `%s` receives a boxed object/callable that has no dynamic
+/// `__toString()` target. The runtime formatter cannot name the concrete class without
+/// allocating a diagnostic buffer, so it uses the same generic wording as the existing
+/// boxed-Mixed string-context fallback.
+pub(crate) const SPRINTF_MIXED_STRING_MSG: &str =
+    "Fatal error: Object could not be converted to string\n";
 /// Catchable `\ValueError` message when `hash()` receives an unknown algorithm name.
 pub(crate) const HASH_UNKNOWN_ALGO_MSG: &str =
     "hash(): Argument #1 ($algo) must be a valid hashing algorithm";
