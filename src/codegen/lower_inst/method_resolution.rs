@@ -96,7 +96,6 @@ pub(super) fn emit_dynamic_instance_method_call(ctx: &mut FunctionContext<'_>, s
     abi::emit_call_reg(ctx.emitter, dispatch_reg);
 }
 
-/// Returns true when the current EIR module includes the target class method body.
 /// Publishes the line of a call INTO a synthesized builtin class, for the exceptions it raises.
 ///
 /// php reports the CALL SITE for an exception an internal method throws, because the `new` lives
@@ -122,6 +121,14 @@ pub(super) fn publish_internal_call_line(
     let reg = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_load_int_immediate(ctx.emitter, reg, i64::from(span.line));
     abi::emit_store_reg_to_symbol(ctx.emitter, reg, "_rt_internal_call_line", 0);
+    // The same line, in the form a WARNING wants. `publish_diagnostic_location` only fires for an
+    // instruction whose effects admit `MAY_WARN`, and a call into one of these classes may not:
+    // the refinement pass unions the summaries of every class the receiver could hold and drops
+    // the whole answer when one of them has none, leaving the lowering's own effects — which do
+    // not mention warnings. MEASURED, `(new ArrayIterator([1]))->offsetGet(7)` raised
+    // `Undefined array key 7` with NO ` in FILE on line N` at all, while the `ArrayObject`
+    // spelling of the same call, whose summary did resolve, named its line correctly.
+    crate::codegen::lower_inst::publish_diagnostic_line(ctx, span.line);
 }
 
 /// Reports whether this class's method bodies were SYNTHESIZED rather than written by the user.
@@ -135,6 +142,7 @@ fn class_bodies_are_synthetic(ctx: &FunctionContext<'_>, class_name: &str) -> bo
     })
 }
 
+/// Returns true when the current EIR module includes the target class method body.
 pub(super) fn class_method_already_emitted(
     ctx: &FunctionContext<'_>,
     class_name: &str,
