@@ -54,21 +54,24 @@ pub(super) const CONV_SCRATCH_CAP: u32 = 512;
 /// - `x0`: number of packed variadic argument records pushed by the caller
 /// - `x1`: format string pointer
 /// - `x2`: format string byte length
+/// - `x3`: optional persistent eval context for eval-declared `__toString()` dispatch
 /// - `[sp]` of the caller: `x0` records of 16 bytes, `[payload, tag]`, first argument lowest
 ///
 /// # Output (AArch64)
 /// - `x1`: result pointer inside `_concat_buf`
 /// - `x2`: result byte length
 ///
-/// The record tag word is `0` for int, `1 | (len << 8)` for string, `2` for float and
-/// `3` for bool, and `7` for a deferred boxed `Mixed`; the helper consults it so a conversion
-/// never dereferences a payload that is not a string pointer. `_concat_off` is advanced by the
-/// result length and the caller's `arg_count * 16` bytes of records are popped before returning.
+/// The record tag word is `0` for int, `1 | (len << 8)` for string, `2` for float, `3` for
+/// bool, `7` for a deferred boxed `Mixed`, and `4`/`5`/`6`/`9`/`10`/`11` for raw indexed-array,
+/// associative-array, object, resource, callable, or erased-iterable payloads. The helper
+/// consults it so a conversion never dereferences a payload that is not a string pointer.
+/// `_concat_off` is advanced by the result length and the caller's `arg_count * 16` bytes of
+/// records are popped before returning.
 ///
 /// Callee-saved registers used: `x19` = format cursor, `x20` = remaining format bytes,
 /// `x21` = next sequential argument index, `x22` = argument record base, `x23` = write
 /// cursor in `_concat_buf`, `x24` = result start, `x25` = `_concat_off` address,
-/// `x26` = argument count.
+/// `x26` = argument count, `x27` = optional eval context.
 pub fn emit_sprintf(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_sprintf_linux_x86_64(emitter);
@@ -82,7 +85,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     // Frame layout (704 bytes). Every stp/ldp offset stays inside the ±504 scaled
     // immediate range, so the saved register pairs live at the bottom of the frame:
     //   sp+0..7     = first variadic slot for snprintf (Apple AArch64 needs it at sp)
-    //   sp+8..15    = padding that keeps the variadic slot 16-byte aligned
+    //   sp+8..15    = saved x27 (optional eval context)
     //   sp+16..31   = saved x29, x30
     //   sp+32..95   = saved x19..x26
     //   sp+96..103  = parsed field width
@@ -105,11 +108,13 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("stp x21, x22, [sp, #48]");                             // save x21, x22
     emitter.instruction("stp x23, x24, [sp, #64]");                             // save x23, x24
     emitter.instruction("stp x25, x26, [sp, #80]");                             // save x25, x26
+    emitter.instruction("str x27, [sp, #8]");                                   // preserve the caller's callee-saved register
 
     // -- initialize state in callee-saved registers --
     emitter.instruction("mov x19, x1");                                         // format cursor
     emitter.instruction("mov x20, x2");                                         // remaining format bytes
     emitter.instruction("mov x26, x0");                                         // packed argument record count
+    emitter.instruction("mov x27, x3");                                         // optional eval context for dynamic Stringable dispatch
     emitter.instruction("mov x21, #0");                                         // next sequential argument index
     emitter.instruction("add x22, sp, #704");                                   // argument record base (just past this frame)
 
@@ -122,6 +127,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x9, #{}", CONCAT_BUF_CAP));               // total concat-buffer capacity in bytes
     emitter.instruction("add x9, x7, x9");                                      // one-past-the-end address of the concat buffer
     emitter.instruction("str x9, [sp, #144]");                                  // publish the hard write limit for every copy below
+    emitter.instruction("str xzr, [sp, #152]");                                // no formatter-owned temporary string is live
 
     // ================================================================
     // MAIN SCAN LOOP: literal bytes are copied, '%' starts a specifier
@@ -184,6 +190,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("ldp x21, x22, [sp, #48]");                             // restore x21, x22
     emitter.instruction("ldp x23, x24, [sp, #64]");                             // restore x23, x24
     emitter.instruction("ldp x25, x26, [sp, #80]");                             // restore x25, x26
+    emitter.instruction("ldr x27, [sp, #8]");                                   // restore the caller's eval-context register
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #704");                                    // release the sprintf helper frame
     emitter.instruction("add sp, sp, x0");                                      // pop the caller's packed argument records
@@ -414,9 +421,16 @@ fn emit_conversion_dispatch(emitter: &mut Emitter) {
 /// record carrying another tag is rendered numerically instead of being dereferenced.
 fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_t_str");
+    emitter.instruction("str xzr, [sp, #152]");                                // this conversion owns no temporary string yet
     emitter.instruction("and x5, x4, #255");                                    // isolate the record type tag
-    emitter.instruction("cmp x5, #7");                                          // is this a deferred boxed Mixed operand?
-    emitter.instruction("b.eq __rt_sprintf_str_mixed");                         // coerce it only now that %s is known
+    emit_branch_if_deferred_tag(emitter, "x5", "__rt_sprintf_str_mixed");
+    emitter.instruction("cmp x5, #3");                                          // boolean record?
+    emitter.instruction("b.ne __rt_sprintf_str_not_bool");                      // no → ordinary string/numeric dispatch
+    emitter.instruction("cbnz x3, __rt_sprintf_str_num");                       // true renders as integer one
+    emitter.instruction("mov x3, #0");                                          // false renders as the empty string
+    emitter.instruction("mov x4, #0");                                          // zero output bytes
+    emitter.instruction("b __rt_sprintf_str_ptr");                              // apply width/precision to the empty body
+    emitter.label("__rt_sprintf_str_not_bool");
     emitter.instruction("cmp x5, #1");                                          // is this record actually a string?
     emitter.instruction("b.ne __rt_sprintf_str_num");                           // no → render the payload as a number
     emitter.instruction("lsr x4, x4, #8");                                      // string byte length lives above the tag
@@ -450,13 +464,23 @@ fn emit_string_conversion(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_concat_buf");
     emitter.instruction("sub x10, x23, x9");                                    // publish bytes already written before a nested __toString call
     emitter.instruction("str x10, [x25]");                                      // make nested concat users start after the partial sprintf result
-    emitter.instruction("mov x0, x3");                                          // pass the preserved boxed Mixed record payload
+    emitter.instruction("mov x0, x5");                                          // pass the deferred record tag
+    emitter.instruction("mov x1, x3");                                          // pass the preserved record payload
+    emitter.instruction("mov x2, x27");                                         // pass the optional eval context
     emitter.instruction("bl __rt_sprintf_mixed_to_string");                     // apply array/resource/object string semantics
     emitter.instruction("cbz x1, __rt_sprintf_mfatal");                         // callable/non-stringable objects take a controlled fatal
+    emitter.instruction("str x0, [sp, #152]");                                  // release an owned stabilized result after copying
     emitter.instruction("mov x3, x1");                                          // replace the record payload with the coerced string pointer
-    emitter.instruction("lsl x4, x2, #8");                                      // pack the coerced string byte length above the tag
-    emitter.instruction("orr x4, x4, #1");                                      // rebuild the record as a normal string operand
-    emitter.instruction("b __rt_sprintf_t_str");                                // reuse precision, padding, and copy handling
+    emitter.instruction("mov x4, x2");                                          // coerced string byte length
+    emitter.instruction("b __rt_sprintf_str_ptr");                              // reuse precision, padding, and copy handling
+}
+
+/// Branches when an AArch64 sprintf record tag denotes deferred non-scalar coercion.
+fn emit_branch_if_deferred_tag(emitter: &mut Emitter, tag_reg: &str, label: &str) {
+    for tag in [4, 5, 6, 7, 9, 10, 11] {
+        emitter.instruction(&format!("cmp {tag_reg}, #{tag}"));
+        emitter.instruction(&format!("b.eq {label}"));
+    }
 }
 
 /// Emits the AArch64 `%b` conversion body, which libc has no portable equivalent for.
@@ -507,8 +531,7 @@ fn emit_char_conversion(emitter: &mut Emitter) {
 fn emit_integer_conversion(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_t_int");
     emitter.instruction("and x5, x4, #255");                                    // isolate the record type tag
-    emitter.instruction("cmp x5, #7");                                          // is this a deferred boxed Mixed operand?
-    emitter.instruction("b.eq __rt_sprintf_int_mixed");                         // apply PHP's non-scalar numeric cast first
+    emit_branch_if_deferred_tag(emitter, "x5", "__rt_sprintf_int_mixed");
     emitter.instruction("cmp x5, #1");                                          // is the payload a string pointer?
     emitter.instruction("b.eq __rt_sprintf_int_str");                           // yes → parse it instead of printing the pointer
     emitter.instruction("cmp x5, #2");                                          // is the payload a double?
@@ -531,7 +554,8 @@ fn emit_integer_conversion(emitter: &mut Emitter) {
     emitter.instruction("mov x3, #0");                                          // a null string operand formats as zero
     emitter.instruction("b __rt_sprintf_int_ready");                            // join the ordinary integer formatting path
     emitter.label("__rt_sprintf_int_mixed");
-    emitter.instruction("mov x0, x3");                                          // pass the preserved boxed Mixed record payload
+    emitter.instruction("mov x0, x5");                                          // pass the deferred record tag
+    emitter.instruction("mov x1, x3");                                          // pass the preserved record payload
     emitter.instruction("bl __rt_sprintf_mixed_to_int");                        // arrays/objects/callables/resources cast without pointer leakage
     emitter.instruction("mov x3, x0");                                          // use the normalized PHP integer as the operand
     emitter.label("__rt_sprintf_int_ready");
@@ -584,8 +608,7 @@ fn emit_integer_conversion(emitter: &mut Emitter) {
 fn emit_float_conversion(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_t_flt");
     emitter.instruction("and x5, x4, #255");                                    // isolate the record type tag
-    emitter.instruction("cmp x5, #7");                                          // is this a deferred boxed Mixed operand?
-    emitter.instruction("b.eq __rt_sprintf_flt_mixed");                         // apply PHP's non-scalar numeric cast first
+    emit_branch_if_deferred_tag(emitter, "x5", "__rt_sprintf_flt_mixed");
     emitter.instruction("cmp x5, #2");                                          // is the payload already a double?
     emitter.instruction("b.eq __rt_sprintf_flt_bits");                          // yes → use its bit pattern directly
     emitter.instruction("cmp x5, #1");                                          // is the payload a string pointer?
@@ -609,7 +632,8 @@ fn emit_float_conversion(emitter: &mut Emitter) {
     emitter.instruction("mov x3, #0");                                          // a null string operand formats as zero
     emitter.instruction("b __rt_sprintf_flt_bits");                             // join the ordinary floating formatting path
     emitter.label("__rt_sprintf_flt_mixed");
-    emitter.instruction("mov x0, x3");                                          // pass the preserved boxed Mixed record payload
+    emitter.instruction("mov x0, x5");                                          // pass the deferred record tag
+    emitter.instruction("mov x1, x3");                                          // pass the preserved record payload
     emitter.instruction("bl __rt_sprintf_mixed_to_int");                        // non-scalars share PHP's zero/one/resource-id numeric cast
     emitter.instruction("scvtf d0, x0");                                        // widen the normalized integer to a PHP float operand
     emitter.instruction("fmov x3, d0");                                         // keep the double bits in the record payload register
@@ -831,7 +855,7 @@ fn emit_pad_and_copy(emitter: &mut Emitter) {
     emitter.instruction("sub x11, x11, #1");                                    // one padding byte fewer to write
     emitter.instruction("b __rt_sprintf_emit_pad");                             // keep padding
     emitter.label("__rt_sprintf_emit_copy");
-    emitter.instruction("cbz x4, __rt_sprintf_loop");                           // body copied → scan the next format byte
+    emitter.instruction("cbz x4, __rt_sprintf_emit_done");                      // body copied → release any temporary owner
     emitter.instruction("ldrb w13, [x3], #1");                                  // load the next body byte
     emitter.instruction("strb w13, [x23], #1");                                 // emit the body byte
     emitter.instruction("sub x4, x4, #1");                                      // one body byte fewer to copy
@@ -843,10 +867,16 @@ fn emit_pad_and_copy(emitter: &mut Emitter) {
     emitter.instruction("sub x4, x4, #1");                                      // one body byte fewer to copy
     emitter.instruction("b __rt_sprintf_emit_left");                            // keep copying
     emitter.label("__rt_sprintf_emit_lpad");
-    emitter.instruction("cbz x11, __rt_sprintf_loop");                          // padding written → scan the next format byte
+    emitter.instruction("cbz x11, __rt_sprintf_emit_done");                     // padding written → release any temporary owner
     emitter.instruction("strb w9, [x23], #1");                                  // emit one trailing padding byte
     emitter.instruction("sub x11, x11, #1");                                    // one padding byte fewer to write
     emitter.instruction("b __rt_sprintf_emit_lpad");                            // keep padding
+    emitter.label("__rt_sprintf_emit_done");
+    emitter.instruction("ldr x0, [sp, #152]");                                  // formatter-owned string produced by __toString, if any
+    emitter.instruction("cbz x0, __rt_sprintf_loop");                           // borrowed/numeric bodies need no cleanup
+    emitter.instruction("str xzr, [sp, #152]");                                // prevent stale ownership from crossing conversions
+    emitter.instruction("bl __rt_heap_free_safe");                             // release only after every output byte was copied
+    emitter.instruction("b __rt_sprintf_loop");                                // scan the next format byte
 }
 
 /// Emits the AArch64 controlled-fatal exits for invalid widths/specifiers/argument counts,

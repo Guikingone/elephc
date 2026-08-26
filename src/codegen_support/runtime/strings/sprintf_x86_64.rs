@@ -36,6 +36,7 @@ use super::sprintf::{CONCAT_BUF_CAP, CONV_SCRATCH_CAP};
 ///
 /// # Register contract on entry
 /// - `rdi`: number of packed variadic argument records pushed by the caller
+/// - `rsi`: optional persistent eval context for eval-declared `__toString()` dispatch
 /// - `rax`: format string pointer
 /// - `rdx`: format string byte length
 /// - caller stack above the return address: `rdi` records of 16 bytes, `[payload, tag]`
@@ -44,10 +45,12 @@ use super::sprintf::{CONCAT_BUF_CAP, CONV_SCRATCH_CAP};
 /// - `rax`: result pointer inside `_concat_buf`
 /// - `rdx`: result byte length
 ///
-/// The record tag word is `0` for int, `1 | (len << 8)` for string, `2` for float, `3`
-/// for bool, and `7` for a deferred boxed `Mixed`; the helper consults it so a conversion
-/// never dereferences a payload that is not a string pointer. `_concat_off` is advanced by
-/// the result length and the caller's tagged records are discarded before `ret`.
+/// The record tag word is `0` for int, `1 | (len << 8)` for string, `2` for float, `3` for
+/// bool, `7` for a deferred boxed `Mixed`, and `4`/`5`/`6`/`9`/`10`/`11` for raw indexed-array,
+/// associative-array, object, resource, callable, or erased-iterable payloads. The helper
+/// consults it so a conversion never dereferences a payload that is not a string pointer.
+/// `_concat_off` is advanced by the result length and the caller's tagged records are discarded
+/// before `ret`.
 ///
 /// Callee-saved registers used: `rbx` = write cursor in `_concat_buf`, `r12` = format
 /// cursor, `r13` = remaining format bytes, `r14` = next sequential argument index,
@@ -69,6 +72,8 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp-104]            = parsed conversion character
     //   [rbp-112]            = parsed argument number (0 = next sequential argument)
     //   [rbp-120]            = one-past-the-end address of _concat_buf
+    //   [rbp-680]            = optional eval context
+    //   [rbp-688]            = formatter-owned temporary string
     //   [rbp-160 .. rbp-129] = mini C format string built by this helper
     //   [rbp-672 .. rbp-161] = snprintf conversion scratch (CONV_SCRATCH_CAP bytes)
 
@@ -79,12 +84,14 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r13");                                            // preserve the remaining-format-length register
     emitter.instruction("push r14");                                            // preserve the sequential-argument-index register
     emitter.instruction("push r15");                                            // preserve the argument-record base register
-    emitter.instruction("sub rsp, 632");                                        // reserve the parse slots, mini format buffer and conversion scratch
+    emitter.instruction("sub rsp, 648");                                        // reserve parse slots, conversion scratch, and formatter state
     emitter.instruction("mov r12, rax");                                        // format cursor
     emitter.instruction("mov r13, rdx");                                        // remaining format bytes
     emitter.instruction("xor r14d, r14d");                                      // next sequential argument index
     emitter.instruction("lea r15, [rbp + 16]");                                 // argument records begin above the saved return address
     emitter.instruction("mov QWORD PTR [rbp - 64], rdi");                       // remember how many records the caller pushed
+    emitter.instruction("mov QWORD PTR [rbp - 680], rsi");                      // preserve optional eval context for Stringable dispatch
+    emitter.instruction("mov QWORD PTR [rbp - 688], 0");                        // no formatter-owned temporary string is live
     abi::emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // current concat-buffer write offset
     abi::emit_symbol_address(emitter, "rcx", "_concat_buf");
@@ -152,7 +159,7 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], rbx");                            // publish the exact new write offset without double-counting
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // packed argument record count
     emitter.instruction("shl rcx, 4");                                          // records are 16 bytes each
-    emitter.instruction("add rsp, 632");                                        // release the local buffers
+    emitter.instruction("add rsp, 648");                                        // release local buffers and formatter state
     emitter.instruction("pop r15");                                             // restore the argument-record base register
     emitter.instruction("pop r14");                                             // restore the sequential-argument-index register
     emitter.instruction("pop r13");                                             // restore the remaining-format-length register
@@ -387,10 +394,18 @@ fn emit_conversion_dispatch(emitter: &mut Emitter) {
 /// carrying another tag is rendered numerically instead of being dereferenced.
 fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_t_str_x64");
+    emitter.instruction("mov QWORD PTR [rbp - 688], 0");                        // this conversion owns no temporary string yet
     emitter.instruction("mov rax, r11");                                        // copy the record tag word
     emitter.instruction("and rax, 255");                                        // isolate the record type tag
-    emitter.instruction("cmp rax, 7");                                          // is this a deferred boxed Mixed operand?
-    emitter.instruction("je __rt_sprintf_str_mixed_x64");                       // coerce it only now that %s is known
+    emit_branch_if_deferred_tag(emitter, "rax", "__rt_sprintf_str_mixed_x64");
+    emitter.instruction("cmp rax, 3");                                          // boolean record?
+    emitter.instruction("jne __rt_sprintf_str_not_bool_x64");                   // no → ordinary dispatch
+    emitter.instruction("test r10, r10");                                       // true or false?
+    emitter.instruction("jnz __rt_sprintf_str_num_x64");                        // true renders as integer one
+    emitter.instruction("xor r10d, r10d");                                      // false string pointer
+    emitter.instruction("xor r11d, r11d");                                      // false renders zero bytes
+    emitter.instruction("jmp __rt_sprintf_str_ptr_x64");                        // apply width/precision to empty body
+    emitter.label("__rt_sprintf_str_not_bool_x64");
     emitter.instruction("cmp rax, 1");                                          // is this record actually a string?
     emitter.instruction("jne __rt_sprintf_str_num_x64");                        // no → render the payload as a number
     emitter.instruction("shr r11, 8");                                          // string byte length lives above the tag
@@ -426,15 +441,25 @@ fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.instruction("sub rax, r9");                                         // compute bytes already written before nested __toString
     emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // reload the address of the global concat offset
     emitter.instruction("mov QWORD PTR [r9], rax");                             // make nested concat users start after the partial result
-    emitter.instruction("mov rdi, r10");                                        // pass the preserved boxed Mixed record payload
+    emitter.instruction("mov rdi, r11");                                        // recover the deferred record metadata
+    emitter.instruction("and rdi, 255");                                        // pass only its low-byte tag
+    emitter.instruction("mov rsi, r10");                                        // pass the preserved record payload
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 680]");                      // pass the optional eval context
     emitter.instruction("call __rt_sprintf_mixed_to_string");                   // apply array/resource/object string semantics
     emitter.instruction("test rax, rax");                                       // did the dynamic value expose a string conversion?
     emitter.instruction("jz __rt_sprintf_mfatal_x64");                          // callable/non-stringable objects take a controlled fatal
+    emitter.instruction("mov QWORD PTR [rbp - 688], rcx");                      // release an owned stabilized result after copying
     emitter.instruction("mov r10, rax");                                        // replace the record payload with the coerced string pointer
     emitter.instruction("mov r11, rdx");                                        // copy the coerced string byte length
-    emitter.instruction("shl r11, 8");                                          // pack the string byte length above the tag
-    emitter.instruction("or r11, 1");                                           // rebuild the record as a normal string operand
-    emitter.instruction("jmp __rt_sprintf_t_str_x64");                          // reuse precision, padding, and copy handling
+    emitter.instruction("jmp __rt_sprintf_str_ptr_x64");                        // reuse precision, padding, and copy handling
+}
+
+/// Branches when an x86_64 sprintf record tag denotes deferred non-scalar coercion.
+fn emit_branch_if_deferred_tag(emitter: &mut Emitter, tag_reg: &str, label: &str) {
+    for tag in [4, 5, 6, 7, 9, 10, 11] {
+        emitter.instruction(&format!("cmp {tag_reg}, {tag}"));
+        emitter.instruction(&format!("je {label}"));
+    }
 }
 
 /// Emits the x86_64 `%b` conversion body, which libc has no portable equivalent for.
@@ -487,8 +512,7 @@ fn emit_integer_conversion(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_t_int_x64");
     emitter.instruction("mov rax, r11");                                        // copy the record tag word
     emitter.instruction("and rax, 255");                                        // isolate the record type tag
-    emitter.instruction("cmp rax, 7");                                          // is this a deferred boxed Mixed operand?
-    emitter.instruction("je __rt_sprintf_int_mixed_x64");                       // apply PHP's non-scalar numeric cast first
+    emit_branch_if_deferred_tag(emitter, "rax", "__rt_sprintf_int_mixed_x64");
     emitter.instruction("cmp rax, 1");                                          // is the payload a string pointer?
     emitter.instruction("je __rt_sprintf_int_str_x64");                         // yes → parse it instead of printing the pointer
     emitter.instruction("cmp rax, 2");                                          // is the payload a double?
@@ -513,7 +537,8 @@ fn emit_integer_conversion(emitter: &mut Emitter) {
     emitter.instruction("xor r10d, r10d");                                      // a null string operand formats as zero
     emitter.instruction("jmp __rt_sprintf_int_ready_x64");                      // join the ordinary integer formatting path
     emitter.label("__rt_sprintf_int_mixed_x64");
-    emitter.instruction("mov rdi, r10");                                        // pass the preserved boxed Mixed record payload
+    emitter.instruction("mov rdi, rax");                                        // pass the deferred record tag
+    emitter.instruction("mov rsi, r10");                                        // pass the preserved record payload
     emitter.instruction("call __rt_sprintf_mixed_to_int");                      // arrays/objects/callables/resources cast without pointer leakage
     emitter.instruction("mov r10, rax");                                        // use the normalized PHP integer as the operand
     emitter.label("__rt_sprintf_int_ready_x64");
@@ -569,8 +594,7 @@ fn emit_float_conversion(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_t_flt_x64");
     emitter.instruction("mov rax, r11");                                        // copy the record tag word
     emitter.instruction("and rax, 255");                                        // isolate the record type tag
-    emitter.instruction("cmp rax, 7");                                          // is this a deferred boxed Mixed operand?
-    emitter.instruction("je __rt_sprintf_flt_mixed_x64");                       // apply PHP's non-scalar numeric cast first
+    emit_branch_if_deferred_tag(emitter, "rax", "__rt_sprintf_flt_mixed_x64");
     emitter.instruction("cmp rax, 2");                                          // is the payload already a double?
     emitter.instruction("je __rt_sprintf_flt_bits_x64");                        // yes → use its bit pattern directly
     emitter.instruction("cmp rax, 1");                                          // is the payload a string pointer?
@@ -596,7 +620,8 @@ fn emit_float_conversion(emitter: &mut Emitter) {
     emitter.instruction("xor r10d, r10d");                                      // a null string operand formats as zero
     emitter.instruction("jmp __rt_sprintf_flt_bits_x64");                       // join the ordinary floating formatting path
     emitter.label("__rt_sprintf_flt_mixed_x64");
-    emitter.instruction("mov rdi, r10");                                        // pass the preserved boxed Mixed record payload
+    emitter.instruction("mov rdi, rax");                                        // pass the deferred record tag
+    emitter.instruction("mov rsi, r10");                                        // pass the preserved record payload
     emitter.instruction("call __rt_sprintf_mixed_to_int");                      // non-scalars share PHP's zero/one/resource-id numeric cast
     emitter.instruction("cvtsi2sd xmm0, rax");                                  // widen the normalized integer to a PHP float operand
     emitter.instruction("movq r10, xmm0");                                      // keep the double bits in the record payload register
@@ -836,7 +861,7 @@ fn emit_pad_and_copy(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_sprintf_emit_pad_x64");                       // keep padding
     emitter.label("__rt_sprintf_emit_copy_x64");
     emitter.instruction("test r11, r11");                                       // any body bytes left?
-    emitter.instruction("jz __rt_sprintf_loop_x64");                            // no → scan the next format byte
+    emitter.instruction("jz __rt_sprintf_emit_done_x64");                       // no → release any temporary owner
     emitter.instruction("movzx r8d, BYTE PTR [r10]");                           // load the next body byte
     emitter.instruction("mov BYTE PTR [rbx], r8b");                             // emit the body byte
     emitter.instruction("add r10, 1");                                          // advance the body cursor
@@ -854,11 +879,18 @@ fn emit_pad_and_copy(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_sprintf_emit_left_x64");                      // keep copying
     emitter.label("__rt_sprintf_emit_lpad_x64");
     emitter.instruction("test rcx, rcx");                                       // any trailing padding left?
-    emitter.instruction("jz __rt_sprintf_loop_x64");                            // no → scan the next format byte
+    emitter.instruction("jz __rt_sprintf_emit_done_x64");                       // no → release any temporary owner
     emitter.instruction("mov BYTE PTR [rbx], r9b");                             // emit one trailing padding byte
     emitter.instruction("add rbx, 1");                                          // advance the write cursor
     emitter.instruction("sub rcx, 1");                                          // one padding byte fewer to write
     emitter.instruction("jmp __rt_sprintf_emit_lpad_x64");                      // keep padding
+    emitter.label("__rt_sprintf_emit_done_x64");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 688]");                      // formatter-owned string produced by __toString, if any
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_sprintf_loop_x64");                            // borrowed/numeric bodies need no cleanup
+    emitter.instruction("mov QWORD PTR [rbp - 688], 0");                        // prevent stale ownership from crossing conversions
+    emitter.instruction("call __rt_heap_free_safe");                            // release only after every output byte was copied
+    emitter.instruction("jmp __rt_sprintf_loop_x64");                           // scan the next format byte
 }
 
 /// Emits the x86_64 controlled-fatal exits for invalid widths/specifiers/argument counts,

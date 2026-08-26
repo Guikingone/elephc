@@ -330,6 +330,56 @@ echo format_mixed("%d", $callable), "|", format_mixed("%f", $callable);
     assert_eq!(&parts[11..], &["1", "1.000000"]);
 }
 
+/// Verifies false keeps PHP's empty-string `%s` rendering when the format or value is dynamic.
+#[test]
+fn test_sprintf_runtime_bool_string_conversion() {
+    let out = compile_and_run(
+        r#"<?php
+$format = "[%s]";
+$values = [false, true];
+echo sprintf($format, false), "|";
+echo sprintf($format, true), "|";
+echo sprintf($format, $values[0]), "|";
+echo sprintf($format, $values[1]), "|";
+echo vsprintf($format, [false]), "|", vsprintf($format, [true]);
+"#,
+    );
+    assert_eq!(out, "[]|[1]|[]|[1]|[]|[1]");
+}
+
+/// Verifies literal and runtime formats preserve statically typed non-scalar PHP casts.
+#[test]
+fn test_sprintf_static_non_scalars_use_deferred_runtime_coercion() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticFormatLabel {
+    public int $id = 7;
+    public function __toString(): string { return "label:" . $this->id; }
+}
+$array = [4, 5];
+$empty = [];
+$object = new StaticFormatLabel();
+$resource = fopen("php://memory", "r+");
+$string = "%s";
+$integer = "%d";
+echo sprintf("%s|%d|%d", $array, $array, $empty), "|";
+echo sprintf($string, $array), "|", sprintf($integer, $array), "|";
+echo sprintf("%s|%d", $object, $object), "|";
+echo sprintf($string, $object), "|", sprintf($integer, $object), "|";
+echo sprintf($string, $resource), "|", sprintf($integer, $resource);
+"#,
+    );
+    let parts = out.split('|').collect::<Vec<_>>();
+    assert_eq!(
+        &parts[..9],
+        &["Array", "1", "0", "Array", "1", "label:7", "1", "label:7", "1"]
+    );
+    let resource_id = parts[9]
+        .strip_prefix("Resource id #")
+        .unwrap_or_else(|| panic!("unexpected resource rendering: {}", parts[9]));
+    assert_eq!(parts[10], resource_id);
+}
+
 /// A callable under a dynamic `%s` conversion must fail in a controlled way instead of
 /// formatting its descriptor address as a decimal integer.
 #[test]

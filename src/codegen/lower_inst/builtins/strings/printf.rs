@@ -8,6 +8,7 @@
 //! - Format categories drive 16-byte runtime records without changing source evaluation order.
 
 use super::*;
+use crate::ir::LocalKind;
 
 /// Runtime payload category consumed by one printf-family conversion specifier.
 #[derive(Clone, Copy)]
@@ -70,10 +71,12 @@ pub(super) fn emit_sprintf_runtime_call(
             ctx.emitter.instruction(
                 &format!("mov x0, #{}", inst.operands.len() - 1)
             );                                                                  // pass the number of packed sprintf() variadic records
+            load_optional_sprintf_eval_context(ctx, 3)?;
         }
         Arch::X86_64 => {
             load_value_as_string_to_regs(ctx, format, name, "rax", "rdx")?;
             abi::emit_load_int_immediate(ctx.emitter, "rdi", (inst.operands.len() - 1) as i64);
+            load_optional_sprintf_eval_context(ctx, 1)?;
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_sprintf");
@@ -108,31 +111,11 @@ pub(in crate::codegen::lower_inst::builtins) fn sprintf_spec_cats_for_format(
     Ok(parse_sprintf_spec_cats(&bytes))
 }
 
-/// Parses the conversion categories consumed by the runtime sprintf scanner.
 /// Highest `printf`-family argument position `parse_sprintf_spec_cats` will track. A format
 /// string is program text, so its `N$` digits are attacker-controlled; the cap keeps the
 /// category table from being sized by them. Positions above it fall back to static-type
 /// packing and are rejected by the runtime's argument-count check.
 const MAX_TRACKED_SPRINTF_ARGS: usize = 4096;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /// Parses the conversion categories consumed by the runtime sprintf scanner, indexed by the
 /// argument position each conversion consumes.
 ///
@@ -247,6 +230,7 @@ pub(super) fn emit_vsprintf_runtime_call(
             ctx.load_value_to_result(values)?;
             ctx.emitter.instruction("ldp x1, x2, [sp, #0]");                    // restore the format pointer and length for vsprintf
             ctx.emitter.instruction("add sp, sp, #16");                         // release the format scratch storage
+            load_optional_sprintf_eval_context(ctx, 3)?;
         }
         Arch::X86_64 => {
             ctx.load_string_value_to_regs(format, "rax", "rdx")?;
@@ -258,9 +242,31 @@ pub(super) fn emit_vsprintf_runtime_call(
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the format pointer for vsprintf
             ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // restore the format byte length for vsprintf
             ctx.emitter.instruction("add rsp, 16");                             // release the format scratch storage
+            load_optional_sprintf_eval_context(ctx, 1)?;
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_vsprintf");
+    Ok(())
+}
+
+/// Loads the current function's persistent eval context, or zero when no eval state exists.
+fn load_optional_sprintf_eval_context(
+    ctx: &mut FunctionContext<'_>,
+    arg_index: usize,
+) -> Result<()> {
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, arg_index);
+    let slot = ctx
+        .function
+        .locals
+        .iter()
+        .find(|local| local.kind == LocalKind::EvalContext)
+        .map(|local| local.id);
+    if let Some(slot) = slot {
+        let offset = ctx.local_offset(slot)?;
+        abi::load_at_offset(ctx.emitter, arg_reg, offset);
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, arg_reg, 0);
+    }
     Ok(())
 }
 /// Packs one printf-family variadic operand into the runtime's 16-byte tagged record.
@@ -270,6 +276,12 @@ pub(in crate::codegen::lower_inst::builtins) fn pack_sprintf_like_arg(
     spec_cat: Option<SprintfSpecCat>,
     owner: &str,
 ) -> Result<()> {
+    let raw_ty = ctx.raw_value_php_type(value)?;
+    if matches!(raw_ty, PhpType::Mixed | PhpType::Union(_))
+        || sprintf_deferred_record_tag(&raw_ty).is_some()
+    {
+        return pack_static_sprintf_arg(ctx, value, owner);
+    }
     match spec_cat {
         Some(SprintfSpecCat::Int) => {
             load_sprintf_arg_as_int(ctx, value, owner)?;
@@ -289,23 +301,17 @@ pub(in crate::codegen::lower_inst::builtins) fn pack_sprintf_like_arg(
 
 /// Packs one sprintf variadic operand using its static PHP representation.
 ///
-/// A Mixed operand cannot be packed from its static type — there is nothing static about it — so
-/// it goes through `__rt_sprintf_pack_mixed`, which reads the cell's real runtime tag. This
-/// matters only when the format string is NOT a compile-time literal: with a literal format,
-/// `sprintf_spec_cats_for_format` knows each conversion category and the caller takes the
-/// `load_sprintf_arg_as_*` path instead, which already handled Mixed.
-///
-/// Both conditions together are what made `sprintf($fmt, $v)` with both read out of a
-/// heterogeneous array answer `0`: no known category, so the operand fell to the catch-all arm
-/// below, which pushes a zero payload tagged as an integer for every shape it does not name.
-/// `echo` printed the same value correctly, which is why this read as a formatting bug rather
-/// than a marshalling one.
+/// Mixed operands always go through `__rt_sprintf_pack_mixed`, which reads the boxed runtime tag.
+/// Statically known arrays, objects, resources, callables, and erased iterables carry their raw
+/// payload under a deferred runtime tag. This routing is independent of whether the format is a
+/// literal: coercion happens only after `__rt_sprintf` has parsed the actual conversion.
 pub(super) fn pack_static_sprintf_arg(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     owner: &str,
 ) -> Result<()> {
-    match ctx.raw_value_php_type(value)?.codegen_repr() {
+    let raw_ty = ctx.raw_value_php_type(value)?;
+    match raw_ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
             load_value_to_first_int_arg(ctx, value)?;
             abi::emit_call_label(ctx.emitter, "__rt_sprintf_pack_mixed");
@@ -316,11 +322,46 @@ pub(super) fn pack_static_sprintf_arg(
         }
         _ => {}
     }
+    if let Some(tag) = sprintf_deferred_record_tag(&raw_ty) {
+        ctx.load_value_to_result(value)?;
+        return pack_sprintf_raw_deferred_arg(ctx, tag);
+    }
     let ty = ctx.load_value_to_result(value)?.codegen_repr();
     match ctx.emitter.target.arch {
         Arch::AArch64 => pack_sprintf_arg_aarch64(ctx, &ty, owner),
         Arch::X86_64 => pack_sprintf_arg_x86_64(ctx, &ty, owner),
     }
+}
+
+/// Returns the runtime record tag for a statically known non-scalar printf operand.
+fn sprintf_deferred_record_tag(ty: &PhpType) -> Option<i64> {
+    match ty {
+        PhpType::Array(_) => Some(4),
+        PhpType::AssocArray { .. } => Some(5),
+        PhpType::Object(_) => Some(6),
+        PhpType::Resource(_) => Some(9),
+        PhpType::Callable => Some(10),
+        PhpType::Iterable => Some(11),
+        _ => None,
+    }
+}
+
+/// Pushes a raw non-scalar payload with the deferred tag consumed by `__rt_sprintf`.
+fn pack_sprintf_raw_deferred_arg(ctx: &mut FunctionContext<'_>, tag: i64) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                    // push the borrowed non-scalar payload
+            abi::emit_load_int_immediate(ctx.emitter, "x9", tag);
+            ctx.emitter.instruction("str x9, [sp, #8]");                       // preserve its concrete runtime category
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                            // reserve one deferred non-scalar record
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");               // push the borrowed non-scalar payload
+            ctx.emitter
+                .instruction(&format!("mov QWORD PTR [rsp + 8], {tag}"));       // preserve its concrete runtime category
+        }
+    }
+    Ok(())
 }
 
 /// Packs a default-mode nullable integer without discarding either its payload or null tag.
@@ -525,10 +566,9 @@ pub(super) fn pack_sprintf_arg_aarch64(
             ctx.emitter.instruction("mov x0, #1");                              // (0 << 8) | 1 = a zero-length string record
             ctx.emitter.instruction("str x0, [sp, #8]");                        // store the packed string length and type tag
         }
-        _other => {
-            ctx.emitter.instruction("str xzr, [sp, #-16]!");                    // push a zero payload for an unsupported sprintf operand
-            ctx.emitter.instruction("str xzr, [sp, #8]");                       // tag the unsupported sprintf operand as integer zero
-        }
+        other => return Err(CodegenIrError::unsupported(format!(
+            "{} format argument PHP type {:?}", owner, other
+        ))),
     }
     let _ = owner;
     Ok(())
@@ -571,13 +611,10 @@ pub(super) fn pack_sprintf_arg_x86_64(
             ctx.emitter.instruction("mov QWORD PTR [rsp], 0");                  // null string pointer payload
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 1");              // (0 << 8) | 1 = a zero-length string record
         }
-        _other => {
-            ctx.emitter.instruction("sub rsp, 16");                             // reserve one packed sprintf operand record
-            ctx.emitter.instruction("mov QWORD PTR [rsp], 0");                  // store a zero payload for an unsupported sprintf operand
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 0");              // tag the unsupported sprintf operand as integer zero
-        }
+        other => return Err(CodegenIrError::unsupported(format!(
+            "{} format argument PHP type {:?}", owner, other
+        ))),
     }
-    let _ = owner;
     Ok(())
 }
 

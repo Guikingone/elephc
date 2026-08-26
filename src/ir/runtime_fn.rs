@@ -1071,10 +1071,27 @@ impl RuntimeFnId {
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::ALLOC_CONCAT.bits(),
             ),
-            RuntimeFnId::Sprintf | RuntimeFnId::Vsprintf => {
+            // A `%s` conversion can invoke arbitrary userland `__toString()` code. Keep the
+            // full externally observable call surface here so AST try/catch pruning retains
+            // handlers and propagation never treats state touched by that method as stable.
+            RuntimeFnId::Printf
+            | RuntimeFnId::Sprintf
+            | RuntimeFnId::Vprintf
+            | RuntimeFnId::Vsprintf => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::WRITES_HEAP.bits()
+                        | crate::ir::Effects::READS_GLOBAL.bits()
+                        | crate::ir::Effects::WRITES_GLOBAL.bits()
+                        | crate::ir::Effects::READS_FS.bits()
+                        | crate::ir::Effects::WRITES_FS.bits()
+                        | crate::ir::Effects::READS_PROCESS.bits()
+                        | crate::ir::Effects::WRITES_PROCESS.bits()
+                        | crate::ir::Effects::OUTPUT.bits()
+                        | crate::ir::Effects::ALLOC_HEAP.bits()
                         | crate::ir::Effects::ALLOC_CONCAT.bits()
+                        | crate::ir::Effects::MAY_THROW.bits()
+                        | crate::ir::Effects::MAY_FATAL.bits()
                         | crate::ir::Effects::MAY_WARN.bits(),
                 )
             }

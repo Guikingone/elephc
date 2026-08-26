@@ -12,8 +12,8 @@
 //!
 //! Key details:
 //! - Record tags match `__rt_sprintf`: int=0, string=1|(len<<8), float=2,
-//!   bool=3, deferred boxed Mixed=7. Records are pushed in reverse element order so element 0 lands at
-//!   the lowest address (the first argument), as `__rt_sprintf` expects.
+//!   bool=3, deferred boxed Mixed=7. Records are pushed in reverse element order so element 0
+//!   lands at the lowest address (the first argument), as `__rt_sprintf` expects.
 //! - The arguments array is read by its runtime value_type (kind word at
 //!   `[arr-8]`, bits 8..14): a Mixed array (7) holds boxed-cell pointers that
 //!   are unboxed per element through `__rt_sprintf_pack_mixed`, which
@@ -25,9 +25,9 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits `__rt_vsprintf(array_ptr, fmt_ptr, fmt_len) -> string`.
 ///
-/// Inputs: x0 = array pointer, x1 = format pointer, x2 = format length
-/// (AArch64); rdi = array pointer, rax = format pointer, rdx = format length
-/// (x86_64). Output: the formatted string in the standard string-result
+/// Inputs: x0 = array pointer, x1 = format pointer, x2 = format length, x3 = optional eval
+/// context (AArch64); rdi = array pointer, rax = format pointer, rdx = format length,
+/// rsi = optional eval context (x86_64). Output: the formatted string in the standard string-result
 /// registers (x1/x2 on AArch64, rax/rdx on x86_64), via `__rt_sprintf`.
 pub fn emit_vsprintf(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -41,12 +41,13 @@ pub fn emit_vsprintf(emitter: &mut Emitter) {
 
     // Frame: 80 bytes. [x29+0..16] saved x29/x30; locals above: [x29+16] fmt
     //   ptr, [x29+24] fmt len, [x29+32] count, [x29+40] slot base, [x29+48]
-    //   value_type, [x29+56] slot size, [x29+64] loop index.
+    //   value_type, [x29+56] slot size, [x29+64] loop index, [x29+72] eval context.
     emitter.instruction("sub sp, sp, #80");                                     // helper frame
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // fixed frame pointer (sp moves while records are pushed)
     emitter.instruction("str x1, [x29, #16]");                                  // save the format pointer
     emitter.instruction("str x2, [x29, #24]");                                  // save the format length
+    emitter.instruction("str x3, [x29, #72]");                                  // preserve the optional eval context
 
     // -- read the array length and runtime value_type --
     emitter.instruction("cbz x0, __rt_vsprintf_empty");                         // null array → format with zero args
@@ -121,6 +122,7 @@ pub fn emit_vsprintf(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x29, #32]");                                  // arg count
     emitter.instruction("ldr x1, [x29, #16]");                                  // format pointer
     emitter.instruction("ldr x2, [x29, #24]");                                  // format length
+    emitter.instruction("ldr x3, [x29, #72]");                                  // forward the optional eval context
     emitter.instruction("bl __rt_sprintf");                                     // format; pops the count*16 records, returns x1/x2
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the helper frame
@@ -134,12 +136,14 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_vsprintf");
 
     // Frame: [rbp-8] fmt ptr, [rbp-16] fmt len, [rbp-24] count, [rbp-32] slot
-    //   base, [rbp-40] value_type, [rbp-48] slot size, [rbp-56] loop index.
+    //   base, [rbp-40] value_type, [rbp-48] slot size, [rbp-56] loop index,
+    //   [rbp-64] eval context.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // fixed frame pointer (rsp moves while records are pushed)
     emitter.instruction("sub rsp, 64");                                         // reserve the helper locals
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the format pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the format length
+    emitter.instruction("mov QWORD PTR [rbp - 64], rsi");                       // preserve the optional eval context
 
     // -- read the array length and runtime value_type (array ptr in rdi) --
     emitter.instruction("test rdi, rdi");                                       // null array?
@@ -211,6 +215,7 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // arg count
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // format pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // format length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // forward the optional eval context
     emitter.instruction("call __rt_sprintf");                                   // format; pops the count*16 records, returns rax/rdx
     emitter.instruction("leave");                                               // restore rsp/rbp (records already discarded by __rt_sprintf)
     emitter.instruction("ret");                                                 // return the formatted string (rax/rdx)

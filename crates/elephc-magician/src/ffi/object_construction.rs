@@ -7,6 +7,7 @@
 //! - Generated EIR backend assembly through `__elephc_eval_new_object`.
 //! - Generated EIR backend assembly through `__elephc_eval_try_new_object`.
 //! - Generated EIR backend assembly through `__elephc_eval_method_call`.
+//! - Generated runtime assembly through `__elephc_eval_string_context`.
 //! - Generated EIR backend assembly through `__elephc_eval_static_method_call`.
 //!
 //! Key details:
@@ -89,6 +90,22 @@ pub unsafe extern "C" fn __elephc_eval_method_call(
         eval_method_call_inner(ctx, object, method_ptr, method_len, arg_pack, out)
     })
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Applies eval-aware PHP string-context semantics to a boxed runtime value.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `value` must point at a boxed runtime cell,
+/// and `out` may be null.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_string_context(
+    ctx: *mut ElephcEvalContext,
+    value: *mut RuntimeCell,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe { eval_string_context_inner(ctx, value, out) })
+        .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
 /// Calls a static method on a class previously declared through `eval()`.
@@ -381,6 +398,37 @@ unsafe fn eval_method_call_inner(
         RuntimeCellHandle::from_raw(object),
         &method,
         args,
+        &mut values,
+    ) {
+        Ok(outcome) => write_outcome(outcome, out).code(),
+        Err(status) => status.code(),
+    }
+}
+
+/// Runs the eval-aware string-context ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_string_context`; callers must provide a valid context and boxed cell.
+#[cfg(not(test))]
+unsafe fn eval_string_context_inner(
+    ctx: *mut ElephcEvalContext,
+    value: *mut RuntimeCell,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    if value.is_null() {
+        return EvalStatus::RuntimeFatal.code();
+    }
+    clear_result(out);
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    match interpreter::execute_context_string_outcome(
+        context,
+        RuntimeCellHandle::from_raw(value),
         &mut values,
     ) {
         Ok(outcome) => write_outcome(outcome, out).code(),

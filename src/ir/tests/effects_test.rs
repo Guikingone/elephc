@@ -81,3 +81,19 @@ fn runtime_function_probes_expose_targeted_effects() {
         Effects::READS_PROCESS | Effects::ALLOC_CONCAT | Effects::MAY_FATAL
     );
 }
+
+/// Formatting calls retain arbitrary `__toString()` effects, including throws and globals.
+#[test]
+fn printf_family_effects_cover_userland_string_conversion() {
+    for target in [
+        RuntimeFnId::Printf,
+        RuntimeFnId::Sprintf,
+        RuntimeFnId::Vprintf,
+        RuntimeFnId::Vsprintf,
+    ] {
+        let effects = target.effects();
+        assert!(effects.contains(Effects::MAY_THROW), "{target:?}");
+        assert!(effects.contains(Effects::WRITES_GLOBAL), "{target:?}");
+        assert!(effects.contains(Effects::OUTPUT), "{target:?}");
+    }
+}

@@ -8874,6 +8874,43 @@ echo $box->accepts($box);');
     );
 }
 
+/// Verifies printf-family string conversion reaches eval-declared `__toString()` methods.
+#[test]
+fn test_eval_declared_tostring_sprintf_contexts() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalSprintfBox {
+    public string $name = "Ada";
+    public function __toString() { return "box:" . $this->name; }
+}');
+$box = new EvalSprintfBox();
+$format = "[%s]";
+echo sprintf($format, $box), "|";
+echo vsprintf($format, [$box]);
+"#,
+    );
+    assert_eq!(out, "[box:Ada]|[box:Ada]");
+}
+
+/// Verifies an eval `__toString()` throwable escapes sprintf through the native unwinder.
+#[test]
+fn test_eval_declared_tostring_sprintf_throwable() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalThrowingSprintfBox {
+    public function __toString() { throw new Exception("format boom"); }
+}');
+$box = new EvalThrowingSprintfBox();
+try {
+    echo sprintf("%s", $box);
+} catch (Throwable $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "format boom");
+}
+
 /// Verifies eval-declared objects support nullsafe property reads and method calls.
 #[test]
 fn test_eval_declared_nullsafe_property_and_method_access() {
