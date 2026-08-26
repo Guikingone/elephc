@@ -27274,11 +27274,10 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -27288,8 +27287,7 @@
           "alloc_concat",
           "may_throw",
           "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "may_warn"
         ]
       },
       "lowering": {
@@ -51412,11 +51410,10 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -51426,8 +51423,7 @@
           "alloc_concat",
           "may_throw",
           "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "may_warn"
         ]
       },
       "lowering": {
@@ -59614,7 +59610,18 @@
         "kind": "static",
         "names": [
           "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
           "alloc_concat",
+          "may_throw",
+          "may_fatal",
           "may_warn"
         ]
       },
@@ -74619,11 +74626,10 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -74633,8 +74639,7 @@
           "alloc_concat",
           "may_throw",
           "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "may_warn"
         ]
       },
       "lowering": {
@@ -74784,11 +74789,10 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -74798,8 +74802,7 @@
           "alloc_concat",
           "may_throw",
           "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "may_warn"
         ]
       },
       "lowering": {
@@ -74942,7 +74945,18 @@
         "kind": "static",
         "names": [
           "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
           "alloc_concat",
+          "may_throw",
+          "may_fatal",
           "may_warn"
         ]
       },

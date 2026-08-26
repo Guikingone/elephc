@@ -394,8 +394,55 @@ echo format_mixed("%s", $callable);
 "#,
     );
     assert!(
-        err.contains("Object could not be converted to string"),
+        err.contains("Object of class Closure could not be converted to string"),
         "{err}"
+    );
+}
+
+/// Non-stringable native objects and Closure values must raise a catchable PHP `Error`.
+#[test]
+fn test_sprintf_non_stringable_values_raise_catchable_error() {
+    let out = compile_and_run(
+        r#"<?php
+class SprintfPlainObject {}
+$values = [new SprintfPlainObject(), fn(): int => 1];
+foreach ($values as $value) {
+    try {
+        echo sprintf("%s", $value);
+    } catch (Throwable $error) {
+        echo get_class($error), ":", $error->getMessage(), "|";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error:Object of class SprintfPlainObject could not be converted to string|\
+Error:Object of class Closure could not be converted to string|"
+    );
+}
+
+/// Deferred array and object conversions emit PHP warnings and honor `@` suppression.
+#[test]
+fn test_sprintf_deferred_conversion_warnings_match_php_and_support_suppression() {
+    let output = compile_and_run_capture(
+        r#"<?php
+class SprintfNumericWarning {}
+$object = new SprintfNumericWarning();
+$closure = fn(): int => 1;
+echo sprintf("%s|%d|%f|%d|%f", [1], $object, $object, $closure, $closure), "|";
+echo @sprintf("%s|%d|%f", [1], $object, $closure);
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "Array|1|1.000000|1|1.000000|Array|1|1.000000");
+    assert_eq!(
+        output.stderr,
+        "Warning: Array to string conversion\n\
+Warning: Object of class SprintfNumericWarning could not be converted to int\n\
+Warning: Object of class SprintfNumericWarning could not be converted to float\n\
+Warning: Object of class Closure could not be converted to int\n\
+Warning: Object of class Closure could not be converted to float\n"
     );
 }
 

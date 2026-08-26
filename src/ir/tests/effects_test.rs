@@ -86,8 +86,10 @@ fn runtime_function_probes_expose_targeted_effects() {
 #[test]
 fn printf_family_effects_cover_userland_string_conversion() {
     for target in [
+        RuntimeFnId::Fprintf,
         RuntimeFnId::Printf,
         RuntimeFnId::Sprintf,
+        RuntimeFnId::Vfprintf,
         RuntimeFnId::Vprintf,
         RuntimeFnId::Vsprintf,
     ] {

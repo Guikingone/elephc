@@ -26,8 +26,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::runtime::data::{
-    SPRINTF_ARGCOUNT_MSG, SPRINTF_MIXED_STRING_MSG, SPRINTF_OVERFLOW_MSG,
-    SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG,
+    SPRINTF_ARGCOUNT_MSG, SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG,
 };
 
 use super::sprintf::{CONCAT_BUF_CAP, CONV_SCRATCH_CAP};
@@ -446,8 +445,6 @@ fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, r10");                                        // pass the preserved record payload
     emitter.instruction("mov rdx, QWORD PTR [rbp - 680]");                      // pass the optional eval context
     emitter.instruction("call __rt_sprintf_mixed_to_string");                   // apply array/resource/object string semantics
-    emitter.instruction("test rax, rax");                                       // did the dynamic value expose a string conversion?
-    emitter.instruction("jz __rt_sprintf_mfatal_x64");                          // callable/non-stringable objects take a controlled fatal
     emitter.instruction("mov QWORD PTR [rbp - 688], rcx");                      // release an owned stabilized result after copying
     emitter.instruction("mov r10, rax");                                        // replace the record payload with the coerced string pointer
     emitter.instruction("mov r11, rdx");                                        // copy the coerced string byte length
@@ -539,6 +536,8 @@ fn emit_integer_conversion(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_int_mixed_x64");
     emitter.instruction("mov rdi, rax");                                        // pass the deferred record tag
     emitter.instruction("mov rsi, r10");                                        // pass the preserved record payload
+    emitter.instruction("xor edx, edx");                                        // select integer conversion warning wording
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 680]");                      // pass the optional eval context for dynamic metadata
     emitter.instruction("call __rt_sprintf_mixed_to_int");                      // arrays/objects/callables/resources cast without pointer leakage
     emitter.instruction("mov r10, rax");                                        // use the normalized PHP integer as the operand
     emitter.label("__rt_sprintf_int_ready_x64");
@@ -622,6 +621,8 @@ fn emit_float_conversion(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_flt_mixed_x64");
     emitter.instruction("mov rdi, rax");                                        // pass the deferred record tag
     emitter.instruction("mov rsi, r10");                                        // pass the preserved record payload
+    emitter.instruction("mov edx, 1");                                          // select float conversion warning wording
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 680]");                      // pass the optional eval context for dynamic metadata
     emitter.instruction("call __rt_sprintf_mixed_to_int");                      // non-scalars share PHP's zero/one/resource-id numeric cast
     emitter.instruction("cvtsi2sd xmm0, rax");                                  // widen the normalized integer to a PHP float operand
     emitter.instruction("movq r10, xmm0");                                      // keep the double bits in the record payload register
@@ -901,7 +902,6 @@ fn emit_fatal_paths(emitter: &mut Emitter) {
     emit_fatal(emitter, "__rt_sprintf_ofatal_x64", "_sprintf_overflow_msg", SPRINTF_OVERFLOW_MSG.len());
     emit_fatal(emitter, "__rt_sprintf_afatal_x64", "_sprintf_argcount_msg", SPRINTF_ARGCOUNT_MSG.len());
     emit_fatal(emitter, "__rt_sprintf_sfatal_x64", "_sprintf_unknown_spec_msg", SPRINTF_UNKNOWN_SPEC_MSG.len());
-    emit_fatal(emitter, "__rt_sprintf_mfatal_x64", "_sprintf_mixed_string_msg", SPRINTF_MIXED_STRING_MSG.len());
 }
 
 /// Emits one x86_64 fatal exit block: write `len` bytes of `symbol` to stderr with the

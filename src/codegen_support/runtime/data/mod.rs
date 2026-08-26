@@ -140,6 +140,18 @@ pub(crate) const UNSER_OBJECT_STRING_ERROR_PREFIX: &str = "Object of class ";
 /// Suffix for PHP's catchable object-to-string conversion Error in an allowed-class list.
 pub(crate) const UNSER_OBJECT_STRING_ERROR_SUFFIX: &str =
     " could not be converted to string";
+/// PHP warning emitted when a printf-family `%s` conversion stringifies an array.
+pub(crate) const SPRINTF_ARRAY_TO_STRING_WARNING: &str =
+    "Warning: Array to string conversion\n";
+/// Prefix for printf-family object-to-number coercion warnings.
+pub(crate) const SPRINTF_OBJECT_NUMERIC_WARNING_PREFIX: &str =
+    "Warning: Object of class ";
+/// Suffix for printf-family object-to-integer coercion warnings.
+pub(crate) const SPRINTF_OBJECT_TO_INT_WARNING_SUFFIX: &str =
+    " could not be converted to int\n";
+/// Suffix for printf-family object-to-float coercion warnings.
+pub(crate) const SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX: &str =
+    " could not be converted to float\n";
 /// Suffix shared by PHP's runtime unserialize TypeError diagnostics.
 pub(crate) const UNSER_TYPE_GIVEN_SUFFIX: &str = " given";
 /// Fatal error message when a `printf`-family conversion requests a field width outside
@@ -164,12 +176,6 @@ pub(crate) const SPRINTF_ARGCOUNT_MSG: &str =
 /// `snprintf` (that would expose `%n` and friends), so it reports PHP's `ValueError` instead.
 pub(crate) const SPRINTF_UNKNOWN_SPEC_MSG: &str =
     "Fatal error: Uncaught ValueError: Unknown format specifier\n";
-/// Fatal error message when `%s` receives a boxed object/callable that has no dynamic
-/// `__toString()` target. The runtime formatter cannot name the concrete class without
-/// allocating a diagnostic buffer, so it uses the same generic wording as the existing
-/// boxed-Mixed string-context fallback.
-pub(crate) const SPRINTF_MIXED_STRING_MSG: &str =
-    "Fatal error: Object could not be converted to string\n";
 /// Catchable `\ValueError` message when `hash()` receives an unknown algorithm name.
 pub(crate) const HASH_UNKNOWN_ALGO_MSG: &str =
     "hash(): Argument #1 ($algo) must be a valid hashing algorithm";

@@ -28,12 +28,13 @@ pub(in crate::interpreter) fn eval_builtin_vprintf(
     for arg in args {
         evaluated_args.push(eval_expr(arg, context, scope, values)?);
     }
-    eval_vprintf_result(&evaluated_args, values)
+    eval_vprintf_result(&evaluated_args, context, values)
 }
 
 /// Formats `vprintf()` array arguments, echoes the result, and returns its byte count.
 pub(in crate::interpreter) fn eval_vprintf_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [format, array] = evaluated_args else {
@@ -41,7 +42,7 @@ pub(in crate::interpreter) fn eval_vprintf_result(
     };
     let format = values.string_bytes(*format)?;
     let format_args = super::vsprintf::eval_sprintf_argument_array_values(*array, values)?;
-    let output = super::sprintf::eval_sprintf_bytes(&format, &format_args, values)?;
+    let output = super::sprintf::eval_sprintf_bytes(&format, &format_args, context, values)?;
     let len = i64::try_from(output.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
     let output = values.string_bytes_value(&output)?;
     values.echo(output)?;

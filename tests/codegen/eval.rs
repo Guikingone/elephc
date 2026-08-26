@@ -8892,6 +8892,126 @@ echo vsprintf($format, [$box]);
     assert_eq!(out, "[box:Ada]|[box:Ada]");
 }
 
+/// Eval-created Stringable objects retain their owning context across ordinary AOT helpers.
+#[test]
+fn test_eval_declared_tostring_sprintf_survives_aot_helper_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+function render_eval_stringable(mixed $value): string {
+    return sprintf("[%s]", $value);
+}
+eval('class EvalSprintfHelperBox {
+    public function __toString() { return "helper-ok"; }
+}');
+$box = new EvalSprintfHelperBox();
+echo render_eval_stringable($box);
+"#,
+    );
+    assert_eq!(out, "[helper-ok]");
+}
+
+/// `fprintf` and `vfprintf` pass the eval context required by dynamic `__toString()` dispatch.
+#[test]
+fn test_eval_declared_tostring_fprintf_and_vfprintf_contexts() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalStreamSprintfBox {
+    public function __toString() { return "stream-ok"; }
+}');
+$box = new EvalStreamSprintfBox();
+$stream = fopen("php://temp", "w+");
+fprintf($stream, "[%s]", $box);
+vfprintf($stream, "|[%s]", [$box]);
+rewind($stream);
+echo stream_get_contents($stream);
+"#,
+    );
+    assert_eq!(out, "[stream-ok]|[stream-ok]");
+}
+
+/// The eval interpreter applies dynamic `__toString()` across the complete printf family.
+#[test]
+fn test_eval_builtin_printf_family_uses_dynamic_string_context() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalBuiltinSprintfBox {
+    public function __toString() { return "eval-ok"; }
+}
+$box = new EvalBuiltinSprintfBox();
+$stream = fopen("php://temp", "w+");
+echo sprintf("[%s]", $box), "|";
+printf("[%s]", $box);
+echo "|", vsprintf("[%s]", [$box]), "|";
+vprintf("[%s]", [$box]);
+fprintf($stream, "[%s]", $box);
+vfprintf($stream, "|[%s]", [$box]);
+rewind($stream);
+echo "|", stream_get_contents($stream);');
+"#,
+    );
+    assert_eq!(
+        out,
+        "[eval-ok]|[eval-ok]|[eval-ok]|[eval-ok]|[eval-ok]|[eval-ok]"
+    );
+}
+
+/// Eval printf coercions preserve PHP warnings and catchable Errors for non-scalars.
+#[test]
+fn test_eval_builtin_sprintf_non_scalar_diagnostics_match_php() {
+    let output = compile_and_run_capture(
+        r#"<?php
+$closure = fn(): int => 1;
+eval('class EvalBuiltinSprintfPlain {}
+$object = new EvalBuiltinSprintfPlain();
+echo sprintf("%s|%d|%f|%d|%f", [1], $object, $object, $closure, $closure), "|";');
+try {
+    eval('sprintf("%s", new EvalBuiltinSprintfPlain());');
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "|";
+}
+try {
+    eval('sprintf("%s", $closure);');
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "|";
+}
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(
+        output.stdout,
+        "Array|1|1.000000|1|1.000000|\
+Error:Object of class EvalBuiltinSprintfPlain could not be converted to string|\
+Error:Object of class Closure could not be converted to string|"
+    );
+    assert_eq!(
+        output.stderr,
+        "Warning: Array to string conversion\n\
+Warning: Object of class EvalBuiltinSprintfPlain could not be converted to int\n\
+Warning: Object of class EvalBuiltinSprintfPlain could not be converted to float\n\
+Warning: Object of class Closure could not be converted to int\n\
+Warning: Object of class Closure could not be converted to float\n"
+    );
+}
+
+/// Numeric formatting resolves eval-created class names and emits PHP's exact warnings.
+#[test]
+fn test_eval_declared_object_sprintf_numeric_warnings_use_owner_context() {
+    let output = compile_and_run_capture(
+        r#"<?php
+eval('class EvalSprintfNumericWarning {}');
+$box = new EvalSprintfNumericWarning();
+echo sprintf("%d|%f", $box, $box);
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "1|1.000000");
+    assert_eq!(
+        output.stderr,
+        "Warning: Object of class EvalSprintfNumericWarning could not be converted to int\n\
+Warning: Object of class EvalSprintfNumericWarning could not be converted to float\n"
+    );
+}
+
 /// Verifies an eval `__toString()` throwable escapes sprintf through the native unwinder.
 #[test]
 fn test_eval_declared_tostring_sprintf_throwable() {

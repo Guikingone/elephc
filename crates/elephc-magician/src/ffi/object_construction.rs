@@ -8,6 +8,7 @@
 //! - Generated EIR backend assembly through `__elephc_eval_try_new_object`.
 //! - Generated EIR backend assembly through `__elephc_eval_method_call`.
 //! - Generated runtime assembly through `__elephc_eval_string_context`.
+//! - Generated runtime assembly through `__elephc_eval_sprintf_numeric_warning`.
 //! - Generated EIR backend assembly through `__elephc_eval_static_method_call`.
 //!
 //! Key details:
@@ -20,6 +21,7 @@ use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
 use crate::context::native_frame_called_class_override_context;
 use crate::errors::EvalStatus;
 use crate::interpreter;
+use crate::interpreter::RuntimeValueOps;
 use crate::runtime_hooks::ElephcRuntimeOps;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 use std::slice;
@@ -95,8 +97,9 @@ pub unsafe extern "C" fn __elephc_eval_method_call(
 /// Applies eval-aware PHP string-context semantics to a boxed runtime value.
 ///
 /// # Safety
-/// `ctx` must be a valid eval context handle. `value` must point at a boxed runtime cell,
-/// and `out` may be null.
+/// `ctx` may be null when `value` is an eval-created object still registered with its
+/// owning context. Otherwise it must be a valid eval context handle. `value` must point
+/// at a boxed runtime cell, and `out` may be null.
 #[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_string_context(
@@ -106,6 +109,25 @@ pub unsafe extern "C" fn __elephc_eval_string_context(
 ) -> i32 {
     std::panic::catch_unwind(|| unsafe { eval_string_context_inner(ctx, value, out) })
         .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Emits the PHP warning for numeric conversion of an eval-created object.
+///
+/// # Safety
+/// `ctx` may be null when `object` remains registered with its owning eval context.
+/// `object` must be a live eval-created object payload. `is_float != 0` selects the
+/// float wording; zero selects the integer wording.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_sprintf_numeric_warning(
+    ctx: *mut ElephcEvalContext,
+    object: *mut RuntimeCell,
+    is_float: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_sprintf_numeric_warning_inner(ctx, object, is_float)
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
 /// Calls a static method on a class previously declared through `eval()`.
@@ -408,30 +430,75 @@ unsafe fn eval_method_call_inner(
 /// Runs the eval-aware string-context ABI body after installing a panic boundary.
 ///
 /// # Safety
-/// Mirrors `__elephc_eval_string_context`; callers must provide a valid context and boxed cell.
+/// Mirrors `__elephc_eval_string_context`; callers must provide a boxed cell. Dynamic
+/// objects recover their owning eval context from the process registry, so they remain
+/// stringable after crossing into an ordinary AOT helper that has no local eval slot.
 #[cfg(not(test))]
 unsafe fn eval_string_context_inner(
     ctx: *mut ElephcEvalContext,
     value: *mut RuntimeCell,
     out: *mut ElephcEvalResult,
 ) -> i32 {
-    let Some(context) = ctx.as_mut() else {
+    if value.is_null() {
+        return EvalStatus::RuntimeFatal.code();
+    }
+    let value = RuntimeCellHandle::from_raw(value);
+    let mut probe = ElephcRuntimeOps::new();
+    let owner = probe.object_identity(value).ok().and_then(|identity| {
+        crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+    });
+    let resolved_context = owner.unwrap_or(ctx);
+    let Some(context) = resolved_context.as_mut() else {
         return EvalStatus::RuntimeFatal.code();
     };
     if context.abi_version() != ABI_VERSION {
         return EvalStatus::AbiMismatch.code();
     }
-    if value.is_null() {
-        return EvalStatus::RuntimeFatal.code();
-    }
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_string_outcome(
         context,
-        RuntimeCellHandle::from_raw(value),
+        value,
         &mut values,
     ) {
         Ok(outcome) => write_outcome(outcome, out).code(),
+        Err(status) => status.code(),
+    }
+}
+
+/// Runs the eval-created object numeric-warning ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_sprintf_numeric_warning`; `object` must remain live for the
+/// duration of the registry lookup and warning emission.
+#[cfg(not(test))]
+unsafe fn eval_sprintf_numeric_warning_inner(
+    ctx: *mut ElephcEvalContext,
+    object: *mut RuntimeCell,
+    is_float: u64,
+) -> i32 {
+    if object.is_null() {
+        return EvalStatus::RuntimeFatal.code();
+    }
+    let identity = object as u64;
+    let owner = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity);
+    let resolved_context = owner.unwrap_or(ctx);
+    let Some(context) = resolved_context.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    let Some(class_name) = context.dynamic_object_class_name(identity) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let target = if is_float == 0 { "int" } else { "float" };
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    match values.warning(&format!(
+        "Warning: Object of class {} could not be converted to {target}\n",
+        class_name.trim_start_matches('\\')
+    )) {
+        Ok(()) => EvalStatus::Ok.code(),
         Err(status) => status.code(),
     }
 }

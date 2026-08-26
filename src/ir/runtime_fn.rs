@@ -1074,8 +1074,10 @@ impl RuntimeFnId {
             // A `%s` conversion can invoke arbitrary userland `__toString()` code. Keep the
             // full externally observable call surface here so AST try/catch pruning retains
             // handlers and propagation never treats state touched by that method as stable.
-            RuntimeFnId::Printf
+            RuntimeFnId::Fprintf
+            | RuntimeFnId::Printf
             | RuntimeFnId::Sprintf
+            | RuntimeFnId::Vfprintf
             | RuntimeFnId::Vprintf
             | RuntimeFnId::Vsprintf => {
                 crate::ir::Effects::from_bits_retain(

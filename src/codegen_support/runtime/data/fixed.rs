@@ -20,8 +20,9 @@ use super::{
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
-    SPRINTF_MIXED_STRING_MSG, SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG,
-    SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
+    SPRINTF_ARRAY_TO_STRING_WARNING, SPRINTF_OBJECT_NUMERIC_WARNING_PREFIX,
+    SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX, SPRINTF_OBJECT_TO_INT_WARNING_SUFFIX,
+    SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
     STR_REPEAT_TIMES_MSG, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
     UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX,
     UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX,
@@ -103,6 +104,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ));
     }
     out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
+    out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
+    out.push_str(&format!(
+        ".globl _diag_sprintf_array_to_string\n_diag_sprintf_array_to_string:\n    .ascii {SPRINTF_ARRAY_TO_STRING_WARNING:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _diag_sprintf_object_numeric_prefix\n_diag_sprintf_object_numeric_prefix:\n    .ascii {SPRINTF_OBJECT_NUMERIC_WARNING_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _diag_sprintf_object_to_int_suffix\n_diag_sprintf_object_to_int_suffix:\n    .ascii {SPRINTF_OBJECT_TO_INT_WARNING_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _diag_sprintf_object_to_float_suffix\n_diag_sprintf_object_to_float_suffix:\n    .ascii {SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX:?}\n"
+    ));
     out.push_str(".globl _incomplete_class_property_name\n_incomplete_class_property_name:\n    .ascii \"__PHP_Incomplete_Class_Name\"\n");
     // print_r($value, true) return-mode capture state. _print_r_mode is a flag
     // (0 = write to stdout, 1 = append to _print_r_buf) consulted by
@@ -475,10 +489,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&format!(
         ".globl _sprintf_unknown_spec_msg\n_sprintf_unknown_spec_msg:\n    .ascii {:?}\n",
         SPRINTF_UNKNOWN_SPEC_MSG
-    ));
-    out.push_str(&format!(
-        ".globl _sprintf_mixed_string_msg\n_sprintf_mixed_string_msg:\n    .ascii {:?}\n",
-        SPRINTF_MIXED_STRING_MSG
     ));
     out.push_str(&format!(
         ".globl _hash_unknown_algo_msg\n_hash_unknown_algo_msg:\n    .ascii {:?}\n",

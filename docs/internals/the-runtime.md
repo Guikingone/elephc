@@ -220,8 +220,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_sha1` | SHA1 hash | `x1`/`x2` | `x1`/`x2` |
 | `__rt_sprintf` | Format string, including deferred static/Mixed coercion and eval-aware object stringification | format + tagged args on stack + optional eval context | `x1`/`x2` |
 | `__rt_sprintf_pack_mixed` | Pack a boxed scalar or preserve a boxed non-scalar for deferred formatting | boxed `Mixed` in `x0` | record payload/tag in `x0`/`x1` |
-| `__rt_sprintf_mixed_to_int` | Apply PHP numeric formatting rules to a boxed or raw-tagged array, object, callable, iterable, or resource | record tag/payload in `x0`/`x1` | `x0` |
-| `__rt_sprintf_mixed_to_string` | Render a boxed or raw-tagged array/resource, or dispatch native/eval `__toString()` | record tag/payload + optional eval context in `x0`/`x1`/`x2` | owner + `x1`/`x2` (null pair when non-stringable) |
+| `__rt_sprintf_mixed_to_int` | Apply PHP numeric formatting rules and warnings to a boxed or raw-tagged array, object, callable, iterable, or resource | record tag/payload + conversion kind + optional eval context in `x0`-`x3` | `x0` |
+| `__rt_sprintf_mixed_to_string` | Render a boxed or raw-tagged array/resource, dispatch native/eval `__toString()`, or throw a catchable `Error` for a non-stringable value | record tag/payload + optional eval context in `x0`/`x1`/`x2` | owner + `x1`/`x2` |
 | `__rt_base64_encode` | Base64 encode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_base64_decode` | Base64 decode (php-src semantics, `$strict` in `x3`) | `x1`/`x2`/`x3` | `x0` ok flag + `x1`/`x2` |
 | `__rt_quoted_printable_encode` | MIME quoted-printable encode | `x1`/`x2` | `x1`/`x2` |

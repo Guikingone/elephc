@@ -250,7 +250,7 @@ pub(super) fn emit_vsprintf_runtime_call(
 }
 
 /// Loads the current function's persistent eval context, or zero when no eval state exists.
-fn load_optional_sprintf_eval_context(
+pub(in crate::codegen::lower_inst::builtins) fn load_optional_sprintf_eval_context(
     ctx: &mut FunctionContext<'_>,
     arg_index: usize,
 ) -> Result<()> {
@@ -350,13 +350,13 @@ fn sprintf_deferred_record_tag(ty: &PhpType) -> Option<i64> {
 fn pack_sprintf_raw_deferred_arg(ctx: &mut FunctionContext<'_>, tag: i64) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("str x0, [sp, #-16]!");                    // push the borrowed non-scalar payload
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // push the borrowed non-scalar payload
             abi::emit_load_int_immediate(ctx.emitter, "x9", tag);
-            ctx.emitter.instruction("str x9, [sp, #8]");                       // preserve its concrete runtime category
+            ctx.emitter.instruction("str x9, [sp, #8]");                        // preserve its concrete runtime category
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("sub rsp, 16");                            // reserve one deferred non-scalar record
-            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");               // push the borrowed non-scalar payload
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve one deferred non-scalar record
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // push the borrowed non-scalar payload
             ctx.emitter
                 .instruction(&format!("mov QWORD PTR [rsp + 8], {tag}"));       // preserve its concrete runtime category
         }

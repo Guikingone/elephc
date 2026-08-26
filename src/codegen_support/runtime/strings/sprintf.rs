@@ -31,8 +31,7 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::{Arch, Platform};
 use crate::codegen_support::runtime::data::{
-    SPRINTF_ARGCOUNT_MSG, SPRINTF_MIXED_STRING_MSG, SPRINTF_OVERFLOW_MSG,
-    SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG,
+    SPRINTF_ARGCOUNT_MSG, SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG,
 };
 
 use super::sprintf_x86_64::emit_sprintf_linux_x86_64;
@@ -127,7 +126,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x9, #{}", CONCAT_BUF_CAP));               // total concat-buffer capacity in bytes
     emitter.instruction("add x9, x7, x9");                                      // one-past-the-end address of the concat buffer
     emitter.instruction("str x9, [sp, #144]");                                  // publish the hard write limit for every copy below
-    emitter.instruction("str xzr, [sp, #152]");                                // no formatter-owned temporary string is live
+    emitter.instruction("str xzr, [sp, #152]");                                 // no formatter-owned temporary string is live
 
     // ================================================================
     // MAIN SCAN LOOP: literal bytes are copied, '%' starts a specifier
@@ -421,7 +420,7 @@ fn emit_conversion_dispatch(emitter: &mut Emitter) {
 /// record carrying another tag is rendered numerically instead of being dereferenced.
 fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_t_str");
-    emitter.instruction("str xzr, [sp, #152]");                                // this conversion owns no temporary string yet
+    emitter.instruction("str xzr, [sp, #152]");                                 // this conversion owns no temporary string yet
     emitter.instruction("and x5, x4, #255");                                    // isolate the record type tag
     emit_branch_if_deferred_tag(emitter, "x5", "__rt_sprintf_str_mixed");
     emitter.instruction("cmp x5, #3");                                          // boolean record?
@@ -468,7 +467,6 @@ fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x3");                                          // pass the preserved record payload
     emitter.instruction("mov x2, x27");                                         // pass the optional eval context
     emitter.instruction("bl __rt_sprintf_mixed_to_string");                     // apply array/resource/object string semantics
-    emitter.instruction("cbz x1, __rt_sprintf_mfatal");                         // callable/non-stringable objects take a controlled fatal
     emitter.instruction("str x0, [sp, #152]");                                  // release an owned stabilized result after copying
     emitter.instruction("mov x3, x1");                                          // replace the record payload with the coerced string pointer
     emitter.instruction("mov x4, x2");                                          // coerced string byte length
@@ -556,6 +554,8 @@ fn emit_integer_conversion(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_int_mixed");
     emitter.instruction("mov x0, x5");                                          // pass the deferred record tag
     emitter.instruction("mov x1, x3");                                          // pass the preserved record payload
+    emitter.instruction("mov x2, #0");                                          // select integer conversion warning wording
+    emitter.instruction("mov x3, x27");                                         // pass the optional eval context for dynamic metadata
     emitter.instruction("bl __rt_sprintf_mixed_to_int");                        // arrays/objects/callables/resources cast without pointer leakage
     emitter.instruction("mov x3, x0");                                          // use the normalized PHP integer as the operand
     emitter.label("__rt_sprintf_int_ready");
@@ -634,6 +634,8 @@ fn emit_float_conversion(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_flt_mixed");
     emitter.instruction("mov x0, x5");                                          // pass the deferred record tag
     emitter.instruction("mov x1, x3");                                          // pass the preserved record payload
+    emitter.instruction("mov x2, #1");                                          // select float conversion warning wording
+    emitter.instruction("mov x3, x27");                                         // pass the optional eval context for dynamic metadata
     emitter.instruction("bl __rt_sprintf_mixed_to_int");                        // non-scalars share PHP's zero/one/resource-id numeric cast
     emitter.instruction("scvtf d0, x0");                                        // widen the normalized integer to a PHP float operand
     emitter.instruction("fmov x3, d0");                                         // keep the double bits in the record payload register
@@ -874,20 +876,19 @@ fn emit_pad_and_copy(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_emit_done");
     emitter.instruction("ldr x0, [sp, #152]");                                  // formatter-owned string produced by __toString, if any
     emitter.instruction("cbz x0, __rt_sprintf_loop");                           // borrowed/numeric bodies need no cleanup
-    emitter.instruction("str xzr, [sp, #152]");                                // prevent stale ownership from crossing conversions
-    emitter.instruction("bl __rt_heap_free_safe");                             // release only after every output byte was copied
-    emitter.instruction("b __rt_sprintf_loop");                                // scan the next format byte
+    emitter.instruction("str xzr, [sp, #152]");                                 // prevent stale ownership from crossing conversions
+    emitter.instruction("bl __rt_heap_free_safe");                              // release only after every output byte was copied
+    emitter.instruction("b __rt_sprintf_loop");                                 // scan the next format byte
 }
 
 /// Emits the AArch64 controlled-fatal exits for invalid widths/specifiers/argument counts,
-/// concat overflow, and non-stringable boxed values. Each writes a PHP-shaped diagnostic
+/// concat overflow. Each writes a PHP-shaped diagnostic
 /// to stderr and exits with PHP's fatal-error status (255).
 fn emit_fatal_paths(emitter: &mut Emitter) {
     emit_fatal(emitter, "__rt_sprintf_wfatal", "_sprintf_width_msg", SPRINTF_WIDTH_MSG.len());
     emit_fatal(emitter, "__rt_sprintf_ofatal", "_sprintf_overflow_msg", SPRINTF_OVERFLOW_MSG.len());
     emit_fatal(emitter, "__rt_sprintf_afatal", "_sprintf_argcount_msg", SPRINTF_ARGCOUNT_MSG.len());
     emit_fatal(emitter, "__rt_sprintf_sfatal", "_sprintf_unknown_spec_msg", SPRINTF_UNKNOWN_SPEC_MSG.len());
-    emit_fatal(emitter, "__rt_sprintf_mfatal", "_sprintf_mixed_string_msg", SPRINTF_MIXED_STRING_MSG.len());
 }
 
 /// Emits one AArch64 fatal exit block: write `len` bytes of `symbol` to stderr, then exit
