@@ -149,15 +149,56 @@ impl Checker {
                         .filter(|(_, _, _, is_ref)| *is_ref)
                         .map(|(name, _, _, _)| name.clone())
                         .collect();
+                    // Every parameter is bound unconditionally on entry, so all of them are
+                    // recorded at binding depth 0 (a missing entry means "seeded, not bound
+                    // here", which is not kill/retype eligible).
+                    let method_param_names: Vec<String> = method
+                        .params
+                        .iter()
+                        .map(|(name, _, _, _)| name.clone())
+                        .chain(method.variadic.iter().cloned())
+                        .collect();
+                    // A parameter with a declared type hint is a contract: never kill/retype
+                    // eligible inside the body, in either mode.
+                    let method_typed_params: Vec<String> = method
+                        .params
+                        .iter()
+                        .filter(|(_, type_ann, _, _)| type_ann.is_some())
+                        .map(|(name, _, _, _)| name.clone())
+                        .chain(
+                            method
+                                .variadic
+                                .iter()
+                                .filter(|_| method.variadic_type.is_some())
+                                .cloned(),
+                        )
+                        .collect();
                     let mut method_errors = Vec::new();
-                    self.with_local_storage_context(method_ref_params, |checker| {
-                        for s in &method.body {
-                            if let Err(error) = checker.check_stmt(s, &mut method_env) {
-                                method_errors.extend(error.flatten());
+                    // The storage this frame already holds on entry: the parameters. `$this`,
+                    // the superglobals and the seeded globals `method_env` also carries are not
+                    // this frame's own storage, and none of them is markable anyway.
+                    let pre_bound_own_storage: std::collections::HashMap<String, PhpType> =
+                        method_param_names
+                            .iter()
+                            .filter_map(|name| {
+                                method_env.get(name).map(|ty| (name.clone(), ty.clone()))
+                            })
+                            .collect();
+                    self.with_local_storage_context(
+                        method_ref_params,
+                        method_param_names,
+                        method_typed_params,
+                        pre_bound_own_storage,
+                        &method.body,
+                        |checker| {
+                            for s in &method.body {
+                                if let Err(error) = checker.check_stmt(s, &mut method_env) {
+                                    method_errors.extend(error.flatten());
+                                }
                             }
-                        }
-                        Ok(())
-                    })?;
+                            Ok(())
+                        },
+                    )?;
                     let method_has_errors = !method_errors.is_empty();
                     pass_errors.extend(method_errors);
 

@@ -15,7 +15,7 @@
 
 use std::collections::HashSet;
 
-use crate::ir::{LocalKind, Op};
+use crate::ir::{LocalKind, LocalSlotId, Op};
 use crate::ir_lower::context::LoweringContext;
 use crate::parser::ast::{
     BinOp, CallableTarget, CatchClause, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind,
@@ -121,11 +121,16 @@ fn lower_region_at_type_fixpoint(
     // region's ENTRY types only AFTER it, in `canonicalize_array_locals`: read now, the entry types
     // are the speculation's EXIT types, which already carry the very conversions being looked for.
     let snapshot = ctx.snapshot();
+    // Which slot each candidate's name resolves to AT REGION ENTRY. A region that ENDS one of
+    // these bindings — an `unset` the checker recorded as a kill, or an incompatible
+    // reassignment it recorded as a retype — releases the entry slot and mints a fresh one for
+    // the rest of the body. See `discovered_conversions` for why that matters here.
+    let entry_slots = candidate_entry_slots(ctx, &candidates);
     ctx.forget_array_conversions(&candidates);
     let outer = ctx.set_speculating(true);
     lower_once(ctx);
     ctx.set_speculating(outer);
-    let conversions = discovered_conversions(ctx, &candidates);
+    let conversions = discovered_conversions(ctx, &candidates, &entry_slots);
     ctx.restore(snapshot);
 
     // Re-lower unconditionally, even with nothing to convert: the discovery pass suppressed the
@@ -157,6 +162,17 @@ fn convertible_array_locals(ctx: &LoweringContext<'_, '_>) -> Vec<String> {
     names
 }
 
+/// Returns the frame slot each candidate's name resolves to right now, aligned with `candidates`.
+fn candidate_entry_slots(
+    ctx: &LoweringContext<'_, '_>,
+    candidates: &[String],
+) -> Vec<Option<LocalSlotId>> {
+    candidates
+        .iter()
+        .map(|name| ctx.local_slots.get(name).copied())
+        .collect()
+}
+
 /// Returns what the just-lowered region converted each candidate to, as `(local, representation)`.
 ///
 /// The candidates come from the type environment and are filtered by the conversion record, not the
@@ -164,13 +180,34 @@ fn convertible_array_locals(ctx: &LoweringContext<'_, '_>) -> Vec<String> {
 /// would miss a local converted earlier in the function, rebound to a fresh concrete array since,
 /// and converted again here. `forget_array_conversions` is what keeps that over-approximation from
 /// hoisting conversions this region does not actually perform.
+///
+/// A candidate whose BINDING the region ended is dropped outright. `unset($a)` at a checker-recorded
+/// kill site, and an incompatible reassignment at a checker-recorded retype site, both release the
+/// entry slot and re-bind the name to a fresh one; a conversion the region recorded AFTER that point
+/// describes the fresh slot's storage. Canonicalization, though, runs at the region's ENTRY, where
+/// the name still resolves to the OLD slot — so hoisting such a conversion would rewrite the layout
+/// of an array that is about to be released, using a target representation derived from an entirely
+/// different value, and `store_mutated_local` would put the converted old array back under a name
+/// the region then re-binds. `abandon_local_binding` already drops what was recorded BEFORE the
+/// kill; this drops what is recorded after it.
+///
+/// Ending a binding is detected by slot IDENTITY rather than by re-deriving the checker's decision
+/// from the AST, for the same reason the conversions themselves are discovered by lowering instead
+/// of predicted from the AST: the decision lives in the lowering (it also depends on
+/// `local_binding_slot_is_abandonable`, which the AST cannot see), and a second copy of it would
+/// eventually desynchronize from the first. The fresh binding is not left un-canonicalized either —
+/// like any local first assigned inside the region, it is canonicalized by its own nested region on
+/// the second, non-speculative pass.
 fn discovered_conversions(
     ctx: &LoweringContext<'_, '_>,
     candidates: &[String],
+    entry_slots: &[Option<LocalSlotId>],
 ) -> Vec<(String, PhpType)> {
     candidates
         .iter()
-        .filter_map(|name| Some((name.clone(), ctx.array_conversion(name)?.clone())))
+        .zip(entry_slots)
+        .filter(|(name, entry_slot)| ctx.local_slots.get(name.as_str()).copied() == **entry_slot)
+        .filter_map(|(name, _)| Some((name.clone(), ctx.array_conversion(name)?.clone())))
         .collect()
 }
 

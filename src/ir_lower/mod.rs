@@ -18,6 +18,8 @@ mod effects_lookup;
 mod expr;
 mod fibers;
 mod function;
+/// The padding-thunk symbol codegen calls for a dynamic `new` that omits defaulted arguments.
+pub(crate) use function::dynamic_constructor_thunk_name;
 mod ownership;
 mod program;
 mod reflection;

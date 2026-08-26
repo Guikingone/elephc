@@ -251,10 +251,17 @@ impl FakeOps {
             EvalBinOp::LooseNotEq => !self.loose_eq(left, right),
             EvalBinOp::StrictEq => self.strict_eq(left, right),
             EvalBinOp::StrictNotEq => !self.strict_eq(left, right),
-            EvalBinOp::Lt => self.numeric(left)? < self.numeric(right)?,
-            EvalBinOp::LtEq => self.numeric(left)? <= self.numeric(right)?,
-            EvalBinOp::Gt => self.numeric(left)? > self.numeric(right)?,
-            EvalBinOp::GtEq => self.numeric(left)? >= self.numeric(right)?,
+            EvalBinOp::Lt | EvalBinOp::LtEq | EvalBinOp::Gt | EvalBinOp::GtEq => {
+                let (ordering, unordered) = self.php_ordering(left, right);
+                !unordered
+                    && match op {
+                        EvalBinOp::Lt => ordering.is_lt(),
+                        EvalBinOp::LtEq => ordering.is_le(),
+                        EvalBinOp::Gt => ordering.is_gt(),
+                        EvalBinOp::GtEq => ordering.is_ge(),
+                        _ => unreachable!("relational arm filters the opcode"),
+                    }
+            }
             EvalBinOp::Add
             | EvalBinOp::Sub
             | EvalBinOp::Mul
@@ -282,15 +289,50 @@ impl FakeOps {
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        let left = self.numeric(left)?;
-        let right = self.numeric(right)?;
-        let value = if left < right {
-            -1
-        } else if left > right {
-            1
-        } else {
-            0
+        let (ordering, _unordered) = self.php_ordering(left, right);
+        let value = match ordering {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
         };
         self.int(value)
+    }
+
+    /// Compares fake integer and string array keys using PHP regular-sort rules.
+    pub(super) fn runtime_regular_key_compare(
+        &self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<i64, EvalStatus> {
+        let left = self.key(left)?;
+        let right = self.key(right)?;
+        let order = match (&left, &right) {
+            (FakeKey::Int(left), FakeKey::Int(right)) => left.cmp(right),
+            (FakeKey::String(left), FakeKey::String(right)) => {
+                match (left.parse::<f64>(), right.parse::<f64>()) {
+                    (Ok(left), Ok(right)) => left
+                        .partial_cmp(&right)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                    _ => left.cmp(right),
+                }
+            }
+            (FakeKey::Int(left), FakeKey::String(right)) => match right.parse::<f64>() {
+                Ok(right) => (*left as f64)
+                    .partial_cmp(&right)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                Err(_) => left.to_string().cmp(right),
+            },
+            (FakeKey::String(left), FakeKey::Int(right)) => match left.parse::<f64>() {
+                Ok(left) => left
+                    .partial_cmp(&(*right as f64))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                Err(_) => left.cmp(&right.to_string()),
+            },
+        };
+        Ok(match order {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        })
     }
 }

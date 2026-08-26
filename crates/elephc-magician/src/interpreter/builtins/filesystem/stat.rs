@@ -66,15 +66,15 @@ pub(in crate::interpreter) fn eval_file_stat_scalar_result(
     if let Some(stat) = eval_user_wrapper_url_stat_result(&path, 0, context, values)? {
         return eval_user_wrapper_file_stat_scalar_from_stat(name, stat, values);
     }
+    // Every name this function serves returns `false` on failure, `filemtime` included. It used
+    // to be singled out here to answer `int(0)` on both the unsupported-scheme and the
+    // failed-metadata path, which made `eval("filemtime(...)")` disagree with the same call
+    // compiled and let `=== false` miss under one of the two.
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
-        return match name {
-            "filemtime" => values.int(0),
-            _ => values.bool_value(false),
-        };
+        return values.bool_value(false);
     };
     let metadata = match std::fs::metadata(path) {
         Ok(metadata) => metadata,
-        Err(_) if name == "filemtime" => return values.int(0),
         Err(_) => return values.bool_value(false),
     };
     match name {

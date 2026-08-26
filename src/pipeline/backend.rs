@@ -15,8 +15,13 @@ use super::*;
 pub(super) struct BackendInputs<'a> {
     pub(super) filename: &'a str,
     pub(super) with_crates: &'a HashSet<String>,
+    /// PHP surfaces injected into this compilation ("PDO", "mysqli"), reported to
+    /// `extension_loaded()` alongside archive-derived bridge extensions. Needed
+    /// because the shared `elephc_pdo` archive cannot identify a surface by itself.
+    pub(super) linked_php_surfaces: &'a [String],
     pub(super) ir_module: ir::Module,
     pub(super) web: bool,
+    pub(super) web_isolation: codegen::WebIsolation,
     pub(super) extra_link_libs: &'a [String],
     pub(super) extra_link_paths: &'a [String],
     pub(super) extra_frameworks: &'a [String],
@@ -25,10 +30,13 @@ pub(super) struct BackendInputs<'a> {
     pub(super) emit: Emit,
     pub(super) heap_size: usize,
     pub(super) gc_stats: bool,
+    pub(super) counters: bool,
+    pub(super) instrument: crate::codegen::Instrumentation,
     pub(super) heap_debug: bool,
     pub(super) exported_functions: &'a HashMap<String, exports::ExportedFunction>,
     pub(super) regalloc_linear: bool,
     pub(super) emit_debug_info: bool,
+    pub(super) keep_symbols: bool,
     pub(super) output_paths: &'a OutputPaths,
     pub(super) emit_source_map: bool,
     pub(super) emit_asm: bool,
@@ -36,12 +44,28 @@ pub(super) struct BackendInputs<'a> {
 }
 
 /// Generates user assembly, resolves native requirements, and links the requested artifact.
+/// Restricts a file to its owner (0600).
+///
+/// The build key is written with whatever the umask allows, which on a normal
+/// system is world-readable — and possession of that file is the entire remote
+/// credential. Anyone on the host could read the key out of the deployed binary
+/// too, which is by design, but a sidecar sitting at 0644 next to it makes that
+/// a `cat` rather than a hex dump.
+fn restrict_to_owner(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+}
+
+/// Runs the backend half of a build: emit the assembly, assemble it, and link
+/// the result against the runtime and whichever bridge crates were requested.
 pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     let BackendInputs {
         filename,
         with_crates,
+        linked_php_surfaces,
         mut ir_module,
         web,
+        web_isolation,
         extra_link_libs,
         extra_link_paths,
         extra_frameworks,
@@ -50,10 +74,13 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         emit,
         heap_size,
         gc_stats,
+        counters,
+        instrument,
         heap_debug,
         exported_functions,
         regalloc_linear,
         emit_debug_info,
+        keep_symbols,
         output_paths,
         emit_source_map,
         emit_asm,
@@ -65,6 +92,26 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // lets eval setup register that managed provider with Magician.
     if with_crates.contains("regex") {
         ir_module.required_runtime_features.regex = true;
+    }
+    let probe = with_crates.contains("probe");
+    if probe {
+        // A build that cannot produce a real key does not produce a binary. The
+        // key is the only thing standing between a production endpoint and
+        // anyone who can reach it, so a weaker one is worse than none: it looks
+        // like a credential in every message and holds like nothing.
+        let key = match crate::probe_key::build_key() {
+            Ok(key) => key,
+            Err(error) => {
+                crate::progress::clear();
+                eprintln!(
+                    "Error: --with-monitoring needs a build key and {error}.\n  \
+                     Set ELEPHC_PROBE_KEY to 64 hex characters to supply one."
+                );
+                process::exit(1);
+            }
+        };
+        eprintln!("probe build fingerprint: {}", crate::probe_key::fingerprint(&key));
+        ir_module.probe_key = Some(key);
     }
     let mut runtime_features = ir_module.required_runtime_features;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
@@ -123,14 +170,22 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // Report the bridges actually linked into THIS compilation to
     // `extension_loaded()` / `get_loaded_extensions()`. Each planned bridge is
     // mapped through the single-source bridge table; bridges with no distinct
-    // PHP extension (tz -> date, eval) are skipped. Seeded into a codegen
-    // thread-local because extension folding happens during instruction lowering.
+    // PHP extension (tz -> date, eval) are skipped, and so is `elephc_pdo`,
+    // whose archive backs more than one PHP surface (its table row maps to
+    // None). The injected PHP surfaces ("PDO", "mysqli") are appended instead.
+    // Seeded into a codegen thread-local because extension folding happens
+    // during instruction lowering.
     let mut linked_extensions: Vec<String> = Vec::new();
     for lib in &planned_link_libraries {
         if let Some(ext) = linker::php_extension_for_lib(lib) {
             if !linked_extensions.iter().any(|existing| existing == ext) {
                 linked_extensions.push(ext.to_string());
             }
+        }
+    }
+    for surface in linked_php_surfaces {
+        if !linked_extensions.iter().any(|existing| existing == surface) {
+            linked_extensions.push(surface.clone());
         }
     }
     codegen::set_linked_extensions(linked_extensions);
@@ -140,12 +195,16 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     let user_asm = match codegen::generate_user_asm_from_ir_with_options(
         &ir_module,
         gc_stats,
+        counters,
+        instrument,
+        probe,
         heap_debug,
         requires_elephc_tls,
         emit,
         exported_functions,
         regalloc_linear,
         web,
+        web_isolation,
     ) {
         Ok(asm) => asm,
         Err(err) => {
@@ -288,8 +347,34 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // the binary's debug map to it.
     let keep_obj_for_debug =
         emit_debug_info && !linker::bake_debug_info(target, &output_paths.bin);
+
+    // Strip after the dSYM is baked, never before: `dsymutil` reads the binary's debug map, and
+    // a stripped binary has none. `--debug-info` and `--keep-symbols` both opt out — the first
+    // because stripping would undo what it was asked for, the second for profilers, which read
+    // the symbol table and have no other way to get names.
+    if !emit_debug_info && !keep_symbols {
+        if let Err(error) = linker::strip_symbols(target, emit, &output_paths.bin) {
+            eprintln!("Warning: could not strip symbols ({error}); keeping the larger binary");
+        }
+    }
     if !keep_obj_for_debug {
         let _ = fs::remove_file(&output_paths.obj);
+    }
+
+    // Write the build key next to the binary: `elephc monitor <address> --key`
+    // reads it to run the HMAC handshake. Keep it like a `.env` secret.
+    if let Some(key) = ir_module.probe_key {
+        let sidecar = output_paths.bin.with_extension("key");
+        if let Err(err) = fs::write(&sidecar, crate::probe_key::to_hex(&key)) {
+            eprintln!("warning: could not write the build key {}: {err}", sidecar.display());
+        } else if let Err(err) = restrict_to_owner(&sidecar) {
+            // Not fatal — the key is still usable — but say it, because the
+            // whole point of the file is that only its owner can read it.
+            eprintln!(
+                "warning: could not restrict {} to its owner: {err}",
+                sidecar.display()
+            );
+        }
     }
 
     crate::progress::clear();

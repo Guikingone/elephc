@@ -241,6 +241,29 @@ pub fn function_sig(name: &str) -> Option<FunctionSig> {
     })
 }
 
+/// Returns the fixed argument positions that may contain callable descriptors.
+pub fn callback_parameter_indices(definition: &BuiltinDef) -> Vec<usize> {
+    let callback_names = definition.spec.callback_parameter_names();
+    definition
+        .params
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (name, ty))| {
+            (callback_names.contains(&name.as_str()) || php_type_may_be_callable(ty))
+                .then_some(index)
+        })
+        .collect()
+}
+
+/// Returns whether a PHP type can carry a callable descriptor.
+fn php_type_may_be_callable(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Callable => true,
+        PhpType::Union(types) => types.iter().any(php_type_may_be_callable),
+        _ => false,
+    }
+}
+
 /// Derives a first-class-callable `FunctionSig` for the named builtin.
 ///
 /// Applies `callable_wrapper_sig` to the base `function_sig`, upgrading the
@@ -415,6 +438,20 @@ pub fn check_arity(name: &str, arg_count: usize, span: Span) -> Result<(), Compi
 mod tests {
     use super::*;
     use crate::builtins::spec::DefaultSpec;
+
+    /// Verifies callback slots come from structural contract metadata, not parameter position.
+    #[test]
+    fn callback_parameter_indices_follow_contract_metadata() {
+        assert_eq!(
+            callback_parameter_indices(lookup("array_map").expect("array_map builtin")),
+            vec![0]
+        );
+        assert_eq!(
+            callback_parameter_indices(lookup("usort").expect("usort builtin")),
+            vec![1]
+        );
+        assert!(callback_parameter_indices(lookup("strlen").expect("strlen builtin")).is_empty());
+    }
 
     // Register a registry-specific probe so tests do not depend solely on the
     // spec-module probe (which lives in a different cfg(test) module).
@@ -899,19 +936,34 @@ mod tests {
     }
 
     /// Verifies synthetic array-returning runtime calls retain concrete array metadata.
+    ///
+    /// The element type is what matters: a fallback that widened to `Mixed` would make the
+    /// backend read 8-byte slots as boxed cells. A builtin that can also FAIL carries its
+    /// false arm here as well, because the EIR fallback and the checker's declared type must
+    /// agree — where they disagree the program miscompiles instead of failing to build.
     #[test]
     fn array_runtime_fallbacks_preserve_backend_container_layout() {
+        let string_array = PhpType::Array(Box::new(PhpType::Str));
         for target in [
             crate::ir::RuntimeFnId::Explode,
-            crate::ir::RuntimeFnId::File,
             crate::ir::RuntimeFnId::Glob,
             crate::ir::RuntimeFnId::Scandir,
             crate::ir::RuntimeFnId::SplClasses,
         ] {
             assert_eq!(
                 target.fallback_result_type(&[], &PhpType::Mixed),
-                PhpType::Array(Box::new(PhpType::Str)),
+                string_array,
                 "{} must remain a concrete string array",
+                target.as_eir(),
+            );
+        }
+        // `file()` answers `false` for a read it could not perform, which is the only way a
+        // caller can tell a missing file from an empty one.
+        for target in [crate::ir::RuntimeFnId::File, crate::ir::RuntimeFnId::Fgetcsv] {
+            assert_eq!(
+                target.fallback_result_type(&[], &PhpType::Mixed),
+                PhpType::Union(vec![string_array.clone(), PhpType::False]),
+                "{} must keep its string-array element type AND its false arm",
                 target.as_eir(),
             );
         }

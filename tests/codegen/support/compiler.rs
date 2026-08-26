@@ -25,11 +25,24 @@ pub(crate) fn compile_source_to_asm_with_options(
     gc_stats: bool,
     heap_debug: bool,
 ) -> (String, String, TestLinkRequirements) {
+    compile_source_to_asm_with_counters(source, dir, heap_size, gc_stats, false, heap_debug)
+}
+
+/// Like `compile_source_to_asm_with_options`, with the `--counters` exit dump enabled.
+pub(crate) fn compile_source_to_asm_with_counters(
+    source: &str,
+    dir: &Path,
+    heap_size: usize,
+    gc_stats: bool,
+    counters: bool,
+    heap_debug: bool,
+) -> (String, String, TestLinkRequirements) {
     compile_source_to_asm_with_options_and_regex(
         source,
         dir,
         heap_size,
         gc_stats,
+        counters,
         heap_debug,
         false,
     )
@@ -41,6 +54,7 @@ fn compile_source_to_asm_with_options_and_regex(
     dir: &Path,
     heap_size: usize,
     gc_stats: bool,
+    counters: bool,
     heap_debug: bool,
     with_regex: bool,
 ) -> (String, String, TestLinkRequirements) {
@@ -50,6 +64,7 @@ fn compile_source_to_asm_with_options_and_regex(
         &HashSet::new(),
         heap_size,
         gc_stats,
+        counters,
         heap_debug,
         default_null_repr(),
         with_regex,
@@ -110,6 +125,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
         defines,
         heap_size,
         gc_stats,
+        false,
         heap_debug,
         null_repr,
         false,
@@ -135,6 +151,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr_and_php_version(
         defines,
         heap_size,
         gc_stats,
+        false,
         heap_debug,
         null_repr,
         false,
@@ -150,6 +167,7 @@ fn compile_source_to_asm_with_defines_repr_regex_and_php_version(
     defines: &HashSet<String>,
     heap_size: usize,
     gc_stats: bool,
+    counters: bool,
     heap_debug: bool,
     null_repr: elephc::codegen::NullRepr,
     with_regex: bool,
@@ -161,6 +179,7 @@ fn compile_source_to_asm_with_defines_repr_regex_and_php_version(
         defines,
         heap_size,
         gc_stats,
+        counters,
         heap_debug,
         null_repr,
         with_regex,
@@ -192,6 +211,7 @@ pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
         8_388_608,
         false,
         false,
+        false,
         default_null_repr(),
         false,
         elephc::php_version::PhpVersion::default(),
@@ -212,6 +232,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     defines: &HashSet<String>,
     heap_size: usize,
     gc_stats: bool,
+    counters: bool,
     heap_debug: bool,
     null_repr: elephc::codegen::NullRepr,
     with_regex: bool,
@@ -231,13 +252,40 @@ fn try_compile_source_to_asm_with_defines_repr(
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:
+    // the harness seeds `set_linked_extensions` from the same bits so
+    // `extension_loaded('PDO'/'mysqli')` agrees between `compile_and_run` and
+    // the CLI. mysqli injects after PDO so the shared `elephc_pdo` externs
+    // (merged in idempotently by either) are declared exactly once.
+    let pdo_used = elephc::pdo_prelude::program_uses_pdo(&resolved);
+    let resolved = elephc::pdo_prelude::inject_if_used_for_version(
+        resolved,
+        false,
+        php_version,
+        &mut prelude_inventory,
+    );
+    let mysqli_used = elephc::mysqli_prelude::program_uses_mysqli(&resolved);
+    let resolved = elephc::mysqli_prelude::inject_if_used(
+        resolved,
+        false,
+        php_version,
+        &mut prelude_inventory,
+    );
+    let mut linked_php_surfaces: Vec<String> = Vec::new();
+    if pdo_used {
+        linked_php_surfaces.push("PDO".to_string());
+    }
+    if mysqli_used {
+        linked_php_surfaces.push("mysqli".to_string());
+    }
+    elephc::codegen::set_linked_extensions(linked_php_surfaces);
+    let resolved = elephc::tz_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::list_id_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::var_export_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved =
-        elephc::pdo_prelude::inject_if_used_for_version(resolved, false, php_version);
-    let resolved = elephc::tz_prelude::inject_if_used(resolved, false);
-    let resolved = elephc::list_id_prelude::inject_if_used(resolved);
-    let resolved = elephc::var_export_prelude::inject_if_used(resolved);
-    let resolved = elephc::image_prelude::inject_if_used(resolved, false);
-    let resolved = elephc::hash_prelude::inject_if_used(resolved, false);
+        elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
@@ -246,12 +294,33 @@ fn try_compile_source_to_asm_with_defines_repr(
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
-    let check_result =
+    let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
-    let optimized = elephc::optimize::propagate_constants(resolved);
-    let optimized = elephc::optimize::prune_constant_control_flow(optimized);
-    let optimized = elephc::optimize::normalize_control_flow(optimized);
-    let optimized = elephc::optimize::eliminate_dead_code(optimized);
+    let optimized =
+        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
+    let optimized = elephc::optimize::prune_constant_control_flow(
+        optimized,
+        check_result.local_binding_decision_spans(),
+    );
+    let optimized = elephc::optimize::normalize_control_flow(
+        optimized,
+        check_result.local_binding_decision_spans(),
+    );
+    let optimized = elephc::optimize::eliminate_dead_code(
+        optimized,
+        check_result.local_binding_decision_spans(),
+    );
+    let empty_roots = HashSet::new();
+    let optimized = elephc::optimize::prune_unreachable_declarations(
+        optimized,
+        &mut check_result,
+        elephc::optimize::reachability::PruneOptions {
+            inventory: &prelude_inventory,
+            forced_groups: &empty_roots,
+            exported_functions: &empty_roots,
+            eval_forced: false,
+        },
+    );
     let requires_elephc_tls = check_result
         .required_libraries
         .iter()
@@ -268,12 +337,16 @@ fn try_compile_source_to_asm_with_defines_repr(
     let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
         &ir_module,
         gc_stats,
+        counters,
+        elephc::codegen::Instrumentation::Off, // the exact profiler has its own tests
+        false, // probe
         heap_debug,
         requires_elephc_tls,
         elephc::codegen::Emit::Executable,
         &exported_functions,
         regalloc_linear,
         false,
+        elephc::codegen::WebIsolation::Worker,
     );
     let runtime_features = ir_module.required_runtime_features;
     let runtime_asm =
@@ -466,6 +539,33 @@ pub(crate) fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
     output
 }
 
+// Compiles a PHP source snippet with `--counters` and runs it, capturing stdout and
+// stderr; stderr is expected to contain one `elephc-counters: <name> <count>` line per
+// non-synthetic PHP function.
+/// Provides the Compile and run with call counters helper used by the compiler module.
+pub(crate) fn compile_and_run_with_counters(source: &str) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_counters(source, &dir, 8_388_608, false, true, false);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
 // Compiles a PHP source snippet and runs it with the default 8_388_608-byte heap,
 // capturing stdout and stderr from the resulting binary. Cleans up the temp directory.
 /// Provides the Compile and run capture helper used by the compiler module.
@@ -491,7 +591,7 @@ fn compile_and_run_capture_with_optional_regex(
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options_and_regex(
-            source, &dir, 8_388_608, false, false, with_regex,
+            source, &dir, 8_388_608, false, false, false, with_regex,
         );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture(
@@ -580,7 +680,7 @@ fn compile_and_run_with_heap_size_and_optional_regex(
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options_and_regex(
-            source, &dir, heap_size, false, false, with_regex,
+            source, &dir, heap_size, false, false, false, with_regex,
         );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
 

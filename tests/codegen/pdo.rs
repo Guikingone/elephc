@@ -2912,27 +2912,33 @@ echo $rev . "|" . $nat;
 }
 
 /// Tier-D exception firewall: a collation comparator that `throw`s must not unwind
-/// past the C boundary (SQLite's VDBE + the Rust bridge frame). The adapter's
-/// `setjmp` firewall catches the `throw`, treats the comparison as equal (SQLite's
-/// `xCompare` has no error channel), and lets the query complete. The program must
-/// finish (no deadlock/hang/crash from a `longjmp` over C frames) and the connection
-/// must remain usable — a following query still returns the correct count.
+/// past the C boundary (SQLite's VDBE + the Rust bridge frame). The adapter catches
+/// and releases the Throwable, then the bridge interrupts the active statement so
+/// the callback is not silently treated as equality. The connection remains usable.
 #[test]
 fn test_pdo_sqlite_create_collation_throwing_comparator_does_not_hang() {
     let out = compile_and_run(
         r#"<?php
+class CollationFailure extends Exception {
+    public function __destruct() { echo "released:"; }
+}
 $db = new \Pdo\Sqlite("sqlite::memory:");
 $db->createCollation("BOOM", function($a, $b) {
-    throw new Exception("boom");
+    throw new CollationFailure("boom");
 });
 $db->exec("CREATE TABLE t (name TEXT)");
-$db->exec("INSERT INTO t (name) VALUES ('x'), ('y'), ('z')");
-$rows = $db->query("SELECT name FROM t ORDER BY name COLLATE BOOM")->fetchAll(PDO::FETCH_NUM);
+$db->exec("INSERT INTO t (name) VALUES ('x'), ('y')");
+try {
+    $db->query("SELECT name FROM t ORDER BY name COLLATE BOOM")->fetchAll(PDO::FETCH_NUM);
+    echo "not-thrown:";
+} catch (\PDOException $e) {
+    echo "caught:";
+}
 $count = $db->query("SELECT COUNT(*) FROM t")->fetchColumn();
-echo count($rows) . ":" . $count;
+echo $count;
 "#,
     );
-    assert_eq!(out, "3:3");
+    assert_eq!(out, "released:caught:2");
 }
 
 /// Tier-D `Pdo\Sqlite::createFunction`: a compiled-PHP closure drives a scalar SQL
@@ -6288,4 +6294,49 @@ try {
         out,
         "set:SQLSTATE[HY000]: General error: PDO::ATTR_STATEMENT_CLASS cannot be used with persistent PDO instances|local-ok|ctor:SQLSTATE[HY000]: General error: PDO::ATTR_STATEMENT_CLASS cannot be used with persistent PDO instances"
     );
+}
+
+/// The `T|false` contracts narrow through both standard guard shapes and the value
+/// is usable at its narrowed type.
+///
+/// These methods were declared `T|bool` in the prelude, wider than php's own
+/// `T|false`. A `bool` member is not the literal-false subtype a `=== false` guard
+/// strips, so the value stayed `T|bool` and the idiomatic "guard, then use" shape
+/// could not compile at all — neither via an early return nor a positive branch.
+/// Running the fixture (rather than only type-checking it) is the point: the
+/// narrowed value must also behave at its narrowed type.
+#[test]
+fn test_or_false_contracts_narrow_after_a_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function shout(string $s): string { return strtoupper($s); }
+function width(array $a): int { return count($a); }
+
+function viaEarlyReturn(PDO $pdo): string {
+    $q = $pdo->quote("x");
+    if ($q === false) { return "no"; }
+    return shout($q);
+}
+function viaPositiveBranch(PDO $pdo): string {
+    $id = $pdo->lastInsertId();
+    if ($id !== false) { return shout($id); }
+    return "no";
+}
+function viaExec(PDO $pdo): int {
+    $n = $pdo->exec("CREATE TABLE t (a INTEGER)");
+    if ($n === false) { return -1; }
+    return $n + 1;
+}
+function viaColumnMeta(PDOStatement $st): int {
+    $meta = $st->getColumnMeta(0);
+    if ($meta === false) { return 0; }
+    return width($meta);
+}
+
+$db = new PDO("sqlite::memory:");
+echo viaExec($db), "|", viaQuoteWrap($db), "|", viaPositiveBranch($db), "\n";
+function viaQuoteWrap(PDO $pdo): string { return viaEarlyReturn($pdo); }
+"#,
+    );
+    assert_eq!(out, "1|'X'|0\n");
 }

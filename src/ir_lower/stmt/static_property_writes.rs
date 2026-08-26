@@ -137,8 +137,12 @@ pub(super) fn lower_static_property_array_assign(
     {
         let array_ty = property_ty.clone();
         let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
-        let index = lower_expr(ctx, index);
-        let value = lower_expr(ctx, value);
+        // PHP reads a plain-variable index at STORE time, after the right-hand side, so
+        // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
+        // rule; sharing the helper is what keeps the two from answering differently for
+        // the same source line.
+        let (index, value) =
+            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
         let value = coerce_indexed_array_set_value(ctx, &array_ty, value, Some(span));
         ctx.emit_void(
             Op::ArraySet,
@@ -158,8 +162,12 @@ pub(super) fn lower_static_property_array_assign(
     } else {
         load_static_property(ctx, receiver, property, span)
     };
-    let index = lower_expr(ctx, index);
-    let value = lower_expr(ctx, value);
+    // PHP reads a plain-variable index at STORE time, after the right-hand side, so
+    // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
+    // rule; sharing the helper is what keeps the two from answering differently for
+    // the same source line.
+    let (index, value) =
+        crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
     if static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::RuntimeCall,

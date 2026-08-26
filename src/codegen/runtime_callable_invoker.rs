@@ -299,26 +299,30 @@ fn emit_invoker_exception_boundary_push(
             emitter.instruction(&format!(
                 "sub x0, x29, #{}",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
-            )); // pass the boundary jmp_buf to setjmp
+            ));                                                                 // pass the boundary jmp_buf to setjmp
             emitter.bl_c("setjmp"); // snapshot the bridge stack before entering the callable
             emitter.instruction(&format!("cbnz x0, {}", escape_label));         // non-zero setjmp result means a callable Throwable escaped
         }
         Arch::X86_64 => {
             abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base)); // save the previous native exception-handler head
+            emitter.instruction(
+                &format!("mov QWORD PTR [rbp - {}], r10", handler_base)
+            );                                                                  // save the previous native exception-handler head
             abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)); // preserve the caller activation frame across callable unwinding
+            emitter.instruction(
+                &format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)
+            );                                                                  // preserve the caller activation frame across callable unwinding
             abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
             emitter.instruction(&format!(
                 "mov QWORD PTR [rbp - {}], r10",
                 handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            )); // save diagnostic suppression depth for restoration
+            ));                                                                 // save diagnostic suppression depth for restoration
             emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base)); // compute the boundary handler record address
             abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
             emitter.instruction(&format!(
                 "lea rdi, [rbp - {}]",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
-            )); // pass the boundary jmp_buf to setjmp
+            ));                                                                 // pass the boundary jmp_buf to setjmp
             emitter.bl_c("setjmp"); // snapshot the bridge stack before entering the callable
             emitter.instruction("test eax, eax");                               // did control arrive through longjmp?
             emitter.instruction(&format!("jne {}", escape_label));              // non-zero setjmp result means a callable Throwable escaped
@@ -341,12 +345,14 @@ fn emit_invoker_exception_boundary_pop(emitter: &mut Emitter, handler_base: usiz
             abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", handler_base)); // reload the previous native exception-handler head
+            emitter.instruction(
+                &format!("mov r10, QWORD PTR [rbp - {}]", handler_base)
+            );                                                                  // reload the previous native exception-handler head
             abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
             emitter.instruction(&format!(
                 "mov r10, QWORD PTR [rbp - {}]",
                 handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            )); // reload the saved diagnostic suppression depth
+            ));                                                                 // reload the saved diagnostic suppression depth
             abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
         }
     }
@@ -627,7 +633,7 @@ fn emit_loaded_indexed_array_callback_call(
         emitter.instruction(&format!(
             "mov {}, {}",
             array_new_capacity_reg, tail_count_reg
-        )); // size the variadic array to the tail element count
+        ));                                                                     // size the variadic array to the tail element count
         abi::emit_load_int_immediate(
             emitter,
             array_new_elem_size_reg,
@@ -639,7 +645,7 @@ fn emit_loaded_indexed_array_callback_call(
             "mov {}, {}",
             peek_reg,
             abi::int_result_reg(emitter)
-        )); // keep the new array pointer for the type stamp and copy loop
+        ));                                                                     // keep the new array pointer for the type stamp and copy loop
         crate::codegen::emit_array_value_type_stamp(emitter, peek_reg, &variadic_elem_ty);
         abi::emit_load_int_immediate(emitter, tail_index_reg, 0);
         let loop_label = ctx.next_label("invoker_variadic_loop");
@@ -918,11 +924,13 @@ fn emit_tail_count(
             emitter.instruction(&format!(
                 "sub {}, {}, #{}",
                 dest_reg, len_reg, regular_param_count
-            )); // tail count = argument count minus the fixed parameter prefix
+            ));                                                                 // tail count = argument count minus the fixed parameter prefix
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov {}, {}", dest_reg, len_reg));     // start from the runtime argument count
-            emitter.instruction(&format!("sub {}, {}", dest_reg, regular_param_count)); // subtract the fixed parameter prefix to leave the tail count
+            emitter.instruction(
+                &format!("sub {}, {}", dest_reg, regular_param_count)
+            );                                                                  // subtract the fixed parameter prefix to leave the tail count
         }
     }
 }
@@ -930,8 +938,10 @@ fn emit_tail_count(
 /// Adds an immediate to a register.
 fn emit_add_usize(emitter: &mut Emitter, reg: &str, value: usize) {
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("add {}, {}, #{}", reg, reg, value)), // add the compile-time immediate to the register in place
-        Arch::X86_64 => emitter.instruction(&format!("add {}, {}", reg, value)), // add the compile-time immediate to the register in place
+        Arch::AArch64 => emitter.instruction(
+            &format!("add {}, {}, #{}", reg, reg, value)
+        ),                                                                      // add the compile-time immediate to the register in place
+        Arch::X86_64 => emitter.instruction(&format!("add {}, {}", reg, value)),// add the compile-time immediate to the register in place
     }
 }
 
@@ -939,7 +949,9 @@ fn emit_add_usize(emitter: &mut Emitter, reg: &str, value: usize) {
 fn emit_add_reg(emitter: &mut Emitter, dest_reg: &str, rhs_reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, rhs_reg)); // accumulate the scaled byte offset into the base register
+            emitter.instruction(
+                &format!("add {}, {}, {}", dest_reg, dest_reg, rhs_reg)
+            );                                                                  // accumulate the scaled byte offset into the base register
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("add {}, {}", dest_reg, rhs_reg));     // accumulate the scaled byte offset into the base register
@@ -969,30 +981,44 @@ fn emit_scale_index_to_offset(
     match stride {
         0 => abi::emit_load_int_immediate(emitter, offset_reg, 0),
         8 => match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, index_reg)), // offset = index * 8 (one-word elements)
+            Arch::AArch64 => emitter.instruction(
+                &format!("lsl {}, {}, #3", offset_reg, index_reg)
+            ),                                                                  // offset = index * 8 (one-word elements)
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); // copy the index so scaling leaves the counter intact
+                emitter.instruction(
+                    &format!("mov {}, {}", offset_reg, index_reg)
+                );                                                              // copy the index so scaling leaves the counter intact
                 emitter.instruction(&format!("shl {}, 3", offset_reg));         // offset = index * 8 (one-word elements)
             }
         },
         16 => match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction(&format!("lsl {}, {}, #4", offset_reg, index_reg)), // offset = index * 16 (two-word string elements)
+            Arch::AArch64 => emitter.instruction(
+                &format!("lsl {}, {}, #4", offset_reg, index_reg)
+            ),                                                                  // offset = index * 16 (two-word string elements)
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); // copy the index so scaling leaves the counter intact
+                emitter.instruction(
+                    &format!("mov {}, {}", offset_reg, index_reg)
+                );                                                              // copy the index so scaling leaves the counter intact
                 emitter.instruction(&format!("shl {}, 4", offset_reg));         // offset = index * 16 (two-word string elements)
             }
         },
         _ => match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("mov {}, #{}", offset_reg, stride)); // load the element stride for the generic multiply
+                emitter.instruction(
+                    &format!("mov {}, #{}", offset_reg, stride)
+                );                                                              // load the element stride for the generic multiply
                 emitter.instruction(&format!(
                     "mul {}, {}, {}",
                     offset_reg, index_reg, offset_reg
-                )); // offset = index * element stride
+                ));                                                             // offset = index * element stride
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); // copy the index so scaling leaves the counter intact
-                emitter.instruction(&format!("imul {}, {}", offset_reg, stride)); // offset = index * element stride
+                emitter.instruction(
+                    &format!("mov {}, {}", offset_reg, index_reg)
+                );                                                              // copy the index so scaling leaves the counter intact
+                emitter.instruction(
+                    &format!("imul {}, {}", offset_reg, stride)
+                );                                                              // offset = index * element stride
             }
         },
     }
@@ -1174,11 +1200,15 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
 fn emit_branch_if_invoker_ref_cell_tag(tag_reg: &str, label: &str, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #{}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); // compare the value tag against the invoker ref-cell marker
+            emitter.instruction(
+                &format!("cmp {}, #{}", tag_reg, INVOKER_ARG_REF_CELL_TAG)
+            );                                                                  // compare the value tag against the invoker ref-cell marker
             emitter.instruction(&format!("b.eq {}", label));                    // take the ref-cell path when the marker tag matches
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, {}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); // compare the value tag against the invoker ref-cell marker
+            emitter.instruction(
+                &format!("cmp {}, {}", tag_reg, INVOKER_ARG_REF_CELL_TAG)
+            );                                                                  // compare the value tag against the invoker ref-cell marker
             emitter.instruction(&format!("je {}", label));                      // take the ref-cell path when the marker tag matches
         }
     }
@@ -1221,7 +1251,7 @@ fn emit_branch_if_boxed_invoker_ref_cell(
             emitter.instruction(&format!(
                 "cmp {}, #{}",
                 marker_tag_reg, INVOKER_ARG_REF_CELL_TAG
-            )); // does the boxed cell carry the invoker ref-cell marker tag?
+            ));                                                                 // does the boxed cell carry the invoker ref-cell marker tag?
             emitter.instruction(&format!("b.eq {}", label));                    // take the ref-cell path when the marker tag matches
         }
         Arch::X86_64 => {
@@ -1231,7 +1261,7 @@ fn emit_branch_if_boxed_invoker_ref_cell(
             emitter.instruction(&format!(
                 "cmp {}, {}",
                 marker_tag_reg, INVOKER_ARG_REF_CELL_TAG
-            )); // does the boxed cell carry the invoker ref-cell marker tag?
+            ));                                                                 // does the boxed cell carry the invoker ref-cell marker tag?
             emitter.instruction(&format!("je {}", label));                      // take the ref-cell path when the marker tag matches
         }
     }
@@ -1290,7 +1320,7 @@ fn push_current_result_ref_arg_address(
         "mov {}, {}",
         cell_reg,
         abi::int_result_reg(emitter)
-    )); // keep the freshly allocated ref-cell address in a stable scratch
+    ));                                                                         // keep the freshly allocated ref-cell address in a stable scratch
     store_pushed_value_to_ref_cell(emitter, cell_reg, &pushed_ty);
     abi::emit_push_reg(emitter, cell_reg);
     PhpType::Int
@@ -1306,7 +1336,7 @@ fn wrap_pushed_value_in_ref_cell(emitter: &mut Emitter, val_ty: &PhpType) {
         "mov {}, {}",
         cell_reg,
         abi::int_result_reg(emitter)
-    )); // keep the freshly allocated ref-cell address in a stable scratch
+    ));                                                                         // keep the freshly allocated ref-cell address in a stable scratch
     store_pushed_value_to_ref_cell(emitter, cell_reg, val_ty);
     abi::emit_push_reg(emitter, cell_reg);
 }
@@ -1421,8 +1451,12 @@ fn emit_hash_lookup_for_param_or_index(
 
     // -- fall back to the positional numeric key --
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("mov x0, {}", hash_base_reg)), // pass the argument hash for the numeric-index lookup
-        Arch::X86_64 => emitter.instruction(&format!("mov rdi, {}", hash_base_reg)), // pass the argument hash for the numeric-index lookup
+        Arch::AArch64 => emitter.instruction(
+            &format!("mov x0, {}", hash_base_reg)
+        ),                                                                      // pass the argument hash for the numeric-index lookup
+        Arch::X86_64 => emitter.instruction(
+            &format!("mov rdi, {}", hash_base_reg)
+        ),                                                                      // pass the argument hash for the numeric-index lookup
     }
     abi::emit_load_int_immediate(emitter, key_ptr_reg, numeric_idx as i64);
     abi::emit_load_int_immediate(emitter, key_len_reg, -1);
@@ -1672,12 +1706,12 @@ fn materialize_hash_value_to_result(emitter: &mut Emitter, source_elem_ty: &PhpT
                 "fmov {}, {}",
                 abi::float_result_reg(emitter),
                 raw_lo_reg
-            )), // bit-move the raw hash payload into the float result
+            )),                                                                 // bit-move the raw hash payload into the float result
             Arch::X86_64 => emitter.instruction(&format!(
                 "movq {}, {}",
                 abi::float_result_reg(emitter),
                 raw_lo_reg
-            )), // bit-move the raw hash payload into the float result
+            )),                                                                 // bit-move the raw hash payload into the float result
         },
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
@@ -1730,7 +1764,7 @@ fn push_default_ref_arg(
         "mov {}, {}",
         cell_reg,
         abi::int_result_reg(emitter)
-    )); // keep the freshly allocated ref-cell address in a stable scratch
+    ));                                                                         // keep the freshly allocated ref-cell address in a stable scratch
     store_pushed_value_to_ref_cell(emitter, cell_reg, &pushed_ty);
     abi::emit_push_reg(emitter, cell_reg);
     PhpType::Int
@@ -1804,7 +1838,9 @@ fn emit_float_literal_to_result(emitter: &mut Emitter, data: &mut DataSection, v
             emitter.instruction(&format!("ldr {}, [{}]", float_reg, scratch));  // load the float literal from its data-section slot
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", float_reg, scratch)); // load the float literal from its data-section slot
+            emitter.instruction(
+                &format!("movsd {}, QWORD PTR [{}]", float_reg, scratch)
+            );                                                                  // load the float literal from its data-section slot
         }
     }
 }

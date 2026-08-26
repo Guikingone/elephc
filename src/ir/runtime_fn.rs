@@ -24,6 +24,39 @@ pub enum RuntimeFnTargetSupport {
     AllSupported,
 }
 
+/// A resource destructor `__rt_mixed_free_deep` runs at scope exit, beyond the plain
+/// `close()` every kind-1 stream descriptor gets.
+///
+/// `RuntimeFnId::resource_cleanup_kind` is the SINGLE authority for which of these a
+/// program can produce: the lowering stamps the kind from it, and the runtime emitter
+/// omits the ladder arm for every kind no lowered call declares. A new producer that
+/// does not declare itself here compiles and runs, and silently leaks its handle at
+/// scope exit — declare it in `resource_cleanup_kind` before stamping it.
+///
+/// Kind 0 (generic, no destructor), kind 2 (`HashContext`, stamped by the runtime helper
+/// `__rt_hash_init` rather than by a lowering) and kind 5 (the eval-owned inert handle,
+/// which must never gain an arm) are deliberately absent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceCleanupKind {
+    /// Kind 1: a native stream descriptor closed with `close()`.
+    StreamFd,
+    /// Kind 3: a `popen()` pipe closed and reaped through `__rt_pclose`.
+    PopenPipe,
+    /// Kind 4: an `opendir()` stream released through `__rt_closedir`.
+    Directory,
+}
+
+impl ResourceCleanupKind {
+    /// Returns the value written into the Mixed high payload word for this kind.
+    pub const fn stamp(self) -> u64 {
+        match self {
+            Self::StreamFd => 1,
+            Self::PopenPipe => 3,
+            Self::Directory => 4,
+        }
+    }
+}
+
 /// Complete central descriptor for one typed EIR runtime function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeFnDescriptor {
@@ -126,6 +159,7 @@ pub enum RuntimeFnId {
     EnumExists,
     FunctionExists,
     GetClass,
+    GetObjectVars,
     GetDeclaredClasses,
     GetDeclaredInterfaces,
     GetDeclaredTraits,
@@ -314,6 +348,20 @@ pub enum RuntimeFnId {
     Atan,
     Atan2,
     BaseConvert,
+    BcAdd,
+    BcCeil,
+    BcComp,
+    BcDiv,
+    BcDivmod,
+    BcFloor,
+    BcMod,
+    BcMul,
+    BcPow,
+    BcPowmod,
+    BcRound,
+    BcScale,
+    BcSqrt,
+    BcSub,
     Ceil,
     Clamp,
     Cos,
@@ -614,10 +662,19 @@ impl RuntimeFnId {
                 key: Box::new(PhpType::Mixed),
                 value: Box::new(PhpType::Mixed),
             },
+            // `fgetcsv()` answers `false` at end of file and `file()` answers `false` when the
+            // read fails, so their fallback type must carry that arm too: the checker declares
+            // the union, and a builtin whose EIR and checker types disagree miscompiles rather
+            // than failing to build. This is the authority that is easy to forget, because a
+            // SYNTHESIZED call has no call-site type to fall back on — leaving `fgetcsv()` here
+            // made `SplFileObject::fgetcsv()` read the boxed cell as a raw pointer.
+            RuntimeFnId::Fgetcsv | RuntimeFnId::File => PhpType::Union(vec![
+                PhpType::Array(Box::new(PhpType::Str)),
+                PhpType::False,
+            ]),
             RuntimeFnId::ClassAttributeNames
+            | RuntimeFnId::BcDivmod
             | RuntimeFnId::Explode
-            | RuntimeFnId::Fgetcsv
-            | RuntimeFnId::File
             | RuntimeFnId::Glob
             | RuntimeFnId::Scandir
             | RuntimeFnId::SplClasses => PhpType::Array(Box::new(PhpType::Str)),
@@ -763,6 +820,31 @@ impl RuntimeFnId {
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
+            RuntimeFnId::BcScale => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
+            RuntimeFnId::BcComp => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
+            RuntimeFnId::BcAdd
+            | RuntimeFnId::BcCeil
+            | RuntimeFnId::BcDiv
+            | RuntimeFnId::BcDivmod
+            | RuntimeFnId::BcFloor
+            | RuntimeFnId::BcMod
+            | RuntimeFnId::BcMul
+            | RuntimeFnId::BcPow
+            | RuntimeFnId::BcPowmod
+            | RuntimeFnId::BcRound
+            | RuntimeFnId::BcSqrt
+            | RuntimeFnId::BcSub => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayColumn |
@@ -933,6 +1015,12 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
             ),
+            RuntimeFnId::GetObjectVars => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
             RuntimeFnId::SplObjectHash => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::ALLOC_CONCAT.bits(),
@@ -1039,6 +1127,20 @@ impl RuntimeFnId {
     ) -> &'static [crate::builtins::semantics::BuiltinRequirement] {
         use crate::builtins::semantics::BuiltinRequirement;
         match self {
+            RuntimeFnId::BcAdd
+            | RuntimeFnId::BcCeil
+            | RuntimeFnId::BcComp
+            | RuntimeFnId::BcDiv
+            | RuntimeFnId::BcDivmod
+            | RuntimeFnId::BcFloor
+            | RuntimeFnId::BcMod
+            | RuntimeFnId::BcMul
+            | RuntimeFnId::BcPow
+            | RuntimeFnId::BcPowmod
+            | RuntimeFnId::BcRound
+            | RuntimeFnId::BcScale
+            | RuntimeFnId::BcSqrt
+            | RuntimeFnId::BcSub => &[BuiltinRequirement::Bridge("elephc_bcmath")],
             RuntimeFnId::ElephcPharBzip2Archive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharDecompressArchive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharGetFileMetadata => &[BuiltinRequirement::Bridge("elephc_phar")],
@@ -1131,6 +1233,24 @@ impl RuntimeFnId {
         matches!(self, RuntimeFnId::MbStrlen)
     }
 
+    /// Returns the scope-cleanup kind stamped into the resource this operation boxes.
+    ///
+    /// Read twice, and that is the point: the lowering stamps `Some(kind).stamp()` into the
+    /// Mixed high payload word, and `lowered_runtime_features` turns the same answer into the
+    /// runtime feature bit that decides whether `__rt_mixed_free_deep` emits the matching arm.
+    /// One table, so the producer and the destructor cannot drift apart.
+    ///
+    /// Only kinds with a destructor appear. Every other resource-boxing builtin — `fopen`,
+    /// `tmpfile`, `fsockopen`, the socket family — carries kind 1, whose `close()` is a raw
+    /// syscall on AArch64 and needs nothing gated.
+    pub const fn resource_cleanup_kind(self) -> Option<ResourceCleanupKind> {
+        match self {
+            RuntimeFnId::Popen => Some(ResourceCleanupKind::PopenPipe),
+            RuntimeFnId::Opendir => Some(ResourceCleanupKind::Directory),
+            _ => None,
+        }
+    }
+
     /// Returns whether this operation can publish PHAR bridge helper symbols.
     pub const fn publishes_phar_symbols(self) -> bool {
         matches!(
@@ -1207,12 +1327,27 @@ impl RuntimeFnId {
         // in the default `MayAliasArguments` bucket would keep an owned subject temporary
         // alive for the integer's whole lifetime, which is the leak shape already documented
         // for `Strpos` and `Strtr` below.
-        if matches!(self, RuntimeFnId::IntvalBase) {
+        if matches!(
+            self,
+            RuntimeFnId::IntvalBase | RuntimeFnId::BcComp | RuntimeFnId::BcScale
+        ) {
             return BuiltinResultOwnership::NonHeap;
         }
         if matches!(
             self,
             RuntimeFnId::Abs
+                | RuntimeFnId::BcAdd
+                | RuntimeFnId::BcCeil
+                | RuntimeFnId::BcDiv
+                | RuntimeFnId::BcDivmod
+                | RuntimeFnId::BcFloor
+                | RuntimeFnId::BcMod
+                | RuntimeFnId::BcMul
+                | RuntimeFnId::BcPow
+                | RuntimeFnId::BcPowmod
+                | RuntimeFnId::BcRound
+                | RuntimeFnId::BcSqrt
+                | RuntimeFnId::BcSub
                 | RuntimeFnId::ArrayChunk
                 | RuntimeFnId::ArrayColumn
                 | RuntimeFnId::ArrayCombine
@@ -1267,6 +1402,10 @@ impl RuntimeFnId {
                 // back is independently owned and never aliases the source object's
                 // storage — the caller may release it like any other temporary.
                 | RuntimeFnId::ElephcObjectPropValue
+                // Both disk-space helpers box their float-or-false answer through
+                // `__rt_mixed_from_value`; the fresh cell cannot alias the directory string.
+                | RuntimeFnId::DiskFreeSpace
+                | RuntimeFnId::DiskTotalSpace
                 | RuntimeFnId::Explode
                 | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents
@@ -1277,6 +1416,7 @@ impl RuntimeFnId {
                 // its release, leaking one block per call — measured unbounded, 10 calls left
                 // 10 live blocks, so a `--web` worker calling it per request grows forever.
                 | RuntimeFnId::Getcwd
+                | RuntimeFnId::GetObjectVars
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
                 // is new bytes, never a slice of the encoded value. Same leak shape as the
@@ -1455,6 +1595,7 @@ impl RuntimeFnId {
             RuntimeFnId::EnumExists => "enum_exists",
             RuntimeFnId::FunctionExists => "function_exists",
             RuntimeFnId::GetClass => "get_class",
+            RuntimeFnId::GetObjectVars => "get_object_vars",
             RuntimeFnId::GetDeclaredClasses => "get_declared_classes",
             RuntimeFnId::GetDeclaredInterfaces => "get_declared_interfaces",
             RuntimeFnId::GetDeclaredTraits => "get_declared_traits",
@@ -1642,6 +1783,20 @@ impl RuntimeFnId {
             RuntimeFnId::Asin => "asin",
             RuntimeFnId::Atan => "atan",
             RuntimeFnId::Atan2 => "atan2",
+            RuntimeFnId::BcAdd => "bcadd",
+            RuntimeFnId::BcCeil => "bcceil",
+            RuntimeFnId::BcComp => "bccomp",
+            RuntimeFnId::BcDiv => "bcdiv",
+            RuntimeFnId::BcDivmod => "bcdivmod",
+            RuntimeFnId::BcFloor => "bcfloor",
+            RuntimeFnId::BcMod => "bcmod",
+            RuntimeFnId::BcMul => "bcmul",
+            RuntimeFnId::BcPow => "bcpow",
+            RuntimeFnId::BcPowmod => "bcpowmod",
+            RuntimeFnId::BcRound => "bcround",
+            RuntimeFnId::BcScale => "bcscale",
+            RuntimeFnId::BcSqrt => "bcsqrt",
+            RuntimeFnId::BcSub => "bcsub",
             RuntimeFnId::Ceil => "ceil",
             RuntimeFnId::Clamp => "clamp",
             RuntimeFnId::Cos => "cos",

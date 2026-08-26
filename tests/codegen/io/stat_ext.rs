@@ -135,9 +135,19 @@ fn test_filetype_missing_is_strict_false() {
     assert_eq!(out, "false");
 }
 
-/// Verifies all scalar stat getters (`fileatime`, `filectime`, `fileperms`, `fileowner`,
-/// `filegroup`, `fileinode`) return strict `false` when the target file does not exist.
-/// Each function is checked individually and concatenated results must be "acpogi".
+/// Verifies the scalar stat getters return strict `false` when the target file does not exist.
+///
+/// THE MEMBERSHIP OF THIS LIST IS THE POINT. It used to name six — `fileatime`, `filectime`,
+/// `fileperms`, `fileowner`, `filegroup`, `fileinode` — and the two it left out, `filemtime`
+/// and `filesize`, are exactly the two that stayed broken: `filemtime` answered with whatever
+/// the stack held where `st_mtime` would have been, and `filesize` answered `0`. A family test
+/// that enumerates its members defines the family for every later reader, so an omission does
+/// not read as a gap, it reads as coverage.
+///
+/// All eight are named here now, `filesize` included. Its lowering goes through a
+/// wrapper-dispatch composer shared with `is_file()`, so both arms of that composer had to start
+/// carrying an int|false flag beside the payload; `is_file()` reads the payload register only, so
+/// the flag is inert for it. Concatenated results must be "acpogimts".
 #[test]
 fn test_scalar_stat_getters_missing_are_strict_false() {
     let out = compile_and_run(
@@ -148,9 +158,55 @@ echo fileperms("missing.txt") === false ? "p" : "!";
 echo fileowner("missing.txt") === false ? "o" : "!";
 echo filegroup("missing.txt") === false ? "g" : "!";
 echo fileinode("missing.txt") === false ? "i" : "!";
+echo filemtime("missing.txt") === false ? "m" : "!";
+echo filetype("missing.txt") === false ? "t" : "!";
+echo filesize("missing.txt") === false ? "s" : "!";
 "#,
     );
-    assert_eq!(out, "acpogi");
+    assert_eq!(out, "acpogimts");
+}
+
+/// Verifies `filesize()` still answers `int(0)` for a file that genuinely holds zero bytes.
+///
+/// This is the half of the change that can silently go wrong. `filesize()` used to report every
+/// failure as `0`, so the fix has to separate "could not be measured" from "measured, and it is
+/// zero" — and an empty file is exactly the case where those two answers used to be the same
+/// value. A fix that returned `false` here would be no better than the bug.
+#[test]
+fn test_filesize_of_an_empty_file_is_zero_not_false() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("empty.txt", "");
+$s = filesize("empty.txt");
+echo $s === 0 ? "zero" : "!";
+echo is_int($s) ? "-int" : "-notint";
+echo $s === false ? "-false" : "-notfalse";
+"#,
+    );
+    drop(dir);
+    assert_eq!(out, "zero-int-notfalse");
+}
+
+/// Verifies a successful `filesize()` still behaves as an integer after the return type widened.
+///
+/// Declaring `int|false` changes how the value is CARRIED, not just what it can be. Arithmetic,
+/// `is_int()`, and string concatenation are the three places a boxed result diverges from a raw
+/// one, so a success-side regression would show up here rather than in the failure assertions.
+#[test]
+fn test_filesize_success_still_behaves_as_an_integer() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("seven2.txt", "1234567");
+$s = filesize("seven2.txt");
+echo $s + 1;
+echo ":";
+echo is_int($s) ? "int" : "notint";
+echo ":";
+echo "size=" . $s;
+"#,
+    );
+    drop(dir);
+    assert_eq!(out, "8:int:size=7");
 }
 
 /// Verifies `is_executable()` returns true for `/bin/sh`, which is executable on every
@@ -406,4 +462,54 @@ echo $info["size"];
     );
     assert_eq!(out, "10");
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// `filemtime()` answers `false` for a path it cannot stat, like its seven siblings and like php.
+///
+/// It used to answer with whatever the stack held where `st_mtime` would have been: the AArch64
+/// helper read the buffer without checking that `stat()` had written it, and the x86_64 helper
+/// checked but reported `0` — a legitimate timestamp, indistinguishable from success. Three
+/// authorities had to agree for the failure to survive the trip: the runtime helper raises the
+/// int|false flag its siblings already use, the lowering goes through the shared
+/// `int_or_false` composer instead of reading a plain integer, and the declared return type is
+/// no longer a bare `Int` — that declaration is what discarded the `false`.
+///
+/// The success half is asserted in the same fixture on purpose: a fix that reports failure
+/// correctly and breaks the ordinary read would pass a failure-only test.
+#[test]
+fn test_filemtime_returns_false_for_an_unstatable_path() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("mtime.txt", "x");
+$ok = filemtime("mtime.txt");
+$bad = @filemtime("/nonexistent/elephc/probe");
+echo var_export($bad, true), "|", ($ok > 1000000000 ? "ok" : "bad"), "|";
+echo var_export(@filemtime("also/missing"), true);
+"#,
+    );
+    assert_eq!(out, "false|ok|false");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The same read, twice in one process, from two different stack depths.
+///
+/// This is the witness for the LEAK rather than for the value: an uninitialised read tracks a
+/// stack address, so it answers differently depending on how deep the frame sits — and it
+/// changed between runs of one binary, which no single-call assertion can see. Both calls must
+/// now agree, and agree with php.
+#[test]
+fn test_filemtime_failure_does_not_depend_on_stack_depth() {
+    let out = compile_and_run(
+        r#"<?php
+function deep(int $n): string {
+    if ($n > 0) {
+        return deep($n - 1);
+    }
+    return var_export(@filemtime("/nonexistent/elephc/probe"), true);
+}
+$shallow = var_export(@filemtime("/nonexistent/elephc/probe"), true);
+echo $shallow, "|", deep(12);
+"#,
+    );
+    assert_eq!(out, "false|false");
 }

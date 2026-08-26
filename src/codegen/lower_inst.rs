@@ -15,9 +15,6 @@ use crate::codegen::{
     emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, runtime,
     runtime_value_tag,
 };
-use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
-};
 use crate::intrinsics::{IntrinsicCall, IntrinsicCallKind};
 use crate::ir::{
     BlockId, Builder, CmpPredicate, Function, FunctionParam, Immediate, InstId, Instruction,
@@ -44,6 +41,7 @@ mod comparisons;
 mod conversions;
 mod enums;
 mod exceptions;
+mod mixed_narrowing;
 mod externs;
 mod floats;
 mod hashes;
@@ -124,6 +122,10 @@ pub(super) use call_operands::{
     direct_call_stack_pad_bytes, emit_mixed_string_for_persistent_store,
     load_value_to_first_int_arg, resolve_int_operand_to_result,
 };
+pub(in crate::codegen) use builtins::emit_count_countable_guard_from_result;
+pub(in crate::codegen) use conversions::{
+    emit_mixed_string_dispatch_from_result, MixedStringContextMode,
+};
 pub(super) use core_closures::function_signature_from_eir;
 pub(super) use descriptor_entries::emit_static_method_descriptor_entry_wrapper;
 pub(super) use descriptor_metadata::{
@@ -161,6 +163,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
         Op::UnsetLocal => lower_unset_local(ctx, &inst),
+        Op::ZeroLocalSlot => lower_zero_local_slot(ctx, &inst),
         Op::LoadRefCell => lower_load_ref_cell(ctx, &inst),
         Op::StoreRefCell => lower_store_ref_cell(ctx, &inst),
         Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
@@ -212,6 +215,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FNeg => floats::lower_float_neg(ctx, &inst),
         Op::ICmp => lower_int_compare(ctx, &inst),
         Op::FCmp => floats::lower_float_compare(ctx, &inst),
+        Op::PhpRelCmp => comparisons::lower_php_rel_cmp(ctx, &inst),
         Op::Spaceship => comparisons::lower_spaceship(ctx, &inst),
         Op::StrCmp => comparisons::lower_str_cmp(ctx, &inst),
         Op::StrictEq => comparisons::lower_strict_eq(ctx, &inst, true),
@@ -322,6 +326,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
         Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
         Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
+        Op::StaticPropInitialized => {
+            static_properties::lower_static_property_initialized(ctx, &inst)
+        }
         Op::LoadReflectionStaticProperty => {
             static_properties::lower_load_reflection_static_property(ctx, &inst)
         }
@@ -343,6 +350,10 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EvalStaticMethodCall => lower_eval_static_method_call(ctx, &inst),
         Op::EnumBackingStringToInt => enums::lower_enum_backing_string_to_int(ctx, &inst),
         Op::EnumBackingMixedToInt => enums::lower_enum_backing_mixed_to_int(ctx, &inst),
+        Op::PackedFieldMixedToInt => objects::lower_packed_field_mixed_to_int(ctx, &inst),
+        Op::ReturnBoundaryMixedToInt => {
+            mixed_narrowing::lower_return_boundary_mixed_to_int(ctx, &inst)
+        }
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::LanguageConstructCall => builtins::lower_language_construct_call(ctx, &inst),
         Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, &inst),

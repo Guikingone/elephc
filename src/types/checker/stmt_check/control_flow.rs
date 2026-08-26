@@ -62,13 +62,18 @@ fn stabilize_loop_storage(
                     | ExprKind::ClosureCall { .. }
                     | ExprKind::ExprCall { .. }
             );
-            if is_call {
+            // The memo is keyed by span, so it may only answer for a span that names one call.
+            // Under `Span::dummy()` every method / static / closure call in a prelude loop body
+            // shared a single entry and the FIRST call's inferred type was handed to all of
+            // them — 42 times while checking one `new PDO("sqlite::memory:")` program.
+            let memoizable = is_call && expr.span.identifies_a_node();
+            if memoizable {
                 if let Some(cached) = call_types.get(&expr.span) {
                     return Some(cached.clone());
                 }
             }
             let inferred = checker.infer_type(expr, analysis_env).ok()?;
-            if is_call {
+            if memoizable {
                 call_types.insert(expr.span, inferred.clone());
             }
             Some(inferred)
@@ -145,6 +150,30 @@ impl Checker {
                 value_by_ref,
                 body,
             } => {
+                // `foreach ($arr as &$v)` takes a reference into each element, so BOTH names it
+                // touches are reference-aliased for the rest of the body and neither binding can
+                // be killed or re-bound — releasing or abandoning that storage would strand the
+                // element references.
+                //
+                // The ITERABLE is aliased because the loop holds references into its elements.
+                // `$v` is aliased because it IS one of those references: PHP leaves it bound to
+                // the last element after the loop ends, so a post-loop `$v = "changed"` writes
+                // through into `$arr`. The conditional-depth rule does NOT cover it — a `$v`
+                // already assigned at depth 0 ABOVE the loop keeps that depth-0 binding, so
+                // `local_binding_is_killable` answered true and the permissive path re-bound a
+                // name lowering had ref-bound (`mark_ref_bound_local` in
+                // `crate::ir_lower::stmt::typed_foreach`). Lowering then refuses the re-bind and
+                // degrades to a store through the ref cell at the CELL's type, which for
+                // `int` cell + `string` value has no coercion at all: a program the strict
+                // checker rejects became one that miscompiles. Marking `$v` here is the same
+                // permanent marking a `=&` target receives, and restores the hard error.
+                //
+                // Recorded before the iterable is inferred so an iterable that fails to type is
+                // still treated as aliased.
+                if *value_by_ref {
+                    self.record_reference_alias_root(array);
+                    self.ref_aliased_locals.insert(value_var.clone());
+                }
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
                 if let PhpType::Array(elem_ty) = &arr_ty {
                     if let Some(k) = key_var {
@@ -437,7 +466,28 @@ impl Checker {
             StmtKind::While { condition, body } => {
                 stabilize_loop_storage(self, stmt.span, body, None, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
+                // The condition is re-evaluated before every iteration, so a guard on it
+                // holds on entry to each one: `while (($row = fgetcsv($h)) !== false)`
+                // leaves `$row` an array inside the body. The narrowing is dropped again
+                // afterwards, because the loop exits precisely when the guard is false.
+                let guard = self.guard_narrowing(condition, env)?;
+                let saved = guard
+                    .as_ref()
+                    .map(|g| (g.var.clone(), env.get(&g.var).cloned()));
+                if let Some(g) = &guard {
+                    env.insert(g.var.clone(), g.then_ty.clone());
+                }
                 let errors = self.check_break_continue_target_body(body, env);
+                if let Some((var, previous)) = saved {
+                    match previous {
+                        Some(ty) => {
+                            env.insert(var, ty);
+                        }
+                        None => {
+                            env.remove(&var);
+                        }
+                    }
+                }
                 if errors.is_empty() {
                     Ok(())
                 } else {

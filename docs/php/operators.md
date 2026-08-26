@@ -88,8 +88,10 @@ dependency?` when `==` meets a cyclic array/object graph. elephc's comparison
 walker stops at a fixed nesting depth and reports "not equal" instead of failing,
 so a cyclic comparison terminates normally rather than aborting the program.
 
-`===` on two arrays is not yet supported by the backend and reports an
-unsupported-feature diagnostic at compile time.
+`===` and `!==` perform PHP-compatible deep structural comparison for indexed,
+associative, nested, and heterogeneous arrays. Keys, values, value types, and
+iteration order must all match; associative arrays containing the same pairs in
+a different order are therefore not strictly equal.
 
 ## Bitwise
 

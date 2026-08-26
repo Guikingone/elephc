@@ -61,7 +61,8 @@ const ITERATOR_ITERATOR_DOWNCAST_MESSAGE: &str =
     "Class to downcast to not found or not base class or does not implement Traversable";
 
 /// Resolved declared-property storage metadata for a known object receiver.
-struct PropertySlot {
+#[derive(Clone)]
+pub(super) struct PropertySlot {
     class_name: String,
     property: String,
     php_type: PhpType,
@@ -104,13 +105,19 @@ struct ConstructorCallTarget {
     param_types: Vec<PhpType>,
     ref_params: Vec<bool>,
     sig: crate::types::FunctionSig,
+    /// Symbol to call instead of the constructor itself, when the site passes fewer arguments
+    /// than the constructor declares. `ir_lower` emits `_class_ctor_<id>_<argc>` for exactly
+    /// those pairs; it takes what the site passed and calls the real constructor with the
+    /// declared defaults appended. Codegen cannot build those defaults itself — by the time it
+    /// runs, arguments are materialized SSA values and a default is still an expression.
+    padding_thunk: Option<String>,
 }
 
 
 mod fixed_new;
 mod clone_and_spl;
 mod iterator_iterator;
-mod throwable_new;
+pub(in crate::codegen::lower_inst) mod throwable_new;
 mod fiber_dynamic_entry;
 mod dynamic_mixed_candidates;
 mod dynamic_factory;
@@ -196,6 +203,7 @@ pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_prop_get, lower_prop_initialized,
 };
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
+pub(super) use property_store_values::lower_packed_field_mixed_to_int;
 pub(super) use property_resolution::{
     emit_boxed_null, emit_nullable_receiver_object_payload, nullable_object_receiver_class,
     raw_value_php_type,
@@ -204,6 +212,26 @@ pub(super) use runtime_property_writes::{
     lower_dynamic_prop_set, lower_prop_set, lower_prop_unset,
 };
 pub(super) use clone_and_spl::lower_object_clone_shallow;
+
+/// Resolves the declared property slot targeted by a direct container mutation.
+pub(super) fn resolve_mutated_container_property(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    inst: &Instruction,
+) -> Result<PropertySlot> {
+    let property = property_name_immediate(ctx, inst)?;
+    resolve_property_slot(ctx, object, property, inst)
+}
+
+/// Stores a mutating builtin's retained container result through the object-lowering facade.
+pub(super) fn store_mutated_container_property_owner(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    slot: &PropertySlot,
+    value: ValueId,
+) -> Result<()> {
+    store_mutated_container_property(ctx, object, slot, value)
+}
 
 /// Stamps a declared property slot with the uninitialized-typed-property marker.
 ///
@@ -262,7 +290,7 @@ fn lower_dynamic_prop_unset(
             ctx.emitter.instruction(&format!(
                 "mov rdi, QWORD PTR [{} + {}]",
                 object_reg, hash_offset
-            )); // load the dynamic-property hash pointer from the receiver
+            ));                                                                 // load the dynamic-property hash pointer from the receiver
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_unset");

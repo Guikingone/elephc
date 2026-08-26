@@ -731,7 +731,11 @@ impl SqliteConn {
         let Ok(c_name) = CString::new(name) else {
             return 0;
         };
-        let reg = Box::into_raw(Box::new(UdfReg { descriptor, adapter })) as *mut c_void;
+        let reg = Box::into_raw(Box::new(UdfReg {
+            descriptor,
+            adapter,
+            db: self.db,
+        })) as *mut c_void;
         // `_v2` invokes `x_destroy` (freeing the box) even when it returns an
         // error, so the success path is the only one that must not free here.
         let rc = ffi::sqlite3_create_collation_v2(
@@ -775,7 +779,11 @@ impl SqliteConn {
         let Ok(c_name) = CString::new(name) else {
             return 0;
         };
-        let reg = Box::into_raw(Box::new(UdfReg { descriptor, adapter })) as *mut c_void;
+        let reg = Box::into_raw(Box::new(UdfReg {
+            descriptor,
+            adapter,
+            db: self.db,
+        })) as *mut c_void;
         // `_v2` invokes `x_destroy` (freeing the box) even on failure, so only the
         // success path must not free here. `flags` carries SQLITE_DETERMINISTIC etc.,
         // OR-ed into the UTF-8 text encoding as SQLite's C API expects.
@@ -978,7 +986,12 @@ struct UdfReg {
     descriptor: *mut c_void,
     /// The shared codegen adapter entry that re-enters the descriptor.
     adapter: *const c_void,
+    /// Owning SQLite handle, used to abort a statement when a collation throws.
+    db: *mut ffi::sqlite3,
 }
+
+/// Sentinel returned by the codegen collation adapter after catching a PHP throw.
+const COLLATION_CALLBACK_ERROR: i64 = i64::MIN;
 
 /// SQLite authorizer registration with deferred PHP error state. The authorizer
 /// API has no destructor hook, so `SqliteConn` owns and frees this box directly.
@@ -1018,6 +1031,10 @@ unsafe extern "C" fn x_compare(
         b as *const u8,
         n_b as i64,
     );
+    if sign == COLLATION_CALLBACK_ERROR {
+        ffi::sqlite3_interrupt(reg.db);
+        return 0;
+    }
     sign.clamp(-1, 1) as c_int
 }
 
@@ -1521,6 +1538,24 @@ unsafe extern "C" fn x_destroy_agg(p_arg: *mut c_void) {
 }
 
 impl SqliteStmt {
+    /// The original SQL text of this prepared statement (with `?` placeholders,
+    /// not the bound values), recovered from the native handle — no need to
+    /// store it at prepare time. Empty if the statement was already finalized.
+    /// Used by the exact profiler to list distinct statements and their counts.
+    pub fn query_text(&self) -> String {
+        if self.ptr.is_null() {
+            return String::new();
+        }
+        unsafe {
+            let value = ffi::sqlite3_sql(self.ptr);
+            if value.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(value).to_string_lossy().into_owned()
+            }
+        }
+    }
+
     /// Returns SQLite's source table name for result column `i`, or an empty
     /// string for expressions and out-of-range columns.
     pub fn column_table_name(&self, i: i64) -> String {

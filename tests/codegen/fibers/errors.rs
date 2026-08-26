@@ -22,6 +22,34 @@ catch (FiberError $e) { echo $e->getMessage(); }
     assert_eq!(out, "Cannot suspend outside of a fiber");
 }
 
+/// Verifies a hydration hook cannot suspend while `unserialize()` owns
+/// process-scoped parser state. The controlled `FiberError` must leave that
+/// state clean enough for the caught fiber to deserialize another value.
+#[test]
+fn test_fiber_cannot_suspend_during_unserialize_hydration() {
+    let out = compile_and_run(
+        r#"<?php
+class SuspendingWakeupPayload {
+    public function __wakeup(): void { Fiber::suspend("unsafe"); }
+}
+$fiber = new Fiber(function(): void {
+    $wire = serialize(new SuspendingWakeupPayload());
+    try {
+        unserialize($wire, ['allowed_classes' => ['SuspendingWakeupPayload']]);
+        echo "no-throw";
+    } catch (FiberError $e) {
+        echo $e->getMessage(), "|", unserialize('i:2;');
+    }
+});
+$fiber->start();
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot suspend a fiber while unserialize() is active|2"
+    );
+}
+
 /// Verifies that calling `start()` on a fiber that has already been started
 /// throws `FiberError` with the message "Cannot start a fiber that has already been started".
 #[test]
@@ -88,12 +116,17 @@ try {
 
 /// Verifies that calling `throw()` on a fiber that is not suspended throws `FiberError`
 /// with the message "Cannot resume a fiber that is not suspended".
+///
+/// The thrown value is an `Exception` rather than a `FiberError`: reference PHP reserves
+/// `FiberError` for internal use, so the original fixture's `new FiberError("x")` is refused
+/// there. Which throwable is handed to `throw()` is incidental to this test — the fiber is
+/// not suspended, so it never reaches the callback.
 #[test]
 fn test_fiber_error_on_throw_not_suspended() {
     let out = compile_and_run(
         r#"<?php
 $f = new Fiber(function(): void {});
-try { $f->throw(new FiberError("x")); echo "no-throw"; }
+try { $f->throw(new Exception("x")); echo "no-throw"; }
 catch (FiberError $e) { echo $e->getMessage(); }
 "#,
     );
@@ -148,4 +181,23 @@ echo "after-start";
 "#,
     );
     assert_eq!(out, "fiber-caught;after-start");
+}
+
+/// Verifies the reserved-class refusal did not take the engine's own `FiberError` with it.
+///
+/// `new FiberError(...)` is refused at compile time, which is what PHP does — see
+/// `test_error_fiber_error_is_reserved_for_internal_use`. The class must still exist for the
+/// runtime to RAISE and for user code to CATCH by name; a guard that removed it outright
+/// would satisfy the refusal test and break every fiber program.
+#[test]
+fn test_fiber_error_is_still_raised_and_catchable() {
+    let out = compile_and_run(
+        r#"<?php
+$f = new Fiber(function (): void { Fiber::suspend(1); });
+$f->start();
+try { $f->start(); echo "not reached"; }
+catch (FiberError $e) { echo "caught:", get_class($e); }
+"#,
+    );
+    assert_eq!(out, "caught:FiberError");
 }

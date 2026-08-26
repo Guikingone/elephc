@@ -6,8 +6,8 @@
 //! `url_rewriter` output filter.
 //!
 //! Called from:
-//! - `crate::worker`'s response-assembly path, once per request, between the
-//!   handler run and the gzip decision (so rewriting happens on plaintext).
+//! - `crate::request_state`'s response-capture path, which buffers only an
+//!   activated trans-SID response and rewrites it before streaming plaintext.
 //!
 //! Key details:
 //! - Rewriting is fully gated by session config (`use_trans_sid=1`,
@@ -97,6 +97,23 @@ fn activation(req_cookie: Option<&str>) -> Option<Activation> {
     }
 }
 
+/// Rewrites trans-SID response headers before first output and reports whether
+/// the HTML body also needs whole-response buffering.
+///
+/// Inactive and non-HTML responses retain the immediate streaming path. A
+/// same-origin `Location` is still rewritten before headers are committed.
+pub(crate) fn prepare_streaming_response(
+    req_cookie: Option<&str>,
+    req_host: Option<&str>,
+    headers: &mut Vec<(String, String)>,
+) -> bool {
+    let Some(act) = activation(req_cookie) else {
+        return false;
+    };
+    rewrite_location_header(headers, &act, req_host);
+    content_type_is_html(headers)
+}
+
 /// Rewrites the response body and `Location` header to propagate the session id
 /// when `session.use_trans_sid` is active, returning the (possibly rewritten)
 /// body. When inactive the body is returned unchanged with zero allocation.
@@ -115,14 +132,7 @@ pub fn maybe_rewrite_response(
         Some(a) => a,
         None => return body,
     };
-    // Same-origin redirects must carry the SID too.
-    for (n, v) in resp_headers.iter_mut() {
-        if n.eq_ignore_ascii_case("location") {
-            if let Some(new) = rewrite_url(v, &act.name, &act.id, &act.hosts, req_host) {
-                *v = new;
-            }
-        }
-    }
+    rewrite_location_header(resp_headers, &act, req_host);
     // Only HTML bodies are rewritten; a missing Content-Type is treated as HTML.
     if !content_type_is_html(resp_headers) {
         return body;
@@ -135,11 +145,32 @@ pub fn maybe_rewrite_response(
     match rewrite_html(&text, &act.name, &act.id, &act.tags, &act.hosts, req_host) {
         Some(new_body) => {
             // The body length changed: drop any explicit Content-Length so the
-            // hyper `Full<Bytes>` body recomputes the correct length.
+            // hyper response body recomputes the correct length.
             resp_headers.retain(|(n, _)| !n.eq_ignore_ascii_case("content-length"));
             new_body.into_bytes()
         }
         None => text.into_bytes(),
+    }
+}
+
+/// Rewrites a same-origin `Location` header using an activated session.
+fn rewrite_location_header(
+    headers: &mut Vec<(String, String)>,
+    activation: &Activation,
+    req_host: Option<&str>,
+) {
+    for (n, v) in headers.iter_mut() {
+        if n.eq_ignore_ascii_case("location") {
+            if let Some(new) = rewrite_url(
+                v,
+                &activation.name,
+                &activation.id,
+                &activation.hosts,
+                req_host,
+            ) {
+                *v = new;
+            }
+        }
     }
 }
 

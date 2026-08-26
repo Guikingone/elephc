@@ -173,12 +173,16 @@ pub(super) fn promote_local_slot_for_ref_capture(
         abi::load_at_offset(ctx.emitter, state_reg, state_offset);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cbz {}, {}", state_reg, promote)); // create the fallback cell only on the first runtime promotion
+                ctx.emitter.instruction(
+                    &format!("cbz {}, {}", state_reg, promote)
+                );                                                              // create the fallback cell only on the first runtime promotion
                 ctx.emitter
                     .instruction(&format!("b {}", done));                         // reuse the existing cell on later loop iterations
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test whether this slot already stores a fallback cell
+                ctx.emitter.instruction(
+                    &format!("test {}, {}", state_reg, state_reg)
+                );                                                              // test whether this slot already stores a fallback cell
                 ctx.emitter
                     .instruction(&format!("je {}", promote));                       // create the fallback cell only on the first runtime promotion
                 ctx.emitter
@@ -226,7 +230,7 @@ pub(super) fn promote_local_slot_for_ref_capture_unchecked(
         "mov {}, {}",
         cell_reg,
         abi::int_result_reg(ctx.emitter)
-    )); // keep the promoted closure capture cell while restoring its value
+    ));                                                                         // keep the promoted closure capture cell while restoring its value
     pop_result_value(ctx, &local_ty);
     store_current_result_to_ref_cell(ctx, cell_reg, &local_ty);
     if release_replaced_value {

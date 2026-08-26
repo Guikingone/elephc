@@ -10,16 +10,16 @@ sidebar:
 
 Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 internal functions).
 
-Overall builtin coverage: **459 / 2030** (23%).
+Overall builtin coverage: **473 / 2030** (23%).
 
 ## Builtin coverage by PHP module
 
 | PHP module | Supported | Coverage | AOT | eval() |
 |---|---|---|---|---|
-| `bcmath` | 0 / 14 | 0% | 0 | 0 |
+| `bcmath` | 14 / 14 | 100% | 14 | 14 |
 | `bz2` | 0 / 10 | 0% | 0 | 0 |
 | `calendar`† | 0 / 18 | 0% | 0 | 0 |
-| `core` | 32 / 59 | 54% | 28 | 30 |
+| `core` | 32 / 59 | 54% | 29 | 30 |
 | `ctype` | 4 / 11 | 36% | 4 | 4 |
 | `curl` | 0 / 33 | 0% | 0 | 0 |
 | `date`† | 11 / 48 | 23% | 11 | 11 |
@@ -39,7 +39,7 @@ Overall builtin coverage: **459 / 2030** (23%).
 | `ldap` | 0 / 55 | 0% | 0 | 0 |
 | `libxml` | 0 / 8 | 0% | 0 | 0 |
 | `mbstring` | 2 / 65 | 3% | 2 | 2 |
-| `mysqli` | 0 / 106 | 0% | 0 | 0 |
+| `mysqli`† | 0 / 106 | 0% | 0 | 0 |
 | `openssl` | 4 / 66 | 6% | 4 | 4 |
 | `pcntl` | 0 / 25 | 0% | 0 | 0 |
 | `pcre` | 5 / 11 | 45% | 5 | 5 |
@@ -105,6 +105,7 @@ In addition, elephc implements 3 PHP language constructs that PHP does not count
 | Feature | Status | Notes |
 |---|---|---|
 | [PDO](./pdo.md) ([PHP](https://www.php.net/manual/en/book.pdo.php)) | ✅ Supported | Driver matrix documented on the PDO page |
+| [mysqli](./mysqli.md) ([PHP](https://www.php.net/manual/en/book.mysqli.php)) | 🟡 Partial | Locked v1 subset over the elephc-pdo bridge; divergences on the mysqli page |
 | [Sessions](./sessions.md) ([PHP](https://www.php.net/manual/en/book.session.php)) | ✅ Supported | In --web binaries |
 | [Streams](./streams.md) ([PHP](https://www.php.net/manual/en/book.stream.php)) | 🟡 Partial |  |
 | [SPL](./spl.md) ([PHP](https://www.php.net/manual/en/book.spl.php)) | 🟡 Partial |  |

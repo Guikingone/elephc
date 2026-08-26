@@ -13,16 +13,21 @@ use crate::parser::ast::{
     BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
     InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
 };
+use crate::span::Span;
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
+mod binding_decisions;
 mod control;
 mod effect_analysis;
 mod effects;
 mod fold;
 mod propagate;
+pub mod reachability;
 
+use binding_decisions::{with_local_binding_decision_spans, with_mixed_storage_locals};
 use control::*;
 use effect_analysis::{
     collect_instance_dispatch_metadata, compute_program_callable_effects, method_effect_key,
@@ -31,74 +36,94 @@ use effects::*;
 use fold::*;
 use propagate::*;
 
+pub use reachability::prune_unreachable_declarations;
+
 #[cfg(test)]
 mod tests;
 
 thread_local! {
-    static ACTIVE_FUNCTION_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
-    static ACTIVE_STATIC_METHOD_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
-    static ACTIVE_INSTANCE_METHOD_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
-    static ACTIVE_INSTANCE_DISPATCH_METADATA: RefCell<Option<InstanceDispatchMetadata>> = const { RefCell::new(None) };
+    static ACTIVE_FUNCTION_EFFECTS: RefCell<Option<Rc<HashMap<String, Effect>>>> = const { RefCell::new(None) };
+    static ACTIVE_STATIC_METHOD_EFFECTS: RefCell<Option<Rc<HashMap<String, Effect>>>> = const { RefCell::new(None) };
+    static ACTIVE_INSTANCE_METHOD_EFFECTS: RefCell<Option<Rc<HashMap<String, Effect>>>> = const { RefCell::new(None) };
+    static ACTIVE_INSTANCE_DISPATCH_METADATA: RefCell<Option<Rc<InstanceDispatchMetadata>>> = const { RefCell::new(None) };
     static ACTIVE_CLASS_EFFECT_CONTEXT: RefCell<Option<ClassEffectContext>> = const { RefCell::new(None) };
     static ACTIVE_CALLABLE_ALIAS_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
 }
 
+/// Borrows the active function-effect summary without cloning its whole map.
+pub(in crate::optimize) fn with_active_function_effects<R>(
+    f: impl FnOnce(Option<&HashMap<String, Effect>>) -> R,
+) -> R {
+    ACTIVE_FUNCTION_EFFECTS.with(|slot| f(slot.borrow().as_deref()))
+}
+
+/// Borrows the active static-method summary without cloning its whole map.
+pub(in crate::optimize) fn with_active_static_method_effects<R>(
+    f: impl FnOnce(Option<&HashMap<String, Effect>>) -> R,
+) -> R {
+    ACTIVE_STATIC_METHOD_EFFECTS.with(|slot| f(slot.borrow().as_deref()))
+}
+
+/// Borrows the active instance-method summary without cloning its whole map.
+pub(in crate::optimize) fn with_active_instance_method_effects<R>(
+    f: impl FnOnce(Option<&HashMap<String, Effect>>) -> R,
+) -> R {
+    ACTIVE_INSTANCE_METHOD_EFFECTS.with(|slot| f(slot.borrow().as_deref()))
+}
+
+/// Borrows the active instance-dispatch metadata without cloning it.
+pub(in crate::optimize) fn with_active_instance_dispatch_metadata<R>(
+    f: impl FnOnce(Option<&InstanceDispatchMetadata>) -> R,
+) -> R {
+    ACTIVE_INSTANCE_DISPATCH_METADATA.with(|slot| f(slot.borrow().as_deref()))
+}
+
 /// Folds constant expressions to their compile-time values.
+///
+/// Also gives a CLI program the superglobals PHP's CLI SAPI would already have
+/// created. That is not folding, and it rides here for a reason spelled out in
+/// `superglobals::COMPILING_FOR_WEB`: this function is the last phase every one of
+/// the thirteen hand-rolled pipelines calls before the checker, so a semantic pass
+/// placed here cannot be forgotten by one of them. It runs FIRST so the literal it
+/// prepends folds like any other.
 pub fn fold_constants(program: Program) -> Program {
+    let program = crate::superglobals::seed_cli_populated_superglobals(program);
     program.into_iter().map(fold_stmt).collect()
 }
 
 /// Propagates scalar constants across statements and control flow.
-pub fn propagate_constants(program: Program) -> Program {
-    reset_reference_volatile();
-    // Request superglobals are writable from any scope under `--web`, so they
-    // can never carry propagated facts.
-    for name in crate::superglobals::SUPERGLOBALS {
-        mark_reference_volatile(name);
-    }
-    // Install the callable effect summaries and by-ref signatures so calls to
-    // known-pure user callables stop clearing the environment. Substitution
-    // into by-ref argument positions is masked by `propagate_args`, which
-    // keeps those arguments lvalues.
-    let (function_effects, static_method_effects, instance_method_effects) =
-        compute_program_callable_effects(&program);
-    let instance_dispatch_metadata = collect_instance_dispatch_metadata(&program);
-    let signatures = collect_by_ref_signatures(&program);
-    with_callable_effects(
-        function_effects,
-        static_method_effects,
-        instance_method_effects,
-        instance_dispatch_metadata,
-        || with_by_ref_signatures(signatures, || propagate_block(program, HashMap::new()).0),
-    )
+///
+/// `mixed_storage_locals` comes from `CheckResult::mixed_storage_local_names()`. It is a REQUIRED
+/// argument for the same reason `eliminate_dead_code`'s span set is: a caller that silently passed
+/// an empty set would re-enable substitution on a local the checker boxed, and the divergence
+/// surfaces as a compiler PANIC inside a checked builtin's lowering — nothing a reader would trace
+/// back to this call. The test tree shadows this with a no-set wrapper for hand-built ASTs.
+#[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
+pub fn propagate_constants(program: Program, mixed_storage_locals: HashSet<String>) -> Program {
+    PostTypecheckOptimizer::new(&program).propagate(program, mixed_storage_locals)
 }
 
 /// Normalizes control flow structures (ifs, switches, try/catch) for easier optimization.
-pub fn normalize_control_flow(program: Program) -> Program {
-    let (function_effects, static_method_effects, instance_method_effects) =
-        compute_program_callable_effects(&program);
-    let instance_dispatch_metadata = collect_instance_dispatch_metadata(&program);
-    with_callable_effects(
-        function_effects,
-        static_method_effects,
-        instance_method_effects,
-        instance_dispatch_metadata,
-        || prune_block(program),
-    )
+///
+/// `binding_decision_spans` is `CheckResult::local_binding_decision_spans()`, required for the same
+/// reason `eliminate_dead_code`'s is: this phase runs the single-case switch rewrite, which CLONES
+/// the default body into both branches of the synthesized `if`, and a caller that silently passed
+/// an empty set would let that clone hand one span-keyed checker decision to two statements.
+#[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
+pub fn normalize_control_flow(program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+    PostTypecheckOptimizer::new(&program).normalize(program, binding_decision_spans)
 }
 
 /// Prunes branches with constant conditions that cannot be reached.
-pub fn prune_constant_control_flow(program: Program) -> Program {
-    let (function_effects, static_method_effects, instance_method_effects) =
-        compute_program_callable_effects(&program);
-    let instance_dispatch_metadata = collect_instance_dispatch_metadata(&program);
-    with_callable_effects(
-        function_effects,
-        static_method_effects,
-        instance_method_effects,
-        instance_dispatch_metadata,
-        || prune_block(program),
-    )
+///
+/// `binding_decision_spans` is required here for the same reason as in `normalize_control_flow`:
+/// both phases run `control::prune_switch_stmt`, whose single-case rewrite clones statements.
+#[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
+pub fn prune_constant_control_flow(
+    program: Program,
+    binding_decision_spans: HashSet<Span>,
+) -> Program {
+    PostTypecheckOptimizer::new(&program).prune(program, binding_decision_spans)
 }
 
 /// A fact the propagation environment records for a local variable.
@@ -171,29 +196,115 @@ fn same_array_literal_fact(left: &Expr, right: &Expr) -> bool {
 
 /// Maps local names to propagated facts during constant propagation.
 type ConstantEnv = HashMap<String, PropagatedValue>;
+
+/// Owns one conservative whole-program callable-effect analysis for all
+/// post-typecheck AST passes. Reusing the summary is sound because these
+/// passes only remove or simplify behavior, so the pre-pass effect summary is
+/// an over-approximation for every later pass.
+pub struct PostTypecheckOptimizer {
+    callable_effects: CallableEffectAnalysis,
+    by_ref_signatures: ByRefSignatures,
+}
+
+impl PostTypecheckOptimizer {
+    /// Builds the reusable analysis from the program entering post-typecheck optimization.
+    pub fn new(program: &Program) -> Self {
+        Self {
+            callable_effects: CallableEffectAnalysis::from_program(program),
+            by_ref_signatures: collect_by_ref_signatures(program),
+        }
+    }
+
+    /// Propagates constants while using the shared callable-effect summary.
+    ///
+    /// `mixed_storage_locals` is `CheckResult::mixed_storage_local_names()`: the locals the
+    /// checker's pre-scan compiled as boxed `mixed` frame storage. It is a REQUIRED argument for
+    /// the same reason `eliminate_dead_code`'s span set is — a caller that silently passed an
+    /// empty set would re-enable substitution on a boxed local, and the divergence surfaces as a
+    /// compiler PANIC in a checked builtin's fast path rather than as anything a reader would
+    /// connect back to this call.
+    pub fn propagate(&self, program: Program, mixed_storage_locals: HashSet<String>) -> Program {
+        reset_reference_volatile();
+        // Request superglobals are writable from any scope under `--web`, so they
+        // can never carry propagated facts.
+        for name in crate::superglobals::SUPERGLOBALS {
+            mark_reference_volatile(name);
+        }
+        // Install the callable effect summaries and by-ref signatures so calls to
+        // known-pure user callables stop clearing the environment. Substitution
+        // into by-ref argument positions is masked by `propagate_args`, which
+        // keeps those arguments lvalues.
+        with_mixed_storage_locals(mixed_storage_locals, || {
+            with_callable_effect_analysis(&self.callable_effects, || {
+                with_by_ref_signatures(self.by_ref_signatures.clone(), || {
+                    propagate_block(program, HashMap::new()).0
+                })
+            })
+        })
+    }
+
+    /// Normalizes control flow using the shared callable-effect summary.
+    ///
+    /// Takes the same `binding_decision_spans` as `eliminate_dead_code` because this phase is the
+    /// SECOND cloning pass: `control::prune_switch_stmt` rewrites a single-case switch on a
+    /// non-scalar subject into an `if`, and the default body is materialized into BOTH branches
+    /// with its original spans. The spans let that rewrite veto itself; see
+    /// `control::switch::single_case_rewrite_would_clone_a_decision`.
+    pub fn normalize(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+        with_local_binding_decision_spans(binding_decision_spans, || {
+            with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+        })
+    }
+
+    /// Prunes constant control-flow branches using the shared callable-effect summary.
+    ///
+    /// Installs `binding_decision_spans` for the same reason `normalize` does — the two phases run
+    /// the same `prune_block`, so the cloning switch rewrite is reachable from both.
+    pub fn prune(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+        with_local_binding_decision_spans(binding_decision_spans, || {
+            with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+        })
+    }
+
+    /// Eliminates dead code using the shared callable-effect summary.
+    ///
+    /// `binding_decision_spans` is the union of the checker's three span-keyed local-binding
+    /// decision maps — `CheckResult::local_bind_kill_sites`, `local_retype_sites` and
+    /// `mixed_storage_store_sites`. A clone carries the original's span, so NO post-typecheck pass
+    /// may duplicate a node carrying one: it would hand a single checker decision to two syntactic
+    /// sites. DCE's tail-sinking is one of the two passes that clone (the single-case switch
+    /// rewrite reached from `normalize`/`prune` is the other); passing the spans in lets it keep
+    /// those statements singular. See `control::binding_decisions`.
+    pub fn eliminate_dead_code(
+        &self,
+        program: Program,
+        binding_decision_spans: HashSet<Span>,
+    ) -> Program {
+        with_local_binding_decision_spans(binding_decision_spans, || {
+            with_callable_effect_analysis(&self.callable_effects, || {
+                with_by_ref_signatures(self.by_ref_signatures.clone(), || dce_block(program))
+            })
+        })
+    }
+}
+
 /// Eliminates dead code for this module.
-pub fn eliminate_dead_code(program: Program) -> Program {
-    let (function_effects, static_method_effects, instance_method_effects) =
-        compute_program_callable_effects(&program);
-    let instance_dispatch_metadata = collect_instance_dispatch_metadata(&program);
-    let signatures = collect_by_ref_signatures(&program);
-    with_callable_effects(
-        function_effects,
-        static_method_effects,
-        instance_method_effects,
-        instance_dispatch_metadata,
-        || with_by_ref_signatures(signatures, || dce_block(program)),
-    )
+///
+/// `binding_decision_spans` comes from `CheckResult::local_binding_decision_spans`. It is a
+/// REQUIRED argument rather than a default: a caller that silently passed an empty set would
+/// re-enable the tail-sinking clone of a decision-carrying statement, and the divergence would be
+/// invisible until the resulting program printed the wrong answer.
+#[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
+pub fn eliminate_dead_code(program: Program, binding_decision_spans: HashSet<Span>) -> Program {
+    PostTypecheckOptimizer::new(&program).eliminate_dead_code(program, binding_decision_spans)
 }
 
 /// Returns true when the named builtin can invoke user code through a callback
-/// argument (registry convention: every callback parameter is named
-/// `callback`). Such builtins inherit the callback's powers: they can write
-/// globals and mutate any argument reachable through the callback's by-ref
-/// parameters.
+/// argument. Such builtins inherit the callback's powers: they can write globals
+/// and mutate any argument reachable through the callback's by-ref parameters.
 fn builtin_invokes_callbacks(name: &str) -> bool {
-    crate::builtins::registry::lookup(name).is_some_and(|def| {
-        def.params.iter().any(|(param, _)| param == "callback")
+    crate::builtins::registry::lookup(name).is_some_and(|definition| {
+        !crate::builtins::registry::callback_parameter_indices(definition).is_empty()
     })
 }
 
@@ -317,40 +428,60 @@ struct InstanceDispatchMetadata {
 
 /// Holds the body and never-return metadata for a function during effect analysis.
 #[derive(Clone, Debug)]
-struct FunctionEffectBody {
-    body: Vec<Stmt>,
+struct FunctionEffectBody<'a> {
+    body: &'a [Stmt],
     declared_never: bool,
 }
 
 /// Holds the body, class context, and never-return metadata for a static method during effect analysis.
 #[derive(Clone, Debug)]
-struct StaticMethodBody {
+struct StaticMethodBody<'a> {
     context: ClassEffectContext,
-    body: Vec<Stmt>,
+    body: &'a [Stmt],
     declared_never: bool,
 }
 
-/// Maps names to scalar constants during constant propagation.
+/// Holds callable summaries and dispatch metadata shared by optimizer passes.
+#[derive(Clone)]
+struct CallableEffectAnalysis {
+    function_effects: Rc<HashMap<String, Effect>>,
+    static_method_effects: Rc<HashMap<String, Effect>>,
+    instance_method_effects: Rc<HashMap<String, Effect>>,
+    instance_dispatch_metadata: Rc<InstanceDispatchMetadata>,
+}
+
+impl CallableEffectAnalysis {
+    /// Computes the conservative callable summaries once for a post-typecheck program.
+    fn from_program(program: &[Stmt]) -> Self {
+        let (function_effects, static_method_effects, instance_method_effects) =
+            compute_program_callable_effects(program);
+        Self {
+            function_effects,
+            static_method_effects,
+            instance_method_effects,
+            instance_dispatch_metadata: Rc::new(collect_instance_dispatch_metadata(program)),
+        }
+    }
+}
 
 /// Installs function, static method, instance method, and class-dispatch summaries for the
 /// closure's duration, then restores the previous state.
-fn with_callable_effects<R>(
-    function_effects: HashMap<String, Effect>,
-    static_method_effects: HashMap<String, Effect>,
-    instance_method_effects: HashMap<String, Effect>,
-    instance_dispatch_metadata: InstanceDispatchMetadata,
+fn with_callable_effect_analysis<R>(
+    analysis: &CallableEffectAnalysis,
     f: impl FnOnce() -> R,
 ) -> R {
     ACTIVE_FUNCTION_EFFECTS.with(|function_slot| {
         ACTIVE_STATIC_METHOD_EFFECTS.with(|static_slot| {
             ACTIVE_INSTANCE_METHOD_EFFECTS.with(|instance_slot| {
                 ACTIVE_INSTANCE_DISPATCH_METADATA.with(|metadata_slot| {
-                    let previous_functions = function_slot.replace(Some(function_effects));
-                    let previous_static_methods = static_slot.replace(Some(static_method_effects));
+                    let previous_functions =
+                        function_slot.replace(Some(Rc::clone(&analysis.function_effects)));
+                    let previous_static_methods =
+                        static_slot.replace(Some(Rc::clone(&analysis.static_method_effects)));
                     let previous_instance_methods =
-                        instance_slot.replace(Some(instance_method_effects));
-                    let previous_metadata =
-                        metadata_slot.replace(Some(instance_dispatch_metadata));
+                        instance_slot.replace(Some(Rc::clone(&analysis.instance_method_effects)));
+                    let previous_metadata = metadata_slot
+                        .replace(Some(Rc::clone(&analysis.instance_dispatch_metadata)));
                     let result = f();
                     metadata_slot.replace(previous_metadata);
                     instance_slot.replace(previous_instance_methods);
@@ -361,6 +492,24 @@ fn with_callable_effects<R>(
             })
         })
     })
+}
+
+/// Installs one-off callable summaries for focused optimizer tests and helpers.
+#[cfg(test)]
+fn with_callable_effects<R>(
+    function_effects: HashMap<String, Effect>,
+    static_method_effects: HashMap<String, Effect>,
+    instance_method_effects: HashMap<String, Effect>,
+    instance_dispatch_metadata: InstanceDispatchMetadata,
+    f: impl FnOnce() -> R,
+) -> R {
+    let analysis = CallableEffectAnalysis {
+        function_effects: Rc::new(function_effects),
+        static_method_effects: Rc::new(static_method_effects),
+        instance_method_effects: Rc::new(instance_method_effects),
+        instance_dispatch_metadata: Rc::new(instance_dispatch_metadata),
+    };
+    with_callable_effect_analysis(&analysis, f)
 }
 
 /// Installs a class effect context for instance dispatch analysis, then restores it.

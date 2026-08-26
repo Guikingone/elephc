@@ -83,6 +83,10 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         package: "elephc-crypto",
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_bcmath",
+        package: "elephc-bcmath",
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_phar",
         package: "elephc-phar",
     },
@@ -557,7 +561,7 @@ pub(crate) fn link_binary(
             ld_cmd.arg(bin_path);
             ld_cmd.arg(obj_path);
             ld_cmd.arg(runtime_obj);
-            // Resolve FreeTDS's `dbopen` before libSystem's Berkeley DB symbol.
+            // Link FreeTDS with the other native dependencies before libSystem.
             if needs_dblib {
                 for path in ["/opt/homebrew/opt/freetds/lib", "/usr/local/opt/freetds/lib"] {
                     if Path::new(path).exists() {
@@ -721,7 +725,7 @@ fn test_link_plan(
     for framework in extra_frameworks {
         plan.push(LinkItem::Framework(framework.clone()));
     }
-    plan
+    plan.without_redundant_embedded_bridges()
 }
 
 /// Appends every typed search path before archive and named-library inputs.
@@ -1027,5 +1031,11 @@ pub(crate) fn assemble_and_run_expect_failure(
     let output = run_binary(&bin_path, dir);
     assert!(!output.status.success(), "binary unexpectedly succeeded");
 
-    String::from_utf8(output.stderr).unwrap()
+    // BOTH streams. PHP writes its uncaught-exception report to STDOUT — measured against 8.5 with
+    // the two streams captured to separate files — and elephc now does the same, so a helper that
+    // read only stderr would hand every failure assertion an empty string. Compiler diagnostics
+    // still arrive on stderr, so both are returned rather than either one.
+    let mut combined = String::from_utf8(output.stdout).unwrap();
+    combined.push_str(&String::from_utf8(output.stderr).unwrap());
+    combined
 }

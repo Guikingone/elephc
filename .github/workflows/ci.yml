@@ -22,11 +22,14 @@ env:
     -p elephc-tls
     -p elephc-pdo
     -p elephc-crypto
+    -p elephc-bcmath
     -p elephc-phar
     -p elephc-tz
     -p elephc-image
     -p elephc-magician
     -p elephc-web
+    -p elephc-instr
+    -p elephc-probe
 
 jobs:
   # Compile each platform once, then let that platform's tests start as soon as
@@ -69,12 +72,14 @@ jobs:
       - name: Build combined optional PDO driver profile
         run: |
           cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          scripts/check_pdo_dblib_symbols.sh target/debug/libelephc_pdo.a
           cargo clean -p elephc-pdo
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
-        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
+        # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # and libelephc_web.a. Build
@@ -138,12 +143,14 @@ jobs:
       - name: Build combined optional PDO driver profile
         run: |
           cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          scripts/check_pdo_dblib_symbols.sh target/debug/libelephc_pdo.a
           cargo clean -p elephc-pdo
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
-        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
+        # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # and libelephc_web.a. Build
@@ -202,12 +209,14 @@ jobs:
       - name: Build combined optional PDO driver profile
         run: |
           cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          scripts/check_pdo_dblib_symbols.sh target/debug/libelephc_pdo.a
           cargo clean -p elephc-pdo
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
-        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
+        # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # and libelephc_web.a. Build

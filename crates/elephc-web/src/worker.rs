@@ -23,7 +23,9 @@ use hyper::{Request, Response};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 
+use crate::probe_route;
 use crate::request_state;
 use crate::session::upload_progress;
 
@@ -45,6 +47,14 @@ fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener
 /// Number of requests this worker has served, used by `--max-requests` recycling.
 /// Process-local (each forked worker has its own copy starting at 0).
 static SERVED: AtomicUsize = AtomicUsize::new(0);
+
+/// Records one completed handler and broadcasts a graceful recycle at the quota.
+fn record_completed_request(max_requests: usize, recycle: &watch::Sender<bool>) {
+    let served = SERVED.fetch_add(1, Ordering::Relaxed) + 1;
+    if max_requests > 0 && served >= max_requests {
+        let _ = recycle.send(true);
+    }
+}
 
 /// Exit code a worker child uses for a planned `--max-requests` recycle.
 /// Distinct from 0 (clean exit), 1 (worker setup/handler errors), and 2 (usage
@@ -115,6 +125,11 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
         install_exec_timeout_handler();
     }
+    // Re-arm the sampling probe in this worker: the fork disarmed the inherited
+    // timer (so exec'd children cannot die from the default SIGPROF action), and
+    // a worker keeps running elephc code, so it must sample again. No-op unless
+    // the binary was built --probe.
+    probe_route::rearm();
     let addr: SocketAddr = match listen.parse() {
         Ok(a) => a,
         Err(_) => {
@@ -147,21 +162,40 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                 std::process::exit(1);
             }
         };
+        let (recycle, mut recycle_requested) = watch::channel(false);
+        let mut connections = Vec::new();
         loop {
+            connections.retain(|connection: &tokio::task::JoinHandle<_>| {
+                !connection.is_finished()
+            });
             // --max-requests recycling: stop accepting once the cap is reached so
             // the master respawns a fresh worker (bounds memory growth over time).
-            if max_requests > 0 && SERVED.load(Ordering::Relaxed) >= max_requests {
+            if *recycle_requested.borrow() {
                 break;
             }
-            let (stream, peer) = match listener.accept().await {
+            let accepted = tokio::select! {
+                changed = recycle_requested.changed() => {
+                    if changed.is_err() || *recycle_requested.borrow() {
+                        break;
+                    }
+                    continue;
+                }
+                accepted = listener.accept() => accepted,
+            };
+            let (stream, peer) = match accepted {
                 Ok(pair) => pair,
                 Err(_) => continue,
             };
             let io = TokioIo::new(stream);
-            tokio::task::spawn_local(http1::Builder::new()
-                .timer(TokioTimer::new())
-                .header_read_timeout(Duration::from_secs(30))
-                .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| async move {
+            let request_recycle = recycle.clone();
+            let mut connection_recycle = recycle.subscribe();
+            connections.push(tokio::task::spawn_local(async move {
+                let connection = http1::Builder::new()
+                    .timer(TokioTimer::new())
+                    .header_read_timeout(Duration::from_secs(30))
+                    .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| {
+                        let request_recycle = request_recycle.clone();
+                        async move {
                     // Seed session deployment config before upload-progress body
                     // draining. The PHP prelude repeats this reset immediately
                     // before the handler, so both phases see identical values and
@@ -175,6 +209,11 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     let protocol = format!("{:?}", req.version());
                     // Captured for the optional access log (method/path are moved into set_request).
                     let log_method_path = if access_log { Some((method.clone(), path.clone())) } else { None };
+                    // The route label the sampling probe stamps onto samples taken
+                    // during this request (no-op unless the binary was built --probe).
+                    // Shaped, not raw: the probe's route table is fixed at 256 with
+                    // no eviction, and raw paths spend it on identifiers.
+                    let probe_route = probe_route::route_label(&method, &path);
                     let accepts_gzip = gzip
                         && req.headers().get(hyper::header::ACCEPT_ENCODING).is_some_and(|v| {
                             v.to_str().map(|s| s.to_ascii_lowercase().contains("gzip")).unwrap_or(false)
@@ -234,8 +273,47 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                         .iter()
                         .find(|(n, _)| n.eq_ignore_ascii_case("host"))
                         .map(|(_, v)| v.clone());
+                    // Distributed profiling: continue the caller's trace when it
+                    // sent a W3C `traceparent`, else start one. Read before
+                    // `headers` is moved into set_request, like Cookie/Host.
+                    let req_traceparent = headers
+                        .iter()
+                        .find(|(n, _)| n.eq_ignore_ascii_case("traceparent"))
+                        .map(|(_, v)| v.clone());
+                    // Opt in per request, the way a profiler you can leave in
+                    // production has to work: the caller asks, and only that
+                    // request pays. Absent the header the hooks stay as the
+                    // environment left them, so `--web --instrument` without
+                    // `ELEPHC_INSTR_OFF` keeps profiling every request.
+                    // Signed, not merely present: the value is
+                    // `t=<unix seconds>,v=<hmac>` over the build key, so a header
+                    // captured from a log stops working within minutes and one
+                    // invented from scratch never does.
+                    let profile_this = headers
+                        .iter()
+                        .find(|(n, _)| n.eq_ignore_ascii_case("x-elephc-query"))
+                        .is_some_and(|(_, value)| probe_route::query_is_authentic(value));
                     request_state::set_request(method, uri, path, query, headers, body, meta);
+                    probe_route::set(&probe_route);
+                    // A signed header authorizes this request outright; without
+                    // one, offer the request anyway — the instrumentation starts
+                    // a slice only if something is waiting for one, which is how
+                    // `monitor <address> --exact` gets an answer without a second
+                    // way into the request path. The offer costs a call through a
+                    // slot and a flag read.
+                    //
+                    // Before the trace, not after: this call is what decides
+                    // whether this request is being profiled at all, and the
+                    // trace context is dormant until it says so. The other order
+                    // meant an idle service paid for a trace id every request.
+                    probe_route::profile_request_kind(if profile_this { 1 } else { 2 });
+                    probe_route::trace_begin(req_traceparent.as_deref(), &probe_route);
                     let resp_body = run_handler(handler);
+                    // Unconditional and idempotent: a request that started no
+                    // slice ends none, and consecutive profiled requests stay
+                    // separate captures.
+                    probe_route::profile_request_kind(0);
+                    probe_route::clear();
                     let status = request_state::take_status();
                     let mut resp_headers = request_state::take_headers();
                     // Propagate the session id through same-origin URLs / forms when
@@ -254,7 +332,13 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                         .iter()
                         .any(|(n, _)| n.eq_ignore_ascii_case("content-encoding"));
                     let gzipped = if accepts_gzip && !already_encoded && resp_body.len() >= GZIP_MIN_LEN {
-                        gzip_bytes(&resp_body)
+                        let compressed = gzip_bytes(&resp_body);
+                        if compressed.is_some() {
+                            resp_headers.retain(|(name, _)| {
+                                !name.eq_ignore_ascii_case("content-length")
+                            });
+                        }
+                        compressed
                     } else {
                         None
                     };
@@ -280,8 +364,24 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                             started.elapsed().as_millis()
                         );
                     }
+                    record_completed_request(max_requests, &request_recycle);
                     Ok::<_, Infallible>(response)
-                })));
+                }}));
+                tokio::pin!(connection);
+                tokio::select! {
+                    _ = &mut connection => {}
+                    changed = connection_recycle.changed() => {
+                        if changed.is_ok() && *connection_recycle.borrow() {
+                            connection.as_mut().graceful_shutdown();
+                            let _ = connection.await;
+                        }
+                    }
+                }
+            }));
+        }
+        drop(listener);
+        for connection in connections {
+            let _ = connection.await;
         }
     });
 }
@@ -324,7 +424,11 @@ async fn drain_with_progress(
     Ok(buf)
 }
 
-/// Runs the PHP handler for one request and returns the captured response body.
+/// Runs one request's PHP handler and returns the response bytes it produced.
+///
+/// Resets the per-request capture state first, arms the execution-timeout
+/// watchdog around the blocking call when one is configured, and collects
+/// whatever the handler wrote.
 fn run_handler(handler: extern "C" fn()) -> Vec<u8> {
     request_state::set_capture(true);
     request_state::clear_body();
@@ -338,6 +442,5 @@ fn run_handler(handler: extern "C" fn()) -> Vec<u8> {
     if secs > 0 {
         unsafe { libc::alarm(0); }
     }
-    SERVED.fetch_add(1, Ordering::Relaxed);
     request_state::take_body()
 }

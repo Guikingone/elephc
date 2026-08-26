@@ -29,6 +29,12 @@ pub(super) const ZIP32_SENTINEL: u32 = 0xFFFF_FFFF;
 pub(super) const ZIP16_SENTINEL: u16 = 0xFFFF;
 pub(super) const PHAR_WRITE_FD_BASE: usize = 0x5000_0000;
 pub(super) const PHAR_WRITE_STREAM_LIMIT: usize = 32;
+/// Largest allowed decompression expansion for one compressed archive entry.
+pub(super) const MAX_PHAR_DECOMPRESSION_RATIO: usize = 1_024;
+/// Absolute ceiling for one decoded PHAR, TAR, or ZIP entry.
+pub(super) const MAX_PHAR_ENTRY_DECOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
+/// Absolute ceiling for a whole gzip/bzip2 wrapped archive after decompression.
+pub(super) const MAX_PHAR_ARCHIVE_DECOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
 
 pub(super) static EXTRACT_BUFFER: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 pub(super) static WRITE_STREAMS: OnceLock<Mutex<Vec<Option<WriteStream>>>> = OnceLock::new();

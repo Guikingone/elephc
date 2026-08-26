@@ -147,6 +147,22 @@ pub(super) fn lower_load_reflection_static_property(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a static-property initialization probe for ordinary PHP source.
+///
+/// The read below it (`lower_load_static_property`) emits a fatal guard for a typed slot that
+/// is still uninitialized, so `S::$s ?? "d"` had no way to answer the default: the guard is
+/// emitted in codegen rather than as an operation the lowering could branch on. This is that
+/// operation. It differs from the Reflection probe only in ENFORCING visibility — Reflection is
+/// allowed past a private slot and `??` is not.
+pub(super) fn lower_static_property_initialized(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = resolve_static_property_slot(ctx, inst, true)?;
+    emit_direct_static_property_initialized_result(ctx, &slot);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a Reflection static-property initialization probe.
 pub(super) fn lower_reflection_static_property_initialized(
     ctx: &mut FunctionContext<'_>,
@@ -321,11 +337,15 @@ fn emit_static_property_initialized_bool(
     abi::emit_load_int_immediate(ctx.emitter, sentinel_reg, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the static property marker against the uninitialized sentinel
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}", marker_reg, sentinel_reg)
+            );                                                                  // compare the static property marker against the uninitialized sentinel
             ctx.emitter.instruction("cset x0, ne");                             // materialize true when the static property is initialized
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the static property marker against the uninitialized sentinel
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}", marker_reg, sentinel_reg)
+            );                                                                  // compare the static property marker against the uninitialized sentinel
             ctx.emitter.instruction("setne al");                                // materialize true when the static property is initialized
             ctx.emitter.instruction("movzx rax, al");                           // widen the initialization flag into the integer result register
         }
@@ -497,11 +517,15 @@ fn emit_branch_if_class_id_matches(
     abi::emit_load_int_immediate(ctx.emitter, compare_reg, class_id as i64);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); // compare the runtime called class id to a redeclared static property owner
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}", class_id_reg, compare_reg)
+            );                                                                  // compare the runtime called class id to a redeclared static property owner
             ctx.emitter.instruction(&format!("b.eq {}", label));                // use this static property slot when the called class id matches
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); // compare the runtime called class id to a redeclared static property owner
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}", class_id_reg, compare_reg)
+            );                                                                  // compare the runtime called class id to a redeclared static property owner
             ctx.emitter.instruction(&format!("je {}", label));                  // use this static property slot when the called class id matches
         }
     }
@@ -912,11 +936,15 @@ fn emit_uninitialized_static_property_guard(
     abi::emit_load_int_immediate(ctx.emitter, sentinel_reg, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the static property marker against the uninitialized sentinel
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}", marker_reg, sentinel_reg)
+            );                                                                  // compare the static property marker against the uninitialized sentinel
             ctx.emitter.instruction(&format!("b.ne {}", initialized_label));    // continue the static property read once the slot has been initialized
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the static property marker against the uninitialized sentinel
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}", marker_reg, sentinel_reg)
+            );                                                                  // compare the static property marker against the uninitialized sentinel
             ctx.emitter.instruction(&format!("jne {}", initialized_label));     // continue the static property read once the slot has been initialized
         }
     }
@@ -973,14 +1001,18 @@ fn emit_uninitialized_static_property_fatal(
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call 16-byte aligned
             ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
             ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the Error object payload
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+            ctx.emitter.instruction(
+                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
+            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_error_class_id", 0); // load Error's runtime class id for this program
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at the object header
             abi::emit_symbol_address(ctx.emitter, "r10", &message_label);          // materialize static Error message pointer
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store static Error message pointer
-            ctx.emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store Error message length
+            ctx.emitter.instruction(
+                &format!("mov QWORD PTR [rax + 16], {}", message_len)
+            );                                                                  // store Error message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null

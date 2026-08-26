@@ -54,12 +54,21 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
         crate::resolver::resolve_collecting_includes_with_defines(parsed, parent, &defines)
             .expect("resolver failed");
     let ast = crate::autoload::collect_aliases(ast);
-    let ast = crate::pdo_prelude::inject_if_used(ast, false);
-    let ast = crate::tz_prelude::inject_if_used(ast, false);
-    let ast = crate::list_id_prelude::inject_if_used(ast);
-    let ast = crate::var_export_prelude::inject_if_used(ast);
-    let ast = crate::image_prelude::inject_if_used(ast, false);
-    let ast = crate::hash_prelude::inject_if_used(ast, false);
+    let mut prelude_inventory = crate::optimize::reachability::PreludeInventory::new();
+    let ast = crate::pdo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    // Same injection order as `pipeline::compile`: mysqli after PDO, so the
+    // shared `elephc_pdo` externs are merged in exactly once.
+    let ast = crate::mysqli_prelude::inject_if_used(
+        ast,
+        false,
+        crate::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
+    );
+    let ast = crate::tz_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
     let (ast, _) = crate::autoload::run_collecting_included_with_defines(
         ast,
@@ -74,10 +83,17 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::func_args::desugar(ast).expect("func_args desugar failed");
     let ast = crate::optimize::fold_constants(ast);
     let check_result = crate::types::check_with_target(&ast, target).expect("type check failed");
-    let ast = crate::optimize::propagate_constants(ast);
-    let ast = crate::optimize::prune_constant_control_flow(ast);
-    let ast = crate::optimize::normalize_control_flow(ast);
-    let ast = crate::optimize::eliminate_dead_code(ast);
+    let ast = crate::optimize::propagate_constants(ast, check_result.mixed_storage_local_names());
+    let ast = crate::optimize::prune_constant_control_flow(
+        ast,
+        check_result.local_binding_decision_spans(),
+    );
+    let ast = crate::optimize::normalize_control_flow(
+        ast,
+        check_result.local_binding_decision_spans(),
+    );
+    let ast =
+        crate::optimize::eliminate_dead_code(ast, check_result.local_binding_decision_spans());
     crate::ir_lower::lower_program(&ast, &check_result, target, false).unwrap_or_else(|error| {
         panic!(
             "EIR lowering failed for {}: {error:?}",

@@ -22,6 +22,9 @@ This page explains where every value lives in memory at runtime.
 │  (arrays, hash tables,       │  Free-list + bump allocator
 │   objects, persisted strings) │
 ├─────────────────────────────┤
+│ Buffer descriptor registry   │  _buffer_registry: 4097 x 48B
+│  (generation-safe handles)   │  index 0 reserved; 4096 usable slots
+├─────────────────────────────┤
 │     String buffer            │  _concat_buf: 64KB, scratch pad
 │  (temporary string results)  │  Reset at each statement
 ├─────────────────────────────┤
@@ -34,9 +37,10 @@ This page explains where every value lives in memory at runtime.
 │  (C strings, streams, TLS,   │  _stream_*, _http_*, _ftp_*, wrapper/filter
 │   wrappers, filters)         │  tables, protocol/service/principal lookup buffers
 ├─────────────────────────────┤
-│   Runtime metadata (BSS)     │  _concat_off, _global_argc/_argv,
+│ Runtime metadata (BSS/data)  │  _concat_off, _global_argc/_argv,
 │  (heap state, counters,      │  _heap_off, _heap_free_list,
 │   globals, static storage)   │  _heap_small_bins, _heap_debug_enabled,
+│                              │  _buffer_registry_free/_next,
 │                              │  _gc_allocs/_frees/_live/_peak,
 │                              │  _gc_collecting/_gc_release_suppressed,
 │                              │  _exc_handler_top, _exc_call_frame_top,
@@ -50,7 +54,8 @@ This page explains where every value lives in memory at runtime.
 │                              │  _ob_level/_ob_in_handler/_ob_flushing,
 │                              │  elephc_web_capture,
 │                              │  _include_once_*, _fn_variant_active_*,
-│                              │  _elephc_crypto_*_fn, _elephc_tls_*_fn,
+│                              │  _elephc_crypto_*_fn, _elephc_bcmath_*_fn,
+│                              │  _elephc_tls_*_fn,
 │                              │  _elephc_eval_*_fn, ...
 ├─────────────────────────────┤
 │       Data section           │  String literals, float constants
@@ -107,7 +112,7 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 | `Callable` | 8 bytes | Function pointer |
 | `Pointer` | 8 bytes | Raw 64-bit address |
 | `Resource` | 8 bytes | Native resource payload, such as a stream descriptor |
-| `Buffer` | 8 bytes | Pointer to buffer header |
+| `Buffer` | 8 bytes | Opaque `(generation:u32 << 32) \| descriptor_index:u32` handle |
 | `Packed` | 8 bytes | Metadata-only nominal type, accessed via pointer |
 | `Union` | 8 bytes | Boxed runtime-tagged payload (same storage as Mixed) |
 | `TaggedScalar` | 16 bytes | 8-byte payload + 8-byte runtime tag (tagged null representation) |
@@ -171,11 +176,40 @@ a pointer to a boxed Mixed cell.
 
 Pointers are stored as raw 64-bit addresses. An opaque pointer and a typed `ptr<T>` value have the same runtime representation; the type tag only exists in the checker. Null pointers use address `0x0`, and dereference helpers explicitly trap on null via `__rt_ptr_check_nonnull`.
 
+### Buffer handles, descriptors, and payloads
+
+A `buffer<T>` local stores an opaque 64-bit handle rather than a payload or header pointer:
+
+```
+Bits 63..32  generation (non-zero u32)
+Bits 31..0   descriptor index (1..=4096)
+```
+
+The static `_buffer_registry` contains a reserved descriptor at index zero plus 4096 usable 48-byte descriptors:
+
+```
+Offset  Size  Field
+  0      8    payload pointer
+  8      8    logical element count
+ 16      8    element stride
+ 24      8    generation slot (low u32 used)
+ 32      8    active marker
+ 40      8    free-list successor index
+```
+
+`__rt_buffer_resolve` validates the handle index, non-zero generation, active marker, and exact generation match before length, read, write, or free paths use descriptor metadata. `buffer_new<T>()` allocates exactly `length * stride` payload bytes from the compiler-managed heap and zeroes only that payload. `buffer_free()` marks the descriptor inactive before releasing the detached payload. Reusable descriptors enter the `_buffer_registry_free` list and receive a new generation for their next lifetime, which keeps stale aliases invalid after slot or heap reuse. A descriptor whose u32 generation reaches its maximum is retired instead of wrapping to zero.
+
 ### Fiber stacks and scheduler state
 
 `Fiber` objects own native stacks rather than borrowing the caller's stack. The runtime allocates each fiber stack through `mmap` (256 KiB usable by default, plus the guard page), protects the bottom 16 KiB with `mprotect(PROT_NONE)` as a guard page, and stores both the mapping base and total mapped size in the Fiber object so `__rt_fiber_free_stack` can later return it with `munmap`.
 
 The currently running fiber is tracked in `_fiber_current`. When execution switches away from the main stack, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, and `_fiber_main_saved_call_frame` preserve the main stack pointer, exception-handler chain, and activation-record cleanup chain. A suspended Fiber stores the same state inside its object payload (`saved_sp`, `own_exc_head`, and `own_call_frame`), so `__rt_fiber_switch` can swap between main and fiber contexts without mixing exception or cleanup chains.
+
+Every compiled function prologue also consults `_stack_limit`. The main-thread
+floor, derived from `RLIMIT_STACK`, is retained in `_stack_limit_main`; Fiber and
+Generator switches replace the active value with their guarded-stack floor and
+restore the main value on return. Reaching the floor raises the compiler's
+maximum-call-stack fatal instead of falling through to a raw guard-page fault.
 
 ## The string buffer (scratch pad)
 
@@ -517,7 +551,7 @@ _float_1: .quad 0x4000000000000000    ; 2.0
 - Floats are stored as 64-bit IEEE 754 bit patterns
 - Identical literals are deduplicated (two `"hello"` in source = one `_str_0` in binary)
 
-These are **read-only** — the program never modifies them. When a string operation needs to work with a literal, it reads from the data section and writes the result to the [string buffer](#the-string-buffer).
+These are **read-only** — the program never modifies them. When a string operation needs to work with a literal, it reads from the data section and writes the result to the [string buffer](#the-string-buffer-scratch-pad).
 
 The runtime data layer is split into fixed shared data, user-program data, and dynamic `instanceof` lookup formatting under `src/codegen_support/runtime/data/`. Together they emit these static data tables:
 - `_fmt_g` — printf format string for float-to-string conversion (`%.14G`)
@@ -525,11 +559,12 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_spl_autoload_exts_default`, `_spl_autoload_exts_ptr`, `_spl_autoload_exts_len` — mutable SPL autoload extension state
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
-- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
+- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
 - `_fiber_msg_*` — Fiber state-error message strings used when constructing `FiberError`
 - `_rt_diag_suppression`, `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — runtime warning suppression depth and warning strings used by `@`
 - `_resource_id_prefix` — prefix used by resource display helpers
 - `_obj_handle_index`, `_obj_handle_free`, `_obj_handle_free_top` — direct heap-granule-to-object-handle index plus the LIFO pool of reusable PHP object handles
+- `_web_heap_guard_enabled` — enables per-request live-block accounting for persistent `--web` workers
 - `_resource_id_keys`, `_resource_id_vals` — open-addressed native-resource-to-PHP-id map; resource ids and object handles deliberately use separate numbering spaces
 - `_vd_indent`, `_vd_seen`, `_vd_seen_n` — current `var_dump()` indentation and its bounded recursion-detection stack
 - `_callable_strict_profile` — selects the strict-PHP callable builtin table when `--strict-php` is active
@@ -547,6 +582,8 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_json_exception_class_id`, `_stdclass_class_id` — per-program class ids used by JSON throw paths and stdClass dynamic-property helpers
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal descriptors used by object deep-free and cycle collection
 - `_class_json_desc_ptrs`, `_class_json_desc_<id>`, `_class_json_pname_<id>_<slot>` — per-class JSON descriptors used by object encoding and JsonSerializable dispatch
+- `_class_tostring_count`, `_class_tostring_ptrs` — dense per-class `__toString` method table used by runtime string coercions of boxed `mixed` objects
+- `_class_iface_method_count` (plus per-interface method tables), `_class_serprop_declaring_ptrs`, `_class_serprop_declaring_missing`, `_class_serprop_declaring_<id>` — interface-method ordering and property declaring-class tables used by `get_object_vars()` visibility filtering and object-to-array projection
 - `_class_attribute_count`, `_class_attribute_ptrs`, `_class_attributes_<id>` — per-class PHP attribute metadata emitted from `ClassInfo`; current helper and Reflection APIs materialize supported static lookups during codegen instead of performing dynamic runtime class/member lookup
 - `_class_vtable_ptrs`, `_class_vtable_<id>` — per-class virtual tables used for inherited instance-method dispatch
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used for late static binding
@@ -555,7 +592,8 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_zlib_fwrite_fn`, `_zlib_close_fn`, `_bz2_fwrite_fn`, `_bz2_close_fn`, `_iconv_fwrite_fn`, `_iconv_close_fn` — late-bound stream compression and iconv bridge entry points
 - `_phar_zlib_inflate_init2_fn`, `_phar_zlib_inflate_fn`, `_phar_zlib_inflate_end_fn`, `_phar_bz2_decompress_fn` — late-bound PHAR decompression entry points
 - `_elephc_tls_connect_fn`, `_elephc_tls_connect_insecure_fn`, `_elephc_tls_connect_cafile_fn`, `_elephc_tls_connect_capath_fn`, `_elephc_tls_connect_peer_name_fn`, `_elephc_tls_connect_client_cert_fn`, `_elephc_tls_attach_fd_fn`, `_elephc_tls_attach_fd_client_cert_fn`, `_elephc_tls_read_fn`, `_elephc_tls_write_fn`, `_elephc_tls_close_fn` — late-bound TLS session entry points
-- `_elephc_crypto_hash_fn`, `_elephc_crypto_hmac_fn`, `_elephc_crypto_init_fn`, `_elephc_crypto_update_fn`, `_elephc_crypto_final_fn`, `_elephc_crypto_clone_fn`, `_elephc_crypto_free_fn`, `_elephc_crypto_is_finalized_fn` — late-bound one-shot and incremental crypto entry points
+- `_elephc_crypto_hash_fn`, `_elephc_crypto_hmac_fn`, `_elephc_crypto_init_fn`, `_elephc_crypto_update_fn`, `_elephc_crypto_final_fn`, `_elephc_crypto_clone_fn`, `_elephc_crypto_free_fn`, `_elephc_crypto_is_finalized_fn`, `_elephc_crypto_cipher_iv_length_fn`, `_elephc_crypto_cipher_methods_fn`, `_elephc_crypto_encrypt_fn`, `_elephc_crypto_decrypt_fn` — late-bound hashing, incremental-context, and OpenSSL-compatible symmetric-crypto entry points
+- `_elephc_bcmath_add_fn`, `_elephc_bcmath_sub_fn`, `_elephc_bcmath_mul_fn`, `_elephc_bcmath_div_fn`, `_elephc_bcmath_mod_fn`, `_elephc_bcmath_divmod_fn`, `_elephc_bcmath_pow_fn`, `_elephc_bcmath_powmod_fn`, `_elephc_bcmath_sqrt_fn`, `_elephc_bcmath_comp_fn`, `_elephc_bcmath_ceil_fn`, `_elephc_bcmath_floor_fn`, `_elephc_bcmath_round_fn`, `_elephc_bcmath_get_scale_fn`, `_elephc_bcmath_set_scale_fn`, `_elephc_bcmath_last_error_fn`, `_elephc_bcmath_free_fn` — late-bound decimal bridge entry points shared by arithmetic lowering and error/result marshalling
 - enum-case `.comm` symbols produced via `enum_case_symbol(...)` — one 8-byte singleton storage slot per declared enum case
 
 ### Global variables
@@ -619,11 +657,12 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | Eval bridge hook slots | `_elephc_eval_ob_handler_fn`, `_elephc_eval_dynamic_object_destruct_fn` = 8 bytes each | Late-bound magician callbacks for eval-registered output handlers and eval dynamic-object destructors |
 | Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
 | Heap metadata | `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_gc_*` flags/counters = 104 bytes total | Fixed-size bookkeeping, not user-visible |
+| Buffer descriptors | `_buffer_registry` = 196656 bytes (4097 descriptors × 48 bytes), `_buffer_registry_free` = 8 bytes, `_buffer_registry_next` = 8 bytes | Up to 4096 live buffers; freed descriptors are recycled with a new generation, while exhaustion aborts with `Fatal error: buffer registry exhausted` (an invalid requested size aborts earlier with `Fatal error: buffer_new() length is negative or exceeds the maximum buffer size`) |
 | Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value` = 24 bytes total | Fixed-size setjmp/longjmp handler and thrown-value bookkeeping |
 | Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame` = 32 bytes total | Fixed-size current-fiber and main-frame resume bookkeeping |
 | Runtime diagnostics | `_rt_diag_suppression` = 8 bytes total | Fixed-size warning-suppression depth used by `@` and exception unwinding |
 | JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc`, `_json_error_source_ptr`, `_json_error_location_active`, `_json_error_line`, `_json_error_column` = 104 bytes total | Fixed-size bookkeeping for JSON calls and decode error locations |
-| Serialize/unserialize state | `_ser_value_counter`, `_ser_obj_count`, `_unser_count` = 8 bytes each; `_ser_obj_ptrs`, `_ser_obj_idxs`, `_unser_values` = 512KB each | `serialize()` object-dedup counters/maps and `unserialize()` reference registry; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref) |
+| Serialize/unserialize state | `_ser_value_counter`, `_ser_obj_count`, `_unser_count` = 8 bytes each; `_ser_obj_ptrs`, `_ser_obj_idxs`, `_unser_values` = 512KB each; `_unser_depth`, `_unser_allowed_mode`, `_unser_allowed_list`, `_unser_allowed_list_mixed`, `_unser_active`, `_unser_context` = 8 bytes each | `serialize()` object-dedup counters/maps and `unserialize()` reference registry, plus the decode depth limit, `allowed_classes` policy/list, active flag, and reentrancy snapshot; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref) and reentrant decodes restore the outer context |
 | Date/time state | `_strtotime_clock`, `_php_default_tz_len` = 8 bytes each; `_php_tz_env`, `_php_tz_save` = 264 bytes each | `strtotime()` clock override plus default-timezone (`date_default_timezone_*`) env/save buffers and stored identifier length |
 | CLI globals | `_global_argc`, `_global_argv` = 16 bytes total | Fixed-size bookkeeping |
 | User globals | 16 bytes per `global $var` slot | Grows with number of referenced globals |
@@ -637,7 +676,7 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | File descriptor state | `_eof_flags`, `_stream_read_filters`, `_stream_write_filters` = 256 bytes each; `_popen_files`, `_dir_handles`, `_glob_handles`, `_zstream_handles`, `_bzstream_handles`, `_iconv_handles`, `_tls_sessions`, `_stream_chunk_size` = 2048 bytes each | Per-fd stream, process, directory, compression, iconv, TLS, and chunk-size bookkeeping for up to 256 descriptors |
 | Stream filter scratch | `_stream_filter_buf`, `_stream_grow_scratch` = 64KB each | Scratch space for stream filters, including length-growing filters such as base64 and quoted-printable encoders |
 | Stream context and callbacks | `_stream_context_options`, `_stream_notification_callback`, `_stream_connect_host`, `_stream_open_opened_path_scratch`, `_url_stat_matched` | Current stream-context options hash, notification callback, TLS peer host, wrapper opened-path scratch, and wrapper url_stat match flag |
-| TLS and crypto function slots | `_elephc_tls_*_fn`, `_zlib_*_fn`, `_bz2_*_fn`, `_phar_zlib_*_fn`, `_phar_bz2_*_fn`, `_iconv_*_fn`, `_elephc_crypto_*_fn` = 8 bytes per slot | Late-bound function pointers so programs only link optional TLS/compression/iconv/crypto support when a call site publishes the symbol |
+| TLS, crypto, and BCMath function slots | `_elephc_tls_*_fn`, `_zlib_*_fn`, `_bz2_*_fn`, `_phar_zlib_*_fn`, `_phar_bz2_*_fn`, `_iconv_*_fn`, `_elephc_crypto_*_fn`, `_elephc_bcmath_*_fn` = 8 bytes per slot | Late-bound function pointers so programs only link optional TLS/compression/iconv/crypto/decimal support when a call site publishes the symbol |
 | HTTP/HTTPS/FTP buffers | `_http_resp_buf`, `_https_resp_buf`, `_user_wrapper_drain_buf`, `_phar_write_out` = 1MB each; `_http_req_scratch` = 8KB; `_http_redirect_path_buf`, `_fgc_url_retr` = 2KB each; `_fgc_url_addr`, `_fsockopen_addr` = 512 bytes each; `_ftp_resp_buf` = 4KB; `_ftp_data_addr`, `_ftp_cmd_scratch` = 64 bytes each; `_ftp_use_tls` = 8 bytes (FTPS handshake flag) | Protocol-specific response, request, redirect, FTP/FTPS, wrapper, and PHAR writer scratch buffers and flags |
 | HTTP active context | `_http_active_ignore_errors`, `_http_active_max_redirects`, `_http_active_timeout_seconds`, `_http_active_proxy_ptr`, `_http_active_proxy_len`, `_http_active_host_ptr`, `_http_active_host_len`, `_http_redirect_path_len` | Fixed-size state shared between HTTP request construction and redirect/open helpers |
 | Socket address scratch | `_recvfrom_addr_ptr`, `_recvfrom_addr_len`, `_accept_peer_ptr`, `_accept_peer_len` = 8 bytes each | Stores peer/address strings returned through by-reference socket parameters |

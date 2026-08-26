@@ -32,8 +32,8 @@ pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emitter.label("__elephc_runtime_builtin_v1_dispatch");
 
     for (id, label) in runtime_dispatch_labels() {
-        emitter.instruction(&format!("cmp x19, #{}", id.as_u32()));
-        emitter.instruction(&format!("b.eq {label}"));
+        emitter.instruction(&format!("cmp x19, #{}", id.as_u32()));             // compare the retained builtin ID with this arm's contract value
+        emitter.instruction(&format!("b.eq {label}"));                          // dispatch to the matching builtin arm
     }
     emitter.instruction("b __elephc_runtime_builtin_v1_unsupported");           // unknown IDs fail closed
 
@@ -62,13 +62,13 @@ pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emitter.label("__elephc_runtime_builtin_v1_result");
     emitter.instruction("cbz x0, __elephc_runtime_builtin_v1_fatal");           // null helper results report runtime failure
     emitter.instruction("str x0, [x22]");                                       // transfer the fresh boxed result to the caller
-    emitter.instruction(&format!("mov w0, #{}", RuntimeBuiltinStatus::Success as i32));
+    emitter.instruction(&format!("mov w0, #{}", RuntimeBuiltinStatus::Success as i32)); // report Success through the versioned status contract
     emitter.instruction("b __elephc_runtime_builtin_v1_done");                  // return success after ownership transfer
     emitter.label("__elephc_runtime_builtin_v1_fatal");
-    emitter.instruction(&format!("mov w0, #{}", RuntimeBuiltinStatus::RuntimeFatal as i32));
+    emitter.instruction(&format!("mov w0, #{}", RuntimeBuiltinStatus::RuntimeFatal as i32)); // report RuntimeFatal; result-out stays null
     emitter.instruction("b __elephc_runtime_builtin_v1_done");                  // return failure with a null result slot
     emitter.label("__elephc_runtime_builtin_v1_unsupported");
-    emitter.instruction(&format!("mov w0, #{}", RuntimeBuiltinStatus::Unsupported as i32));
+    emitter.instruction(&format!("mov w0, #{}", RuntimeBuiltinStatus::Unsupported as i32)); // report Unsupported for unknown IDs and arities
     emitter.label("__elephc_runtime_builtin_v1_done");
     emitter.instruction("ldp x19, x20, [sp]");                                  // restore callee-saved ID and arguments
     emitter.instruction("ldp x21, x22, [sp, #16]");                             // restore callee-saved count and result slot
@@ -100,8 +100,8 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emitter.label("__elephc_runtime_builtin_v1_dispatch_x86");
 
     for (id, label) in runtime_dispatch_labels() {
-        emitter.instruction(&format!("cmp ebx, {}", id.as_u32()));
-        emitter.instruction(&format!("je {label}_x86"));
+        emitter.instruction(&format!("cmp ebx, {}", id.as_u32()));              // compare the retained builtin ID with this arm's contract value
+        emitter.instruction(&format!("je {label}_x86"));                        // dispatch to the matching builtin arm
     }
     emitter.instruction("jmp __elephc_runtime_builtin_v1_unsupported_x86");     // unknown IDs fail closed
 
@@ -131,13 +131,13 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // null helper results report runtime failure
     emitter.instruction("jz __elephc_runtime_builtin_v1_fatal_x86");            // keep result-out null on failure
     emitter.instruction("mov QWORD PTR [r14], rax");                            // transfer the fresh boxed result to the caller
-    emitter.instruction(&format!("mov eax, {}", RuntimeBuiltinStatus::Success as i32));
+    emitter.instruction(&format!("mov eax, {}", RuntimeBuiltinStatus::Success as i32)); // report Success through the versioned status contract
     emitter.instruction("jmp __elephc_runtime_builtin_v1_done_x86");            // return success after ownership transfer
     emitter.label("__elephc_runtime_builtin_v1_fatal_x86");
-    emitter.instruction(&format!("mov eax, {}", RuntimeBuiltinStatus::RuntimeFatal as i32));
+    emitter.instruction(&format!("mov eax, {}", RuntimeBuiltinStatus::RuntimeFatal as i32)); // report RuntimeFatal; result-out stays null
     emitter.instruction("jmp __elephc_runtime_builtin_v1_done_x86");            // return failure with a null result slot
     emitter.label("__elephc_runtime_builtin_v1_unsupported_x86");
-    emitter.instruction(&format!("mov eax, {}", RuntimeBuiltinStatus::Unsupported as i32));
+    emitter.instruction(&format!("mov eax, {}", RuntimeBuiltinStatus::Unsupported as i32)); // report Unsupported for unknown IDs and arities
     emitter.label("__elephc_runtime_builtin_v1_done_x86");
     emitter.instruction("pop r14");                                             // restore the caller-owned result-out register
     emitter.instruction("pop r13");                                             // restore the boxed argument count register

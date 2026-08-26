@@ -441,6 +441,81 @@ echo ($nan <=> $one), ($one <=> $nan), ($nan <=> $nan);
 }
 
 
+/// Regression: ordered comparisons on `float|false` must inspect the boxed runtime tag.
+/// Fractional floats keep their fraction, while a `false` arm compares to numbers by PHP
+/// truthiness rather than by treating the boolean payload as numeric zero.
+#[test]
+fn test_float_or_false_union_uses_runtime_ordering_rules() {
+    let out = compile_and_run(
+        r#"<?php
+function fractional_or_false(bool $ok): float|false {
+    return $ok ? 0.5 : false;
+}
+
+$value = fractional_or_false(true);
+var_dump($value > 0);
+var_dump($value >= 0.5);
+var_dump($value < 1);
+var_dump($value <= 0.5);
+var_dump($value <=> 0);
+var_dump(0 <=> $value);
+
+$failure = fractional_or_false(false);
+var_dump($failure > -1);
+var_dump($failure < -1);
+var_dump($failure <=> -1);
+var_dump(-1 <=> $failure);
+var_dump($failure >= 0);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(true)\nbool(true)\nint(1)\nint(-1)\n\
+         bool(false)\nbool(true)\nint(-1)\nint(1)\nbool(true)\n"
+    );
+}
+
+
+/// Regression: boxed float unions preserve PHP's unordered NaN rules for numeric and string
+/// operands, including the always-positive spaceship result in either operand order.
+#[test]
+fn test_float_or_false_union_relational_nan_is_unordered() {
+    let out = compile_and_run(
+        r#"<?php
+function nan_or_false(bool $ok): float|false {
+    return $ok ? NAN : false;
+}
+
+function string_or_float(string $value): float|string {
+    return $value;
+}
+
+$nan = nan_or_false(true);
+var_dump($nan < 0);
+var_dump($nan <= 0);
+var_dump($nan > 0);
+var_dump($nan >= 0);
+var_dump($nan <=> 0);
+foreach (["1", "a"] as $raw) {
+    $string = string_or_float($raw);
+    var_dump($string <=> $nan);
+    var_dump($nan <=> $string);
+    var_dump($string < $nan);
+    var_dump($string > $nan);
+    var_dump($nan < $string);
+    var_dump($nan > $string);
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\nint(1)\n\
+         int(1)\nint(1)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n\
+         int(1)\nint(1)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n"
+    );
+}
+
+
 /// Verifies runtime loose equality of two non-numeric strings compares by byte sequence.
 #[test]
 fn test_runtime_loose_eq_non_numeric_strings_compare_by_bytes() {

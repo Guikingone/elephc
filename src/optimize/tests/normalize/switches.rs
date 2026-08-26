@@ -238,3 +238,125 @@ fn test_normalize_control_flow_merges_fallthrough_switch_labels_into_next_case()
         other => panic!("expected normalized if, got {:?}", other),
     }
 }
+
+/// Builds the single-case switch whose DEFAULT body the rewrite materializes twice.
+///
+/// One case with a body that FALLS THROUGH (no `break`) is what makes the default body reachable
+/// from the matching path as well, so `materialize_switch_execution` appends it to the `then`
+/// branch and emits it again as the `else` branch. `decision_span` is the span of the default
+/// body's assignment — the node a checker local-binding decision would be filed against.
+fn single_case_fallthrough_switch(decision_span: Span) -> Program {
+    vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::var("x"),
+            cases: vec![(vec![Expr::int_lit(1)], vec![Stmt::echo(Expr::int_lit(7))])],
+            default: Some(vec![Stmt::new(
+                StmtKind::Assign {
+                    name: "a".to_string(),
+                    value: Expr::int_lit(9),
+                },
+                decision_span,
+            )]),
+        },
+        Span::dummy(),
+    )]
+}
+
+/// Control for the guard below: with no local-binding decision in play, the single-case rewrite
+/// still fires — and it really does write the default body's statement into BOTH branches.
+///
+/// The two `decision_span` assertions are the anti-vacuity half of the guard test: they pin that
+/// this shape duplicates a span, so a guarded run that leaves the switch alone is measuring
+/// something real rather than a rewrite that never applied.
+#[test]
+fn test_normalize_control_flow_materializes_a_single_case_default_into_both_branches() {
+    let decision_span = Span::new(7, 1);
+
+    let pruned = normalize_control_flow(single_case_fallthrough_switch(decision_span));
+
+    assert_eq!(pruned.len(), 1);
+    match &pruned[0].kind {
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            assert!(elseif_clauses.is_empty());
+            assert_eq!(
+                *condition,
+                Expr::new(
+                    ExprKind::BinaryOp {
+                        left: Box::new(Expr::var("x")),
+                        op: BinOp::Eq,
+                        right: Box::new(Expr::int_lit(1)),
+                    },
+                    Span::dummy(),
+                )
+            );
+            assert_eq!(then_body.len(), 2);
+            assert_eq!(then_body[0], Stmt::echo(Expr::int_lit(7)));
+            assert_eq!(then_body[1].span, decision_span);
+            let else_body = else_body.as_ref().expect("the default body must become the else");
+            assert_eq!(else_body.len(), 1);
+            assert_eq!(else_body[0].span, decision_span);
+        }
+        other => panic!("expected normalized if, got {:?}", other),
+    }
+}
+
+/// The same rewrite vetoes itself when the default body carries a checker local-binding decision.
+///
+/// The decisions are keyed BY SPAN and a clone carries the original's span, so materializing this
+/// default into both branches would leave ONE decision naming TWO statements — the singularity
+/// `checker::binding_decision_ambiguity` certified on the original program. The switch is left
+/// exactly as it arrived, which costs this one optimization and nothing else.
+///
+/// Calls `crate::optimize::normalize_control_flow` directly rather than the test tree's shadow,
+/// because the shadow installs the empty set every hand-built fixture wants.
+#[test]
+fn test_normalize_control_flow_keeps_a_single_case_switch_carrying_a_binding_decision() {
+    let decision_span = Span::new(7, 1);
+
+    let guarded = crate::optimize::normalize_control_flow(
+        single_case_fallthrough_switch(decision_span),
+        HashSet::from([decision_span]),
+    );
+
+    assert_eq!(guarded.len(), 1);
+    match &guarded[0].kind {
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            assert_eq!(*subject, Expr::var("x"));
+            assert_eq!(cases.len(), 1);
+            assert_eq!(cases[0].0, vec![Expr::int_lit(1)]);
+            assert_eq!(cases[0].1, vec![Stmt::echo(Expr::int_lit(7))]);
+            let default = default.as_ref().expect("the default body must survive the veto");
+            assert_eq!(default.len(), 1);
+            assert_eq!(default[0].span, decision_span);
+        }
+        other => panic!("expected the switch to be left unpruned, got {:?}", other),
+    }
+}
+
+/// The veto is about the DECISION, not about single-case switches: a decision span that names no
+/// node in this switch leaves the rewrite firing exactly as the control above.
+#[test]
+fn test_normalize_control_flow_still_rewrites_when_the_decision_names_another_node() {
+    let decision_span = Span::new(7, 1);
+
+    let pruned = crate::optimize::normalize_control_flow(
+        single_case_fallthrough_switch(decision_span),
+        HashSet::from([Span::new(99, 1)]),
+    );
+
+    assert_eq!(pruned.len(), 1);
+    assert!(
+        matches!(pruned[0].kind, StmtKind::If { .. }),
+        "expected the rewrite to fire, got {:?}",
+        pruned[0].kind
+    );
+}

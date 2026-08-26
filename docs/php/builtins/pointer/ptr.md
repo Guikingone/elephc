@@ -2,13 +2,13 @@
 title: "ptr()"
 description: "Returns a raw pointer to the given variable."
 sidebar:
-  order: 321
+  order: 335
 ---
 
 ## ptr()
 
 ```php
-function ptr(mixed $value): mixed
+function ptr(mixed $value): pointer
 ```
 
 Returns a raw pointer to the given variable.
@@ -16,7 +16,7 @@ Returns a raw pointer to the given variable.
 **Parameters**:
 - `$value` (`mixed`)
 
-**Returns**: `mixed`
+**Returns**: `pointer`
 
 ## Availability
 

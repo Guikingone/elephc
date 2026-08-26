@@ -9,6 +9,7 @@
 //! - Keep startup thin so CLI validation and pipeline behavior stay in dedicated modules.
 
 mod autoload;
+mod brand;
 mod builtins;
 mod cli;
 mod codegen;
@@ -18,6 +19,7 @@ mod errors;
 mod eval_aot;
 mod exports;
 mod func_args;
+mod global_decls;
 mod hash_prelude;
 mod image_prelude;
 mod intrinsics;
@@ -41,10 +43,17 @@ mod names;
 mod opcache;
 mod opcache_prelude;
 mod optimize;
+mod otlp;
 mod parser;
 mod php_version;
+mod mysqli_prelude;
 mod pdo_prelude;
+mod monitor;
+mod call_graph;
 mod php_profile;
+mod pprof_encode;
+mod prelude_prune;
+mod probe_key;
 mod pipeline;
 mod progress;
 mod resolver;
@@ -56,6 +65,8 @@ mod span;
 mod strict_php;
 mod string_bytes;
 mod superglobals;
+#[allow(dead_code)]
+mod synthetic_class;
 mod termination;
 mod timings;
 mod types;
@@ -93,6 +104,7 @@ fn main() {
             pipeline::compile(config);
         }
         cli::Command::Native(command) => run_native(command),
+        cli::Command::Monitor(command) => std::process::exit(monitor::run(command)),
     }
 }
 

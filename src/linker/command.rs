@@ -150,6 +150,12 @@ fn render_macos_command(
                 OsString::from("-dylib"),
                 OsString::from("-install_name"),
                 OsString::from(install_name),
+                // Collectable for the same reason as the Linux shared library: every symbol
+                // outside the export allowlist is `.private_extern`, so it is no longer an export
+                // and no longer a root. Mach-O needed the marking more than ELF did — there every
+                // `.globl` is an export by definition, so an unmarked dylib has no dead code at
+                // all from the linker's point of view.
+                OsString::from("-dead_strip"),
             ]);
         }
     }
@@ -173,8 +179,7 @@ fn render_macos_command(
         }
     }
     append_link_inputs(&mut args, plan, Platform::MacOS);
-    // FreeTDS also exports `dbopen`; keeping native dependencies before libSystem
-    // prevents ld64 from binding PDO_DBLIB to Berkeley DB's incompatible symbol.
+    // Keep native dependencies before the platform runtime in the final link order.
     args.push(OsString::from("-lSystem"));
     append_frameworks(&mut args, plan);
 
@@ -195,7 +200,19 @@ fn render_linux_command(
     let mut args = Vec::new();
     match emit {
         Emit::Executable => args.push(OsString::from("-Wl,--gc-sections")),
-        Emit::Cdylib => args.push(OsString::from("-shared")),
+        Emit::Cdylib => {
+            args.push(OsString::from("-shared"));
+            // A shared library collects the same unreachable helpers an executable does. The
+            // prerequisite is already in place and was the reason this was withheld: every symbol
+            // outside the export allowlist is marked `.hidden`, so it is not a dynsym root and is
+            // collectable. Without that marking `--gc-sections` would be inert here, since every
+            // `.globl __rt_*` would be an export and therefore a root.
+            //
+            // A helper reached only through a data pointer — the runtime `.data` holds vtables of
+            // `.quad __rt_*` — stays alive: that is a relocation from a retained section, which
+            // the collector follows like any other reference.
+            args.push(OsString::from("-Wl,--gc-sections"));
+        }
     }
     args.extend(LINUX_HARDENING_FLAGS.iter().copied().map(OsString::from));
     args.extend([
@@ -216,7 +233,7 @@ fn render_linux_command(
         args.push(OsString::from("-ldl"));
     }
     append_search_paths(&mut args, plan);
-    if whole_bridge_count(plan) >= 2 {
+    if bridge_archive_count(plan) >= 2 {
         args.push(OsString::from("-Wl,--allow-multiple-definition"));
     }
     append_link_inputs(&mut args, plan, Platform::Linux);
@@ -294,15 +311,23 @@ fn has_link_inputs(plan: &LinkPlan) -> bool {
     })
 }
 
-/// Counts whole-archived bridge items that can duplicate Rust runtime members.
-fn whole_bridge_count(plan: &LinkPlan) -> usize {
+/// Counts bridge staticlib archives that can duplicate Rust runtime members.
+///
+/// Every Rust `staticlib` bundles the allocator shims, std rcgu objects, and any
+/// shared dependency (e.g. rustls in both `elephc_pdo` and `elephc_tls`), so as
+/// soon as TWO bridge archives each contribute at least one member, GNU ld sees
+/// multiple definitions — with or without `--whole-archive`. A program that
+/// auto-detects several bridges (PDO's prelude alone plans pdo+tls+phar+crypto)
+/// therefore needs `--allow-multiple-definition` exactly like a forced
+/// whole-archive pair; the duplicates are identical objects from one workspace
+/// build, so first-definition-wins is sound.
+fn bridge_archive_count(plan: &LinkPlan) -> usize {
     plan.items()
         .iter()
         .filter(|item| {
             matches!(
                 item,
                 LinkItem::StaticArchive {
-                    whole_archive: true,
                     origin: LinkOrigin::Bridge { .. },
                     ..
                 }
@@ -354,6 +379,30 @@ mod tests {
             &[],
         )
         .arguments_lossy()
+    }
+
+    /// Verifies a Linux shared library is section-collected like an executable.
+    ///
+    /// The flag is only meaningful because every symbol outside the export allowlist is already
+    /// marked `.hidden`: without that, each `.globl __rt_*` would be an export, therefore a
+    /// dynsym root, and the collector would have nothing to drop. A regression removing either
+    /// half leaves a shared library carrying the whole runtime while still linking and passing
+    /// its behaviour tests, which is why the flag is asserted rather than left to review.
+    #[test]
+    fn linux_shared_library_collects_unreachable_sections() {
+        let args = render_linux_cdylib(&LinkPlan::new());
+        assert!(args.iter().any(|arg| arg == "-shared"));
+        assert!(
+            args.iter().any(|arg| arg == "-Wl,--gc-sections"),
+            "a shared library must collect unreachable sections: {args:?}"
+        );
+    }
+
+    /// Verifies the executable path did not lose its collection flag while the cdylib gained one.
+    #[test]
+    fn linux_executable_still_collects_unreachable_sections() {
+        let args = render_linux(&LinkPlan::new());
+        assert!(args.iter().any(|arg| arg == "-Wl,--gc-sections"));
     }
 
     /// Renders one macOS executable command with injected SDK and Homebrew paths.
@@ -437,6 +486,32 @@ mod tests {
             .unwrap();
         assert_eq!((archive, close), (open + 1, open + 2));
         assert!(close < managed);
+    }
+
+    /// Verifies two bridge archives enable `--allow-multiple-definition` even
+    /// without whole-archiving: every Rust staticlib duplicates the allocator
+    /// shims and shared dependency rcgu objects, so an auto-detected
+    /// multi-bridge link (e.g. PDO's pdo+tls+phar+crypto plan) collides on GNU
+    /// ld exactly like a forced whole-archive pair.
+    #[test]
+    fn linux_two_bridge_archives_allow_multiple_definition() {
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::bridge_archive("pdo.a", "elephc_pdo", false),
+            LinkItem::bridge_archive("tls.a", "elephc_tls", false),
+        ]);
+        let args = render_linux(&plan);
+        assert!(args.iter().any(|argument| argument == "-Wl,--allow-multiple-definition"));
+    }
+
+    /// Verifies a single bridge archive does not relax linker duplicate checks.
+    #[test]
+    fn linux_single_bridge_archive_keeps_strict_definitions() {
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::bridge_archive("pdo.a", "elephc_pdo", false),
+            LinkItem::managed_archive("pcre2.a", "pcre2"),
+        ]);
+        let args = render_linux(&plan);
+        assert!(!args.iter().any(|argument| argument == "-Wl,--allow-multiple-definition"));
     }
 
     /// Verifies exact macOS archives do not trigger implicit Homebrew search paths.

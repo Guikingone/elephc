@@ -238,10 +238,122 @@ echo buffer_len($buf);
     assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
 }
 
+/// Rejects an element count whose byte size wraps `usize` before the runtime
+/// can publish the attacker-controlled logical length in a tiny allocation.
+#[test]
+fn test_buffer_new_rejects_wrapping_element_count() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+buffer<int> $buf = buffer_new<int>(2305843009213693953);
+echo "unreachable";
+"#,
+    );
+    assert!(
+        err.contains("buffer length") || err.contains("buffer size"),
+        "expected an explicit invalid buffer-size failure, got: {}",
+        err
+    );
+}
+
+/// Verifies exhausting the finite descriptor registry fails closed with a
+/// dedicated diagnostic instead of reporting an unrelated size overflow.
+#[test]
+fn test_buffer_registry_exhaustion_has_dedicated_diagnostic() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+for ($i = 0; $i < 4097; $i++) {
+    buffer<int> $buffer = buffer_new<int>(1);
+    $buffer[0] = $i;
+}
+echo "unreachable";
+"#,
+    );
+    assert!(
+        err.contains("buffer registry exhausted"),
+        "expected the descriptor-capacity diagnostic, got: {err}"
+    );
+}
+
+/// Verifies freeing one local invalidates an aliased local before a read can
+/// access a heap block that may already have been reused for another value.
+#[test]
+fn test_buffer_alias_read_after_free_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+buffer<int> $owner = buffer_new<int>(2);
+$alias = $owner;
+buffer_free($owner);
+echo $alias[0];
+"#,
+    );
+    assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
+}
+
+/// Verifies freeing one local invalidates an aliased local before a write can
+/// corrupt a subsequently reused heap block.
+#[test]
+fn test_buffer_alias_write_after_free_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+buffer<int> $owner = buffer_new<int>(2);
+$alias = $owner;
+buffer_free($owner);
+$alias[0] = 42;
+"#,
+    );
+    assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
+}
+
+/// Verifies `buffer_len()` validates the allocation's liveness instead of
+/// trusting a non-null aliased pointer after the owner was freed.
+#[test]
+fn test_buffer_alias_len_after_free_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+buffer<int> $owner = buffer_new<int>(2);
+$alias = $owner;
+buffer_free($owner);
+echo buffer_len($alias);
+"#,
+    );
+    assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
+}
+
+/// Verifies `buffer_free()` is idempotent for a local that was already cleared,
+/// preserving the runtime heap-free contract instead of writing through null.
+#[test]
+fn test_buffer_double_free_is_safe() {
+    let out = compile_and_run(
+        r#"<?php
+buffer<int> $buf = buffer_new<int>(2);
+buffer_free($buf);
+buffer_free($buf);
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a stale alias stays invalid even after the allocator reuses the
+/// released block for a new live buffer with a fresh generation.
+#[test]
+fn test_buffer_alias_stays_invalid_after_heap_block_reuse() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+buffer<int> $owner = buffer_new<int>(2);
+$stale = $owner;
+buffer_free($owner);
+buffer<int> $replacement = buffer_new<int>(2);
+$replacement[0] = 99;
+echo $stale[0];
+"#,
+    );
+    assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
+}
+
 /// Verifies that a `buffer_new<int>()` length whose `len * 8` payload size wraps the machine word
-/// is rejected. Before the guard the wrapped product allocated 32 bytes while the header still
-/// advertised the pre-overflow length, so `$b[0x100000]` passed the bounds check and read roughly
-/// 8 MB past the block.
+/// is rejected. Without the guard, the wrapped product could publish a descriptor for an
+/// undersized payload, allowing an in-range logical index to access beyond the allocation.
 #[test]
 fn test_buffer_new_overflowing_length_is_fatal() {
     let err = compile_and_run_expect_failure(
@@ -258,8 +370,7 @@ echo $b[0];
 }
 
 /// Verifies that an out-of-range index cannot follow an overflowing `buffer_new<int>()`: the
-/// allocation itself aborts, so the read never reaches the payload. Before the guard this program
-/// printed `read:0` after loading roughly 8 MB past the 32-byte allocation and exited 0.
+/// allocation itself aborts, so the read never reaches an undersized payload.
 #[test]
 fn test_buffer_new_overflow_prevents_out_of_range_read() {
     let out = compile_and_run_capture(
@@ -326,9 +437,9 @@ echo buffer_len($b), ":", $b[0], ":", $b[2];
     assert_eq!(out, "4:0:42");
 }
 
-/// Verifies the linux-x86_64 runtime carries the same `__rt_buffer_new` length guard as the ARM64
-/// runtime. The x86_64 code cannot be executed from an aarch64 host, so this asserts on the emitted
-/// assembly text.
+/// Verifies the linux-x86_64 runtime rejects invalid payload sizes before publishing a generation
+/// handle. The x86_64 code cannot be executed from an aarch64 host, so this asserts on the emitted
+/// assembly text and the absence of the legacy in-band buffer header.
 #[test]
 fn test_x86_64_runtime_buffer_new_carries_length_guard() {
     let target = Target::parse("linux-x86_64").expect("linux-x86_64 is a supported target");
@@ -341,9 +452,12 @@ fn test_x86_64_runtime_buffer_new_carries_length_guard() {
     let buffer_new = &rest[..rest.find("\n\n").unwrap_or(rest.len())];
     for expected in [
         "js __rt_buffer_new_size_fail",
-        "imul rax, rdi",
-        "jo __rt_buffer_new_size_fail",
-        "add rax, 16",
+        "mul rdi",
+        "test rdx, rdx",
+        "jnz __rt_buffer_new_size_fail",
+        "mov r10d, 0xffffffff",
+        "cmp rax, r10",
+        "ja __rt_buffer_new_size_fail",
     ] {
         assert!(
             buffer_new.contains(expected),
@@ -354,4 +468,75 @@ fn test_x86_64_runtime_buffer_new_carries_length_guard() {
         runtime_asm.contains("__rt_buffer_new_size_fail:"),
         "x86_64 runtime is missing the buffer-length fatal handler"
     );
+    assert!(
+        !buffer_new.contains("add rax, 24"),
+        "x86_64 buffer allocation retained the legacy in-band header: {buffer_new}"
+    );
+    assert!(
+        !buffer_new.contains("cmp rax, 0xffffffff"),
+        "x86_64 buffer size bound uses a sign-extended immediate: {buffer_new}"
+    );
+}
+
+/// A packed `int` field accepts a boxed Mixed value that holds an int at runtime: the
+/// strict narrowing stores the raw payload, and int arithmetic routed through a Mixed
+/// return (its type carries the overflow-to-float promotion) can feed packed storage.
+#[test]
+fn test_packed_int_field_accepts_mixed_holding_int() {
+    let out = compile_and_run(
+        "<?php
+        packed class Cell { public int $id; }
+        function bump(int $x) { return $x + 1; }
+        buffer<Cell> $cells = buffer_new<Cell>(1);
+        $cells[0]->id = bump(41);
+        echo $cells[0]->id;
+        buffer_free($cells);
+        ",
+    );
+    assert_eq!(out, "42");
+}
+
+/// A packed `int` field receiving a Mixed value that really overflowed to float throws a
+/// catchable `TypeError` naming the runtime type — never a silent truncation, and never a
+/// box pointer written into fixed field storage.
+#[test]
+fn test_packed_int_field_mixed_float_throws_type_error() {
+    let out = compile_and_run(
+        "<?php
+        packed class Cell { public int $id; }
+        function bump(int $x) { return $x + 1; }
+        buffer<Cell> $cells = buffer_new<Cell>(1);
+        try {
+            $cells[0]->id = bump(PHP_INT_MAX);
+            echo \"stored\";
+        } catch (TypeError $e) {
+            echo get_class($e), \":\", $e->getMessage();
+        }
+        buffer_free($cells);
+        ",
+    );
+    assert_eq!(
+        out,
+        "TypeError:Packed field Cell::$id must be of type int, float given"
+    );
+}
+
+/// The packed-field narrowing is strict: a Mixed string is a `TypeError`, not a numeric
+/// coercion — packed fields are a fixed-layout systems extension, not a PHP scalar slot.
+#[test]
+fn test_packed_int_field_mixed_string_throws_type_error() {
+    let out = compile_and_run(
+        "<?php
+        packed class Cell { public int $id; }
+        function pick(mixed $v) { return $v; }
+        buffer<Cell> $cells = buffer_new<Cell>(1);
+        try {
+            $cells[0]->id = pick(\"x\");
+        } catch (TypeError $e) {
+            echo $e->getMessage();
+        }
+        buffer_free($cells);
+        ",
+    );
+    assert_eq!(out, "Packed field Cell::$id must be of type int, string given");
 }

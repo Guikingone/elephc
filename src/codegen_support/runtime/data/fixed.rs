@@ -16,11 +16,14 @@ use super::{
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
     OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
-    OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OB_WARN_BAD_CALLBACK_GENERIC,
+    OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
+    OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
     SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
-    STR_REPEAT_TIMES_MSG,
+    STR_REPEAT_TIMES_MSG, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
+    UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX,
+    UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX,
 };
 use super::super::system;
 use crate::codegen_support::data_section::comm_directive;
@@ -51,6 +54,55 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", 65536, target));
     out.push_str(&comm_directive("_concat_off", 8, target));
+    out.push_str(&comm_directive("_unser_depth", 8, target));
+    out.push_str(".globl _unser_depth_msg\n_unser_depth_msg:\n    .ascii \"Fatal error: maximum unserialize depth exceeded\\n\"\n");
+    out.push_str(&comm_directive("_unser_allowed_mode", 8, target));
+    out.push_str(&comm_directive("_unser_allowed_list", 8, target));
+    out.push_str(&comm_directive("_unser_allowed_list_mixed", 8, target));
+    out.push_str(&comm_directive("_unser_active", 8, target));
+    out.push_str(&comm_directive("_unser_context", 8, target));
+    out.push_str(".globl _unser_allowed_classes_key\n_unser_allowed_classes_key:\n    .ascii \"allowed_classes\"\n");
+    out.push_str(&format!(
+        ".globl _unser_options_type_prefix\n_unser_options_type_prefix:\n    .ascii {UNSER_OPTIONS_TYPE_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_allowed_classes_policy_prefix\n_unser_allowed_classes_policy_prefix:\n    .ascii {UNSER_ALLOWED_CLASSES_POLICY_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_allowed_classes_entry_prefix\n_unser_allowed_classes_entry_prefix:\n    .ascii {UNSER_ALLOWED_CLASSES_ENTRY_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _object_not_array_prefix\n_object_not_array_prefix:\n    .ascii {OBJECT_NOT_ARRAY_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _object_not_array_suffix\n_object_not_array_suffix:\n    .ascii {OBJECT_NOT_ARRAY_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_object_string_error_prefix\n_unser_object_string_error_prefix:\n    .ascii {UNSER_OBJECT_STRING_ERROR_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_object_string_error_suffix\n_unser_object_string_error_suffix:\n    .ascii {UNSER_OBJECT_STRING_ERROR_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_type_given_suffix\n_unser_type_given_suffix:\n    .ascii {UNSER_TYPE_GIVEN_SUFFIX:?}\n"
+    ));
+    for (label, name) in [
+        ("_unser_type_int", "int"),
+        ("_unser_type_string", "string"),
+        ("_unser_type_float", "float"),
+        ("_unser_type_bool", "bool"),
+        ("_unser_type_array", "array"),
+        ("_unser_type_object", "object"),
+        ("_unser_type_null", "null"),
+        ("_unser_type_resource", "resource"),
+        ("_unser_type_unknown", "unknown"),
+    ] {
+        out.push_str(&format!(
+            ".globl {label}\n{label}:\n    .ascii {name:?}\n"
+        ));
+    }
+    out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
+    out.push_str(".globl _incomplete_class_property_name\n_incomplete_class_property_name:\n    .ascii \"__PHP_Incomplete_Class_Name\"\n");
     // print_r($value, true) return-mode capture state. _print_r_mode is a flag
     // (0 = write to stdout, 1 = append to _print_r_buf) consulted by
     // __rt_stdout_write and __rt_pr_write; _print_r_off tracks the accumulated
@@ -153,8 +205,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // index, keys excluded) plus a pointer->index map of already-serialized objects
     // (parallel arrays, linear scan) so a repeated object emits r:<index>. unserialize:
     // a registry of created value boxes indexed by the same pre-order counter so r:<N>
-    // resolves to the existing value. Capacity bounds the per-call object/value count;
-    // overflow degrades gracefully (serialize stops deduping, unserialize fails the ref).
+    // resolves to the existing value. Reentrant calls snapshot the used prefix plus their
+    // policy/depth fields through _unser_context. Capacity bounds the per-call object/value
+    // count; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref).
     out.push_str(&comm_directive("_ser_value_counter", 8, target));
     out.push_str(&comm_directive("_ser_obj_count", 8, target));
     out.push_str(&comm_directive("_ser_obj_ptrs", 524288, target));
@@ -212,6 +265,62 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_stack_limit", 8, target));
     out.push_str(&comm_directive("_stack_limit_main", 8, target));
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
+    // elephc_probe_route_fn: a function-pointer slot the sampling probe fills at init
+    // (with elephc_probe_set_route) and the --web bridge reads to tag samples by route.
+    // Zero unless --probe linked the probe, so route tagging is pay-for-use with no
+    // compile coupling and no dlsym (the symbol lives in the always-linked core runtime).
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_route_fn"), 8, target));
+    // elephc_probe_rearm_fn: filled with elephc_probe_rearm under --probe; the
+    // --web bridge calls it to re-arm the profiling timer in each worker, which
+    // the post-fork disarm (that protects exec'd children) turned off.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_rearm_fn"), 8, target));
+    // elephc_probe_verify_fn: verifies a signed X-Elephc-Query header against the
+    // embedded build key, so turning profiling on stays a privileged act.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_verify_fn"), 8, target));
+    // elephc_instr_throw_fn: filled with elephc_instr_throw under monitoring; the
+    // single throw helper calls it so the profiler learns that an exception
+    // unwound, and when. Without it the frames an exception passed through could
+    // only be closed when the CATCHER exits, which charged the handler's work to
+    // whatever threw. Null in a binary without the capability, where the helper
+    // pays one load and a branch on a path taken only by throws.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_throw_fn"), 8, target));
+    // elephc_monitor_active: 1 once this process has been asked to profile —
+    // written by the probe's init, read by the exact profiler's, which runs after
+    // it. One check, in one place: repeating it would consume the control
+    // channel's marker twice and the second reader would see nothing.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_monitor_active"), 8, target));
+    // elephc_probe_allocs_ptr: the ADDRESS of `_gc_allocs`, published under
+    // --probe so the sampler can read the allocation counter without declaring
+    // that symbol itself. `_gc_allocs` is spelled with a hardcoded underscore
+    // everywhere it is emitted, which is self-consistent while only assembly
+    // names it; a Rust crate resolving it directly would break every ELF link.
+    // Handing over a pointer keeps that name inside the assembly.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_allocs_ptr"), 8, target));
+    // elephc_instr_io_fn: a function-pointer slot filled with elephc_instr_io
+    // under --instrument, else zero. I/O builtins (PDO queries) read it and call
+    // through it when non-null, so the exact profiler can count queries per
+    // function — pay-for-use, no dlsym, no coupling to the instrument crate.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_io_fn"), 8, target));
+    // elephc_instr_query_fn: companion slot filled with elephc_instr_query under
+    // --instrument, else zero. The PDO bridge reads it and reports each query's
+    // SQL text (normalized) so the exact profiler can list distinct statements
+    // and their execution counts — the N+1 view. Pay-for-use, like the io slot.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_query_fn"), 8, target));
+    // elephc_instr_wait_fn: third companion slot, filled with elephc_instr_wait
+    // under --instrument. The PDO bridge times the actual driver call and
+    // reports the nanoseconds through it, which is what splits each function's
+    // self time into CPU and I/O wait. Zero (inert) in a normal binary.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_wait_fn"), 8, target));
+    // elephc_instr_trace_fn: fourth companion slot, filled with
+    // elephc_instr_trace_begin under --instrument. The web bridge calls it at
+    // the start of every request with the inbound W3C `traceparent`, so a
+    // profile slice carries the identity of the distributed trace it belongs
+    // to. Zero (inert) in a normal binary.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_trace_fn"), 8, target));
+    // elephc_instr_request_fn: brackets one request's profile under
+    // --web --instrument, so a dormant production binary can profile a single
+    // request on demand instead of every request or none.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_request_fn"), 8, target));
     out.push_str(&comm_directive("_rt_diag_suppression", 8, target));
     // elephc_web_capture: per-request output-capture mode flag read by
     // __rt_stdout_write. Zero (the default) routes echo output to the plain
@@ -231,6 +340,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_heap_small_bins", 32, target));
     out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
     out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
+    // Generation-safe buffer descriptor registry. Public Buffer values are
+    // scalar `(generation << 32) | index` handles, never heap pointers: slot
+    // reuse increments generation so stale aliases cannot access a new payload.
+    // Index zero is reserved as the invalid/null handle; the descriptor free
+    // list is static metadata and therefore does not consume user heap space.
+    out.push_str(&comm_directive(
+        "_buffer_registry",
+        (crate::codegen_support::runtime::buffers::BUFFER_REGISTRY_CAPACITY + 1)
+            * crate::codegen_support::runtime::buffers::BUFFER_DESCRIPTOR_SIZE,
+        target,
+    ));
+    out.push_str(&comm_directive("_buffer_registry_free", 8, target));
+    out.push_str(".globl _buffer_registry_next\n_buffer_registry_next:\n    .quad 1\n");
     // PHP object-handle pool. `_obj_handle_index` is a DIRECT-MAPPED side table
     // holding one u32 handle per 16-byte granule of `_heap_buf`: two live heap
     // blocks can never share a granule because the smallest block is 16 header
@@ -321,6 +443,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     ));
     out.push_str(".globl _buffer_bounds_msg\n_buffer_bounds_msg:\n    .ascii \"Fatal error: buffer index out of bounds\\n\"\n");
     out.push_str(".globl _buffer_uaf_msg\n_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
+    out.push_str(".globl _buffer_registry_exhausted_msg\n_buffer_registry_exhausted_msg:\n    .ascii \"Fatal error: buffer registry exhausted\\n\"\n");
     out.push_str(".globl _closure_bind_unsupported_msg\n_closure_bind_unsupported_msg:\n    .ascii \"Fatal error: Closure::bind requires a closure that captures only $this\\n\"\n");
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
     out.push_str(".globl _iterable_array_str\n_iterable_array_str:\n    .ascii \"Array\"\n");
@@ -469,14 +592,26 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
     out.push_str(".globl _uncaught_exc_msg\n_uncaught_exc_msg:\n    .ascii \"Fatal error: uncaught exception\\n\"\n");
-    out.push_str(".globl _uncaught_exc_prefix\n_uncaught_exc_prefix:\n    .ascii \"Fatal error: Uncaught \"\n");
+    // PHP prefixes the report with a newline UNCONDITIONALLY — measured against 8.5 on a script
+    // that writes nothing at all before throwing, where the output still begins with "\n".
+    out.push_str(".globl _uncaught_exc_prefix\n_uncaught_exc_prefix:\n    .ascii \"\\nFatal error: Uncaught \"\n");
     out.push_str(".globl _uncaught_exc_sep\n_uncaught_exc_sep:\n    .ascii \": \"\n");
     out.push_str(".globl _uncaught_exc_in\n_uncaught_exc_in:\n    .ascii \" in \"\n");
     out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");
     out.push_str(".globl _uncaught_exc_nl\n_uncaught_exc_nl:\n    .ascii \"\\n\"\n");
+    // Printed only when `__rt_exception_matches` walks into the "metadata never emitted"
+    // sentinel, which no correct build should reach — see that helper for why it aborts there
+    // instead of answering "no match".
+    out.push_str(&format!(
+        ".globl {symbol}\n{symbol}:\n    .ascii {message:?}\n",
+        symbol = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE_SYMBOL,
+        message = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE,
+    ));
     out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Fatal error: Class name must be a valid object or a string\\n\"\n");
     out.push_str(".globl _diag_file_get_contents_failed_msg\n_diag_file_get_contents_failed_msg:\n    .ascii \"Warning: file_get_contents(): Failed to open stream\\n\"\n");
     out.push_str(".globl _diag_fopen_failed_msg\n_diag_fopen_failed_msg:\n    .ascii \"Warning: fopen(): Failed to open stream\\n\"\n");
+    out.push_str(".globl _swr_bad_proto_msg\n_swr_bad_proto_msg:\n    .ascii \"Warning: stream_wrapper_register(): Invalid protocol scheme specified.\\n\"\n");
+    out.push_str(".globl _swr_dup_proto_msg\n_swr_dup_proto_msg:\n    .ascii \"Warning: stream_wrapper_register(): Protocol is already defined.\\n\"\n");
     // -- php-src's unreachable-seek warning fragments, shared with `__rt_file_get_contents_range` --
     // The helper derives its `__rt_concat` length immediates from the same table, so the bytes
     // here and the immediates there can never drift apart.
@@ -526,6 +661,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _fiber_msg_throw_not_suspended\n_fiber_msg_throw_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");
     out.push_str(".globl _fiber_msg_not_terminated\n_fiber_msg_not_terminated:\n    .ascii \"Cannot get fiber return value: The fiber has not returned\"\n");
     out.push_str(".globl _fiber_msg_suspend_outside\n_fiber_msg_suspend_outside:\n    .ascii \"Cannot suspend outside of a fiber\"\n");
+    out.push_str(".globl _fiber_msg_suspend_unserialize\n_fiber_msg_suspend_unserialize:\n    .ascii \"Cannot suspend a fiber while unserialize() is active\"\n");
     out.push_str(".globl _fiber_msg_unsupported_callable\n_fiber_msg_unsupported_callable:\n    .ascii \"Fiber callable is not supported by this compiler\"\n");
     out.push_str(".globl _fiber_msg_stack_alloc_failed\n_fiber_msg_stack_alloc_failed:\n    .ascii \"Cannot allocate fiber stack\"\n");
     out.push_str(&emit_builtin_callable_data(target));
@@ -656,6 +792,30 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     ));
     out.push_str(&comm_directive("_elephc_crypto_encrypt_fn", 8, target));
     out.push_str(&comm_directive("_elephc_crypto_decrypt_fn", 8, target));
+    // BCMath bridge slots are published only by `bc*` call sites. Shared runtime
+    // helpers call through these slots so unrelated programs never reference the
+    // optional elephc-bcmath archive.
+    for slot in [
+        "_elephc_bcmath_add_fn",
+        "_elephc_bcmath_sub_fn",
+        "_elephc_bcmath_mul_fn",
+        "_elephc_bcmath_div_fn",
+        "_elephc_bcmath_mod_fn",
+        "_elephc_bcmath_divmod_fn",
+        "_elephc_bcmath_pow_fn",
+        "_elephc_bcmath_powmod_fn",
+        "_elephc_bcmath_sqrt_fn",
+        "_elephc_bcmath_comp_fn",
+        "_elephc_bcmath_get_scale_fn",
+        "_elephc_bcmath_set_scale_fn",
+        "_elephc_bcmath_ceil_fn",
+        "_elephc_bcmath_floor_fn",
+        "_elephc_bcmath_round_fn",
+        "_elephc_bcmath_last_error_fn",
+        "_elephc_bcmath_free_fn",
+    ] {
+        out.push_str(&comm_directive(slot, 8, target));
+    }
     // _elephc_phar_extract_url_fn: indirect pointer to the elephc-phar bridge
     // reader. Dynamic phar:// paths publish it before calling the runtime
     // reader; literal phar:// paths are still decoded at compile time.
@@ -1345,5 +1505,103 @@ mod tests {
 
         assert!(asm.contains(".comm _stack_limit, 8, 8\n"));
         assert!(asm.contains(".comm _stack_limit_main, 8, 8\n"));
+    }
+
+    /// The function-pointer slots a *Rust* bridge crate resolves must be spelled with the
+    /// platform's C-ABI mangling, not a hardcoded Mach-O underscore.
+    ///
+    /// Most common symbols here are private to the emitted assembly, so their name is
+    /// self-consistent whatever it is. These six are different: `elephc-pdo` and
+    /// `elephc-web` declare them as `extern "C" { static … }`, so the linker looks for
+    /// `_name` on Mach-O and `name` on ELF. Emitting `_name` everywhere assembles fine on
+    /// both and then fails every ELF link with `undefined reference to 'elephc_probe_route_fn'`
+    /// — which is how a `--web` or PDO binary stopped linking on linux-aarch64 while every
+    /// macOS job stayed green. Same silent-until-link shape as the alignment sweep above.
+    #[test]
+    fn test_bridge_resolved_slots_use_the_platform_c_abi_mangling() {
+        // Derived from the bridge crates rather than pinned here: a hand-kept list would
+        // silently stop covering the seventh slot someone adds. Reading the sources at
+        // test time follows the same approach as the sentinel scans in `sentinels.rs`.
+        let bridge_slots = declared_bridge_slots();
+        assert!(
+            bridge_slots.len() >= 6,
+            "expected the bridge crates to declare their runtime slots, found {bridge_slots:?}"
+        );
+        for (platform, arch, prefix) in [
+            (Platform::MacOS, Arch::AArch64, "_"),
+            (Platform::Linux, Arch::AArch64, ""),
+            (Platform::Linux, Arch::X86_64, ""),
+        ] {
+            let target = Target { platform, arch };
+            let asm = emit_runtime_data_fixed(8_388_608, target);
+            for slot in &bridge_slots {
+                let wanted = format!(".comm {prefix}{slot}, 8, ");
+                assert!(
+                    asm.contains(&wanted),
+                    "{platform:?}/{arch:?} never declares `{wanted}…`; the bridge crate that \
+                     resolves `{slot}` will fail to link"
+                );
+                // And the other spelling must be absent, or the wrong one satisfies the link
+                // on one platform while the right one is missing on the other.
+                let unwanted = if prefix.is_empty() {
+                    format!(".comm _{slot}, ")
+                } else {
+                    format!(".comm {slot}, ")
+                };
+                assert!(
+                    !asm.contains(&unwanted),
+                    "{platform:?}/{arch:?} still declares `{unwanted}…`, the other platform's \
+                     spelling of {slot}"
+                );
+            }
+        }
+    }
+
+    /// Every `elephc_*` runtime slot a bridge crate resolves through the C ABI, read from
+    /// the crates themselves so the check cannot fall behind them.
+    ///
+    /// Matches a declaration — `static elephc_x: usize;` — and not a definition, which is
+    /// how the `#[cfg(test)]` stubs that give those crates their own zero slots
+    /// (`static elephc_instr_io_fn: usize = 0;`) stay out of the list: a crate that
+    /// defines the symbol itself constrains nothing about the runtime's spelling.
+    fn declared_bridge_slots() -> Vec<String> {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates");
+        let mut found = Vec::new();
+        collect_extern_statics(&crates, &mut found);
+        found.sort();
+        found.dedup();
+        found
+    }
+
+    /// Collects every runtime `.comm` symbol the bridge crates declare, by
+    /// reading their sources — the test that holds the emitted set and the
+    /// declared set to each other.
+    fn collect_extern_statics(dir: &std::path::Path, found: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_extern_statics(&path, found);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let Ok(body) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                for line in body.lines() {
+                    let line = line.trim();
+                    let Some(rest) = line.strip_prefix("static elephc_") else {
+                        continue;
+                    };
+                    // A declaration ends at the type; a definition carries `= …`.
+                    if line.contains('=') {
+                        continue;
+                    }
+                    if let Some((name, _)) = rest.split_once(':') {
+                        found.push(format!("elephc_{}", name.trim()));
+                    }
+                }
+            }
+        }
     }
 }

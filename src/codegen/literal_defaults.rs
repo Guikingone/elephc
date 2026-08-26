@@ -55,6 +55,15 @@ pub(crate) enum LiteralDefaultValue {
     EmptyAssocArray {
         value_type: PhpType,
     },
+    /// An indexed-array literal stored into a `mixed`/union slot, boxed into a Mixed cell.
+    ///
+    /// `class T { public mixed $m = []; }` had no default form at all and was refused outright,
+    /// on the STATIC path as much as the dynamic one — which is what made `ReflectionClass`,
+    /// whose `$__constants` is exactly this shape, unallocatable by the AOT `new $c` path.
+    BoxedArray {
+        elem_type: PhpType,
+        elements: Vec<LiteralArrayElement>,
+    },
 }
 
 /// Literal indexed-array element that can be materialized without evaluating code.
@@ -155,6 +164,21 @@ pub(crate) fn literal_default_value(
             _ => Err(unsupported_literal_default(context, php_type, op_name)),
         },
         (PhpType::Mixed | PhpType::Union(_), ExprKind::Null) => Ok(LiteralDefaultValue::BoxedNull),
+        // An array literal in a `mixed`/union slot boxes the array the way the scalar arms above
+        // box their payloads — `emit_box_current_value_as_mixed` already handles `Array` on both
+        // architectures, so only the recognition was missing. Elements are typed `Mixed` because
+        // the slot is: a later `$t->m[] = "s"` must not find an `array<int>` underneath.
+        (PhpType::Mixed | PhpType::Union(_), ExprKind::ArrayLiteral(items)) => {
+            let elem_type = PhpType::Mixed;
+            let elements = items
+                .iter()
+                .map(|item| literal_array_element(context, &elem_type, &item.kind, op_name))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LiteralDefaultValue::BoxedArray {
+                elem_type,
+                elements,
+            })
+        }
         (PhpType::Void | PhpType::Never, ExprKind::Null) => Ok(LiteralDefaultValue::NullSentinel),
         (PhpType::Void | PhpType::Never, _) => Ok(LiteralDefaultValue::NullSentinel),
         (PhpType::Object(_), ExprKind::Null) => Ok(LiteralDefaultValue::Null),
@@ -265,10 +289,14 @@ pub(crate) fn emit_boxed_float_literal_to_result(ctx: &mut FunctionContext<'_>, 
     abi::emit_symbol_address(ctx.emitter, scratch, &label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [{}]", float_reg, scratch)); // load the boxed float literal default through the symbol scratch register
+            ctx.emitter.instruction(
+                &format!("ldr {}, [{}]", float_reg, scratch)
+            );                                                                  // load the boxed float literal default through the symbol scratch register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", float_reg, scratch)); // load the boxed float literal default through the symbol scratch register
+            ctx.emitter.instruction(
+                &format!("movsd {}, QWORD PTR [{}]", float_reg, scratch)
+            );                                                                  // load the boxed float literal default through the symbol scratch register
         }
     }
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);

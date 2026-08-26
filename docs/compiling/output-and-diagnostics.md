@@ -100,6 +100,16 @@ the phase finishes, elephc keeps its action-oriented label with a checkmark and
 elapsed time, then starts the next phase on a new line. Non-interactive output
 and `--quiet` keep the compact plain output without progress lines.
 
+### `--quiet` / `-q`
+
+Disables live and completed progress lines and forces unstyled plain output. It
+does not suppress compiler errors, warnings, or the final success line. Timing
+tables requested with `--timings` still print, using ASCII borders.
+
+```bash
+elephc --quiet hello.php
+```
+
 ### `--timings`
 
 Prints a bordered timing table to stderr in addition to the interactive
@@ -127,6 +137,15 @@ Compiler timings
 └────────────────────────────────┴───────────┴────────┘
 ```
 
+### `--mascotte`
+
+Prints elephc's built-in ASCII mascot and one randomly selected quote before
+normal help, diagnostic, or compilation output.
+
+```bash
+elephc --mascotte hello.php
+```
+
 ## Runtime diagnostics
 
 These flags instrument the **compiled program**, not the compiler.
@@ -142,8 +161,12 @@ elephc --gc-stats heavy.php
 ```
 
 Combined with `--web`, the server never reaches the process-exit report, so the
-counters are printed to stderr after every handled request instead — a growing
-`allocs - frees` gap across requests indicates a per-request leak.
+counters are printed to stderr after every handled request instead. In default
+`worker` isolation, a growing `allocs - frees` gap across requests handled by the
+same worker indicates a per-request leak. In `pool`, the counters belong to each
+persistent handler child and lines from several children may interleave. In
+`request`, each disposable child exits after one response, so compare the
+single-request result rather than looking for a cross-request trend.
 
 ### `--heap-debug`
 

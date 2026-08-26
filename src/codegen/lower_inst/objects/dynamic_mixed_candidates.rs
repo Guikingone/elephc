@@ -87,6 +87,177 @@ pub(super) fn dynamic_new_without_constructor_mixed_candidates(
     Ok(candidates)
 }
 
+/// The collector type this site would have to fill and the thunk cannot convert to, if any.
+///
+/// THE ONE JUDGE of that question. Two callers need the answer and must not disagree:
+/// `dynamic_factory::dynamic_new_candidate`, which must not build a candidate whose thunk was
+/// never emitted, and `dynamic_new_mixed_refusals`, which turns the same condition into a ladder
+/// arm that REPORTS. A second copy would let a class be neither constructed nor refused.
+///
+/// It asks about the DECLARATION, not about the site's argument types. Overflow arguments are
+/// materialized as `Mixed` and the padding thunk casts them down in PHP, spelling out php's own
+/// coercion rules, so a scalar collector takes whatever the site passes and raises a `TypeError`
+/// itself for a value php would refuse. What no cast can express is a collector of objects or
+/// arrays, and that is what this reports.
+///
+/// Answers `None` when nothing reaches the collector: the arity where the overflow is empty is
+/// constructible whatever the collector declares.
+pub(super) fn dynamic_new_uncastable_collector(
+    constructor: &crate::types::FunctionSig,
+    arg_count: usize,
+) -> Option<PhpType> {
+    let regular = crate::types::call_args::regular_param_count(constructor);
+    if arg_count <= regular {
+        return None;
+    }
+    let element = crate::types::call_args::variadic_element_type(constructor)?;
+    match element.codegen_repr() {
+        PhpType::Mixed | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool => None,
+        _ => Some(element),
+    }
+}
+
+/// Classes a `new $c(...)` can NAME but cannot CONSTRUCT at this site's arity, with php's message.
+///
+/// A static `new C()` that passes too few arguments is a COMPILE error — the checker reports
+/// `Constructor 'C::__construct' expects 1 to 2 arguments, got 0`. `new $c()` cannot be checked
+/// that way, because the class is a value. Without this the site fell through to the runtime
+/// fallback, which allocates by name through `__rt_new_by_name` and never runs a constructor, so
+///
+/// ```text
+/// class K { public $v = "defaut"; function __construct($x) { $this->v = $x; } }
+/// $c = $argv[1]; $o = new $c();
+/// ```
+///
+/// answered `K v='defaut'` where php raises `ArgumentCountError`. The object came back built out
+/// of its property defaults with the constructor SKIPPED — no diagnostic, wrong object.
+///
+/// PHP HAS TWO WORDINGS and picks by whether the class is internal, so both are reproduced:
+///
+/// ```text
+/// IteratorIterator::__construct() expects at least 1 argument, 0 given
+/// Too few arguments to function K::__construct(), 0 passed in FILE on line N and exactly 1 expected
+/// ```
+///
+/// `exactly` when the constructor declares no optional parameter, `at least` otherwise; both
+/// shapes agree on that. `known_dynamic_new_builtin_class_names` is the internal/user split.
+///
+/// ONLY CLASSES THE LADDER ALREADY OWNS are refused: same `is_dynamic_new_mixed_aot_candidate`
+/// filter as the candidates, minus the names that matched as candidates. A class outside that set
+/// reaches the fallback for reasons this function has not measured, and stays there.
+pub(super) fn dynamic_new_mixed_refusals(
+    ctx: &FunctionContext<'_>,
+    arg_count: usize,
+    line: u32,
+    matched: &[String],
+) -> Vec<DynamicNewRefusal> {
+    let constructor_key = php_symbol_key("__construct");
+    let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    let mut refusals = Vec::new();
+    for (class_name, class_info) in sorted_classes {
+        if !is_dynamic_new_mixed_aot_candidate(class_name)
+            || matched.iter().any(|name| name == class_name)
+        {
+            continue;
+        }
+        let Some(constructor) = class_info.methods.get(&constructor_key) else {
+            continue;
+        };
+        // SAME DEFINITION THE CHECKER USES for a static call — `checker::functions::
+        // call_validation` — reusing its `regular_param_count` rather than restating it. Two
+        // details make a hand-rolled count wrong, and both would REFUSE A CALL PHP ACCEPTS:
+        // a variadic collector is the final parameter and carries no default, yet contributes
+        // nothing to the minimum; and a required parameter can follow an optional one, so the
+        // count is every defaultless slot, not the leading run of them.
+        let regular = crate::types::call_args::regular_param_count(constructor);
+        let required = constructor
+            .defaults
+            .iter()
+            .take(regular)
+            .filter(|default| default.is_none())
+            .count();
+        if arg_count < required {
+            refusals.push(DynamicNewRefusal {
+                class_name: class_name.to_string(),
+                message: too_few_arguments_message(
+                    class_name,
+                    ctx.module.source_path.as_deref().unwrap_or(""),
+                    line,
+                    arg_count,
+                    required,
+                    required == regular && constructor.variadic.is_none(),
+                ),
+                argument_count: true,
+            });
+            continue;
+        }
+        // The arity is satisfiable, so the site can still be refused for what the collector
+        // DECLARES. A scalar one is handled by the thunk, which casts in PHP and raises its own
+        // `TypeError` for a value php would refuse; a collector of objects or arrays has no cast
+        // that means what php means, and used to drop the class from the ladder in SILENCE — the
+        // site then answered with a constructor-less object built from its property defaults.
+        if let Some(element) = dynamic_new_uncastable_collector(constructor, arg_count) {
+            refusals.push(DynamicNewRefusal {
+                class_name: class_name.to_string(),
+                message: cannot_coerce_message(class_name, regular + 1, &element),
+                argument_count: false,
+            });
+        }
+    }
+    refusals
+}
+
+/// One class a `new $c(...)` site NAMES but must refuse, and which throwable says why.
+pub(super) struct DynamicNewRefusal {
+    pub(super) class_name: String,
+    pub(super) message: String,
+    /// `true` raises `ArgumentCountError`, `false` raises `TypeError` — php's two answers to the
+    /// two questions this ladder settles before it will construct anything.
+    pub(super) argument_count: bool,
+}
+
+/// php's wording for a constructor the site passes too few arguments to.
+///
+/// PHP HAS TWO SHAPES and picks by whether the class is internal, so both are reproduced.
+/// `exactly` only when there is nothing further to pass — no optional parameter and no variadic
+/// tail; php words those cases apart and so does this.
+fn too_few_arguments_message(
+    class_name: &str,
+    source_path: &str,
+    line: u32,
+    given: usize,
+    required: usize,
+    exact: bool,
+) -> String {
+    let bound = if exact { "exactly" } else { "at least" };
+    if known_dynamic_new_builtin_class_names().contains(&class_name) {
+        let plural = if required == 1 { "argument" } else { "arguments" };
+        return format!(
+            "{}::__construct() expects {} {} {}, {} given",
+            class_name, bound, required, plural, given
+        );
+    }
+    format!(
+        "Too few arguments to function {}::__construct(), {} passed in {} on line {} and {} {} expected",
+        class_name, given, source_path, line, bound, required
+    )
+}
+
+/// elephc's wording for a collector no cast can fill.
+///
+/// This is NOT the scalar case: `int ...$r` takes `"7"` and `1.5` here exactly as php does,
+/// because the padding thunk casts in PHP and raises php's own `TypeError` for a value php would
+/// refuse. What is left is a collector of objects or arrays, where no cast means what php means,
+/// so the site says so instead of building an object with its constructor skipped.
+fn cannot_coerce_message(class_name: &str, argument: usize, expected: &PhpType) -> String {
+    format!(
+        "{}::__construct(): Argument #{} collects {:?}, which elephc cannot convert an argument \
+         to at a parameter boundary; construct the value before passing it",
+        class_name, argument, expected
+    )
+}
+
 /// Returns true when a class can safely use the static allocation path for `new $name`.
 pub(super) fn is_dynamic_new_mixed_aot_candidate(class_name: &str) -> bool {
     if class_name.starts_with("__Elephc") {
@@ -98,7 +269,14 @@ pub(super) fn is_dynamic_new_mixed_aot_candidate(class_name: &str) -> bool {
     !known_dynamic_new_builtin_class_names().contains(&class_name)
 }
 
-/// Builtin class names with allocation paths that are safe for dynamic `new`.
+/// Builtin class names the MIXED dynamic-`new` path can allocate ahead of time.
+///
+/// NOT the same question as `codegen_support::dynamic_new::supported_dynamic_new_builtin_class_names`,
+/// despite the near-identical name: that list is what a `new $c` can construct at all, and this
+/// one is the subset whose allocation this path can emit statically. Widening this to the other
+/// list makes `new $c("stdClass")` with `ReflectionClass` fail to compile —
+/// `unsupported EIR backend feature: dynamic_object_new_mixed for default value of property
+/// $__constants with PHP type Mixed` — so the difference is load-bearing, not drift.
 pub(super) fn supported_dynamic_new_builtin_class_names() -> &'static [&'static str] {
     &[
         "ArgumentCountError",
@@ -433,10 +611,14 @@ pub(super) fn emit_dynamic_new_mixed_constructor_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_call_label(
-        ctx.emitter,
-        &method_symbol(&constructor.impl_class, &php_symbol_key("__construct")),
-    );
+    // A padding thunk stands in for the constructor when the site passes fewer arguments than it
+    // declares: it takes the same receiver and arguments, then supplies the declared defaults. It
+    // is an ordinary module function, so it answers to `function_symbol`, not `method_symbol`.
+    let call_symbol = match constructor.padding_thunk.as_deref() {
+        Some(thunk) => crate::names::function_symbol(thunk),
+        None => method_symbol(&constructor.impl_class, &php_symbol_key("__construct")),
+    };
+    abi::emit_call_label(ctx.emitter, &call_symbol);
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)

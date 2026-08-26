@@ -7,6 +7,8 @@ sidebar:
 
 ## Builtins
 
+Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.md) · [Class](./builtins/class.md) · [Date](./builtins/date.md) · [Filesystem](./builtins/filesystem.md) · [IO](./builtins/io.md) · [JSON](./builtins/json.md) · [Math](./builtins/math.md) · [Misc](./builtins/misc.md) · [Pointer](./builtins/pointer.md) · [Process](./builtins/process.md) · [Regex](./builtins/regex.md) · [SPL](./builtins/spl.md) · [Streams](./builtins/streams.md) · [String](./builtins/string.md) · [Type](./builtins/type.md)
+
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
 | [`array_all()`](./builtins/array/array_all.md) | `(mixed $array, mixed $callback): bool` | `bool` | ✓ | — |
@@ -98,7 +100,7 @@ sidebar:
 | [`get_declared_classes()`](./builtins/class/get_declared_classes.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_declared_interfaces()`](./builtins/class/get_declared_interfaces.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_declared_traits()`](./builtins/class/get_declared_traits.md) | `(): array` | `array` | ✓ | ✓ |
-| [`get_object_vars()`](./builtins/class/get_object_vars.md) | `(mixed $object): mixed` | `mixed` | — | ✓ |
+| [`get_object_vars()`](./builtins/class/get_object_vars.md) | `(mixed $object): array` | `array` | ✓ | ✓ |
 | [`get_parent_class()`](./builtins/class/get_parent_class.md) | `(mixed $object_or_class = null): string` | `string` | ✓ | ✓ |
 | [`interface_exists()`](./builtins/class/interface_exists.md) | `(string $interface, bool $autoload = true): bool` | `bool` | ✓ | ✓ |
 | [`is_a()`](./builtins/class/is_a.md) | `(object $object_or_class, string $class, bool $allow_string = false): bool` | `bool` | ✓ | ✓ |
@@ -127,17 +129,17 @@ sidebar:
 | [`clearstatcache()`](./builtins/filesystem/clearstatcache.md) | `(bool $clear_realpath_cache = false, string $filename = ''): void` | `void` | ✓ | ✓ |
 | [`copy()`](./builtins/filesystem/copy.md) | `(string $from, string $to): bool` | `bool` | ✓ | ✓ |
 | [`dirname()`](./builtins/filesystem/dirname.md) | `(string $path, int $levels = 1): string` | `string` | ✓ | ✓ |
-| [`disk_free_space()`](./builtins/filesystem/disk_free_space.md) | `(string $directory): float` | `float` | ✓ | ✓ |
-| [`disk_total_space()`](./builtins/filesystem/disk_total_space.md) | `(string $directory): float` | `float` | ✓ | ✓ |
+| [`disk_free_space()`](./builtins/filesystem/disk_free_space.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
+| [`disk_total_space()`](./builtins/filesystem/disk_total_space.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
 | [`file_exists()`](./builtins/filesystem/file_exists.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`fileatime()`](./builtins/filesystem/fileatime.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`filectime()`](./builtins/filesystem/filectime.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`filegroup()`](./builtins/filesystem/filegroup.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fileinode()`](./builtins/filesystem/fileinode.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`filemtime()`](./builtins/filesystem/filemtime.md) | `(string $filename): int` | `int` | ✓ | ✓ |
+| [`filemtime()`](./builtins/filesystem/filemtime.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fileowner()`](./builtins/filesystem/fileowner.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fileperms()`](./builtins/filesystem/fileperms.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`filesize()`](./builtins/filesystem/filesize.md) | `(string $filename): int` | `int` | ✓ | ✓ |
+| [`filesize()`](./builtins/filesystem/filesize.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`filetype()`](./builtins/filesystem/filetype.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fnmatch()`](./builtins/filesystem/fnmatch.md) | `(string $pattern, string $filename, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`getcwd()`](./builtins/filesystem/getcwd.md) | `(): string` | `string` | ✓ | ✓ |
@@ -180,9 +182,9 @@ sidebar:
 | [`feof()`](./builtins/io/feof.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fflush()`](./builtins/io/fflush.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fgetc()`](./builtins/io/fgetc.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
-| [`fgetcsv()`](./builtins/io/fgetcsv.md) | `(resource $stream, int $length = null, string $separator = ','): array` | `array` | ✓ | ✓ |
+| [`fgetcsv()`](./builtins/io/fgetcsv.md) | `(resource $stream, int $length = null, string $separator = ','): mixed` | `mixed` | ✓ | ✓ |
 | [`fgets()`](./builtins/io/fgets.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
-| [`file()`](./builtins/io/file.md) | `(string $filename, int $flags = 0): array` | `array` | ✓ | ✓ |
+| [`file()`](./builtins/io/file.md) | `(string $filename, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`file_get_contents()`](./builtins/io/file_get_contents.md) | `(string $filename, bool $use_include_path = false, mixed $context = null, int $offset = 0, int $length = null): mixed` | `mixed` | ✓ | ✓ |
 | [`file_put_contents()`](./builtins/io/file_put_contents.md) | `(string $filename, string $data): int` | `int` | ✓ | ✓ |
 | [`flock()`](./builtins/io/flock.md) | `(resource $stream, int $operation, bool $would_block = null): bool` | `bool` | ✓ | ✓ |
@@ -275,6 +277,20 @@ sidebar:
 | [`atan()`](./builtins/math/atan.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`atan2()`](./builtins/math/atan2.md) | `(float $y, float $x): float` | `float` | ✓ | ✓ |
 | [`base_convert()`](./builtins/math/base_convert.md) | `(string $num, int $from_base, int $to_base): string` | `string` | ✓ | ✓ |
+| [`bcadd()`](./builtins/math/bcadd.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcceil()`](./builtins/math/bcceil.md) | `(string $num): string` | `string` | ✓ | ✓ |
+| [`bccomp()`](./builtins/math/bccomp.md) | `(string $num1, string $num2, int $scale = null): int` | `int` | ✓ | ✓ |
+| [`bcdiv()`](./builtins/math/bcdiv.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcdivmod()`](./builtins/math/bcdivmod.md) | `(string $num1, string $num2, int $scale = null): array` | `array` | ✓ | ✓ |
+| [`bcfloor()`](./builtins/math/bcfloor.md) | `(string $num): string` | `string` | ✓ | ✓ |
+| [`bcmod()`](./builtins/math/bcmod.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcmul()`](./builtins/math/bcmul.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcpow()`](./builtins/math/bcpow.md) | `(string $num, string $exponent, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcpowmod()`](./builtins/math/bcpowmod.md) | `(string $num, string $exponent, string $modulus, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcround()`](./builtins/math/bcround.md) | `(string $num, int $precision = 0, int $mode = 1): string` | `string` | ✓ | ✓ |
+| [`bcscale()`](./builtins/math/bcscale.md) | `(int $scale = null): int` | `int` | ✓ | ✓ |
+| [`bcsqrt()`](./builtins/math/bcsqrt.md) | `(string $num, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcsub()`](./builtins/math/bcsub.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
 | [`bindec()`](./builtins/math/bindec.md) | `(string $binary_string): mixed` | `mixed` | ✓ | — |
 | [`ceil()`](./builtins/math/ceil.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`clamp()`](./builtins/math/clamp.md) | `(int $value, int $min, int $max): mixed` | `mixed` | ✓ | ✓ |
@@ -329,11 +345,11 @@ sidebar:
 | [`unset()`](./builtins/misc/unset.md) | `(mixed $var, ...$vars): void` | `void` | ✓ | ✓ |
 | [`var_dump()`](./builtins/misc/var_dump.md) | `(mixed $value, ...$values): void` | `void` | ✓ | ✓ |
 | [`buffer_new()`](./builtins/pointer/buffer_new.md) | `(int $length): mixed` | `mixed` | ✓ | ✓ |
-| [`ptr()`](./builtins/pointer/ptr.md) | `(mixed $value): mixed` | `mixed` | ✓ | ✓ |
+| [`ptr()`](./builtins/pointer/ptr.md) | `(mixed $value): pointer` | `pointer` | ✓ | ✓ |
 | [`ptr_get()`](./builtins/pointer/ptr_get.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
 | [`ptr_is_null()`](./builtins/pointer/ptr_is_null.md) | `(pointer $pointer): bool` | `bool` | ✓ | ✓ |
-| [`ptr_null()`](./builtins/pointer/ptr_null.md) | `(): mixed` | `mixed` | ✓ | ✓ |
-| [`ptr_offset()`](./builtins/pointer/ptr_offset.md) | `(pointer $pointer, int $offset): mixed` | `mixed` | ✓ | ✓ |
+| [`ptr_null()`](./builtins/pointer/ptr_null.md) | `(): pointer` | `pointer` | ✓ | ✓ |
+| [`ptr_offset()`](./builtins/pointer/ptr_offset.md) | `(pointer $pointer, int $offset): pointer` | `pointer` | ✓ | ✓ |
 | [`ptr_read16()`](./builtins/pointer/ptr_read16.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
 | [`ptr_read32()`](./builtins/pointer/ptr_read32.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
 | [`ptr_read8()`](./builtins/pointer/ptr_read8.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |

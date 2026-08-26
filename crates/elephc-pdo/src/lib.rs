@@ -35,6 +35,100 @@
 //!   PDO_OCI loads Oracle Instant Client dynamically through ODPI-C, and PDO_CUBRID
 //!   loads the official CCI client dynamically.
 
+/// Bridges a DB round-trip to the `--instrument` exact profiler's I/O counter.
+/// The core runtime always defines the `_elephc_instr_io_fn` pointer slot (a
+/// `.comm`, zero by default); under `--instrument` the compiler stores
+/// `elephc_instr_io` into it. Reading the slot and calling through it when
+/// non-null makes query counting pay-for-use — a non-instrument binary leaves
+/// the slot zero — with no dlsym and no compile-time coupling to the instr crate.
+mod instr_io {
+    extern "C" {
+        static elephc_instr_io_fn: usize;
+        static elephc_instr_query_fn: usize;
+        static elephc_instr_wait_fn: usize;
+        /// Nonzero once this process has been asked to profile. A `.comm` word
+        /// every compiled program carries, so reading it here needs no new slot.
+        static elephc_monitor_active: u64;
+    }
+    type IoFn = unsafe extern "C" fn();
+    type QueryFn = unsafe extern "C" fn(*const u8, usize);
+    type WaitFn = unsafe extern "C" fn(u64);
+
+    /// Records one query with the exact profiler, if `--instrument` is linked.
+    pub fn note() {
+        let addr = unsafe { std::ptr::addr_of!(elephc_instr_io_fn).read() };
+        if addr != 0 {
+            let f = unsafe { std::mem::transmute::<usize, IoFn>(addr) };
+            unsafe { f() };
+        }
+    }
+
+    /// Whether an exact slice is being recorded RIGHT NOW.
+    ///
+    /// The runtime word the instrumentation publishes when it opens and closes a
+    /// slice. Distinct from "the profiler is linked", which is true of every
+    /// `--with-monitoring` binary and was what these hooks used to ask — so a
+    /// dormant binary paid for a capture nobody had requested. It is also
+    /// distinct from "was ever asked", which is what this read used to get: that
+    /// was true from boot on any service with an endpoint configured, and false
+    /// throughout a request authorized by a signed header — the two states where
+    /// being wrong costs a dormant service real time, and costs an authorized
+    /// capture the SQL shapes and wait time it promises.
+    fn asked() -> bool {
+        unsafe { std::ptr::addr_of!(elephc_monitor_active).read() != 0 }
+    }
+
+    /// Whether recovering a statement's SQL is worth doing: the capture has to
+    /// be linked AND someone has to have asked for it.
+    pub fn query_active() -> bool {
+        asked() && unsafe { std::ptr::addr_of!(elephc_instr_query_fn).read() != 0 }
+    }
+
+    /// Reports one query's SQL text to the exact profiler, if linked. The bytes
+    /// are copied by the callee, so `sql` need not outlive the call.
+    pub fn note_query(sql: &str) {
+        let addr = unsafe { std::ptr::addr_of!(elephc_instr_query_fn).read() };
+        if addr != 0 && !sql.is_empty() {
+            let f = unsafe { std::mem::transmute::<usize, QueryFn>(addr) };
+            unsafe { f(sql.as_ptr(), sql.len()) };
+        }
+    }
+
+    /// Times `body` and reports how long it blocked to the exact profiler, so
+    /// the caller's self time splits into CPU and I/O wait. When the profiler
+    /// is not linked the slot is zero and `body` runs without even reading the
+    /// clock — the measurement costs nothing in a normal binary.
+    pub fn timed<T>(body: impl FnOnce() -> T) -> T {
+        let addr = unsafe { std::ptr::addr_of!(elephc_instr_wait_fn).read() };
+        if addr == 0 || !asked() {
+            // Not linked, or linked and dormant: either way the clock stays
+            // unread. Two `Instant` reads per statement is not "costs nothing".
+            return body();
+        }
+        let started = std::time::Instant::now();
+        let out = body();
+        let ns = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        let f = unsafe { std::mem::transmute::<usize, WaitFn>(addr) };
+        unsafe { f(ns) };
+        out
+    }
+
+    // Standalone `cargo test -p elephc-pdo` has no compiled elephc program to
+    // define the runtime slots, so provide zero ones — only in the test binary,
+    // never in the staticlib, so a real program's `.comm` is not duplicated.
+    #[cfg(test)]
+    mod slot_stub {
+        #[no_mangle]
+        static elephc_instr_io_fn: usize = 0;
+        #[no_mangle]
+        static elephc_instr_query_fn: usize = 0;
+        #[no_mangle]
+        static elephc_instr_wait_fn: usize = 0;
+        #[no_mangle]
+        static elephc_monitor_active: u64 = 0;
+    }
+}
+
 mod driver;
 #[cfg(feature = "cubrid")]
 mod cubrid;
@@ -413,6 +507,12 @@ fn client_version_cell() -> &'static Mutex<CString> {
 
 /// Static buffer for the most recent `elephc_pdo_server_info` result.
 fn server_info_cell() -> &'static Mutex<CString> {
+    static C: OnceLock<Mutex<CString>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(CString::default()))
+}
+
+/// Static buffer for the most recent `elephc_pdo_mysql_charset` result.
+fn mysql_charset_cell() -> &'static Mutex<CString> {
     static C: OnceLock<Mutex<CString>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(CString::default()))
 }
@@ -1141,15 +1241,33 @@ pub extern "C" fn elephc_pdo_release(conn_id: i64, reset_pgsql_session: i64) {
 /// `sql` must point to a NUL-terminated string valid for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_exec(conn_id: i64, sql: *const c_char) -> i64 {
+    // PDO::exec is one direct statement execution.
+    instr_io::note();
+    if instr_io::query_active() {
+        if let Some(text) = cstr_arg(sql) {
+            instr_io::note_query(text);
+        }
+    }
     ffi_guard(-1, || {
         let sqlite_db = match lock_recover(conns()).get(&conn_id) {
             Some(Conn::Sqlite(connection)) => Some(connection.db),
             _ => None,
         };
         if let Some(db) = sqlite_db {
-            return sqlite::SqliteConn::exec_on(db, sql);
+            // Direct execution: the whole call is DB work, so time it as wait.
+            return instr_io::timed(|| sqlite::SqliteConn::exec_on(db, sql));
         }
+        // Every remaining arm is a driver call, so the dispatch is timed as a
+        // whole rather than arm by arm: a driver added later is then covered by
+        // construction, instead of silently reporting zero wait.
+        //
+        // The map lock is taken OUTSIDE that span, as on the SQLite path above:
+        // time spent acquiring it is not time the database spent, so billing it
+        // as I/O wait would inflate driver time with the bridge's own
+        // bookkeeping. The guard stays alive across the call — the connection is
+        // never taken out of the map, so no error path can strand it.
         let mut guard = lock_recover(conns());
+        instr_io::timed(|| {
         match guard.get_mut(&conn_id) {
             #[cfg(feature = "cubrid")]
             Some(Conn::Cubrid(c)) => match cstr_arg(sql) {
@@ -1186,6 +1304,7 @@ pub unsafe extern "C" fn elephc_pdo_exec(conn_id: i64, sql: *const c_char) -> i6
             },
             Some(Conn::Sqlite(_)) | None => -1,
         }
+        })
     })
 }
 
@@ -2595,6 +2714,115 @@ pub extern "C" fn elephc_pdo_no_backslash_escapes(conn_id: i64) -> i64 {
     })
 }
 
+/// Returns the MySQL server connection (thread) id from the handshake, so the
+/// mysqli prelude's `thread_id` / `mysqli_thread_id()` needs no
+/// `SELECT CONNECTION_ID()` round-trip. `0` for a non-MySQL or unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_thread_id(conn_id: i64) -> i64 {
+    ffi_guard(0, || {
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Mysql(c)) => c.thread_id(),
+            _ => 0,
+        }
+    })
+}
+
+/// Returns the number of parameter markers in a prepared statement (the
+/// server's `param_count`), so the mysqli prelude reports
+/// `mysqli_stmt::$param_count` exactly instead of scanning `?` in PHP. `-1` for
+/// a non-MySQL or unknown statement handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_param_count(stmt_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let guard = lock_recover(stmts());
+        match guard.get(&stmt_id) {
+            Some(Stmt::Mysql(s)) => s.param_count(),
+            _ => -1,
+        }
+    })
+}
+
+/// Returns the connection's live session charset name (tracked from the
+/// handshake, the DSN `charset=`, and every `SET NAMES`), so the mysqli surface
+/// reports `character_set_name()` and escapes without a round-trip and without
+/// assuming utf8mb4. Empty string for a non-MySQL or unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_charset(conn_id: i64) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Mysql(c)) => store_cstr(mysql_charset_cell(), c.charset()),
+            _ => static_cstr(b"\0"),
+        }
+    })
+}
+
+/// Returns `1` when `sql` contains a second non-empty statement after a
+/// top-level `;` (quoted regions, backtick identifiers, and comments skipped,
+/// with `/*! … */` executable comments correctly treated as live SQL), honoring
+/// the connection's `NO_BACKSLASH_ESCAPES` mode. `0` otherwise. The single
+/// authoritative multi-statement scanner the mysqli prelude's `query()` guard
+/// calls, replacing its own PHP re-implementation.
+///
+/// Fails CLOSED: the panic-guard fallback is `1` ("is multiple"), so a caught
+/// panic rejects the statement rather than admitting a possibly-multi one.
+///
+/// # Safety
+/// `sql` must expose at least `len` readable bytes and may only be null when
+/// `len` is zero.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_sql_has_multiple_statements(
+    conn_id: i64,
+    sql: *const c_char,
+    len: i64,
+) -> i64 {
+    ffi_guard(1, || {
+        // Raw bytes, not a lossy String: a GBK/sjis query is not valid UTF-8 and
+        // the scanner is charset-aware, so any lossy replacement of a lead byte
+        // would corrupt the lexing the security guard depends on.
+        let bytes = bytes_arg(sql, len);
+        let (no_backslash_escapes, charset) = {
+            let guard = lock_recover(conns());
+            match guard.get(&conn_id) {
+                Some(Conn::Mysql(c)) => (c.no_backslash_escape(), c.charset().to_string()),
+                _ => (false, String::new()),
+            }
+        };
+        my::sql_has_multiple_statements(&bytes, no_backslash_escapes, &charset) as i64
+    })
+}
+
+/// Charset-aware `mysql_real_escape_string` for the mysqli prelude: escapes
+/// `data` for a `'…'` literal using the connection's OWN tracked charset (so it
+/// can never be fooled into treating a multibyte session as utf8mb4), closing
+/// the GBK/Big5 trailing-byte breakout that pure byte substitution leaves open,
+/// and honoring the connection's `NO_BACKSLASH_ESCAPES`. Writes the escaped
+/// bytes into the shared blob cell (read via `elephc_pdo_blob_data_ptr`) and
+/// returns their length; `-1` for a non-MySQL or unknown handle.
+///
+/// # Safety
+/// `data` must expose at least `len` readable bytes and may only be null when
+/// `len` is zero.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_real_escape_string(
+    conn_id: i64,
+    data: *const c_char,
+    len: i64,
+) -> i64 {
+    ffi_guard(-1, || {
+        let input = bytes_arg(data, len);
+        let guard = lock_recover(conns());
+        let Some(Conn::Mysql(c)) = guard.get(&conn_id) else {
+            return -1;
+        };
+        let output = my::my_real_escape(&input, c.charset(), c.no_backslash_escape());
+        let length = output.len() as i64;
+        *lock_recover(blob_cell()) = output;
+        length
+    })
+}
+
 /// Creates a large object and returns its OID as text for a `pgsql:` connection
 /// (`Pdo\Pgsql::lobCreate()`); empty string for a non-PostgreSQL connection, an
 /// unknown handle, an error, or a caught panic.
@@ -3657,10 +3885,51 @@ pub extern "C" fn elephc_pdo_output_is_numeric(stmt_id: i64, idx: i64) -> i64 {
     })
 }
 
+/// The SQL text of a prepared statement, across drivers, for query profiling.
+/// SQLite recovers it from the native handle; the other drivers keep the sent
+/// SQL on the statement. Cubrid does not track it (returns `None`). An empty
+/// string is treated as "no text" so nothing meaningless is recorded.
+fn stmt_query_text(guard: &HashMap<i64, Stmt>, stmt_id: i64) -> Option<String> {
+    let text = match guard.get(&stmt_id)? {
+        #[cfg(feature = "cubrid")]
+        Stmt::Cubrid(_) => return None,
+        #[cfg(feature = "dblib")]
+        Stmt::Dblib(s) => s.sent_sql.clone(),
+        #[cfg(feature = "firebird")]
+        Stmt::Firebird(s) => s.sent_sql.clone(),
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm", feature = "sqlsrv"))]
+        Stmt::Odbc(s) => s.sent_sql.clone(),
+        #[cfg(feature = "oci")]
+        Stmt::Oci(s) => s.sent_sql.clone(),
+        Stmt::Postgres(s) => s.sent_sql.clone(),
+        Stmt::Mysql(s) => s.sent_sql.clone(),
+        Stmt::Sqlite(s) => s.query_text(),
+    };
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
 /// Resets a statement, keeping its parameter bindings. Returns `1`/`0`; a caught
 /// panic reports the `0` failure sentinel.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_reset(stmt_id: i64) -> i64 {
+    // execute() resets before each run, so one reset ~ one statement execution.
+    instr_io::note();
+    // Report the statement's SQL text (once per execution) so the exact
+    // profiler can aggregate distinct queries — the N+1 view. Recovered in a
+    // short scoped lock so the reset below re-locks cleanly.
+    if instr_io::query_active() {
+        let text = {
+            let guard = lock_recover(stmts());
+            stmt_query_text(&guard, stmt_id)
+        };
+        if let Some(t) = text {
+            instr_io::note_query(&t);
+        }
+    }
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
@@ -3748,6 +4017,30 @@ pub extern "C" fn elephc_pdo_clear_bindings(stmt_id: i64) -> i64 {
     })
 }
 
+/// Returns a statement to the map when it goes out of scope, panic or not.
+///
+/// The SQLite arm of `elephc_pdo_step` takes its statement OUT of the map so the
+/// driver call does not run under the map lock. The plain re-insert that followed
+/// that call never ran when `step` panicked: `ffi_guard` catches the unwind and
+/// returns `-1`, so the statement was gone from the map while PHP still held its
+/// id, and every later call on it answered "not found" for the life of the
+/// process — the underlying `sqlite3_stmt` finalized without PHP ever knowing.
+/// A drop guard runs on the unwind path too, which a trailing statement cannot.
+struct ReturnedStatement {
+    id: i64,
+    statement: Option<sqlite::SqliteStmt>,
+}
+
+impl Drop for ReturnedStatement {
+    /// Puts the statement back under the map lock, on the normal path and on the
+    /// unwind path alike.
+    fn drop(&mut self) {
+        if let Some(statement) = self.statement.take() {
+            lock_recover(stmts()).insert(self.id, Stmt::Sqlite(statement));
+        }
+    }
+}
+
 /// Advances the statement one row: `1` for a row, `0` when exhausted, `-1` on
 /// error — the same `-1` a caught panic degrades to (the client crates are the most
 /// likely source of an unexpected panic, and this is where they run).
@@ -3766,11 +4059,29 @@ pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
             }
         };
         if let Some(statement) = sqlite_statement {
-            let result = statement.step();
-            lock_recover(stmts()).insert(stmt_id, Stmt::Sqlite(statement));
-            return result;
+            // Held by a guard rather than re-inserted after the call: `step` runs
+            // outside the map lock on purpose, and a panic there is caught by
+            // `ffi_guard`, so a trailing re-insert is exactly the line that does
+            // not run when it matters.
+            let mut slot = ReturnedStatement {
+                id: stmt_id,
+                statement: Some(statement),
+            };
+            // The step is where SQLite actually runs the query, so this is the
+            // span that counts as I/O wait for the exact profiler.
+            return match slot.statement.as_mut() {
+                Some(statement) => instr_io::timed(|| statement.step()),
+                None => -1,
+            };
         }
+        // As in exec: every remaining arm is a driver call, so the dispatch is
+        // timed as a whole and a driver added later is covered by construction,
+        // and the statement-map lock is taken outside the timed span so lock time
+        // is not billed as I/O wait. Arms that also need a connection take that
+        // second lock inside the span; it is a different mutex, so this cannot
+        // deadlock, and holding it is genuine driver-call setup.
         let mut sguard = lock_recover(stmts());
+        instr_io::timed(|| {
         match sguard.get_mut(&stmt_id) {
             #[cfg(feature = "cubrid")]
             Some(Stmt::Cubrid(s)) => {
@@ -3869,6 +4180,7 @@ pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
             }
             Some(Stmt::Sqlite(_)) | None => -1,
         }
+        })
     })
 }
 
@@ -5334,6 +5646,92 @@ mod tests {
     /// promises for an unknown handle (`-1`/`0`/`"00000"`/…), which the prelude turns
     /// into a normal error. Pinned here directly, since forcing a real panic inside a
     /// specific extern is not reproducible from a test.
+    /// A statement taken out of the map comes back even when the step panics.
+    ///
+    /// `elephc_pdo_step` removes the SQLite statement so the driver call does not
+    /// run under the map lock, and used to re-insert it on the line after the
+    /// call. `ffi_guard` catches a panic from `step`, so that line never ran: the
+    /// id was gone from the map while PHP still held it, and every later call on
+    /// it answered "not found" for the rest of the process.
+    ///
+    /// Coverage splits in two, and only half of it is here: the NORMAL path is
+    /// already pinned by the in-memory SQLite round-trips below, which step and
+    /// then read columns and finalize — all of which fail if the statement was
+    /// not put back. The real `step` cannot be made to panic from a test, so the
+    /// PANIC path is pinned here as the property the fix rests on: a guard's
+    /// `Drop` runs while unwinding, a trailing statement does not.
+    #[test]
+    fn a_value_taken_out_of_a_map_is_put_back_when_the_body_panics() {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        static TABLE: Mutex<Option<HashMap<i64, &'static str>>> = Mutex::new(None);
+        *TABLE.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(HashMap::from([(7_i64, "stmt")]));
+
+        struct Returned(i64, Option<&'static str>);
+        impl Drop for Returned {
+            fn drop(&mut self) {
+                if let Some(value) = self.1.take() {
+                    if let Some(map) = TABLE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                        map.insert(self.0, value);
+                    }
+                }
+            }
+        }
+
+        let answer = ffi_guard(-1_i64, || -> i64 {
+            let taken = TABLE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_mut()
+                .and_then(|map| map.remove(&7))
+                .expect("the fixture inserted it");
+            let _slot = Returned(7, Some(taken));
+            // Stands in for a panic inside the driver's `step`.
+            panic!("the driver blew up mid-step");
+        });
+
+        assert_eq!(answer, -1, "the caught panic still degrades to the sentinel");
+
+        // The wiring, which the map above does not touch: `elephc_pdo_step` must
+        // hold its statement in a guard rather than re-inserting after the call,
+        // because the re-insert is the line a caught panic skips. An audit
+        // pointed out that this test builds its own map and its own guard, so
+        // deleting `ReturnedStatement` from the real function leaves it green.
+        // Reading the source is what closes that gap: an executable test cannot
+        // make the real SQLite `step` panic.
+        let source = include_str!("lib.rs");
+        let step = source
+            .split_once("pub extern \"C\" fn elephc_pdo_step(stmt_id: i64) -> i64 {")
+            .expect("the step entry point must exist")
+            .1;
+        let sqlite_arm = step
+            .split_once("// As in exec:")
+            .expect("the sqlite arm precedes the generic dispatch")
+            .0;
+        assert!(
+            sqlite_arm.contains("ReturnedStatement"),
+            "the statement must be held by a guard: a trailing re-insert is the \
+             line that does not run when the driver panics"
+        );
+        assert!(
+            !sqlite_arm.contains("lock_recover(stmts()).insert("),
+            "a trailing re-insert is exactly the shape the guard replaced"
+        );
+        let present = TABLE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|map| map.contains_key(&7))
+            .unwrap_or(false);
+        assert!(
+            present,
+            "the statement must be back in the map: without the guard its id is \
+             dead for the rest of the process while PHP still holds it"
+        );
+    }
+
     #[test]
     fn ffi_guard_converts_a_panic_into_the_documented_sentinel() {
         let minus_one = ffi_guard(-1_i64, || -> i64 {

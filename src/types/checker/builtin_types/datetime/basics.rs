@@ -14,6 +14,7 @@ use super::*;
 /// wall-clock string is interpreted in that zone (the default is temporarily switched so
 /// `strtotime()` resolves the local time there — an explicit zone inside the string still wins),
 /// and the zone becomes the display zone. `"now"` is the current instant regardless of zone.
+#[cfg(test)]
 pub(super) const CONSTRUCT_SRC: &str = r#"<?php
 // Capture a trailing fractional second (HH:MM:SS.ffffff) into the microsecond
 // component and strip it before strtotime() (which does not accept it). The
@@ -60,9 +61,7 @@ if ($timezone === null) {
 /// of `null` here miscompiled when the constructor was called more than once per frame, so the
 /// nullable-object typing is used instead — it also matches PHP's signature.)
 pub(super) fn datetime_immutable_constructor() -> ClassMethod {
-    let tokens =
-        crate::lexer::tokenize(CONSTRUCT_SRC).expect("DateTime constructor source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("DateTime constructor source must parse");
+    let body = super::bodies::construct();
     method(
         "__construct",
         vec![
@@ -118,6 +117,7 @@ pub(super) fn datetime_immutable_get_timezone() -> ClassMethod {
 /// rewrites the unescaped `u` (microseconds, 6 digits) and `v` (milliseconds, 3 digits) specifiers
 /// to the stored sub-second value before calling `date()` — those decimal digits pass through
 /// `date()` literally (only letters are specifiers). Backslash escapes are preserved verbatim.
+#[cfg(test)]
 pub(super) const FORMAT_SRC: &str = r#"<?php
 $saved = date_default_timezone_get();
 date_default_timezone_set($this->timezone_name);
@@ -177,8 +177,7 @@ return $r;
 /// `DateTime`/`DateTimeImmutable::format(string $format): string` — formats the stored timestamp in
 /// the object's own timezone, with `u`/`v` reflecting the stored microseconds. Body is `FORMAT_SRC`.
 pub(super) fn datetime_immutable_format() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(FORMAT_SRC).expect("format() body source must tokenize");
-    let body = crate::parser::parse_internal(&tokens).expect("format() body source must parse");
+    let body = super::bodies::format();
     method(
         "format",
         vec![("format".to_string(), Some(TypeExpr::Str), None, false)],

@@ -2,20 +2,20 @@
 title: "ptr_null()"
 description: "Returns a null raw pointer."
 sidebar:
-  order: 324
+  order: 338
 ---
 
 ## ptr_null()
 
 ```php
-function ptr_null(): mixed
+function ptr_null(): pointer
 ```
 
 Returns a null raw pointer.
 
 **Parameters**: none.
 
-**Returns**: `mixed`
+**Returns**: `pointer`
 
 ## Availability
 

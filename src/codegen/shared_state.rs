@@ -29,6 +29,31 @@ pub(crate) struct SharedCodegenState {
     runtime_builtin_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     runtime_extern_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     label_counter: usize,
+    /// Memoized "does this module share the Mixed string-context ladder", indexed by mode.
+    ///
+    /// The predicate counts sites across every body in the module and is consulted at EVERY
+    /// string context, so computing it per site is quadratic in module size. That is not
+    /// theoretical here: an `eval()` program emits close to a million lines of assembly, and
+    /// its sites would each rescan the whole instruction stream.
+    mixed_string_sharing: [Option<bool>; 2],
+    /// Memoized "does this module share the `count()` countable guard", for the same reason.
+    count_guard_sharing: Option<bool>,
+    /// `--counters`: every non-synthetic PHP function prologue increments a BSS slot.
+    pub(super) counters: bool,
+    /// `--instrument`: every non-synthetic PHP function calls
+    /// `elephc_instr_enter(id)`/`_exit(id)` around its body for exact timing.
+    pub(super) instrument: crate::codegen::Instrumentation,
+    /// `--probe`: the embedded symbol table `(data label, entry count)` main's
+    /// prologue hands to `elephc_probe_init`. `None` unless the probe is enabled.
+    pub(super) probe_table: Option<(String, usize)>,
+    /// Counted functions as `(display name, counter symbol)`, in emission order. Main's
+    /// epilogue renders the exit dump from this list — main is emitted last, so the
+    /// registry is complete by then.
+    counter_registry: Vec<(String, String)>,
+    /// Instrumented function names, in id order (id = index). Main emits the
+    /// name table `elephc_instr_init` reads; main is emitted last, so it is
+    /// complete by then.
+    instr_registry: Vec<String>,
 }
 
 /// Reusable static descriptor template for one public instance method.
@@ -71,6 +96,49 @@ impl SharedCodegenState {
         let id = self.label_counter;
         self.label_counter += 1;
         id
+    }
+
+    /// Returns the memoized string-context sharing decision for one mode, if already computed.
+    pub(super) fn mixed_string_sharing(&self, mode_index: usize) -> Option<bool> {
+        self.mixed_string_sharing[mode_index]
+    }
+
+    /// Records the string-context sharing decision so later sites reuse it.
+    pub(super) fn set_mixed_string_sharing(&mut self, mode_index: usize, shares: bool) {
+        self.mixed_string_sharing[mode_index] = Some(shares);
+    }
+
+    /// Returns the memoized `count()` guard sharing decision, if already computed.
+    pub(super) fn count_guard_sharing(&self) -> Option<bool> {
+        self.count_guard_sharing
+    }
+
+    /// Records the `count()` guard sharing decision so later sites reuse it.
+    pub(super) fn set_count_guard_sharing(&mut self, shares: bool) {
+        self.count_guard_sharing = Some(shares);
+    }
+
+    /// Records one counted function for the exit dump.
+    pub(super) fn register_counter(&mut self, display_name: String, symbol: String) {
+        self.counter_registry.push((display_name, symbol));
+    }
+
+    /// Returns the counted functions in emission order.
+    pub(super) fn counter_registry(&self) -> &[(String, String)] {
+        &self.counter_registry
+    }
+
+    /// Registers one instrumented function and returns its stable id (its index
+    /// in the name table `elephc_instr_init` receives).
+    pub(super) fn register_instr(&mut self, display_name: String) -> usize {
+        let id = self.instr_registry.len();
+        self.instr_registry.push(display_name);
+        id
+    }
+
+    /// Returns the instrumented function names in id order.
+    pub(super) fn instr_registry(&self) -> &[String] {
+        &self.instr_registry
     }
 
     /// Returns cached runtime string-callable cases for the requested specialization.

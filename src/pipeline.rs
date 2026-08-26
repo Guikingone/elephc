@@ -9,6 +9,7 @@
 //! - Pass ordering is observable: magic constants and conditionals run before resolver/name resolution and type checking.
 //! - Check/EIR/assembly-only paths return before read-only native artifact resolution.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::process;
@@ -24,8 +25,9 @@ use crate::source::SourceMode;
 use crate::timings::CompileTimings;
 use crate::{
     autoload, codegen, debug_info, errors, exports, func_args, ir, ir_lower, ir_passes, lexer,
-    linker, list_id_prelude, name_resolver, opcache_prelude, optimize, parser, pdo_prelude,
-    resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude, web_prelude,
+    linker, list_id_prelude, mysqli_prelude, name_resolver, opcache_prelude, optimize, parser,
+    pdo_prelude, resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude,
+    web_prelude,
 };
 
 mod backend;
@@ -43,6 +45,8 @@ pub(crate) fn compile(config: CliConfig) {
         filename,
         heap_size,
         gc_stats,
+        counters,
+        instrument,
         heap_debug,
         strict_opcache,
         emit_ir,
@@ -53,6 +57,7 @@ pub(crate) fn compile(config: CliConfig) {
         emit_timings,
         emit_source_map,
         emit_debug_info,
+        keep_symbols,
         regalloc_linear,
         ir_opt,
         target,
@@ -63,7 +68,9 @@ pub(crate) fn compile(config: CliConfig) {
         extra_frameworks,
         defines,
         strict_php,
+        strict_locals,
         web,
+        web_isolation,
         with_crates,
         quiet,
         ini_overrides,
@@ -76,6 +83,7 @@ pub(crate) fn compile(config: CliConfig) {
     // `PHP_SAPI`, `phpversion()`), which is baked far below this function's parameter list — in
     // `codegen_support::prescan::collect_constants` and in the `phpversion()` const-fold.
     codegen::set_compile_profile(php_version, web);
+    crate::superglobals::set_compiling_for_web(web);
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let source_mode = SourceMode::from_path(Path::new(filename));
@@ -127,6 +135,17 @@ pub(crate) fn compile(config: CliConfig) {
         process::exit(1);
     }
 
+    let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
+    let forced_groups: HashSet<String> = [
+        (with_crates.contains("pdo"), "pdo"),
+        (with_crates.contains("mysqli"), "mysqli"),
+        (with_crates.contains("tz"), "tz"),
+        (with_crates.contains("image"), "image"),
+    ]
+    .into_iter()
+    .filter_map(|(forced, group)| forced.then_some(group.to_string()))
+    .collect();
+
     // Snapshot the USER-declared function/class names for `opcache.preload`'s
     // `preload_statistics`, taken HERE — after include resolution but BEFORE any compiler prelude
     // is injected — so the reported lists can never contain `var_export`, the PDO surface, or the
@@ -140,18 +159,48 @@ pub(crate) fn compile(config: CliConfig) {
     // written in elephc-PHP) only when the program references PDO, so non-PDO
     // binaries never declare the elephc_pdo externs or link the bridge.
     // Runs after include resolution so PDO usage inside includes is detected.
+    // `pdo_used` is decided BEFORE injection and recorded as a PHP surface:
+    // extension reporting is surface-based because the `elephc_pdo` archive
+    // backs more than one PHP surface (PDO and mysqli).
     crate::progress::phase("pdo-prelude");
     let phase_started = Instant::now();
+    let pdo_force = with_crates.contains("pdo");
+    // Detect once, then pass the result as `force` to injection: `inject_if_used`
+    // injects when `force || detect(...)`, so `force = pdo_used` reproduces the
+    // exact decision without a second AST walk (the injected PDO prelude would
+    // otherwise be re-scanned by the mysqli detection below too).
+    let pdo_used = pdo_force || pdo_prelude::program_uses_pdo(&ast);
     let ast = if php_version == crate::web_prelude::PhpVersion::default() {
-        pdo_prelude::inject_if_used(ast, with_crates.contains("pdo"))
+        pdo_prelude::inject_if_used(ast, pdo_used, &mut prelude_inventory)
     } else {
         pdo_prelude::inject_if_used_for_version(
             ast,
-            with_crates.contains("pdo"),
+            pdo_used,
             php_version,
+            &mut prelude_inventory,
         )
     };
+    let mut linked_php_surfaces: Vec<String> = Vec::new();
+    if pdo_used {
+        linked_php_surfaces.push("PDO".to_string());
+    }
     timings.record_since("pdo-prelude", phase_started);
+
+    // Inject the mysqli prelude (a second PHP surface over the same elephc_pdo
+    // bridge) only when the program references a mysqli symbol or
+    // `--with-mysqli` forces it. Runs AFTER the PDO injection so the shared
+    // extern block — prepended idempotently by whichever surface injects — is
+    // declared exactly once, and never injects the PDO classes.
+    crate::progress::phase("mysqli-prelude");
+    let phase_started = Instant::now();
+    let mysqli_force = with_crates.contains("mysqli");
+    let mysqli_used = mysqli_force || mysqli_prelude::program_uses_mysqli(&ast);
+    let ast =
+        mysqli_prelude::inject_if_used(ast, mysqli_used, php_version, &mut prelude_inventory);
+    if mysqli_used {
+        linked_php_surfaces.push("mysqli".to_string());
+    }
+    timings.record_since("mysqli-prelude", phase_started);
 
     // Inject the timezone-introspection prelude (extern block + array marshalling,
     // written in elephc-PHP) only when the program references getLocation /
@@ -160,7 +209,11 @@ pub(crate) fn compile(config: CliConfig) {
     // include resolution so usage inside includes is detected.
     crate::progress::phase("tz-prelude");
     let phase_started = Instant::now();
-    let ast = tz_prelude::inject_if_used(ast, with_crates.contains("tz"));
+    let ast = tz_prelude::inject_if_used(
+        ast,
+        with_crates.contains("tz"),
+        &mut prelude_inventory,
+    );
     timings.record_since("tz-prelude", phase_started);
 
     // Inject the listIdentifiers-filtering prelude (a pure elephc-PHP function over
@@ -170,7 +223,7 @@ pub(crate) fn compile(config: CliConfig) {
     // is detected, and before name resolution, which desugars both call forms to it.
     crate::progress::phase("list-id-prelude");
     let phase_started = Instant::now();
-    let ast = list_id_prelude::inject_if_used(ast);
+    let ast = list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
     timings.record_since("list-id-prelude", phase_started);
 
     // Inject the var_export prelude (a pure elephc-PHP function) only when the program
@@ -179,7 +232,7 @@ pub(crate) fn compile(config: CliConfig) {
     // before name resolution so the call resolves to the injected function.
     crate::progress::phase("var-export-prelude");
     let phase_started = Instant::now();
-    let ast = var_export_prelude::inject_if_used(ast);
+    let ast = var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
     timings.record_since("var-export-prelude", phase_started);
 
     // Inject the OPcache preludes (pure elephc-PHP functions): `opcache_get_configuration()`
@@ -246,6 +299,7 @@ pub(crate) fn compile(config: CliConfig) {
         &ini_overrides,
         opcache_preload_statistics.as_ref(),
         strict_opcache,
+        &mut prelude_inventory,
     );
     timings.record_since("opcache-prelude", phase_started);
 
@@ -256,7 +310,11 @@ pub(crate) fn compile(config: CliConfig) {
     // image usage inside includes is detected.
     crate::progress::phase("image-prelude");
     let phase_started = Instant::now();
-    let ast = crate::image_prelude::inject_if_used(ast, with_crates.contains("image"));
+    let ast = crate::image_prelude::inject_if_used(
+        ast,
+        with_crates.contains("image"),
+        &mut prelude_inventory,
+    );
     timings.record_since("image-prelude", phase_started);
 
     // Inject the incremental-hashing prelude (the `HashContext` class and the
@@ -267,12 +325,18 @@ pub(crate) fn compile(config: CliConfig) {
     // detected, and before name resolution so a namespaced caller resolves to it.
     crate::progress::phase("hash-prelude");
     let phase_started = Instant::now();
-    let ast = crate::hash_prelude::inject_if_used(ast, false);
+    let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
-    let ast = web_prelude::inject_if_web(ast, web, php_version, &ini_overrides);
+    let ast = web_prelude::inject_if_web(
+        ast,
+        web,
+        php_version,
+        &ini_overrides,
+        &mut prelude_inventory,
+    );
     timings.record_since("web-prelude", phase_started);
 
     // Inject the PHP version-surface functions (`zend_version`, `php_sapi_name`,
@@ -281,7 +345,11 @@ pub(crate) fn compile(config: CliConfig) {
     // them, and before name resolution so a namespaced caller resolves to the injection.
     crate::progress::phase("version-prelude");
     let phase_started = Instant::now();
-    let ast = crate::version_prelude::inject_if_used(ast, php_version);
+    let ast = crate::version_prelude::inject_if_used(
+        ast,
+        php_version,
+        &mut prelude_inventory,
+    );
     timings.record_since("version-prelude", phase_started);
 
     crate::progress::phase("name-resolve");
@@ -384,7 +452,8 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("typecheck");
     let phase_started = Instant::now();
-    let check_result = match types::check_with_target(&ast, target) {
+    let check_options = types::CheckOptions { strict_locals };
+    let mut check_result = match types::check_with_target_and_options(&ast, target, check_options) {
         Ok(result) => result,
         Err(e) => {
             crate::progress::clear();
@@ -396,12 +465,6 @@ pub(crate) fn compile(config: CliConfig) {
     for warning in &check_result.warnings {
         errors::report_warning(warning);
     }
-    codegen::prepare_declared_name_order(
-        &ast,
-        &check_result.classes,
-        &check_result.interfaces,
-    );
-
     if !target.supports_current_backend() {
         crate::progress::clear();
         eprintln!(
@@ -439,23 +502,54 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("opt-prop");
     let phase_started = Instant::now();
-    let ast = optimize::propagate_constants(ast);
+    let post_typecheck_optimizer = optimize::PostTypecheckOptimizer::new(&ast);
+    // Substituting a literal for a read of a local the checker boxed as `mixed` would hand EIR
+    // lowering a concrete type the checker never approved for that name, so the pass is told which
+    // names those are and refuses to record a fact for them.
+    let ast = post_typecheck_optimizer.propagate(ast, check_result.mixed_storage_local_names());
     timings.record_since("opt-prop", phase_started);
 
     crate::progress::phase("opt-post");
     let phase_started = Instant::now();
-    let ast = optimize::prune_constant_control_flow(ast);
+    // Pruning and normalization both run the single-case switch rewrite, which materializes the
+    // default body into BOTH branches of the synthesized `if` with the original's spans. The
+    // checker's local-binding decisions are keyed BY SPAN, so these phases are told which spans
+    // carry one and the rewrite vetoes itself rather than duplicating a decision.
+    let ast = post_typecheck_optimizer.prune(ast, check_result.local_binding_decision_spans());
     timings.record_since("opt-post", phase_started);
 
     crate::progress::phase("opt-norm");
     let phase_started = Instant::now();
-    let ast = optimize::normalize_control_flow(ast);
+    let ast = post_typecheck_optimizer.normalize(ast, check_result.local_binding_decision_spans());
     timings.record_since("opt-norm", phase_started);
 
     crate::progress::phase("dce");
     let phase_started = Instant::now();
-    let ast = optimize::eliminate_dead_code(ast);
+    // Tail-sinking clones the tail of an `if`/`switch`/`try` into every branch, and a clone keeps
+    // the original's spans — the same span-keyed hazard, in the other pass that clones.
+    let ast = post_typecheck_optimizer
+        .eliminate_dead_code(ast, check_result.local_binding_decision_spans());
     timings.record_since("dce", phase_started);
+
+    crate::progress::phase("decl-reach");
+    let phase_started = Instant::now();
+    let exported_function_names: HashSet<String> = exported_functions.keys().cloned().collect();
+    let ast = optimize::prune_unreachable_declarations(
+        ast,
+        &mut check_result,
+        optimize::reachability::PruneOptions {
+            inventory: &prelude_inventory,
+            forced_groups: &forced_groups,
+            exported_functions: &exported_function_names,
+            eval_forced: with_crates.contains("eval"),
+        },
+    );
+    timings.record_since("decl-reach", phase_started);
+    codegen::prepare_declared_name_order(
+        &ast,
+        &check_result.classes,
+        &check_result.interfaces,
+    );
 
     if emit_ir {
         eir_output::emit(
@@ -497,8 +591,10 @@ pub(crate) fn compile(config: CliConfig) {
     backend::emit_and_link(backend::BackendInputs {
         filename,
         with_crates: &with_crates,
+        linked_php_surfaces: &linked_php_surfaces,
         ir_module,
         web,
+        web_isolation,
         extra_link_libs: &extra_link_libs,
         extra_link_paths: &extra_link_paths,
         extra_frameworks: &extra_frameworks,
@@ -507,10 +603,13 @@ pub(crate) fn compile(config: CliConfig) {
         emit,
         heap_size,
         gc_stats,
+        counters,
+        instrument,
         heap_debug,
         exported_functions: &exported_functions,
         regalloc_linear,
         emit_debug_info,
+        keep_symbols,
         output_paths: &output_paths,
         emit_source_map,
         emit_asm,

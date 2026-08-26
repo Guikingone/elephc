@@ -52,6 +52,19 @@ impl Platform {
         }
     }
 
+    /// Returns the assembler-local label prefix for this platform.
+    ///
+    /// Labels starting with it are assembler-temporary: they never enter the object's
+    /// symbol table, so profilers symbolicate frames from the enclosing function (DWARF or
+    /// the function's own symbol) instead of whichever intra-function label sits closest,
+    /// and the linker's dead-strip atom model never sees them.
+    pub fn local_label_prefix(&self) -> &'static str {
+        match self {
+            Platform::MacOS => "L",
+            Platform::Linux | Platform::Windows => ".L",
+        }
+    }
+
     /// Returns the PHP-compatible OS name string for this platform.
     ///
     /// macOS reports `"Darinux"` and Linux reports `"Linux"`, matching PHP's `PHP_OS` constant.
@@ -750,6 +763,26 @@ impl Target {
             }
             (Platform::Linux, Arch::X86_64) => "as",
             (Platform::Windows, _) => "as",
+        }
+    }
+
+    /// Returns the symbol-stripping command for this target.
+    ///
+    /// Same cross-toolchain rule as [`Self::assembler_cmd`]: a Linux ARM64 binary produced from a
+    /// host without a native toolchain must be stripped by that toolchain's `strip`, because the
+    /// host's own `strip` does not read the foreign object format.
+    pub fn strip_cmd(&self) -> &'static str {
+        match (self.platform, self.arch) {
+            (Platform::MacOS, Arch::AArch64 | Arch::X86_64) => "strip",
+            (Platform::Linux, Arch::AArch64) => {
+                if host_has_native_aarch64_toolchain() {
+                    "strip"
+                } else {
+                    "aarch64-linux-gnu-strip"
+                }
+            }
+            (Platform::Linux, Arch::X86_64) => "strip",
+            (Platform::Windows, _) => "strip",
         }
     }
 

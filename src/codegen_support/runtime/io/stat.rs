@@ -198,7 +198,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     // ================================================================
     // __rt_filesize: get file size
     // Input:  x1/x2=path
-    // Output: x0=file size in bytes
+    // Output: x0=file size in bytes, x1=1 on success / 0 when the path could not be stat'ed
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: filesize ---");
@@ -214,10 +214,22 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
-    // -- extract st_size from stat struct --
+    // -- extract st_size, but ONLY if stat() wrote the buffer --
+    // Reading it unconditionally answered whatever the stack held at the `st_size` offset, which
+    // measured as a steady `0` here and so read like a wrong constant — but it is not a constant,
+    // it is unfilled memory, exactly as in `__rt_filemtime` where the `st_mtime` offset made the
+    // same omission visible as five different values in five runs. `x1` carries the int|false
+    // flag the rest of the stat family already uses.
+    emitter.instruction("cmp x0, #0");                                          // did stat() succeed?
+    emitter.instruction("b.ne __rt_filesize_fail");                             // failure path: return the false flag
     emitter.instruction(&format!("ldr x0, [sp, #{}]", size_off));               // load st_size from stat struct
-
-    // -- restore frame and return --
+    emitter.instruction("mov x1, #1");                                          // success flag for codegen-side int|false boxing
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
+    emitter.instruction("ret");                                                 // return to caller
+    emitter.label("__rt_filesize_fail");
+    emitter.instruction("mov x0, #0");                                          // stat failed: integer payload defaults to 0
+    emitter.instruction("mov x1, #0");                                          // failure flag tells codegen to box PHP false
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
@@ -241,10 +253,21 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
-    // -- extract st_mtimespec.tv_sec from stat struct --
+    // -- extract st_mtimespec.tv_sec, but ONLY if stat() wrote the buffer --
+    // Reading it unconditionally returned whatever the stack happened to hold for a path that
+    // cannot be stat'ed: five runs of one binary gave five different values, because the leaked
+    // bytes track a stack address that ASLR moves. `x1` carries the int|false flag its seven
+    // siblings already use — 0 tells codegen to box php `false`.
+    emitter.instruction("cmp x0, #0");                                          // did stat() succeed?
+    emitter.instruction("b.ne __rt_filemtime_fail");                            // failure path: return the false flag
     emitter.instruction(&format!("ldr x0, [sp, #{}]", mtime_off));              // load mtime tv_sec from stat struct
-
-    // -- restore frame and return --
+    emitter.instruction("mov x1, #1");                                          // success flag for codegen-side int|false boxing
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
+    emitter.instruction("ret");                                                 // return to caller
+    emitter.label("__rt_filemtime_fail");
+    emitter.instruction("mov x0, #0");                                          // stat failed: integer payload defaults to 0
+    emitter.instruction("mov x1, #0");                                          // failure flag tells codegen to box PHP false
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
@@ -323,12 +346,17 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: filesize ---");
     emitter.label_global("__rt_filesize");
     emit_linux_stat_call(emitter, frame_size);
+    // This half already CHECKED the syscall — it just reported the failure as `0`, which is a
+    // legitimate size for an empty file and therefore indistinguishable from success. `rdx`
+    // carries the int|false flag the rest of the stat family already uses.
     emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading st_size
-    emitter.instruction("jne __rt_filesize_fail");                              // return zero when the stat call fails
+    emitter.instruction("jne __rt_filesize_fail");                              // failure path: return the false flag
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", size_off));   // load st_size from the Linux stat buffer
+    emitter.instruction("mov rdx, 1");                                          // success flag for codegen-side int|false boxing
     emitter.instruction("jmp __rt_filesize_ret");                               // skip the failure path after reading the file size
     emitter.label("__rt_filesize_fail");
-    emitter.instruction("mov rax, 0");                                          // return zero when the path could not be stated
+    emitter.instruction("mov rax, 0");                                          // stat failed: integer payload defaults to 0
+    emitter.instruction("mov rdx, 0");                                          // failure flag tells codegen to box PHP false
     emitter.label("__rt_filesize_ret");
     emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the temporary stat buffer frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -338,12 +366,17 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: filemtime ---");
     emitter.label_global("__rt_filemtime");
     emit_linux_stat_call(emitter, frame_size);
+    // This half already CHECKED the syscall — it just reported the failure as `0`, which is a
+    // legitimate timestamp and indistinguishable from success. `rdx` carries the int|false flag
+    // its seven siblings already use.
     emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading st_mtime
-    emitter.instruction("jne __rt_filemtime_fail");                             // return zero when the stat call fails
+    emitter.instruction("jne __rt_filemtime_fail");                             // failure path: return the false flag
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", mtime_off));  // load st_mtime.tv_sec from the Linux stat buffer
+    emitter.instruction("mov rdx, 1");                                          // success flag for codegen-side int|false boxing
     emitter.instruction("jmp __rt_filemtime_ret");                              // skip the failure path after reading the modification time
     emitter.label("__rt_filemtime_fail");
-    emitter.instruction("mov rax, 0");                                          // return zero when the path could not be stated
+    emitter.instruction("mov rax, 0");                                          // stat failed: integer payload defaults to 0
+    emitter.instruction("mov rdx, 0");                                          // failure flag tells codegen to box PHP false
     emitter.label("__rt_filemtime_ret");
     emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the temporary stat buffer frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -383,4 +416,52 @@ fn emit_linux_access_check(emitter: &mut Emitter, mode: u32) {
     emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the canonical integer result register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the access helper call sequence
     emitter.instruction("ret");                                                 // return the readability or writability predicate to the caller
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::emit_stat;
+
+    /// Both size and mtime helpers must test the stat result before reading their buffer, on
+    /// BOTH architectures.
+    ///
+    /// The buffer is a stack allocation the syscall fills only on success, so reading it
+    /// unconditionally returns untouched stack for a missing path — measured on AArch64 as
+    /// `filesize()` answering `int(4)` and `filemtime()` `int(8322009384)`. The x86_64 helpers
+    /// already tested `eax`, which is exactly why a behaviour test running on one host could
+    /// not see the defect: it has to be pinned on the EMITTED assembly of each target.
+    #[test]
+    fn the_stat_field_helpers_check_the_syscall_before_reading_their_buffer() {
+        for (platform, arch, failure_labels) in [
+            (
+                Platform::MacOS,
+                Arch::AArch64,
+                ["__rt_filesize_fail", "__rt_filemtime_fail"],
+            ),
+            (
+                Platform::Linux,
+                Arch::X86_64,
+                ["__rt_filesize_fail", "__rt_filemtime_fail"],
+            ),
+        ] {
+            let mut emitter = Emitter::new(Target::new(platform, arch));
+            emit_stat(&mut emitter);
+            let asm = emitter.output();
+            for label in failure_labels {
+                assert!(
+                    asm.contains(&format!("{label}:")),
+                    "{arch:?}: {label} must exist, or the buffer is read unconditionally:\n{asm}"
+                );
+                let branch_to_failure = asm.contains(&format!("b.ne {label}"))
+                    || asm.contains(&format!("jne {label}"));
+                assert!(
+                    branch_to_failure,
+                    "{arch:?}: a failed stat must branch to {label}:\n{asm}"
+                );
+            }
+        }
+    }
 }

@@ -288,6 +288,68 @@ mod tests {
         }
     }
 
+    /// Pins the AArch64 eval key-sort bridge to the shared AOT regular comparator.
+    #[test]
+    fn aarch64_eval_key_sort_uses_native_regular_comparator() {
+        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        let body = body_of(&asm, "__elephc_eval_value_regular_key_compare");
+        assert!(body.contains("bl __rt_mixed_unbox"), "{body}");
+        assert!(body.contains("bl __rt_key_compare_regular"), "{body}");
+    }
+
+    /// Pins the x86_64 eval key-sort bridge to the shared AOT regular comparator.
+    #[test]
+    fn x86_64_eval_key_sort_uses_native_regular_comparator() {
+        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        let body = body_of(&asm, "__elephc_eval_value_regular_key_compare");
+        assert!(body.contains("call __rt_mixed_unbox"), "{body}");
+        assert!(body.contains("call __rt_key_compare_regular"), "{body}");
+    }
+
+    /// Verifies relational and spaceship eval wrappers share PHP's tag-aware ordering ABI.
+    #[test]
+    fn eval_ordering_wrappers_use_php_compare_on_both_targets() {
+        for (target, call, cast) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "bl __rt_php_compare",
+                "bl __rt_mixed_cast_float",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "call __rt_php_compare",
+                "call __rt_mixed_cast_float",
+            ),
+        ] {
+            let asm = emit_for(target);
+            for label in ["__elephc_eval_value_compare", "__elephc_eval_value_spaceship"] {
+                let body = body_of(&asm, label);
+                let ordering_body = body
+                    .split("__elephc_eval_value_compare_eq:")
+                    .next()
+                    .expect("split yields the ordering wrapper prefix");
+                assert!(body.contains(call), "{label} must use PHP ordering on {target:?}:\n{body}");
+                assert!(
+                    !ordering_body.contains(cast),
+                    "{label} must not erase runtime tags through float casting on {target:?}:\n{body}"
+                );
+            }
+        }
+
+        let x86_64 = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        let compare = body_of(&x86_64, "__elephc_eval_value_compare");
+        let compare_prefix = compare
+            .split("__elephc_eval_value_compare_eq:")
+            .next()
+            .expect("split yields the x86_64 ordering wrapper prefix");
+        assert!(compare.contains("mov r10, rax"), "{compare}");
+        assert!(compare.contains("mov rcx, QWORD PTR [rbp - 24]"), "{compare}");
+        assert!(
+            !compare_prefix.contains("mov r10, QWORD PTR [rbp - 24]"),
+            "the x86_64 opcode dispatch must preserve the ordering result:\n{compare}"
+        );
+    }
+
     /// Returns the instruction lines following `label` up to the next exported helper.
     ///
     /// `label_c_global` emits `.globl <sym>` immediately before each wrapper's label, so

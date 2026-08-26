@@ -15,9 +15,8 @@
 //! Key details:
 //! - One process per prefork worker, single-threaded, so the `RET_STRING`
 //!   return buffer (owned by `state`) is race-free across calls.
-//! - `/dev/urandom` is the sole entropy source; a time-based fallback is used
-//!   only if the device is unavailable (never on a supported target in normal
-//!   operation).
+//! - `/dev/urandom` is the sole entropy source; failures are propagated so no
+//!   session identifier is ever generated from predictable fallback material.
 //! - `bin_to_readable` mirrors PHP's low-endian bit-accumulation encoder
 //!   (`ext/session/session.c`): `sid_bits_per_character` selects a charset —
 //!   4 → `0-9a-f`, 5 → `0-9a-v`, 6 → `0-9a-zA-Z,-` — read `bits` LSB-first out
@@ -47,28 +46,15 @@ fn has_valid_id_charset(s: &str) -> bool {
     s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b',' || b == b'-')
 }
 
-/// Fills `buf` with random bytes from `/dev/urandom`, falling back to a
-/// time-based seed if the device is unavailable (never expected on a
-/// supported target in normal operation). Shared by `create_id` (ID entropy)
+/// Fills `buf` with random bytes from `/dev/urandom`. Returns `false` when
+/// the entropy source is unavailable. Shared by `create_id` (ID entropy)
 /// and `file_io::elephc_web_session_should_gc` (probability sampling) — the
 /// single `/dev/urandom` primitive the spec asks every random consumer to
 /// reuse rather than pulling in a new crate.
-pub(super) fn read_random(buf: &mut [u8]) {
-    match File::open("/dev/urandom").and_then(|mut f| f.read_exact(buf)) {
-        Ok(()) => {}
-        Err(_) => {
-            // Fallback: seed from a monotonically-changing time value if
-            // /dev/urandom is unavailable.
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let seed = now.to_le_bytes();
-            for (i, b) in buf.iter_mut().enumerate() {
-                *b = seed[i % seed.len()];
-            }
-        }
-    }
+pub(super) fn read_random(buf: &mut [u8]) -> bool {
+    File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(buf))
+        .is_ok()
 }
 
 /// Converts raw random bytes to PHP's session-ID charset using low-endian bit
@@ -141,7 +127,10 @@ pub unsafe extern "C" fn elephc_web_session_create_id(
     // least sid_length readable characters.
     let nbytes = (sid_length * sid_bits as usize + 7) / 8;
     let mut random_bytes = vec![0u8; nbytes.max(1)];
-    read_random(&mut random_bytes);
+    if !read_random(&mut random_bytes) {
+        set_cstr(core::ptr::addr_of_mut!(RET_STRING), "");
+        return opt_ptr(core::ptr::addr_of!(RET_STRING));
+    }
 
     let mut readable = bin_to_readable(&random_bytes, sid_bits);
     // bin_to_readable can emit one character beyond sid_length on some
@@ -173,6 +162,53 @@ pub(super) fn validate_session_id(id: &str) -> bool {
 mod tests {
     use super::super::state::test_lock as lock;
     use super::*;
+
+    /// Verifies session ID generation fails closed when the operating system
+    /// cannot open its cryptographic entropy source under descriptor pressure.
+    #[test]
+    fn session_id_generation_fails_closed_when_entropy_source_is_unavailable() {
+        const TEST_NAME: &str =
+            "session_id_generation_fails_closed_when_entropy_source_is_unavailable";
+        if std::env::var("ELEPHC_SESSION_ENTROPY_PROBE").as_deref() != Ok(TEST_NAME) {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([TEST_NAME, "--nocapture", "--test-threads=1"])
+                .env("ELEPHC_SESSION_ENTROPY_PROBE", TEST_NAME)
+                .output()
+                .expect("spawn isolated session entropy probe");
+            assert!(
+                output.status.success(),
+                "isolated entropy probe failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let _g = lock();
+        unsafe {
+            super::super::state::elephc_web_session_reset();
+            let limit = libc::rlimit {
+                rlim_cur: 64,
+                rlim_max: 64,
+            };
+            assert_eq!(libc::setrlimit(libc::RLIMIT_NOFILE, &limit), 0);
+        }
+        let mut descriptors = Vec::new();
+        while let Ok(file) = File::open("/dev/null") {
+            descriptors.push(file);
+        }
+        assert!(!descriptors.is_empty(), "the probe must exhaust at least one descriptor");
+
+        let ptr = unsafe { elephc_web_session_create_id(std::ptr::null()) };
+        let id = if ptr.is_null() {
+            ""
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(ptr) }.to_str().unwrap()
+        };
+        assert!(
+            id.is_empty(),
+            "session creation must fail instead of returning a predictable fallback ID: {id}"
+        );
+    }
 
     /// Verifies session ID generation produces a 32-hex-char string by
     /// default (sid_length=32, sid_bits_per_character=4 — unchanged from

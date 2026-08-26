@@ -244,9 +244,60 @@ echo $total >= $free ? "o" : "O";
     assert_eq!(out, "fto");
 }
 
-/// Verifies compiled PHP output for disk free space invalid path returns zero.
+/// Verifies invalid disk-space paths return strict PHP `false`, not a successful `0.0` byte count.
 #[test]
-fn test_disk_free_space_invalid_path_returns_zero() {
-    let out = compile_and_run(r#"<?php var_dump(disk_free_space("/no/such/path/xyz123"));"#);
-    assert_eq!(out, "float(0)\n");
+fn test_disk_space_invalid_path_is_strict_false() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(disk_free_space("/no/such/path/xyz123"));
+var_dump(disk_total_space("/no/such/path/xyz123"));
+echo disk_free_space("/no/such/path/xyz123") === false ? "strict" : "!";
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(false)\nstrict");
+}
+
+/// Verifies disk-space failures keep PHP boolean ordering against negative numbers.
+/// Casting the boxed `false` to an integer would make both relational and spaceship
+/// results point in the opposite direction because PHP compares a boolean operand by truthiness.
+#[test]
+fn test_disk_space_invalid_path_uses_false_ordering_rules() {
+    let out = compile_and_run(
+        r#"<?php
+$free = disk_free_space("/no/such/path/xyz123");
+$total = disk_total_space("/no/such/path/xyz123");
+var_dump($free > -1);
+var_dump($free < -1);
+var_dump($free <=> -1);
+var_dump(-1 <=> $free);
+var_dump($total > -1);
+var_dump($total <=> -1);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(true)\nint(-1)\nint(1)\nbool(false)\nint(-1)\n"
+    );
+}
+
+/// Verifies a successful `disk_free_space()` still behaves as a float after the return type
+/// widened to `float|false`.
+///
+/// Declaring a union changes how a SUCCESSFUL value is carried, not just what it can be, so the
+/// success side needs its own guard: `is_float()`, an arithmetic use, and the ordering against
+/// `disk_total_space()` that any real caller depends on.
+#[test]
+fn test_disk_space_success_still_behaves_as_a_float() {
+    let out = compile_and_run(
+        r#"<?php
+$free = disk_free_space(".");
+$total = disk_total_space(".");
+echo is_float($free) ? "f" : "!";
+echo is_float($total) ? "t" : "!";
+echo $free > 0 ? "p" : "!";
+echo $total >= $free ? "o" : "!";
+echo ($free + 1.0) > $free ? "a" : "!";
+"#,
+    );
+    assert_eq!(out, "ftpoa");
 }

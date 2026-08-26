@@ -172,9 +172,9 @@ fn test_top_level_globals_guard() {
     let sigs = collect_by_ref_signatures(&program);
 
     with_callable_effects(
-        function_effects,
-        static_method_effects,
-        instance_method_effects,
+        function_effects.as_ref().clone(),
+        static_method_effects.as_ref().clone(),
+        instance_method_effects.as_ref().clone(),
         instance_dispatch_metadata,
         || {
             with_by_ref_signatures(sigs, || {

@@ -58,11 +58,15 @@ pub(super) fn emit_typed_property_initialized_bool(
     );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the property marker against the uninitialized sentinel
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}", marker_reg, sentinel_reg)
+            );                                                                  // compare the property marker against the uninitialized sentinel
             ctx.emitter.instruction("cset x0, ne");                             // materialize true when the instance property is initialized
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the property marker against the uninitialized sentinel
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}", marker_reg, sentinel_reg)
+            );                                                                  // compare the property marker against the uninitialized sentinel
             ctx.emitter.instruction("setne al");                                // materialize true when the instance property is initialized
             ctx.emitter.instruction("movzx rax, al");                           // widen the initialization flag into the integer result register
         }
@@ -118,14 +122,18 @@ pub(super) fn emit_uninitialized_typed_property_fatal(
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call 16-byte aligned
             ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
             ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the Error object payload
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+            ctx.emitter.instruction(
+                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
+            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_error_class_id", 0); // load Error's runtime class id for this program
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at the object header
             abi::emit_symbol_address(ctx.emitter, "r10", &message_label);          // materialize static Error message pointer
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store static Error message pointer
-            ctx.emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store Error message length
+            ctx.emitter.instruction(
+                &format!("mov QWORD PTR [rax + 16], {}", message_len)
+            );                                                                  // store Error message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null

@@ -224,3 +224,57 @@ fn test_superglobals_are_always_volatile() {
         );
     }
 }
+
+/// A local the checker compiled as boxed `mixed` storage must not carry a propagated constant.
+///
+/// The fact would be TRUE, but substituting it at the read replaces a boxed-slot load with a
+/// literal of a CONCRETE type — a view the checker never approved for the name — and the checked
+/// builtins downstream then fail to lower it. See `optimize::binding_decisions`.
+#[test]
+fn test_mixed_storage_local_blocks_propagation() {
+    let program = vec![
+        Stmt::assign("x", Expr::int_lit(5)),
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1))),
+    ];
+
+    let folded = crate::optimize::PostTypecheckOptimizer::new(&program)
+        .propagate(program.clone(), std::collections::HashSet::new());
+    assert_eq!(
+        folded[1],
+        Stmt::echo(Expr::int_lit(6)),
+        "control: an ordinary local still folds"
+    );
+
+    let boxed = crate::optimize::PostTypecheckOptimizer::new(&program).propagate(
+        program.clone(),
+        std::collections::HashSet::from(["x".to_string()]),
+    );
+    assert_eq!(
+        boxed[1],
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1))),
+        "a mixed-storage local must never carry a propagated constant"
+    );
+}
+
+/// The mixed-storage set is scoped to one propagation run: a later run without it folds again,
+/// so nothing leaks between compilations sharing a thread.
+#[test]
+fn test_mixed_storage_set_does_not_outlive_its_run() {
+    let program = vec![
+        Stmt::assign("x", Expr::int_lit(5)),
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1))),
+    ];
+
+    let _ = crate::optimize::PostTypecheckOptimizer::new(&program).propagate(
+        program.clone(),
+        std::collections::HashSet::from(["x".to_string()]),
+    );
+    let after = crate::optimize::PostTypecheckOptimizer::new(&program)
+        .propagate(program.clone(), std::collections::HashSet::new());
+
+    assert_eq!(
+        after[1],
+        Stmt::echo(Expr::int_lit(6)),
+        "the previous run's mixed-storage set must not still be installed"
+    );
+}
