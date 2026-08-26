@@ -2028,6 +2028,17 @@ fn process_is_alive(pid: i32) -> bool {
 /// whose pid was recycled, on a platform with no way to ask — the rarest branch
 /// of the rarest case, traded for never corrupting.
 ///
+/// One thing "alive" includes, which the three rules above do not say and a
+/// reader will ask: a process that has exited but has not been reaped. A zombie
+/// answers `kill(pid, 0)` and still has the `/proc` entry the start id is read
+/// from, so it reads as alive AND as the same process, and keeps its claim — for
+/// as long as its parent leaves it unreaped. That is a wedge, not a splice: the
+/// endpoint reports the claim it cannot revoke rather than handing the payload
+/// to a second writer, which is the trade this whole function makes. A
+/// supervisor that reaps promptly closes the window to the microseconds between
+/// the exit and the wait; one that does not is a supervisor whose workers are
+/// already unaccounted for.
+///
 /// Split out as a pure function because the interesting rows need a writer that
 /// is frozen, or dead, or a pid that has been reused — none of which a test can
 /// arrange against a live process.
